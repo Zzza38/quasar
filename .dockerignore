@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.agents
+.codex
+.env*
+data
+*.sqlite*
+coverage
+test-results
+playwright-report
