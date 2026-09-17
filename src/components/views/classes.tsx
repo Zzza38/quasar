@@ -89,10 +89,10 @@ export function ClassesView({ state }: { state: AppState }) {
       <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={setAdjustDate} onEditCycleDay={setAdjustCycleDay} />
       <div className="panel p-4 flex items-center gap-3 flex-wrap">
         <div className="min-w-0 flex-1 basis-[240px] text-sm">
-          <strong>{personal.customSchedule ? 'You use a private schedule' : 'You follow the school schedule'}</strong>
-          <p className="text-text-2">{personal.customSchedule ? 'School corrections do not change it. You can switch back at any time.' : 'If the school schedule never matches your day, build a private copy that only you see.'}</p>
+          <strong>{personal.customSchedule ? 'Your timetable has personal changes' : 'Your timetable starts with the school schedule'}</strong>
+          <p className="text-text-2">Edit your timetable above. Your changes save automatically and only affect you.</p>
         </div>
-        <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>{personal.customSchedule ? 'Edit private schedule' : 'Build a private schedule'}</Button>
+        <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>Advanced schedule settings</Button>
       </div>
     </section>
 

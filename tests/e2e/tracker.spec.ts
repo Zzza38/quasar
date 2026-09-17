@@ -193,7 +193,7 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   await dialog(page).getByLabel('Room').fill('Lab 2');
   await dialog(page).getByRole('button', { name: 'Add class' }).click();
   await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
-  await page.getByRole('button', { name: 'Place in Day 1 at 8:00 AM', exact: true }).click();
+  await page.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.getByRole('link', { name: 'Today' }).click();
   await quickAdd(page, 'Read the next chapter');
@@ -304,7 +304,7 @@ test('time canvas fits desktop, groups weeks, and drags and resizes freely timed
   await expect(dialog(page).getByRole('region', { name: /Rotation week/ })).toHaveCount(2);
   expect(await dialog(page).locator('.time-canvas-scroll').first().evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
-  await dialog(page).getByRole('button', { name: 'Place D', exact: true }).dragTo(day, { targetPosition: { x: 40, y: 468 } });
+  await dialog(page).getByRole('button', { name: 'Place D', exact: true }).dragTo(day.getByRole('button', { name: 'Place in Day 1 at 2:00 PM', exact: true }), { targetPosition: { x: 40, y: 1 } });
   await expect(day.getByRole('button', { name: 'Day 1, 2:00–2:45 PM: D', exact: true })).toBeVisible();
   const edge = day.getByRole('button', { name: 'Resize Day 1 D end', exact: true });
   await edge.scrollIntoViewIfNeeded();
@@ -352,18 +352,32 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   const palette = page.getByRole('button', { name: 'Place Spanish 2H', exact: true });
   const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
   await palette.dragTo(day, { targetPosition: { x: 35, y: 40 } });
-  const block = day.getByRole('button', { name: 'Day 1, 8:30–9:15 AM: Spanish 2H', exact: true });
+  const block = day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Spanish 2H', exact: true });
   await expect(block).toBeVisible();
   await expect(saved(page)).toBeVisible();
-  await day.getByRole('button', { name: 'Resize Day 1 Spanish 2H end', exact: true }).press('ArrowDown');
-  await expect(day.getByRole('button', { name: 'Day 1, 8:30–9:20 AM: Spanish 2H', exact: true })).toBeVisible();
+  await day.getByRole('button', { name: 'Resize Day 1 A end', exact: true }).press('ArrowUp');
+  await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Spanish 2H', exact: true })).toBeVisible();
   await expect(saved(page)).toBeVisible();
   await page.reload();
-  await expect(day.getByRole('button', { name: 'Day 1, 8:30–9:20 AM: Spanish 2H', exact: true })).toHaveCount(1);
+  await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Spanish 2H', exact: true })).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   await palette.click();
   await page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true })).toHaveCount(1);
+  await expect(saved(page)).toBeVisible();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const personal = new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data;
+    expect(personal.customSchedule).toBeNull();
+    expect(personal.assignments).toMatchObject({ A: 'Spanish-2H' });
+    expect(personal.cycleDayOverrides).toHaveLength(1);
+    expect(personal.cycleDayOverrides).toMatchObject([{ cycleDayId: 'day-1', slots: [{ start: '08:00', end: '08:55' }, {}, {}, {}, { start: '13:00', end: '13:45' }] }]);
+    expect(new Service(db).school(fixture.school.id).schedule.cycleDays[0].slots[0].end).toBe('09:00');
+  } finally { db.close(); }
+  await day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true }).click();
+  await day.getByRole('button', { name: 'Day 1, 9:10–10:10 AM: B', exact: true }).click();
+  await expect(day.getByRole('button', { name: 'Day 1, 9:10–10:10 AM: Spanish 2H', exact: true })).toHaveCount(1);
+  await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true })).toHaveCount(0);
   await expect(saved(page)).toBeVisible();
 });
 
@@ -384,4 +398,29 @@ test('large period palette stays beside the canvas on desktop', async ({ page, c
   expect(paletteBox.height).toBeLessThan(600);
   expect(await canvas.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: '/tmp/quasar-time-canvas-desktop.png' });
+});
+
+test('short adjacent blocks have readable compact labels and full details', async ({ page, context }) => {
+  const schedule = structuredClone(exampleSchedule);
+  schedule.periods[0].label = 'Morning advisory and announcements';
+  schedule.cycleDays[0].slots[0].end = '08:05';
+  schedule.cycleDays[0].slots[1].start = '08:05';
+  schedule.cycleDays[0].slots[1].end = '08:10';
+  const fixture = seed(undefined, true, schedule); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  const first = day.getByRole('button', { name: 'Day 1, 8:00–8:05 AM: Morning advisory and announcements', exact: true });
+  const second = day.getByRole('button', { name: 'Day 1, 8:05–8:10 AM: B', exact: true });
+  await first.scrollIntoViewIfNeeded();
+  const one = (await first.boundingBox())!;
+  const two = (await second.boundingBox())!;
+  expect(one.height).toBeGreaterThanOrEqual(22);
+  expect(two.y).toBeGreaterThanOrEqual(one.y + one.height);
+  await expect(first.locator('strong')).toHaveCSS('white-space', 'nowrap');
+  await first.focus();
+  await expect(day.locator('.time-block-detail').filter({ hasText: 'Morning advisory and announcements' })).toBeVisible();
+  await page.screenshot({ path: '/tmp/quasar-short-blocks.png' });
 });
