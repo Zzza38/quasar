@@ -12,6 +12,7 @@ import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateS
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, Panel, Section, Select, Spacer } from '../primitives';
 import { Card } from '../ui/card';
 import { ClassColorPicker } from '../class-color-picker';
+import { ColorPicker } from '../ui/color-picker';
 
 const classFields: FieldSpec<Record<string, unknown>>[] = [
   { key: 'name', label: 'Name', render: (value) => (value.name as string) || null },
@@ -57,7 +58,7 @@ export function ClassesView({ state }: { state: AppState }) {
         const days = new Set(periods.flatMap((period) => meets.get(period.id) ?? []));
         const color = classColor(cls.id, 'class', cls.color);
         // Same surface as <Card>, rendered as a list item so the colour bar sits on the item itself.
-        return <li key={cls.id} className="relative grid gap-2.5 rounded-xl border-t-4 bg-card px-4 py-3 text-sm text-card-foreground ring-1 ring-foreground/10" style={{ borderTopColor: color.dot }}>
+        return <li key={cls.id} className="relative grid gap-2.5 rounded-xl border-t-4 bg-card px-4 py-3 text-sm text-card-foreground ring-1 ring-foreground/10 has-[[data-color-picker-open=true]]:border-t-transparent!" style={{ borderTopColor: color.dot }}>
           <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })} />
           <div className="flex items-start gap-3">
             <div className="grid min-w-0 flex-1 gap-0.5">
@@ -132,8 +133,8 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
     <form id="class-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void submit(); }}>
       <Field label="Class name" htmlFor="class-name"><Input id="class-name" autoFocus required maxLength={120} placeholder="Algebra II" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
       <Field label="Class color" htmlFor="class-color">
-        <div className="flex items-center gap-3">
-          <input id="class-color" type="color" className="h-9 w-14 cursor-pointer rounded-lg border border-input bg-transparent p-1" value={draft.color ?? classColor(draft.id || slugId(draft.name, usedIds, 'class')).dot} disabled={pending} onChange={(event) => setDraft({ ...draft, color: event.target.value })} />
+        <div className="grid gap-3">
+          <ColorPicker id="class-color" label="Class color" value={draft.color ?? classColor(draft.id || slugId(draft.name, usedIds, 'class')).dot} disabled={pending || changed} onValueChange={(color) => setDraft({ ...draft, color })} />
           <Button size="sm" disabled={pending || !draft.color} onClick={() => setDraft({ ...draft, color: undefined })}>Use automatic color</Button>
         </div>
       </Field>
