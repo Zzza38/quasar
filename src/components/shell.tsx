@@ -124,9 +124,9 @@ export function Shell({ session, context, view, taskCount, children }: { session
                 const active = entry.id === view;
                 return <SidebarMenuItem key={entry.id}>
                   <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-lg px-3 font-medium text-muted-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center">
-                    <a href={`#${entry.id}`} aria-current={active ? 'page' : undefined}>
+                    <a href={`#${entry.id}`} aria-label={entry.label} aria-current={active ? 'page' : undefined}>
                       <Icon name={VIEW_ICONS[entry.id]} size={18} strokeWidth={active ? 2.2 : 1.9} />
-                      <span>{entry.label}</span>
+                      <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
                   {entry.id === 'tasks' && taskCount > 0 && <SidebarMenuBadge className="top-2.5 right-2.5 h-5 min-w-5 rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</SidebarMenuBadge>}

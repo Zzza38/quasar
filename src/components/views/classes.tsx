@@ -11,6 +11,7 @@ import { ClassAssignmentGrid } from '../class-assignment-grid';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, Panel, Section, Select, Spacer } from '../primitives';
 import { Card } from '../ui/card';
+import { ClassColorPicker } from '../class-color-picker';
 
 const classFields: FieldSpec<Record<string, unknown>>[] = [
   { key: 'name', label: 'Name', render: (value) => (value.name as string) || null },
@@ -56,7 +57,8 @@ export function ClassesView({ state }: { state: AppState }) {
         const days = new Set(periods.flatMap((period) => meets.get(period.id) ?? []));
         const color = classColor(cls.id, 'class', cls.color);
         // Same surface as <Card>, rendered as a list item so the colour bar sits on the item itself.
-        return <li key={cls.id} className="grid gap-2.5 rounded-xl border-t-4 bg-card px-4 py-3 text-sm text-card-foreground ring-1 ring-foreground/10" style={{ borderTopColor: color.dot }}>
+        return <li key={cls.id} className="relative grid gap-2.5 rounded-xl border-t-4 bg-card px-4 py-3 text-sm text-card-foreground ring-1 ring-foreground/10" style={{ borderTopColor: color.dot }}>
+          <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })} />
           <div className="flex items-start gap-3">
             <div className="grid min-w-0 flex-1 gap-0.5">
               <strong className="truncate text-[15px]">{cls.name}</strong>

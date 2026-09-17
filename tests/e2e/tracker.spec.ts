@@ -266,6 +266,36 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   await page.screenshot({ path: testInfo.outputPath('schedule-mobile.png'), fullPage: true });
 });
 
+test('collapsed navigation centers icons and retains accessible links', async ({ page, context }, testInfo) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
+  await page.goto('/#classes');
+  await page.getByRole('button', { name: 'Collapse navigation sidebar' }).click();
+  const sidebar = page.locator('.app-sidebar');
+  const verify = async () => {
+    const rail = (await sidebar.boundingBox())!;
+    expect(rail.width).toBe(56);
+    for (const name of ['Today', 'Schedule', 'Tasks', 'Classes', 'School']) {
+      const link = sidebar.getByRole('link', { name, exact: true });
+      await expect(link).toBeVisible();
+      await expect(link.locator('span')).toBeHidden();
+      const icon = (await link.locator('svg').boundingBox())!;
+      expect(Math.abs(icon.x + icon.width / 2 - (rail.x + rail.width / 2))).toBeLessThanOrEqual(1);
+    }
+  };
+  await verify();
+  await sidebar.getByRole('link', { name: 'School', exact: true }).click();
+  await expect(page.getByRole('heading', { name: fixture.school.name })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Expand navigation sidebar' })).toBeVisible();
+  await verify();
+  await page.mouse.move(600, 400);
+  await page.screenshot({ path: testInfo.outputPath('collapsed-sidebar.png') });
+  await page.getByRole('button', { name: 'Expand navigation sidebar' }).click();
+  await expect(sidebar.getByRole('link', { name: 'Classes', exact: true }).locator('span')).toBeVisible();
+});
+
 test('empty tasks fill the available width with one responsive navigation shell', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
@@ -579,6 +609,51 @@ test('custom class color persists and appears on the class card', async ({ page,
   await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await expect(card).not.toHaveCSS('border-top-color', 'rgb(255, 0, 136)');
+});
+
+test.describe('class color bar', () => {
+  test.use({ hasTouch: true });
+
+  test('hover, keyboard and touch expose persistent color controls', async ({ page, context }, testInfo) => {
+    const fixture = seed(); await authenticate(context, fixture.id);
+    await page.goto('/#classes');
+    await page.getByRole('button', { name: 'Add class', exact: true }).click();
+    await dialog(page).getByLabel('Class name').fill('Spanish 2H');
+    await dialog(page).getByLabel('Room (optional)').fill('214');
+    await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+    const bar = page.getByRole('button', { name: 'Change color for Spanish 2H' });
+    const picker = page.getByRole('dialog', { name: 'Color for Spanish 2H' });
+    const card = page.getByRole('listitem').filter({ has: bar });
+    await bar.hover();
+    await expect(picker).toBeVisible();
+    await picker.hover();
+    await page.screenshot({ path: testInfo.outputPath('class-color-picker.png') });
+    await picker.getByRole('button', { name: 'Use #be185d' }).click();
+    await expect(picker).toBeHidden();
+    await expect(card).toHaveCSS('border-top-color', 'rgb(190, 24, 93)');
+    await expect(saved(page)).toBeVisible();
+    await page.reload();
+    await expect(card).toHaveCSS('border-top-color', 'rgb(190, 24, 93)');
+    await bar.focus();
+    await page.keyboard.press('Enter');
+    await expect(picker).toBeVisible();
+    await picker.getByLabel('Custom color for Spanish 2H').fill('#123456');
+    await picker.getByRole('button', { name: 'Save color' }).click();
+    await expect(card).toHaveCSS('border-top-color', 'rgb(18, 52, 86)');
+    await expect(saved(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Edit Spanish 2H' }).click();
+    await expect(dialog(page).getByLabel('Class color', { exact: true })).toHaveValue('#123456');
+    await expect(dialog(page).getByLabel('Room (optional)')).toHaveValue('214');
+    await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bar.tap();
+    await expect(picker).toBeVisible();
+    await picker.getByRole('button', { name: 'Use automatic color' }).tap();
+    await expect(card).not.toHaveCSS('border-top-color', 'rgb(18, 52, 86)');
+    await expect(saved(page)).toBeVisible();
+    await page.reload();
+    await expect(card).not.toHaveCSS('border-top-color', 'rgb(18, 52, 86)');
+  });
 });
 
 test('Classes page drops and resizes actual classes with persistence and touch alternative', async ({ page, context }) => {
