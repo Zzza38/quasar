@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 export type Db = Database.Database;
-export function openDatabase(path = process.env.DATABASE_PATH || './data/whatsnext.sqlite'): Db {
+export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.sqlite'): Db {
   if (path !== ':memory:') mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
@@ -100,7 +100,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/whatsne
   })();
   return db;
 }
-const globalDb = globalThis as unknown as { whatsNextDb?: Db };
+const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
-  return globalDb.whatsNextDb ??= openDatabase();
+  return globalDb.quasarDb ??= openDatabase();
 }

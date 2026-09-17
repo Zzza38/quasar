@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 async function main() {
-  const source=resolve(process.env.DATABASE_PATH || './data/whatsnext.sqlite');
+  const source=resolve(process.env.DATABASE_PATH || './data/quasar.sqlite');
   const destination=process.argv[2];
   if (!destination || resolve(destination)===source) throw new Error('Usage: npm run db:backup -- /secure/path/backup.sqlite (destination must differ from source)');
   mkdirSync(dirname(resolve(destination)),{recursive:true,mode:0o700});

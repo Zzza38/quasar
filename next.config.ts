@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
-  output: process.env.WHATSNEXT_STANDALONE === '1' ? "standalone" : undefined,
+  output: process.env.QUASAR_STANDALONE === '1' ? "standalone" : undefined,
   serverExternalPackages: ["better-sqlite3"],
   async headers() {
     return [

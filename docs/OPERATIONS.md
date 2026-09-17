@@ -38,15 +38,15 @@ Use SQLite's online backup API; do not copy only a live main database file while
 For a direct install, export `DATABASE_PATH` (the script does not load `.env.local`) and run:
 
 ```sh
-DATABASE_PATH=/local/path/whatsnext.sqlite npm run db:backup -- /secure/backups/whatsnext-2026-09-11.sqlite
+DATABASE_PATH=/local/path/quasar.sqlite npm run db:backup -- /secure/backups/quasar-2026-09-11.sqlite
 ```
 
 The script checks the copied database and restricts the resulting file to mode 600. For Docker, create a consistent snapshot inside the persistent volume, then copy it to protected backup storage:
 
 ```sh
 docker compose exec app node -e "const D=require('better-sqlite3');const d=new D(process.env.DATABASE_PATH,{readonly:true});d.backup('/app/data/backup.sqlite').then(()=>d.close()).catch(e=>{console.error(e.message);process.exit(1)})"
-docker compose cp app:/app/data/backup.sqlite /secure/backups/whatsnext.sqlite
-chmod 600 /secure/backups/whatsnext.sqlite
+docker compose cp app:/app/data/backup.sqlite /secure/backups/quasar.sqlite
+chmod 600 /secure/backups/quasar.sqlite
 ```
 
 Automate daily backups before pilot launch, retain daily copies for 14 days and weekly copies for at least four weeks, and keep an encrypted off-server copy. These are initial operating defaults; adjust them to actual recovery needs and disk capacity. Snapshot files contain student names and personal tasks.
@@ -88,4 +88,12 @@ Run `npm run worker` under a service manager alongside Next.js. It loads `.env.l
 
 Set the VAPID variables in `.env.local` (see `.env.example`). Keep the private key backed up and outside Git. Enabling server support does not request browser permission: each user must open Account and choose Enable browser reminders. Verify an actual reminder on every supported device before relying on it.
 
-The current host uses user services `whatsnext.service` and `quasar-worker.service`. Inspect with `systemctl --user status`, and restart both after a verified build. Transient services created with `systemd-run` must be recreated after reboot; install persistent units before an unattended pilot. The private Tailscale route remains on port 3003; the other existing routes are unrelated.
+For new installations, name the user services `quasar.service` and `quasar-worker.service`. The existing host still uses the legacy `whatsnext.service` app unit until it is renamed during deployment. Inspect with `systemctl --user status`, and restart both after a verified build. Transient services created with `systemd-run` must be recreated after reboot; install persistent units before an unattended pilot. The private Tailscale route remains on port 3003; the other existing routes are unrelated.
+
+## Upgrading an existing installation to Quasar
+
+New installations use `quasar.sqlite`, `quasar-data`, and `QUASAR_STANDALONE=1`. Existing installations must keep `DATABASE_PATH` pointing to their current database until it is migrated using the backup and restoration procedure above. The local environment file retains that explicit path. Do not rename a live SQLite file.
+
+For an existing Docker deployment, set `QUASAR_DATA_VOLUME` to the actual existing volume name and `DATABASE_PATH` to the existing database path inside the container in the Compose environment (shell or `.env`) before recreating services. Compose interpolation does not read the service's `.env.local` file. This reuses the saved data instead of starting with an empty volume.
+
+The browser database retains its legacy `whatsnext-offline-v1` storage key to preserve unsynced edits and compatibility with already-open tabs. Quasar uses its new name for public shell caches and removes obsolete caches when the service worker activates.

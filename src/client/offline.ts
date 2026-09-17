@@ -34,6 +34,7 @@ export interface WorkspaceSnapshot {
   lastError: string | null;
 }
 
+// Keep the persisted legacy key so Quasar retains existing unsynced edits.
 const DATABASE = "whatsnext-offline-v1";
 const LEASE_MS = 30_000;
 const keyOf = (value: { kind: EntityKind; id: string }) => `${value.kind}:${value.id}`;

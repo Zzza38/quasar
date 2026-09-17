@@ -35,7 +35,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existing Chromium binary. The build and development commands use Webpack; the container enables Next's standalone output with `WHATSNEXT_STANDALONE=1`.
+Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existing Chromium binary. The build and development commands use Webpack; the container enables Next's standalone output with `QUASAR_STANDALONE=1`.
 
 ## Implemented scope
 

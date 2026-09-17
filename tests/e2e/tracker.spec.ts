@@ -117,7 +117,7 @@ test('explicit community choice, class and task persistence, offline reload and 
   await page.waitForFunction(async () => {
     if (!navigator.serviceWorker.controller) return false;
     const names = await caches.keys();
-    for (const name of names) if (name.startsWith('whatsnext-public-shell-') && await (await caches.open(name)).match('/')) return true;
+    for (const name of names) if (name.startsWith('quasar-public-shell-') && await (await caches.open(name)).match('/')) return true;
     return false;
   });
   await context.setOffline(true);

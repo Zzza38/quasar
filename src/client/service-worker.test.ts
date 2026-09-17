@@ -17,6 +17,7 @@ function worker() {
   const requests: Array<{ path: string; credentials?: string }> = [];
   const notifications: Array<{ title: string; options: any }> = [];
   const opened: string[] = [];
+  const deletedCaches: string[] = [];
   let offline = false;
   let anonymousRedirect = false;
   let brokenBundle = false;
@@ -37,7 +38,8 @@ function worker() {
         match: async (key: string | { url: string }) => cache.get(address(key))?.clone(),
         put: async (key: string | { url: string }, value: Response) => { cache.set(address(key), value.clone()); },
       }),
-      keys: async () => ["whatsnext-public-shell-v2"], delete: async () => true,
+      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "unrelated-cache"],
+      delete: async (name: string) => { deletedCaches.push(name); return true; },
     },
     self: {
       location: { origin: ORIGIN },
@@ -59,7 +61,7 @@ function worker() {
     return resolved;
   }
   return {
-    cache, requests, dispatch, notifications, opened,
+    cache, requests, dispatch, notifications, opened, deletedCaches,
     offline: () => { offline = true; },
     redirect: () => { anonymousRedirect = true; },
     breakBundle: () => { brokenBundle = true; },
@@ -69,6 +71,12 @@ function worker() {
 }
 
 describe("public offline service worker", () => {
+  it("cleans up pre-rebrand and outdated shells while preserving current and unrelated caches", async () => {
+    const sw = worker();
+    await sw.dispatch("activate");
+    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2"]);
+  });
+
   it("prepares the shell and bundles for the first offline reload", async () => {
     const sw = worker();
     await sw.dispatch("install");

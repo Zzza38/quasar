@@ -1,6 +1,6 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "whatsnext-public-shell-v3";
+const CACHE = "quasar-public-shell-v3";
 const SHELL_PATHS = new Set(["/", "/admin"]);
 
 function publicShell(response, expectedPath) {
@@ -39,7 +39,8 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter((name) => name.startsWith("whatsnext-public-shell-") && name !== CACHE)
+    // Remove obsolete public shells from before the Quasar rebrand as well.
+    await Promise.all(names.filter((name) => (name.startsWith("quasar-public-shell-") || name.startsWith("whatsnext-public-shell-")) && name !== CACHE)
       .map((name) => caches.delete(name)));
     await self.clients.claim();
   })());

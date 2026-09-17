@@ -147,7 +147,7 @@ describe('durable synchronization', () => {
     expect(()=>f.service.sync(f.student,mutation(task,{...base,data:{...task,title:'Fake base'}}))).toThrow('base revision');
   });
   it('persists saved class/lunch data and receipts after database reopen', () => {
-    const directory=mkdtempSync(join(tmpdir(),'whatsnext-test-')); const path=join(directory,'test.sqlite');
+    const directory=mkdtempSync(join(tmpdir(),'quasar-test-')); const path=join(directory,'test.sqlite');
     try {
       const db=openDatabase(path); const id=randomUUID();
       db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id,id,'test@example.com','Test','Test User',new Date().toISOString());

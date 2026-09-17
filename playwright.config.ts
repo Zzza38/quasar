@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-process.env.E2E_DATABASE_PATH ||= join(mkdtempSync(join(tmpdir(),'whatsnext-browser-')), 'test.sqlite');
+process.env.E2E_DATABASE_PATH ||= join(mkdtempSync(join(tmpdir(),'quasar-browser-')), 'test.sqlite');
 process.env.E2E_AUTH_SECRET ||= 'test-only-secret-which-is-never-used-in-production-123456789';
 export default defineConfig({
   testDir: './tests/e2e', workers: 1, fullyParallel: false, timeout: 60_000,
