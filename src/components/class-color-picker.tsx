@@ -16,13 +16,26 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   const [lift, setLift] = useState(0);
   const [height, setHeight] = useState(4);
   const [ready, setReady] = useState(false);
+  const [surfaceVisible, setSurfaceVisible] = useState(false);
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const surface = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (open && window.matchMedia('(prefers-reduced-motion: reduce)').matches) setReady(true);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setReady(open);
+      setSurfaceVisible(open);
+    }
   }, [open]);
+  useEffect(() => {
+    if (open || !surfaceVisible) return;
+    // A hover reversed before its first frame may never emit transitionend.
+    const frame = requestAnimationFrame(() => {
+      if (!surface.current?.getAnimations().some((animation) => animation.playState === 'running')) setSurfaceVisible(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, surfaceVisible]);
   useLayoutEffect(() => {
     const measure = () => {
       if (!root.current || !content.current) return;
@@ -49,6 +62,7 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
     if (next && pending) return;
     if (next && !open) { setDraft(classColor(cls.id, 'class', cls.color).dot); setError(''); }
     if (next !== open) setReady(false);
+    if (next) setSurfaceVisible(true);
     setOpen(next);
   };
   const save = async (color: string | undefined) => {
@@ -58,18 +72,22 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
     finally { setPending(false); }
   };
 
-  return <div ref={root} data-color-picker-open={open} className="absolute -top-1 inset-x-0" style={{ zIndex: open ? 40 : 1 }}
+  return <div ref={root} data-color-picker-open={surfaceVisible} className="absolute -top-1 inset-x-0" style={{ zIndex: surfaceVisible ? 40 : 1 }}
     onPointerLeave={(event) => { if (event.pointerType === 'mouse') changeOpen(false); }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) changeOpen(false); }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); trigger.current?.focus(); } }}>
     <button ref={trigger} type="button" disabled={disabled} aria-label={`Change color for ${cls.name}`} aria-expanded={open} aria-controls={id}
       className="absolute inset-x-0 top-0 h-4 rounded-t-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       onClick={() => changeOpen(!open)} onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !disabled) changeOpen(true); }} />
-    <div id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
+    <div ref={surface} id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
       data-slot="class-color-expansion"
       className="absolute inset-x-0 overflow-hidden rounded-t-xl border-t-4 bg-card text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[top,height] duration-200 ease-out"
-      onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'height' && open) setReady(true); }}
-      style={{ top: open ? -lift : 0, height: open ? height : 4, borderTopColor: open ? draft : classColor(cls.id, 'class', cls.color).dot, pointerEvents: open ? 'auto' : 'none' }}>
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget || event.propertyName !== 'height') return;
+        if (open) setReady(true);
+        else setSurfaceVisible(false);
+      }}
+      style={{ top: open ? -lift : 0, height: open ? height : 4, visibility: surfaceVisible ? 'visible' : 'hidden', borderTopColor: open ? draft : classColor(cls.id, 'class', cls.color).dot, pointerEvents: open ? 'auto' : 'none' }}>
       <div ref={content} data-slot="class-color-controls" aria-hidden={!open || !ready} inert={!open || !ready}
         className="grid gap-3 p-3" style={{ visibility: open && ready ? 'visible' : 'hidden' }}>
       <div className="flex items-center justify-between gap-2">

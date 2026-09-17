@@ -616,6 +616,7 @@ test.describe('class color bar', () => {
 
   test('hover, keyboard and touch expose persistent color controls', async ({ page, context }, testInfo) => {
     const fixture = seed(); await authenticate(context, fixture.id);
+    await page.emulateMedia({ colorScheme: 'dark' });
     await page.goto('/#classes');
     await page.getByRole('button', { name: 'Add class', exact: true }).click();
     await dialog(page).getByLabel('Class name').fill('Spanish 2H');
@@ -624,6 +625,9 @@ test.describe('class color bar', () => {
     const bar = page.getByRole('button', { name: 'Change color for Spanish 2H' });
     const picker = page.getByRole('dialog', { name: 'Color for Spanish 2H' });
     const card = page.getByRole('listitem').filter({ has: bar });
+    const surface = card.locator('[data-slot="class-color-expansion"]');
+    await expect(surface).toHaveCSS('visibility', 'hidden');
+    await card.screenshot({ path: testInfo.outputPath('color-edge-idle.png') });
     const before = (await card.boundingBox())!;
     // Slow the actual CSS transition so the intermediate state is observable.
     await page.addStyleTag({ content: '[data-slot="class-color-expansion"] { transition-duration: 1s; }' });
@@ -634,6 +638,7 @@ test.describe('class color bar', () => {
     await expect(picker.getByRole('group', { name: 'Saturation and brightness' })).toBeVisible();
     expect(await picker.evaluate((element) => element.getAnimations().filter((animation) => animation.playState === 'running').length)).toBe(0);
     await expect(picker.getByRole('slider', { name: 'Hue' })).toBeVisible();
+    await expect(card).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
     await expect(page.locator('input[type=color]')).toHaveCount(0);
     await expect.poll(async () => (await picker.boundingBox())!.y).toBeLessThan(before.y);
     expect(await card.boundingBox()).toEqual(before);
@@ -647,6 +652,8 @@ test.describe('class color bar', () => {
     await page.mouse.move(1250, 650);
     await expect(bar).toHaveAttribute('aria-expanded', 'false');
     await expect(controls).toHaveCSS('visibility', 'hidden');
+    await expect(surface).toHaveCSS('visibility', 'hidden');
+    await card.screenshot({ path: testInfo.outputPath('color-edge-collapsed.png') });
     await bar.hover();
     await expect(controls).toHaveCSS('visibility', 'visible');
     await spectrum.click({ position: { x: 70, y: 35 } });
