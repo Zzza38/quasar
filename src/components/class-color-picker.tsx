@@ -14,19 +14,23 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [lift, setLift] = useState(0);
+  const [height, setHeight] = useState(4);
+  const [ready, setReady] = useState(false);
   const id = useId();
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const root = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const cancelClose = () => clearTimeout(closeTimer.current);
-  useEffect(() => () => clearTimeout(closeTimer.current), []);
+  useEffect(() => {
+    if (open && window.matchMedia('(prefers-reduced-motion: reduce)').matches) setReady(true);
+  }, [open]);
   useLayoutEffect(() => {
     const measure = () => {
       if (!root.current || !content.current) return;
       const mobileHeader = document.querySelector('.app-topbar')?.getBoundingClientRect();
       const top = mobileHeader?.height ? mobileHeader.bottom + 8 : 8;
-      setLift(Math.max(0, Math.min(content.current.offsetHeight, root.current.getBoundingClientRect().top - top)));
+      const expandedHeight = content.current.offsetHeight + 4;
+      setHeight(expandedHeight);
+      setLift(Math.max(0, Math.min(expandedHeight, root.current.getBoundingClientRect().top - top)));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -37,39 +41,37 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   }, []);
   useEffect(() => {
     if (!open) return;
-    const outside = (event: globalThis.PointerEvent) => { if (!pending && !root.current?.contains(event.target as Node)) setOpen(false); };
+    const outside = (event: globalThis.PointerEvent) => { if (!root.current?.contains(event.target as Node)) { setReady(false); setOpen(false); } };
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
-  }, [open, pending]);
+  }, [open]);
   const changeOpen = (next: boolean) => {
-    cancelClose();
-    if (pending) return;
+    if (next && pending) return;
     if (next && !open) { setDraft(classColor(cls.id, 'class', cls.color).dot); setError(''); }
+    if (next !== open) setReady(false);
     setOpen(next);
   };
-  const leave = () => {
-    cancelClose();
-    closeTimer.current = setTimeout(() => {
-      if (!pending && !root.current?.contains(document.activeElement)) setOpen(false);
-    }, 250);
-  };
   const save = async (color: string | undefined) => {
-    cancelClose(); setPending(true); setError('');
-    try { await onSave(color); setOpen(false); trigger.current?.focus(); }
+    setPending(true); setError('');
+    try { await onSave(color); setReady(false); setOpen(false); trigger.current?.focus(); }
     catch (err) { setError(errorMessage(err)); }
     finally { setPending(false); }
   };
 
   return <div ref={root} data-color-picker-open={open} className="absolute -top-1 inset-x-0" style={{ zIndex: open ? 40 : 1 }}
-    onPointerEnter={cancelClose} onPointerLeave={leave}
-    onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) leave(); }}
+    onPointerLeave={(event) => { if (event.pointerType === 'mouse') changeOpen(false); }}
+    onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) changeOpen(false); }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); trigger.current?.focus(); } }}>
     <button ref={trigger} type="button" disabled={disabled} aria-label={`Change color for ${cls.name}`} aria-expanded={open} aria-controls={id}
       className="absolute inset-x-0 top-0 h-4 rounded-t-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       onClick={() => changeOpen(!open)} onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !disabled) changeOpen(true); }} />
-    <div ref={content} id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
-      className="absolute inset-x-0 grid gap-3 rounded-t-xl border-t-4 bg-card p-3 text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[transform,clip-path,opacity] duration-200 ease-out"
-      style={{ top: -lift, borderTopColor: draft, transform: `translateY(${open ? 0 : lift}px)`, clipPath: open ? 'inset(0 0 0 0)' : 'inset(0 0 calc(100% - 4px) 0)', opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none' }}>
+    <div id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
+      data-slot="class-color-expansion"
+      className="absolute inset-x-0 overflow-hidden rounded-t-xl border-t-4 bg-card text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[top,height] duration-200 ease-out"
+      onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'height' && open) setReady(true); }}
+      style={{ top: open ? -lift : 0, height: open ? height : 4, borderTopColor: open ? draft : classColor(cls.id, 'class', cls.color).dot, pointerEvents: open ? 'auto' : 'none' }}>
+      <div ref={content} data-slot="class-color-controls" aria-hidden={!open || !ready} inert={!open || !ready}
+        className="grid gap-3 p-3" style={{ visibility: open && ready ? 'visible' : 'hidden' }}>
       <div className="flex items-center justify-between gap-2">
         <strong className="text-xs">Class color</strong>
         <Button size="sm" variant="ghost" icon="x" aria-label="Close color picker" disabled={pending} onClick={() => { changeOpen(false); trigger.current?.focus(); }} />
@@ -80,6 +82,7 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
         <Button size="sm" busy={pending} disabled={disabled} onClick={() => void save(draft)}>Save color</Button>
       </div>
       {error && <Hint tone="danger" role="alert">{error}</Hint>}
+      </div>
     </div>
   </div>;
 }

@@ -625,9 +625,14 @@ test.describe('class color bar', () => {
     const picker = page.getByRole('dialog', { name: 'Color for Spanish 2H' });
     const card = page.getByRole('listitem').filter({ has: bar });
     const before = (await card.boundingBox())!;
+    // Slow the actual CSS transition so the intermediate state is observable.
+    await page.addStyleTag({ content: '[data-slot="class-color-expansion"] { transition-duration: 1s; }' });
     await bar.hover();
     await expect(picker).toBeVisible();
+    const controls = card.locator('[data-slot="class-color-controls"]');
+    await expect(controls).toHaveCSS('visibility', 'hidden');
     await expect(picker.getByRole('group', { name: 'Saturation and brightness' })).toBeVisible();
+    expect(await picker.evaluate((element) => element.getAnimations().filter((animation) => animation.playState === 'running').length)).toBe(0);
     await expect(picker.getByRole('slider', { name: 'Hue' })).toBeVisible();
     await expect(page.locator('input[type=color]')).toHaveCount(0);
     await expect.poll(async () => (await picker.boundingBox())!.y).toBeLessThan(before.y);
@@ -637,6 +642,13 @@ test.describe('class color bar', () => {
     await page.screenshot({ path: testInfo.outputPath('class-color-picker.png') });
     const spectrum = picker.getByRole('group', { name: 'Saturation and brightness' });
     const hex = picker.getByLabel('Custom color for Spanish 2H');
+    // A focused input must not keep a mouse-hover panel pinned open.
+    await hex.focus();
+    await page.mouse.move(1250, 650);
+    await expect(bar).toHaveAttribute('aria-expanded', 'false');
+    await expect(controls).toHaveCSS('visibility', 'hidden');
+    await bar.hover();
+    await expect(controls).toHaveCSS('visibility', 'visible');
     await spectrum.click({ position: { x: 70, y: 35 } });
     const selected = await hex.inputValue();
     await spectrum.press('ArrowLeft');
@@ -663,6 +675,7 @@ test.describe('class color bar', () => {
     await expect(dialog(page).getByLabel('Room (optional)')).toHaveValue('214');
     await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await bar.tap();
     await expect(picker).toBeVisible();
     await expect(picker).toBeInViewport({ ratio: 1 });
