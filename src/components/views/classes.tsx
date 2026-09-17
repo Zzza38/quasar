@@ -72,7 +72,7 @@ export function ClassesView({ state }: { state: AppState }) {
     <section className="card card-pad grid gap-3" aria-labelledby="assignments-title">
       <SectionHeader title={<span id="assignments-title">Your class timetable</span>} description="Drag your classes into the schedule. Days run across the top, with periods and times down the side." />
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
-        {stale.map((periodId) => `${periodId} → ${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? personal.assignments[periodId]}`).join(', ')}
+        {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'} — assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
       <ClassAssignmentGrid schedule={schedule} personal={personal} save={state.savePersonal} disabled={!state.personalValid} />
     </section>

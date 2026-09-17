@@ -276,6 +276,7 @@ const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.s
 /** Read-only: call before accepting a new school revision; retain personal data until the student decides. */
 export function detectOverrideConflicts(previous: Schedule, current: Schedule, personal: PersonalSchedule): OverrideConflict[] {
   if (personal.customSchedule) return [];
+  const periodLabels = new Map([...current.periods, ...previous.periods].map(period => [period.id, period.label]));
   const conflicts: OverrideConflict[] = [];
   const add = (kind: OverrideConflict["kind"], target: string, message: string) => {
     const id = `${kind}:${target}`;
@@ -289,7 +290,12 @@ export function detectOverrideConflicts(previous: Schedule, current: Schedule, p
   for (const periodId of referencedPeriods) {
     const oldPeriod = previous.periods.find((entry) => entry.id === periodId);
     const newPeriod = current.periods.find((entry) => entry.id === periodId);
-    if (!newPeriod) add("period-removed", periodId, `Period ${oldPeriod?.label ?? periodId} is no longer in the school schedule. Your assignment and overrides are saved.`);
+    if (!newPeriod) {
+      const label = oldPeriod?.label ?? periodLabels.get(periodId);
+      const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
+      const subject = cls ? `Your class “${cls.name}” was assigned to ${label ? `“${label}”` : 'a period that is no longer listed'}` : label ? `The period “${label}”` : 'A period used by your personal adjustments';
+      add("period-removed", periodId, `${subject}${cls && label ? ', which is no longer listed in your school schedule' : cls ? '' : ' is no longer listed in your school schedule'}. Review it in your classes. Your class and personal adjustments are still saved.`);
+    }
     else if (oldPeriod && !equal(oldPeriod, newPeriod)) add("period-changed", periodId, `The school changed period ${newPeriod.label}. Review your saved class assignment or override.`);
   }
   for (const override of personal.cycleDayOverrides) {
