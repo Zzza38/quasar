@@ -6,7 +6,9 @@ import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type 
 import { addDays, browserTimeZone, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
-import { Button, Callout, Chip, Field, IconButton, Input, Segmented, Select, Toggle, WeekdayPicker } from './ui';
+import { Button, Callout, Chip, Field, Hint, IconButton, Input, Panel, Segmented, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
+import { Label } from './ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 
 type CycleDay = Schedule['cycleDays'][number];
 type Exception = Schedule['exceptions'][number];
@@ -59,17 +61,17 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
     onChange(next);
   };
   return <div className="grid gap-2">
-    {slots.length === 0 && <p className="hint">{emptyText}</p>}
-    {slots.map((slot, index) => <div key={slot.id} className="slot-row">
+    {slots.length === 0 && <Hint>{emptyText}</Hint>}
+    {slots.map((slot, index) => <div key={slot.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 min-[481px]:grid-cols-[minmax(0,1fr)_118px_118px_auto]">
       <Select small aria-label={`Slot ${index + 1} period`} value={slot.periodId} disabled={disabled} onChange={(event) => update(index, { periodId: event.target.value })}>
         {!periods.some((period) => period.id === slot.periodId) && <option value={slot.periodId}>{slot.periodId || 'Choose a period'}</option>}
         {periods.map((period) => <option key={period.id} value={period.id}>{period.label}{period.kind === 'lunch' ? ' (lunch)' : ''}</option>)}
       </Select>
-      <div className="slot-times contents max-[480px]:grid">
+      <div className="col-span-full grid grid-cols-2 gap-1.5 min-[481px]:contents">
         <ScheduleTimeInput label={`Slot ${index + 1} start`} value={slot.start} disabled={disabled} onChange={(start) => update(index, { start })} />
         <ScheduleTimeInput label={`Slot ${index + 1} end`} value={slot.end} disabled={disabled} onChange={(end) => update(index, { end })} />
       </div>
-      <div className="flex items-center gap-0.5">
+      <div className="col-start-2 row-start-1 flex items-center gap-0.5 min-[481px]:col-start-auto min-[481px]:row-start-auto">
         <IconButton size="sm" label={`Move slot ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} className="max-[480px]:hidden" />
         <IconButton size="sm" label={`Remove slot ${index + 1}`} icon="x" disabled={disabled} onClick={() => onChange(slots.filter((_, position) => position !== index))} />
       </div>
@@ -84,21 +86,25 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
   const [section, setSection] = useState<Section>(initialSection);
   const issues = useMemo(() => describeIssues(value), [value]);
   const set = (patch: Partial<Schedule>) => onChange({ ...value, ...patch });
-  return <div className="grid gap-4">
-    <div className="overflow-x-auto -mx-1 px-1">
-      <Segmented<Section> label="Schedule editor section" value={section} onChange={setSection} options={[
-        { value: 'basics', label: 'Basics' }, { value: 'periods', label: `Periods · ${value.periods.length}` }, { value: 'days', label: `Days · ${value.cycleDays.length}` }, { value: 'exceptions', label: `Exceptions · ${value.exceptions.length}` }, { value: 'preview', label: 'Preview' },
-      ]} />
+  return <Tabs value={section} onValueChange={(next) => setSection(next as Section)} className="gap-4">
+    <div className="-mx-1 overflow-x-auto px-1">
+      <TabsList aria-label="Schedule editor section">
+        <TabsTrigger value="basics" className="px-3">Basics</TabsTrigger>
+        <TabsTrigger value="periods" className="px-3">Periods · {value.periods.length}</TabsTrigger>
+        <TabsTrigger value="days" className="px-3">Days · {value.cycleDays.length}</TabsTrigger>
+        <TabsTrigger value="exceptions" className="px-3">Exceptions · {value.exceptions.length}</TabsTrigger>
+        <TabsTrigger value="preview" className="px-3">Preview</TabsTrigger>
+      </TabsList>
     </div>
     {issues.length > 0 && <Callout tone="warning" icon="alert" title={`${issues.length === 1 ? 'One thing' : `${issues.length} things`} to fix before saving`} role="alert">
-      <ul className="list-disc pl-4 grid gap-0.5 text-[13.5px]">{issues.slice(0, 8).map((issue) => <li key={issue}>{issue}</li>)}{issues.length > 8 && <li>…and {issues.length - 8} more</li>}</ul>
+      <ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{issues.slice(0, 8).map((issue) => <li key={issue}>{issue}</li>)}{issues.length > 8 && <li>…and {issues.length - 8} more</li>}</ul>
     </Callout>}
-    {section === 'basics' && <Basics value={value} set={set} disabled={disabled} />}
-    {section === 'periods' && <Periods value={value} set={set} disabled={disabled} />}
-    {section === 'days' && <Days value={value} set={set} disabled={disabled} personal={personal} />}
-    {section === 'exceptions' && <Exceptions value={value} set={set} disabled={disabled} />}
-    {section === 'preview' && <Preview value={value} />}
-  </div>;
+    <TabsContent value="basics"><Basics value={value} set={set} disabled={disabled} /></TabsContent>
+    <TabsContent value="periods"><Periods value={value} set={set} disabled={disabled} /></TabsContent>
+    <TabsContent value="days"><Days value={value} set={set} disabled={disabled} personal={personal} /></TabsContent>
+    <TabsContent value="exceptions"><Exceptions value={value} set={set} disabled={disabled} /></TabsContent>
+    <TabsContent value="preview"><Preview value={value} /></TabsContent>
+  </Tabs>;
 }
 
 function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
@@ -111,18 +117,18 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
         {!zones.includes(value.timeZone) && <option value={value.timeZone}>{value.timeZone}</option>}
         {zones.map((zone) => <option key={zone} value={zone}>{zone.replaceAll('_', ' ')}</option>)}
       </Select>
-      <Button size="sm" disabled={disabled} onClick={() => set({ timeZone: browserTimeZone() })}>Use computer time zone</Button>
+      <div><Button size="sm" disabled={disabled} onClick={() => set({ timeZone: browserTimeZone() })}>Use computer time zone</Button></div>
     </Field>
     <div className="grid gap-2">
-      <span className="label">School days</span>
+      <Label className="text-muted-foreground">School days</Label>
       <WeekdayPicker label="School days" value={value.schoolWeekdays} disabled={disabled} onChange={(schoolWeekdays) => set({ schoolWeekdays, ...(sameAdvance && !singleDay ? { advanceWeekdays: schoolWeekdays } : {}) })} />
     </div>
     {!singleDay && <div className="grid gap-2">
-      <span className="label">Rotation advances after these days</span>
+      <Label className="text-muted-foreground">Rotation advances after these days</Label>
       <Toggle label="Same as school days" checked={sameAdvance} disabled={disabled} onChange={(checked) => set({ advanceWeekdays: checked ? value.schoolWeekdays : value.advanceWeekdays.filter((day) => value.schoolWeekdays.includes(day)) })} />
       {!sameAdvance && <WeekdayPicker label="Advance days" value={value.advanceWeekdays} disabled={disabled} onChange={(advanceWeekdays) => set({ advanceWeekdays })} />}
     </div>}
-    {!singleDay && <div className="panel p-4 grid gap-3">
+    {!singleDay && <Panel className="grid gap-3">
       <strong className="text-sm">Starting point</strong>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Date" htmlFor="anchor-date"><Input id="anchor-date" type="date" value={value.anchorDate} disabled={disabled} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value) set({ anchorDate: event.target.value }); }} /></Field>
@@ -133,7 +139,7 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
           </Select>
         </Field>
       </div>
-    </div>}
+    </Panel>}
   </div>;
 }
 
@@ -158,8 +164,8 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
   };
   return <div className="grid gap-4">
     <div className="grid gap-2">
-      {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 items-center">
-        <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <span className="hint">Unscheduled</span>}</div>
+      {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+        <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <Hint>Unscheduled</Hint>}</div>
         <Select small aria-label={`Period ${index + 1} type`} value={period.kind} disabled={disabled} className="w-[104px]" onChange={(event) => update(index, { kind: event.target.value as SchoolPeriod['kind'] })}>
           <option value="class">Class</option><option value="lunch">Lunch</option><option value="other">Other</option>
         </Select>
@@ -169,7 +175,7 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
         </div>
       </div>)}
     </div>
-    <div className="flex gap-2 flex-wrap">
+    <div className="flex flex-wrap gap-2">
       <Button size="sm" icon="plus" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId(`period-${value.periods.length + 1}`, value.periods.map((period) => period.id)), label: `Period ${value.periods.length + 1}`, kind: 'class' }] })}>Add period</Button>
       {!value.periods.some((period) => period.kind === 'lunch') && <Button size="sm" icon="coffee" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId('lunch', value.periods.map((period) => period.id)), label: 'Lunch', kind: 'lunch' }] })}>Add lunch</Button>}
     </div>
@@ -196,13 +202,13 @@ function Days({ value, set, disabled, personal }: { personal?: PersonalSchedule;
   });
   return <div className="grid gap-4">
     <ScheduleGrid personal={personal} value={value} onChange={(next) => set(next)} disabled={disabled} onEditDay={setOpen} onRemoveDay={(id) => { if (confirm(`Remove ${value.cycleDays.find(day => day.id === id)?.label}? Dates will be recalculated across the remaining days.`)) removeDay(id); }} />
-    {value.cycleDays.filter(day => day.id === open).map(day => <div key={day.id} className="panel p-3 grid gap-3">
-      <div className="flex items-center gap-2"><strong className="text-sm">{day.label} times</strong><span className="spacer" />
+    {value.cycleDays.filter(day => day.id === open).map(day => <Panel key={day.id} className="grid gap-3 p-3">
+      <div className="flex items-center gap-2"><strong className="text-sm">{day.label} times</strong><Spacer />
         <Button size="sm" disabled={disabled || !day.slots.length} onClick={() => { if (confirm(`Apply the times from ${day.label} to every other day, keeping each day's period order?`)) copyTimesToAll(day); }}>Copy times to all days</Button>
         <IconButton icon="x" label="Close day times" onClick={() => setOpen(null)} />
       </div>
       <SlotsEditor slots={day.slots} periods={value.periods} disabled={disabled} onChange={(slots) => updateDay(day.id, { slots })} />
-    </div>)}
+    </Panel>)}
     <div><Button size="sm" icon="plus" disabled={disabled || value.cycleDays.length >= 366} onClick={addDay}>Add rotation day</Button></div>
   </div>;
 }
@@ -225,20 +231,20 @@ function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Pa
     setEditing(date);
   };
   return <div className="grid gap-4">
-    {sorted.length === 0 && <p className="hint">No exceptions yet.</p>}
+    {sorted.length === 0 && <Hint>No exceptions yet.</Hint>}
     <div className="grid gap-2">
       {sorted.map((exception) => {
         const expanded = editing === exception.date;
-        return <div key={exception.date} className="card" style={{ boxShadow: 'none' }}>
+        return <div key={exception.date} className="overflow-hidden rounded-xl border bg-card">
           <div className="flex items-center gap-3 p-3">
             <div className="min-w-0 flex-1">
               <strong className="text-sm">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
-              <div className="hint">{summarizeException(exception, value)}</div>
+              <Hint>{summarizeException(exception, value)}</Hint>
             </div>
             <Button size="sm" variant="ghost" onClick={() => setEditing(expanded ? null : exception.date)} aria-expanded={expanded}>{expanded ? 'Done' : 'Edit'}</Button>
             <IconButton size="sm" label={`Remove exception on ${exception.date}`} icon="trash" disabled={disabled} onClick={() => replace(exception.date, null)} />
           </div>
-          {expanded && <div className="border-t border-border p-3 grid gap-3 bg-surface-2/60">
+          {expanded && <div className="grid gap-3 border-t bg-muted/60 p-3">
             <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(exception.date, next)} />
           </div>}
         </div>;
@@ -258,9 +264,9 @@ export function ExceptionForm({ exception, schedule, onChange, disabled }: { exc
   };
   const normallyAdvances = schedule.advanceWeekdays.includes(new Date(`${exception.date}T12:00:00Z`).getUTCDay() === 0 ? 7 : new Date(`${exception.date}T12:00:00Z`).getUTCDay());
   return <>
-    <div className="grid gap-3 sm:grid-cols-[180px_1fr] items-end">
+    <div className="grid items-end gap-3 sm:grid-cols-[180px_1fr]">
       <Field label="Date" htmlFor={`exception-date-${exception.date}`}><Input id={`exception-date-${exception.date}`} small type="date" value={exception.date} disabled={disabled} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value && !schedule.exceptions.some((entry) => entry.date === event.target.value)) onChange({ ...exception, date: event.target.value }); }} /></Field>
-      <Segmented label="Exception type" value={exception.kind} onChange={change} options={kinds} />
+      <Segmented label="Exception type" value={exception.kind} onChange={change} options={kinds} disabled={disabled} />
     </div>
     {exception.kind === 'reset' && <Field label="Rotation day on this date" htmlFor={`reset-${exception.date}`}>
       <Select id={`reset-${exception.date}`} small value={exception.cycleDayId} disabled={disabled} onChange={(event) => onChange({ ...exception, cycleDayId: event.target.value })}>
@@ -269,9 +275,9 @@ export function ExceptionForm({ exception, schedule, onChange, disabled }: { exc
     </Field>}
     {exception.kind === 'reset' && <Toggle label="School is closed on this date" checked={exception.closed === true} disabled={disabled} onChange={(closed) => onChange(closed ? { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle, closed: true } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />}
     {exception.kind === 'reset' && !exception.closed && <Toggle label="Use special periods on this date" checked={exception.slots !== undefined} disabled={disabled} onChange={(special) => onChange(special ? { ...exception, slots: [] } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />}
-    {(exception.kind === 'replacement' || (exception.kind === 'reset' && exception.slots !== undefined)) && <div className="grid gap-1.5"><span className="label">Periods on this date</span><SlotsEditor slots={exception.slots ?? []} periods={schedule.periods} disabled={disabled} onChange={(slots) => onChange({ ...exception, slots })} /></div>}
+    {(exception.kind === 'replacement' || (exception.kind === 'reset' && exception.slots !== undefined)) && <div className="grid gap-1.5"><Label className="text-muted-foreground">Periods on this date</Label><SlotsEditor slots={exception.slots ?? []} periods={schedule.periods} disabled={disabled} onChange={(slots) => onChange({ ...exception, slots })} /></div>}
     {schedule.cycleDays.length > 1 && <Toggle label={exception.kind === 'closure' ? 'The rotation still advances past this date' : 'This date counts as a rotation day'} checked={exception.advanceCycle} disabled={disabled} onChange={(advanceCycle) => onChange({ ...exception, advanceCycle })} />}
-    {schedule.cycleDays.length > 1 && exception.advanceCycle !== normallyAdvances && <p className="hint">This differs from a normal {normallyAdvances ? 'advancing' : 'non-advancing'} weekday, so the following dates shift by one rotation day.</p>}
+    {schedule.cycleDays.length > 1 && exception.advanceCycle !== normallyAdvances && <Hint>This differs from a normal {normallyAdvances ? 'advancing' : 'non-advancing'} weekday, so the following dates shift by one rotation day.</Hint>}
   </>;
 }
 
@@ -286,6 +292,7 @@ export function Preview({ value }: { value: Schedule }) {
   const schedule = parsed.data;
   const days = Array.from({ length: 14 }, (_, index) => addDays(weekStart, index)).map((entry) => ({ date: entry, day: resolveDay(schedule, entry) }));
   const selected = resolveDay(schedule, date);
+  const strip = (offset: number) => days.slice(offset, offset + 7).map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '—' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}` }));
   return <div className="grid gap-4">
     <div className="flex items-center justify-between gap-2">
       <IconButton label="Previous two weeks" icon="chevronLeft" onClick={() => setWeekStart(addDays(weekStart, -14))} />
@@ -293,23 +300,20 @@ export function Preview({ value }: { value: Schedule }) {
       <IconButton label="Next two weeks" icon="chevronRight" onClick={() => setWeekStart(addDays(weekStart, 14))} />
     </div>
     <div className="grid gap-1">
-      {[0, 7].map((offset) => <div key={offset} className="week-strip">
-        {days.slice(offset, offset + 7).map(({ date: entry, day }) => <button key={entry} type="button" className={`week-day${entry === today ? ' today' : ''}${day.closed ? ' closed' : ''}`} aria-pressed={entry === date} onClick={() => setDate(entry)} aria-label={`${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}`}>
-          <span>{formatDate(entry, { weekday: 'short' }).slice(0, 3)}</span><strong>{Number(entry.slice(8))}</strong><small>{day.closed ? '—' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`}</small>
-        </button>)}
-      </div>)}
+      <WeekStrip days={strip(0)} selected={date} today={today} onSelect={setDate} />
+      <WeekStrip days={strip(7)} selected={date} today={today} onSelect={setDate} />
     </div>
-    <div className="panel p-4 grid gap-2">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
+    <Panel className="grid gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <strong>{formatDate(date, { weekday: 'long', year: true })}</strong>
         {selected.closed ? <Chip>No school</Chip> : <Chip tone="accent">{selected.cycleDayLabel}</Chip>}
       </div>
-      {!selected.closed && selected.periods.length === 0 && <p className="hint">No periods on this day.</p>}
+      {!selected.closed && selected.periods.length === 0 && <Hint>No periods on this day.</Hint>}
       {selected.periods.length > 0 && <ul className="grid gap-1 text-sm">
-        {selected.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.label}{period.kind === 'lunch' ? ' · lunch' : ''}</span><span className="tabular text-text-2">{formatRange(period.start, period.end)}</span></li>)}
+        {selected.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.label}{period.kind === 'lunch' ? ' · lunch' : ''}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}
       </ul>}
-      {selected.issues.length > 0 && <p className="hint" style={{ color: 'var(--danger-text)' }}>{selected.issues.length} period(s) could not be placed on this date.</p>}
-    </div>
+      {selected.issues.length > 0 && <Hint tone="danger">{selected.issues.length} period(s) could not be placed on this date.</Hint>}
+    </Panel>
   </div>;
 }
 

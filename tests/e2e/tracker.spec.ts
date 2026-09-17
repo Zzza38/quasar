@@ -28,6 +28,50 @@ async function authenticate(context: BrowserContext, id: string) {
 const saved = (page: Page) => page.getByRole('status').filter({ hasText: /^Saved$/ }).first();
 const dialog = (page: Page) => page.getByRole('dialog');
 
+test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
+  await page.goto('/');
+  const countdown = page.getByRole('button', { name: /^Ends in/ });
+  const tails = countdown.locator(':scope > span').filter({ has: page.locator('span') });
+  await expect(countdown).toBeVisible();
+  await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+  await countdown.hover();
+  await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
+  await expect.poll(async () => (await tails.first().boundingBox())?.width).toBe(0);
+  await expect.poll(async () => (await tails.last().boundingBox())?.width ?? 0).toBeGreaterThan(10);
+  await page.clock.setFixedTime(new Date('2026-09-17T12:51:38Z'));
+  await expect(countdown).toHaveAccessibleName('Ends in 8:22 (minutes and seconds)');
+  await page.mouse.move(0, 0);
+  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+  await page.keyboard.press('Tab');
+  await countdown.focus();
+  await expect(countdown).toHaveAccessibleName('Ends in 8:22 (minutes and seconds)');
+  await page.keyboard.press('Tab');
+  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+});
+
+test.describe('touch countdown', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('tapping toggles seconds and respects reduced motion', async ({ page, context }) => {
+    const fixture = seed(); await authenticate(context, fixture.id);
+    await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    const countdown = page.getByRole('button', { name: /^Ends in/ });
+    await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+    await countdown.tap();
+    await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
+    await expect(countdown).toHaveAttribute('aria-pressed', 'true');
+    await expect(countdown.locator(':scope > span').last()).toHaveCSS('transition-duration', '0s');
+    await countdown.tap();
+    await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+    await expect(countdown).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
 async function quickAdd(page: Page, title: string) {
   await page.getByLabel('New task').fill(title);
   await page.getByLabel('New task').press('Enter');
@@ -174,7 +218,7 @@ test('shared schedule edits use the structured editor and appear as a reviewable
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /^Periods/ }).click();
+  await dialog(page).getByRole('tab', { name: /^Periods/ }).click();
   await dialog(page).getByLabel('Period 1 name').fill('Advisory');
   await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
   await expect(dialog(page)).toBeHidden();
@@ -227,9 +271,9 @@ test('empty tasks fill the available width with one responsive navigation shell'
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
   await page.goto('/#tasks');
   await expect(page.getByRole('heading', { name: 'All clear', exact: true })).toBeVisible();
-  for (const width of [2048, 1280, 900, 899, 390]) {
+  for (const width of [2048, 1280, 1024, 1023, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    const desktop = width >= 900;
+    const desktop = width >= 1024;
     await expect(page.locator('.app-sidebar')).toBeVisible({ visible: desktop });
     await expect(page.locator('.app-topbar')).toBeVisible({ visible: !desktop });
     await expect(page.locator('.tabbar')).toBeVisible({ visible: !desktop });
@@ -256,7 +300,7 @@ test('remaining screens render without horizontal overflow on desktop and mobile
     await fits();
     await page.screenshot({ path: testInfo.outputPath(`school-${name}.png`), fullPage: true });
     await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-    await dialog(page).getByRole('button', { name: /^Days/ }).click();
+    await dialog(page).getByRole('tab', { name: /^Days/ }).click();
     await page.screenshot({ path: testInfo.outputPath(`editor-${name}.png`) });
     await page.keyboard.press('Escape');
   }
@@ -267,7 +311,7 @@ test('remaining screens render without horizontal overflow on desktop and mobile
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'ocean');
   await page.getByRole('button', { name: /Browser Student/ }).click();
   await dialog(page).getByRole('radio', { name: 'Indigo' }).click();
-  await dialog(page).getByRole('button', { name: 'Dark' }).click();
+  await dialog(page).getByRole('radio', { name: 'Dark' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'indigo');
   await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark');
   await page.screenshot({ path: testInfo.outputPath('theme-picker.png') });
@@ -405,40 +449,40 @@ test('edits one high-school grade and copies its schedule to other grades', asyn
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  const grades = dialog(page).getByRole('group', { name: 'Grade to edit', exact: true });
-  await expect(grades.getByRole('button', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(grades.getByRole('button')).toHaveText(['Grade 9', 'Grade 10', 'Grade 11', 'Grade 12']);
+  const grades = dialog(page).getByRole('radiogroup', { name: 'Grade to edit', exact: true });
+  await expect(grades.getByRole('radio', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(grades.getByRole('radio')).toHaveText(['Grade 9', 'Grade 10', 'Grade 11', 'Grade 12']);
   await expect(dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 9', exact: true })).toHaveCount(0);
   await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await dialog(page).getByLabel('Day 1 name', { exact: true }).fill('Junior day');
-  await grades.getByRole('button', { name: 'Grade 11', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await grades.getByRole('radio', { name: 'Grade 11', exact: true }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
-  await grades.getByRole('button', { name: 'Grade 9 *', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await grades.getByRole('radio', { name: 'Grade 9 *', exact: true }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
   await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
   await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
   await expect(dialog(page)).toHaveCount(0);
-  await page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 9', exact: true }).click();
+  await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 9', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
-  await grades.getByRole('button', { name: 'Grade 10', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await grades.getByRole('radio', { name: 'Grade 10', exact: true }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
-  await grades.getByRole('button', { name: 'Grade 12', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await grades.getByRole('radio', { name: 'Grade 12', exact: true }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
   await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 11', exact: true }).click();
+  await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 11', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
   await dialog(page).getByRole('group', { name: 'Copy from', exact: true }).getByRole('button', { name: 'Grade 9', exact: true }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
@@ -450,7 +494,7 @@ test('schedule times infer AM and PM while typing and allow manual overrides', a
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await dialog(page).getByRole('button', { name: `Edit times for ${fixture.school.schedule.cycleDays[0].label}`, exact: true }).click();
   const end = dialog(page).getByLabel('Slot 4 end', { exact: true });
   const meridiem = dialog(page).getByRole('button', { name: 'Slot 4 end AM/PM', exact: true });
@@ -482,7 +526,7 @@ test('schedule times infer AM and PM while typing and allow manual overrides', a
   await expect(dialog(page)).toHaveCount(0);
   await page.reload();
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await dialog(page).getByRole('button', { name: `Edit times for ${fixture.school.schedule.cycleDays[0].label}`, exact: true }).click();
   await expect(end).toHaveValue('1:30');
   await expect(meridiem).toHaveText('PM');
@@ -494,7 +538,7 @@ test('time canvas fits desktop, groups weeks, and drags and resizes freely timed
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('group', { name: 'School days', exact: true }).getByRole('button', { name: 'Sat', exact: true }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await dialog(page).getByRole('button', { name: 'Add rotation day' }).click();
   await dialog(page).getByRole('button', { name: 'Add rotation day' }).click();
   await expect(dialog(page).getByRole('region', { name: /Rotation week/ })).toHaveCount(2);
@@ -514,7 +558,7 @@ test('time canvas fits desktop, groups weeks, and drags and resizes freely timed
   await expect(dialog(page)).toHaveCount(0);
   await page.reload();
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 2:00–3:00 PM: D', exact: true })).toHaveCount(1);
 });
 
@@ -585,7 +629,7 @@ test('large period palette stays beside the canvas on desktop', async ({ page, c
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   const palette = dialog(page).locator('.timetable-palette');
   const canvas = dialog(page).locator('.time-canvas-scroll').first();
   const paletteBox = (await palette.boundingBox())!;
@@ -607,7 +651,7 @@ test('short adjacent blocks have readable compact labels and full details', asyn
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/#school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
-  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
   const first = day.getByRole('button', { name: 'Day 1, 8:00–8:05 AM: Morning advisory and announcements', exact: true });
   const second = day.getByRole('button', { name: 'Day 1, 8:05–8:10 AM: B', exact: true });

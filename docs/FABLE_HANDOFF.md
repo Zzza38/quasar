@@ -15,7 +15,7 @@ The presentation layer was rebuilt on 2026-09-11 (see [UI_REDESIGN.md](../UI_RED
 | Personal adjustments | [overrides.tsx](../src/components/overrides.tsx) | Date sheet (close/reopen/custom periods/shift), cycle-day sheet, private schedule sheet, adjustments list. |
 | Conflicts and reviews | [conflicts.tsx](../src/components/conflicts.tsx) | Field-level `DiffTable`, draft protection while editing, device conflicts, school-correction review with `detectOverrideConflicts`. |
 | Owner support | [admin.tsx](../src/components/admin.tsx) | Inbox, schools table, review sheet with editor, approve and lock. |
-| Primitives and styling | [ui.tsx](../src/components/ui.tsx), [icon.tsx](../src/components/icon.tsx), [format.ts](../src/lib/format.ts), [globals.css](../src/app/globals.css) | Tokens and light/dark themes. Custom CSS is in `@layer base` / `@layer components` so Tailwind utilities can override it. |
+| Primitives and styling | [primitives.tsx](../src/components/primitives.tsx), [ui/](../src/components/ui/), [icon.tsx](../src/components/icon.tsx), [format.ts](../src/lib/format.ts), [globals.css](../src/app/globals.css) | `ui/` holds shadcn/ui components (Radix base, configured in `components.json`); `primitives.tsx` composes them into the app vocabulary (`Button`, `Field`, `Chip`, `Callout`, `Modal`, `Segmented`, `Toggle`, `Section`, `WeekStrip`). `globals.css` maps the light/dark + accent theme system onto shadcn's CSS variables (`--primary`, `--muted`, `--sidebar`, …) and keeps only the timetable canvas as hand-written CSS. `icon.tsx` maps short names to lucide icons. |
 
 ## Editing rules the forms follow
 

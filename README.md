@@ -2,7 +2,9 @@
 
 Phases 1 and 2 of [PLAN.md](PLAN.md): a personal school schedule and task tracker. The UI is a phone-first app with five views (Today, Schedule, Tasks, Classes, School) behind hash routes, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
 
-Built with Next.js App Router, TypeScript, Tailwind CSS, tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.
+Built with Next.js App Router, TypeScript, Tailwind CSS with [shadcn/ui](https://ui.shadcn.com) (Radix primitives, lucide icons), tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.
+
+The shadcn-owned components live in `src/components/ui/` (managed by `components.json`; add more with `npx shadcn@latest add <name>`). App-level composites built on them (`Button`, `Field`, `Chip`, `Callout`, `Modal`, `Segmented`, `Section`, …) live in `src/components/primitives.tsx`.
 
 ## Run locally
 

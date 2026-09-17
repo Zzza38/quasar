@@ -5,7 +5,9 @@ import { buildTimeAxis } from './time-axis';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import type { Schedule, ScheduleSlot, PersonalSchedule } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
-import { Button, IconButton, Input } from './ui';
+import { cn } from '@/lib/utils';
+import { Button, IconButton, Input } from './primitives';
+import { Button as ShadButton } from './ui/button';
 import { clockTime, minutes, placeTimedPeriod, type PeriodPlacement } from './schedule-placement';
 
 const dragType = 'application/x-quasar-period';
@@ -76,7 +78,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
   return <div className="timetable-workspace">
-    <aside className="timetable-palette panel p-3 grid gap-2">
+    <aside className="timetable-palette grid gap-2 rounded-lg bg-muted p-3">
       <strong className="text-sm">Classes & periods</strong>
       <div className="timetable-palette-items" aria-label="Available periods">
         {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
@@ -84,19 +86,20 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           const label = cls ? (personalClassesOnly ? cls.name : `${cls.name} · ${period.label}`) : period.label;
           const color = classColor(cls?.id ?? period.id, period.kind, cls?.color);
           const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
-          return <button key={period.id} type="button" className="btn btn-sm" draggable={!disabled} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={selected?.periodId === period.id && !selected.dayId}
-            style={{ borderColor: color.dot, background: color.soft }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">Unscheduled</span>}</span></button>;
+          const active = selected?.periodId === period.id && !selected.dayId;
+          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab text-foreground shadow-none', active && 'ring-2 ring-ring/60')} draggable={!disabled} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
+            style={{ borderColor: color.dot, background: color.soft }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">Unscheduled</span>}</span></ShadButton>;
         })}
         {selected && <Button size="sm" variant="ghost" onClick={() => { setSelected(null); setHover(null); }}>Cancel selection</Button>}
       </div>
     </aside>
     <div className="timetable-content">
-      <p role="status" className={message ? 'hint' : 'sr-only'}>{message}</p>
+      <p role="status" className={message ? 'text-xs text-muted-foreground' : 'sr-only'}>{message}</p>
       {weeks.map((days, weekIndex) => <section key={days[0].id} className="grid gap-2 min-w-0" aria-label={`Rotation week ${weekIndex + 1}`}>
         <h3 className="text-sm font-semibold">Week {weekIndex + 1}</h3>
         <div className="time-canvas-scroll">
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
-            <div className="time-canvas-heading hint">Time</div>
+            <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>
             {days.map((day, index) => <div key={day.id} className="time-canvas-heading">
               <Input small aria-label={`Day ${weekIndex * weekLength + index + 1} name`} value={day.label} maxLength={120} disabled={disabled} onChange={event => onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label: event.target.value } : entry) })} />
               <div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => onEditDay(day.id)}>Edit times<span className="sr-only"> for {day.label}</span></Button><IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => onRemoveDay(day.id)} /></div>
@@ -118,7 +121,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const active = resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
                 const start = active?.start ?? minutes(slot.start); const end = active?.end ?? minutes(slot.end);
                 const compact = axis.y(end) - axis.y(start) < 48;
-                return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : ''}`} style={{ top: axis.y(start), height: axis.y(end) - axis.y(start), borderColor: color.dot, background: isGuide ? 'var(--surface-2)' : `color-mix(in srgb, ${color.dot} 22%, var(--surface))` }}>
+                return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : ''}`} style={{ top: axis.y(start), height: axis.y(end) - axis.y(start), borderColor: color.dot, background: isGuide ? 'var(--muted)' : `color-mix(in srgb, ${color.dot} 22%, var(--card))` }}>
                   <button type="button" title={`${cls?.name ?? period?.label ?? slot.periodId} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" draggable={!disabled} disabled={disabled} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${cls?.name ?? period?.label ?? slot.periodId}`}
                     onDragStart={event => beginDrag(event, { periodId: slot.periodId, dayId: day.id, slotId: slot.id })} onDragEnd={() => setHover(null)} onClick={() => { if (selected && onAssign) { placeAt(selected, day.id, minutes(slot.start)); return; } if (isGuide) { setMessage('Select a class first, then tap this school block.'); return; } setSelected({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }); setMessage('Select another time to move this block.'); }}>
                     <strong>{cls?.name ?? period?.label ?? slot.periodId}</strong>{isGuide && <span>School block · drop class here</span>}<span>{formatRange(clockTime(start), clockTime(end))}</span>

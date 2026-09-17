@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { Button, ErrorText } from './ui';
+import { Button, ErrorText, Hint } from './primitives';
+import { Label } from './ui/label';
 
 function applicationKey(value: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
@@ -80,9 +81,9 @@ export function NotificationSettings({ accountId, online }: { accountId: string;
     : enabled ? 'Reminders are enabled on this browser. Choose a reminder when editing a task. Delivery depends on your browser and connection.'
     : 'Enable reminders on this browser, then choose a reminder when editing a task. Task details stay hidden in notifications.';
   return <div className="grid gap-2">
-    <span className="label">Task reminders</span>
-    <p className="hint">{description}</p>
+    <Label className="text-muted-foreground">Task reminders</Label>
+    <Hint>{description}</Hint>
     <ErrorText>{error}</ErrorText>
-    {supported && <Button size="sm" busy={busy} disabled={!online || (!enabled && (!config?.enabled || permission === 'denied'))} onClick={enabled ? disable : enable}>{enabled ? 'Disable on this browser' : 'Enable browser reminders'}</Button>}
+    {supported && <div><Button size="sm" icon="bell" busy={busy} disabled={!online || (!enabled && (!config?.enabled || permission === 'denied'))} onClick={enabled ? disable : enable}>{enabled ? 'Disable on this browser' : 'Enable browser reminders'}</Button></div>}
   </div>;
 }

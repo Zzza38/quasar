@@ -7,7 +7,7 @@ import { slugId } from '@/lib/format';
 import { saveTimetableEdit } from './personal-timetable';
 import { ScheduleGrid } from './schedule-grid';
 import { SlotsEditor } from './schedule-editor';
-import { Button, Callout } from './ui';
+import { Button, Callout, Hint, Panel } from './primitives';
 
 export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
   schedule: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean;
@@ -49,14 +49,14 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
         const days = draft.cycleDays.filter(day => day.id !== id);
         if (days.length && confirm('Remove this day from your private rotation?')) void persist({ ...draft, cycleDays: days, anchorCycleDayId: draft.anchorCycleDayId === id ? days[0].id : draft.anchorCycleDayId, exceptions: draft.exceptions.filter(entry => entry.kind !== 'reset' || entry.cycleDayId !== id) });
       }} />
-    {draft.cycleDays.filter(day => day.id === editing).map(day => <div key={day.id} className="panel p-3 grid gap-2"><strong>{day.label} times</strong>
+    {draft.cycleDays.filter(day => day.id === editing).map(day => <Panel key={day.id} className="grid gap-2 p-3"><strong className="text-sm">{day.label} times</strong>
       <SlotsEditor slots={editedSlots} periods={draft.periods} disabled={disabled || pending} onChange={setEditedSlots} />
-      <Button size="sm" disabled={pending || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { void persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }); setEditing(null); }}>Save times</Button>
-    </div>)}
+      <div><Button size="sm" disabled={pending || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { void persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }); setEditing(null); }}>Save times</Button></div>
+    </Panel>)}
     <div><Button size="sm" icon="plus" disabled={disabled || pending || draft.cycleDays.length >= 366} onClick={() => {
       const id = slugId(`day-${draft.cycleDays.length + 1}`, draft.cycleDays.map(day => day.id));
       void persist({ ...draft, cycleDays: [...draft.cycleDays, { id, label: `Day ${draft.cycleDays.length + 1}`, slots: [] }] });
     }}>Add rotation day</Button></div>
-    {pending && <p className="hint" role="status">Saving timetable…</p>}
+    {pending && <Hint role="status">Saving timetable…</Hint>}
   </div>;
 }

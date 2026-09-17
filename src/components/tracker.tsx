@@ -8,8 +8,9 @@ import { todayIn } from '@/lib/format';
 import { VIEWS, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
 import { Onboarding } from './onboarding';
+import { Spinner } from './icon';
 import { CenteredNotice, Shell, Welcome } from './shell';
-import { Button, Callout } from './ui';
+import { Button, Callout } from './primitives';
 import { useWorkspace } from './use-workspace';
 import { ClassesView } from './views/classes';
 import { ScheduleView } from './views/schedule';
@@ -68,7 +69,7 @@ export function Tracker() {
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
 
   if (session.authRequired) return <Welcome message={session.error || undefined} />;
-  if (session.loading && !context) return <CenteredNotice title="Opening your schedule…"><span className="spinner inline-block" aria-hidden="true" /></CenteredNotice>;
+  if (session.loading && !context) return <CenteredNotice title="Opening your schedule…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
   if (!context || !snapshot) {
     return <CenteredNotice title="Connect to get started" action={<Button variant="primary" onClick={() => void session.initialize()} busy={session.loading}>Retry connection</Button>}>
       {session.error || 'Connect to the internet and sign in once to set up Quasar on this device.'}

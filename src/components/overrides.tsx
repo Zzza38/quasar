@@ -5,7 +5,8 @@ import { errorMessage } from '@/client/api';
 import { effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
 import { ScheduleEditor, SlotsEditor, describeIssues } from './schedule-editor';
-import { Button, Callout, Chip, Field, Input, Segmented, Sheet, Toggle } from './ui';
+import { Button, Callout, Chip, Field, Hint, Input, Modal, Panel, Segmented, Spacer, Toggle } from './primitives';
+import { Label } from './ui/label';
 
 /** The schedule a student's overrides are expressed against. */
 export { effectiveSchedule } from '@/domain/schedule';
@@ -17,7 +18,7 @@ function schoolOnly(personal: PersonalSchedule): PersonalSchedule {
 type DateMode = 'default' | 'closed' | 'open' | 'custom';
 
 export function DateAdjustmentSheet({ open, onClose, date, school, personal, save }: { open: boolean; onClose: () => void; date: string; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
-  return open ? <DateAdjustmentBody key={date} onClose={onClose} date={date} school={school} personal={personal} save={save} /> : <Sheet open={false} onClose={onClose} title="Adjust this day"><span /></Sheet>;
+  return open ? <DateAdjustmentBody key={date} onClose={onClose} date={date} school={school} personal={personal} save={save} /> : null;
 }
 
 function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose: () => void; date: string; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
@@ -51,33 +52,33 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
     setError(''); setPending(true);
     try { await save(draft); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} title={`Adjust ${formatDate(date, { weekday: 'long' })}`}
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{existing && <Button variant="danger" disabled={pending} onClick={async () => { setMode('default'); setShift(0); setError(''); setPending(true); try { await save({ ...personal, dateOverrides: personal.dateOverrides.filter((entry) => entry.date !== date) }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Remove adjustment</Button>}<Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
-    <div className="grid gap-1.5"><span className="label">This day for me</span><Segmented label="Day mode" value={mode} onChange={setMode} options={modes} /></div>
+  return <Modal open onClose={onClose} title={`Adjust ${formatDate(date, { weekday: 'long' })}`}
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{existing && <Button variant="danger" disabled={pending} onClick={async () => { setMode('default'); setShift(0); setError(''); setPending(true); try { await save({ ...personal, dateOverrides: personal.dateOverrides.filter((entry) => entry.date !== date) }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Remove adjustment</Button>}<Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
+    <div className="grid gap-1.5"><Label className="text-muted-foreground">This day for me</Label><Segmented label="Day mode" value={mode} onChange={setMode} options={modes} /></div>
     {mode === 'open' && schoolSlots.length === 0 && <Callout tone="info" icon="info">The school has no periods on this date. Choose “My own periods” to add some.</Callout>}
-    {mode === 'custom' && <div className="grid gap-1.5"><span className="label">Periods on this day</span><SlotsEditor slots={slots} periods={schedule.periods} onChange={setSlots} emptyText="Add the periods you have on this day." /></div>}
+    {mode === 'custom' && <div className="grid gap-1.5"><Label className="text-muted-foreground">Periods on this day</Label><SlotsEditor slots={slots} periods={schedule.periods} onChange={setSlots} emptyText="Add the periods you have on this day." /></div>}
     {mode !== 'closed' && <div className="grid gap-2">
       <Field label="Shift all times" hint="Positive numbers move periods later." htmlFor="shift">
-        <div className="flex gap-2 items-center flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           <Input id="shift" small type="number" min={-720} max={720} step={5} value={shift} onChange={(event) => setShift(Math.max(-720, Math.min(720, Number(event.target.value) || 0)))} className="max-w-[110px]" />
-          <span className="hint">minutes</span>
+          <Hint>minutes</Hint>
           {[-60, -30, 30, 60, 120].map((preset) => <Button key={preset} size="sm" variant="ghost" onClick={() => setShift(preset)}>{preset > 0 ? '+' : ''}{preset}</Button>)}
           {shift !== 0 && <Button size="sm" variant="ghost" onClick={() => setShift(0)}>Reset</Button>}
         </div>
       </Field>
     </div>}
-    <div className="panel p-4 grid gap-2">
+    <Panel className="grid gap-2">
       <div className="flex items-center justify-between"><strong className="text-sm">Preview</strong>{preview?.closed ? <Chip>No school</Chip> : preview ? <Chip tone="accent">{preview.cycleDayLabel}</Chip> : null}</div>
-      {preview && !preview.closed && preview.periods.length === 0 && <p className="hint">No periods.</p>}
-      {preview && preview.periods.length > 0 && <ul className="grid gap-1 text-sm">{preview.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.class?.name ?? period.label}</span><span className="tabular text-text-2">{formatRange(period.start, period.end)}</span></li>)}</ul>}
-      {preview && preview.issues.length > 0 && <p className="hint" style={{ color: 'var(--danger-text)' }}>{preview.issues.length} period(s) would fall outside this day with the current shift.</p>}
-    </div>
-    {error && <p className="callout callout-danger" role="alert">{error}</p>}
-  </Sheet>;
+      {preview && !preview.closed && preview.periods.length === 0 && <Hint>No periods.</Hint>}
+      {preview && preview.periods.length > 0 && <ul className="grid gap-1 text-sm">{preview.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.class?.name ?? period.label}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}</ul>}
+      {preview && preview.issues.length > 0 && <Hint tone="danger">{preview.issues.length} period(s) would fall outside this day with the current shift.</Hint>}
+    </Panel>
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
+  </Modal>;
 }
 
 export function CycleDayAdjustmentSheet({ open, onClose, cycleDayId, school, personal, save }: { open: boolean; onClose: () => void; cycleDayId: string | null; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
-  return open && cycleDayId ? <CycleDayBody key={cycleDayId} onClose={onClose} cycleDayId={cycleDayId} school={school} personal={personal} save={save} /> : <Sheet open={false} onClose={onClose} title="Adjust rotation day"><span /></Sheet>;
+  return open && cycleDayId ? <CycleDayBody key={cycleDayId} onClose={onClose} cycleDayId={cycleDayId} school={school} personal={personal} save={save} /> : null;
 }
 
 function CycleDayBody({ onClose, cycleDayId, school, personal, save }: { onClose: () => void; cycleDayId: string; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
@@ -96,18 +97,18 @@ function CycleDayBody({ onClose, cycleDayId, school, personal, save }: { onClose
       onClose();
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} title={`Adjust ${day?.label ?? 'rotation day'}`}
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" /><Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
+  return <Modal open onClose={onClose} title={`Adjust ${day?.label ?? 'rotation day'}`}
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
     {!day && <Callout tone="warning" icon="alert">This rotation day no longer exists in the school schedule. You can remove your adjustment.</Callout>}
     <Toggle label={`Use my own periods on ${day?.label ?? 'this day'}`} checked={enabled} onChange={setEnabled} />
     {enabled && <SlotsEditor slots={slots} periods={schedule.periods} onChange={setSlots} />}
-    {!enabled && day && <ul className="grid gap-1 text-sm panel p-4">{day.slots.map((slot) => <li key={slot.id} className="flex justify-between gap-3"><span>{schedule.periods.find((period) => period.id === slot.periodId)?.label ?? slot.periodId}</span><span className="tabular text-text-2">{formatRange(slot.start, slot.end)}</span></li>)}{day.slots.length === 0 && <li className="hint">No periods.</li>}</ul>}
-    {error && <p className="callout callout-danger" role="alert">{error}</p>}
-  </Sheet>;
+    {!enabled && day && <Panel><ul className="grid gap-1 text-sm">{day.slots.map((slot) => <li key={slot.id} className="flex justify-between gap-3"><span>{schedule.periods.find((period) => period.id === slot.periodId)?.label ?? slot.periodId}</span><span className="tabular-nums text-muted-foreground">{formatRange(slot.start, slot.end)}</span></li>)}{day.slots.length === 0 && <li className="text-xs text-muted-foreground">No periods.</li>}</ul></Panel>}
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
+  </Modal>;
 }
 
 export function PrivateScheduleSheet({ open, onClose, school, personal, save }: { open: boolean; onClose: () => void; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
-  return open ? <PrivateScheduleBody onClose={onClose} school={school} personal={personal} save={save} /> : <Sheet open={false} onClose={onClose} title="Private schedule"><span /></Sheet>;
+  return open ? <PrivateScheduleBody onClose={onClose} school={school} personal={personal} save={save} /> : null;
 }
 
 function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () => void; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
@@ -124,11 +125,11 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     setError(''); setPending(true);
     try { await save({ ...personal, customSchedule: null }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{personal.customSchedule && <Button variant="danger" disabled={pending} onClick={() => void stop()}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
+  return <Modal open onClose={onClose} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending} onClick={() => void stop()}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
     <ScheduleEditor value={draft} onChange={setDraft} personal={personal} disabled={pending} />
-    {error && <p className="callout callout-danger" role="alert">{error}</p>}
-  </Sheet>;
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
+  </Modal>;
 }
 
 /** Compact list of everything a student has adjusted, with edit/remove controls. */
@@ -141,17 +142,17 @@ export function AdjustmentsList({ school, personal, save, onEditDate, onEditCycl
   return <div className="grid gap-2">
     {personal.cycleDayOverrides.map((entry) => {
       const day = schedule.cycleDays.find((item) => item.id === entry.cycleDayId);
-      return <div key={entry.cycleDayId} className="flex items-center gap-3 panel px-3 py-2.5">
-        <div className="min-w-0 flex-1"><strong className="text-sm">{day?.label ?? entry.cycleDayId}</strong><div className="hint">{day ? `Your own ${entry.slots.length} periods every ${day.label}` : 'This rotation day no longer exists'}</div></div>
+      return <Panel key={entry.cycleDayId} className="flex items-center gap-3 px-3 py-2.5">
+        <div className="min-w-0 flex-1"><strong className="text-sm">{day?.label ?? entry.cycleDayId}</strong><Hint>{day ? `Your own ${entry.slots.length} periods every ${day.label}` : 'This rotation day no longer exists'}</Hint></div>
         <Button size="sm" variant="ghost" onClick={() => onEditCycleDay(entry.cycleDayId)}>Edit</Button>
         <Button size="sm" variant="ghost" icon="x" aria-label={`Remove adjustment for ${day?.label ?? entry.cycleDayId}`} onClick={() => void run({ ...personal, cycleDayOverrides: personal.cycleDayOverrides.filter((item) => item.cycleDayId !== entry.cycleDayId) })} />
-      </div>;
+      </Panel>;
     })}
-    {[...personal.dateOverrides].sort((left, right) => left.date.localeCompare(right.date)).map((entry) => <div key={entry.date} className="flex items-center gap-3 panel px-3 py-2.5">
-      <div className="min-w-0 flex-1"><strong className="text-sm">{formatDate(entry.date, { weekday: 'short', year: true })}</strong><div className="hint">{[entry.closed === true && 'No school for me', entry.closed === false && 'Open for me', entry.slots && `${entry.slots.length} custom periods`, entry.shiftMinutes && `times shifted ${entry.shiftMinutes > 0 ? '+' : ''}${entry.shiftMinutes} min`].filter(Boolean).join(' · ') || 'Adjusted'}</div></div>
+    {[...personal.dateOverrides].sort((left, right) => left.date.localeCompare(right.date)).map((entry) => <Panel key={entry.date} className="flex items-center gap-3 px-3 py-2.5">
+      <div className="min-w-0 flex-1"><strong className="text-sm">{formatDate(entry.date, { weekday: 'short', year: true })}</strong><Hint>{[entry.closed === true && 'No school for me', entry.closed === false && 'Open for me', entry.slots && `${entry.slots.length} custom periods`, entry.shiftMinutes && `times shifted ${entry.shiftMinutes > 0 ? '+' : ''}${entry.shiftMinutes} min`].filter(Boolean).join(' · ') || 'Adjusted'}</Hint></div>
       <Button size="sm" variant="ghost" onClick={() => onEditDate(entry.date)}>Edit</Button>
       <Button size="sm" variant="ghost" icon="x" aria-label={`Remove adjustment for ${entry.date}`} onClick={() => void run({ ...personal, dateOverrides: personal.dateOverrides.filter((item) => item.date !== entry.date) })} />
-    </div>)}
-    {error && <p className="callout callout-danger" role="alert">{error}</p>}
+    </Panel>)}
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
   </div>;
 }

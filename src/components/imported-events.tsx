@@ -4,8 +4,10 @@ import { useMemo, useState } from 'react';
 import { Temporal } from '@js-temporal/polyfill';
 import { errorMessage } from '@/client/api';
 import { addDays, formatDate, formatRange, formatTime } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { taskItems, type AppState, type TaskItem } from './app-state';
-import { Chip, ErrorText } from './ui';
+import { Chip, ErrorText } from './primitives';
+import { Checkbox } from './ui/checkbox';
 
 /** Event ends are exclusive, including all-day and midnight endings. */
 export function importedEventOnDate(item: TaskItem, date: string, timeZone: string): boolean {
@@ -41,21 +43,21 @@ export function ImportedEvents({ state, date }: { state: AppState; date: string 
   const [pending, setPending] = useState<string[]>([]);
   const [error, setError] = useState('');
   if (items.length === 0) return null;
-  return <div className="grid gap-2 pt-3 border-t border-border" aria-label="Imported calendar entries">
-    <h3 className="text-[13px] uppercase tracking-wide text-text-3 font-bold">From your calendars</h3>
+  return <div className="grid gap-2 border-t pt-3" aria-label="Imported calendar entries">
+    <h3 className="text-[13px] font-bold uppercase tracking-wide text-muted-foreground">From your calendars</h3>
     <ul className="grid gap-2">{items.map((item) => {
       const source = item.task.imported!;
       const feed = state.context.subscriptions?.find((entry) => entry.id === source.subscriptionId);
-      return <li key={item.id} className={`panel p-3 flex items-start gap-3${item.task.completed ? ' opacity-60' : ''}`}>
-        <input type="checkbox" className="mt-1" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onChange={(event) => {
-          const completed = event.target.checked;
+      return <li key={item.id} className={cn('flex items-start gap-3 rounded-lg bg-muted p-3', item.task.completed && 'opacity-60')}>
+        <Checkbox className="mt-0.5 size-5 rounded-md [&_svg]:size-4" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onCheckedChange={(checked) => {
+          const completed = checked === true;
           setError(''); setPending((value) => [...value, item.id]);
           void state.saveTask(item.id, { ...item.task, completed }).catch((err) => setError(errorMessage(err))).finally(() => setPending((value) => value.filter((id) => id !== item.id)));
         }} />
-        <div className="min-w-0 flex-1 grid gap-1">
-          <button type="button" className={`text-sm text-left font-semibold break-words${item.task.completed ? ' line-through text-text-3' : ''}`} onClick={() => state.navigate('tasks', { edit: item.id })}>{item.task.title}</button>
-          <p className="text-sm text-text-2 tabular">{eventTime(item, state.timeZone)}</p>
-          <div className="flex gap-1.5 flex-wrap"><Chip icon="calendar">{feed?.name ?? 'Imported calendar'}</Chip>{item.task.completed && <Chip>Completed</Chip>}{source.sourceRemoved && <Chip tone="warning">Removed from source</Chip>}</div>
+        <div className="grid min-w-0 flex-1 gap-1">
+          <button type="button" className={cn('break-words text-left text-sm font-semibold', item.task.completed && 'line-through text-muted-foreground')} onClick={() => state.navigate('tasks', { edit: item.id })}>{item.task.title}</button>
+          <p className="text-sm tabular-nums text-muted-foreground">{eventTime(item, state.timeZone)}</p>
+          <div className="flex flex-wrap gap-1.5"><Chip icon="calendar">{feed?.name ?? 'Imported calendar'}</Chip>{item.task.completed && <Chip>Completed</Chip>}{source.sourceRemoved && <Chip tone="warning">Removed from source</Chip>}</div>
         </div>
       </li>;
     })}</ul>

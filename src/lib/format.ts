@@ -74,6 +74,15 @@ export function formatMinutes(minutes: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+/** "8:05" or "1:08:05" from a number of seconds; the precise companion to formatMinutes. */
+export function formatSeconds(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = String(total % 60).padStart(2, '0');
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
+}
+
 /** Deterministic pastel palette entry for a class. */
 const PALETTE = [
   { dot: '#4f46e5', soft: 'rgb(79 70 229 / .13)' },
@@ -90,7 +99,7 @@ const PALETTE = [
 export function classColor(id: string | undefined, kind: 'class' | 'lunch' | 'other' = 'class', color?: string): { dot: string; soft: string } {
   if (color && /^#[0-9a-fA-F]{6}$/.test(color)) return { dot: color, soft: `color-mix(in srgb, ${color} 14%, transparent)` };
   if (kind === 'lunch') return { dot: '#a16207', soft: 'rgb(161 98 7 / .12)' };
-  if (!id) return { dot: 'var(--text-3)', soft: 'var(--surface-3)' };
+  if (!id) return { dot: 'var(--muted-foreground)', soft: 'var(--secondary)' };
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return PALETTE[hash % PALETTE.length];

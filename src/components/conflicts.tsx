@@ -5,10 +5,12 @@ import type { Workspace } from '@/client/api';
 import { errorMessage } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
 import { scheduleForGrade, gradeLabel, detectOverrideConflicts, personalScheduleSchema, resolveDay, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import type { Entity } from '@/domain/sync';
 import { taskSchema } from '@/domain/task';
 import { formatDate, formatDateTime, formatRange, WEEKDAYS } from '@/lib/format';
-import { Button, Callout, Chip } from './ui';
+import { cn } from '@/lib/utils';
+import { Button, Callout, Chip, Hint } from './primitives';
+import { Card, CardContent } from './ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 /* ---------- Generic field comparison ---------- */
 
@@ -20,15 +22,19 @@ export function DiffTable<T>({ left, right, leftTitle, rightTitle, fields, onlyC
     const b = right ? field.render(right) : null;
     return { field, a, b, changed: JSON.stringify(a) !== JSON.stringify(b) };
   }).filter((row) => !onlyChanged || row.changed);
-  return <div className="overflow-x-auto"><table className="diff-table">
-    <thead><tr><th style={{ width: '22%' }}>Field</th><th>{leftTitle}</th><th>{rightTitle}</th></tr></thead>
-    <tbody>
-      {left === null && <tr><td colSpan={3}><em>{leftTitle}: deleted</em></td></tr>}
-      {right === null && <tr><td colSpan={3}><em>{rightTitle}: deleted</em></td></tr>}
-      {rows.map((row) => <tr key={row.field.key}><td className="text-text-2 font-medium">{row.field.label}</td><td className={row.changed ? 'changed' : ''}>{row.a ?? <span className="text-text-3">—</span>}</td><td className={row.changed ? 'changed' : ''}>{row.b ?? <span className="text-text-3">—</span>}</td></tr>)}
-      {rows.length === 0 && <tr><td colSpan={3} className="text-text-3">No differences.</td></tr>}
-    </tbody>
-  </table></div>;
+  return <Table className="text-[13.5px]">
+    <TableHeader><TableRow><TableHead className="w-[22%]">Field</TableHead><TableHead>{leftTitle}</TableHead><TableHead>{rightTitle}</TableHead></TableRow></TableHeader>
+    <TableBody>
+      {left === null && <TableRow><TableCell colSpan={3}><em>{leftTitle}: deleted</em></TableCell></TableRow>}
+      {right === null && <TableRow><TableCell colSpan={3}><em>{rightTitle}: deleted</em></TableCell></TableRow>}
+      {rows.map((row) => <TableRow key={row.field.key}>
+        <TableCell className="font-medium text-muted-foreground">{row.field.label}</TableCell>
+        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.a ?? <span className="text-muted-foreground/70">—</span>}</TableCell>
+        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.b ?? <span className="text-muted-foreground/70">—</span>}</TableCell>
+      </TableRow>)}
+      {rows.length === 0 && <TableRow><TableCell colSpan={3} className="text-muted-foreground">No differences.</TableCell></TableRow>}
+    </TableBody>
+  </Table>;
 }
 
 const empty = (value: unknown) => value === null || value === undefined || value === '' ? null : String(value);
@@ -67,7 +73,7 @@ export function personalFields(schedule: Schedule): FieldSpec<Record<string, unk
 export function ChangedWhileEditing<T extends Record<string, unknown>>({ draft, current, fields, onKeep, onLoad }: { draft: T; current: T | null; fields: FieldSpec<Record<string, unknown>>[]; onKeep: () => void; onLoad: () => void }) {
   return <Callout tone="warning" icon="alert" title={current === null ? 'This was deleted on another device' : 'This changed on another device while you were editing'} role="alert"
     actions={<><Button size="sm" variant="secondary" onClick={onKeep}>Keep my draft</Button><Button size="sm" variant="secondary" onClick={onLoad}>{current === null ? 'Discard my draft' : 'Use the saved version'}</Button></>}>
-    <div className="mt-2 bg-surface rounded-lg"><DiffTable left={draft} right={current} leftTitle="My draft" rightTitle="Saved version" fields={fields} onlyChanged /></div>
+    <div className="mt-2 rounded-lg bg-card text-card-foreground"><DiffTable left={draft} right={current} leftTitle="My draft" rightTitle="Saved version" fields={fields} onlyChanged /></div>
   </Callout>;
 }
 
@@ -87,15 +93,17 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
         setError(''); setPending(conflict.mutation.mutationId);
         try { await resolve(conflict.mutation.mutationId, choice); } catch (err) { setError(errorMessage(err)); } finally { setPending(null); }
       };
-      return <section key={conflict.mutation.mutationId} className="card card-pad grid gap-3 border-l-4" style={{ borderLeftColor: 'var(--now)' }} aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
-        <div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-[17px]">Choose which changes to keep</h2><p className="text-sm text-text-2 mt-1">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div>
-        <DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} />
-        {error && <p className="callout callout-danger" role="alert">{error}</p>}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="primary" busy={pending === conflict.mutation.mutationId} onClick={() => void choose('local')}>Keep my changes</Button>
-          <Button variant="secondary" disabled={pending !== null} onClick={() => void choose('remote')}>Use the other device’s version</Button>
-        </div>
-      </section>;
+      return <Card key={conflict.mutation.mutationId} className="border-l-4 border-l-now" aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
+        <CardContent className="grid gap-3">
+          <div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-semibold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div>
+          <DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} />
+          {error && <Callout tone="danger" role="alert">{error}</Callout>}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" busy={pending === conflict.mutation.mutationId} onClick={() => void choose('local')}>Keep my changes</Button>
+            <Button variant="secondary" disabled={pending !== null} onClick={() => void choose('remote')}>Use the other device’s version</Button>
+          </div>
+        </CardContent>
+      </Card>;
     })}
   </div>;
 }
@@ -148,20 +156,22 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   const todayBefore = resolveDay(review.previous, today, personal);
   const todayAfter = resolveDay(review.current, today, personal);
   const todayChanged = JSON.stringify(todayBefore) !== JSON.stringify(todayAfter);
-  return <section className="card card-pad grid gap-3 border-l-4" style={{ borderLeftColor: 'var(--accent)' }} aria-labelledby="review-title">
-    <div className="flex items-start justify-between gap-3 flex-wrap">
-      <div><h2 id="review-title" className="text-[17px]">Your school’s schedule was updated</h2><p className="text-sm text-text-2 mt-1">Your classes and personal adjustments are untouched. Here is what changed.</p></div>
-      {todayChanged ? <Chip tone="now" icon="alert">Today looks different</Chip> : <Chip tone="success" icon="check">Today is unaffected</Chip>}
-    </div>
-    <ul className="grid gap-1 text-sm list-disc pl-5">{(showAll ? changes : changes.slice(0, 6)).map((change) => <li key={change}>{change}</li>)}</ul>
-    {changes.length > 6 && <button type="button" className="text-sm text-accent text-left" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${changes.length} changes`}</button>}
-    {conflicts.length > 0 && <Callout tone="warning" icon="alert" title="Some of your personal settings refer to what changed" actions={<Button size="sm" variant="secondary" onClick={onOpenClasses}>Review my classes and adjustments</Button>}>
-      <ul className="grid gap-1 mt-1 list-disc pl-4 text-[13.5px]">{conflicts.map((conflict) => <li key={conflict.id}>{conflict.message}</li>)}</ul>
-    </Callout>}
-    {error && <p className="callout callout-danger" role="alert">{error}</p>}
-    <div className="flex flex-wrap gap-2 items-center">
-      <Button variant="primary" disabled={!online} busy={pending} onClick={async () => { setError(''); setPending(true); try { await onAcknowledge(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Got it, keep my settings</Button>
-      {!online && <span className="hint">Connect to dismiss this notice.</span>}
-    </div>
-  </section>;
+  return <Card className="border-l-4 border-l-primary" aria-labelledby="review-title">
+    <CardContent className="grid gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 id="review-title" className="text-base font-semibold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div>
+        {todayChanged ? <Chip tone="now" icon="alert">Today looks different</Chip> : <Chip tone="success" icon="check">Today is unaffected</Chip>}
+      </div>
+      <ul className="grid list-disc gap-1 pl-5 text-sm">{(showAll ? changes : changes.slice(0, 6)).map((change) => <li key={change}>{change}</li>)}</ul>
+      {changes.length > 6 && <button type="button" className="w-fit text-left text-sm text-primary hover:underline" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${changes.length} changes`}</button>}
+      {conflicts.length > 0 && <Callout tone="warning" icon="alert" title="Some of your personal settings refer to what changed" actions={<Button size="sm" variant="secondary" onClick={onOpenClasses}>Review my classes and adjustments</Button>}>
+        <ul className="mt-1 grid list-disc gap-1 pl-4 text-[13.5px]">{conflicts.map((conflict) => <li key={conflict.id}>{conflict.message}</li>)}</ul>
+      </Callout>}
+      {error && <Callout tone="danger" role="alert">{error}</Callout>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" disabled={!online} busy={pending} onClick={async () => { setError(''); setPending(true); try { await onAcknowledge(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Got it, keep my settings</Button>
+        {!online && <Hint>Connect to dismiss this notice.</Hint>}
+      </div>
+    </CardContent>
+  </Card>;
 }
