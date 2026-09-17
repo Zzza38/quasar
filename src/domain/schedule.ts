@@ -1,5 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { z } from "zod";
+import { scheduledPeriodIds } from "./period-status";
 
 const idSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/, "Use a stable ID with letters, numbers, underscores, or hyphens");
 const labelSchema = z.string().trim().min(1).max(120);
@@ -266,7 +267,7 @@ export function nextClass(schedule: Schedule, now: Date | string, personal: Pers
 
 export interface OverrideConflict {
   id: string;
-  kind: "period-removed" | "period-changed" | "cycle-day-removed" | "shared-day-changed" | "shared-date-changed" | "invalid-shift";
+  kind: "period-unscheduled" | "period-removed" | "period-changed" | "cycle-day-removed" | "shared-day-changed" | "shared-date-changed" | "invalid-shift";
   target: string;
   message: string;
 }
@@ -276,12 +277,15 @@ const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.s
 /** Read-only: call before accepting a new school revision; retain personal data until the student decides. */
 export function detectOverrideConflicts(previous: Schedule, current: Schedule, personal: PersonalSchedule): OverrideConflict[] {
   if (personal.customSchedule) return [];
+  const schoolPeriods = new Map(current.periods.map(period => [period.id, period]));
   const periodLabels = new Map([...current.periods, ...previous.periods].map(period => [period.id, period.label]));
   const conflicts: OverrideConflict[] = [];
   const add = (kind: OverrideConflict["kind"], target: string, message: string) => {
     const id = `${kind}:${target}`;
     if (!conflicts.some((entry) => entry.id === id)) conflicts.push({ id, kind, target, message });
   };
+  const previouslyScheduled = scheduledPeriodIds(previous);
+  const currentlyScheduled = scheduledPeriodIds(current);
   const referencedPeriods = new Set([
     ...Object.keys(personal.assignments),
     ...personal.cycleDayOverrides.flatMap((entry) => entry.slots.map((slot) => slot.periodId)),
@@ -289,12 +293,16 @@ export function detectOverrideConflicts(previous: Schedule, current: Schedule, p
   ]);
   for (const periodId of referencedPeriods) {
     const oldPeriod = previous.periods.find((entry) => entry.id === periodId);
-    const newPeriod = current.periods.find((entry) => entry.id === periodId);
+    const newPeriod = current.periods.find((entry) => entry.id === periodId) ?? schoolPeriods.get(periodId);
     if (!newPeriod) {
       const label = oldPeriod?.label ?? periodLabels.get(periodId);
       const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
       const subject = cls ? `Your class “${cls.name}” was assigned to ${label ? `“${label}”` : 'a period that is no longer listed'}` : label ? `The period “${label}”` : 'A period used by your personal adjustments';
       add("period-removed", periodId, `${subject}${cls && label ? ', which is no longer listed in your school schedule' : cls ? '' : ' is no longer listed in your school schedule'}. Review it in your classes. Your class and personal adjustments are still saved.`);
+    }
+    else if (!currentlyScheduled.has(periodId) && (previouslyScheduled.has(periodId) || !current.periods.some(period => period.id === periodId))) {
+      const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
+      add("period-unscheduled", periodId, `${cls ? `“${cls.name}” (${newPeriod.label})` : `“${newPeriod.label}”`} is Unscheduled. The period still exists, but has no scheduled times. Your assignment and personal adjustments are still saved.`);
     }
     else if (oldPeriod && !equal(oldPeriod, newPeriod)) add("period-changed", periodId, `The school changed period ${newPeriod.label}. Review your saved class assignment or override.`);
   }

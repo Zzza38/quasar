@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, type CSSProperties, type DragEvent, type PointerEvent } from 'react';
+import { scheduledPeriodIds } from '@/domain/period-status';
 import type { Schedule, ScheduleSlot, PersonalSchedule } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
 import { Button, IconButton, Input } from './ui';
@@ -21,6 +22,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const [resizing, setResizing] = useState<Resize | null>(null);
   const resizeRef = useRef<Resize | null>(null);
   const slots = value.cycleDays.flatMap(day => day.slots);
+  const scheduled = scheduledPeriodIds(value);
   const startMinute = Math.floor(Math.min(8 * 60, ...slots.filter(slot => slot.start).map(slot => minutes(slot.start))) / 60) * 60;
   const endMinute = Math.min(1439, Math.ceil(Math.max(16 * 60, ...slots.filter(slot => slot.end).map(slot => minutes(slot.end))) / 60) * 60);
   const height = (endMinute - startMinute) * scale;
@@ -66,8 +68,9 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           const cls = clsFor(period.id);
           const label = cls ? (personalClassesOnly ? cls.name : `${cls.name} · ${period.label}`) : period.label;
           const color = classColor(cls?.id ?? period.id, period.kind, cls?.color);
+          const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
           return <button key={period.id} type="button" className="btn btn-sm" draggable={!disabled} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={selected?.periodId === period.id && !selected.dayId}
-            style={{ borderColor: color.dot, background: color.soft }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}>{label}</button>;
+            style={{ borderColor: color.dot, background: color.soft }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">Unscheduled</span>}</span></button>;
         })}
         {selected && <Button size="sm" variant="ghost" onClick={() => { setSelected(null); setHover(null); }}>Cancel selection</Button>}
       </div>

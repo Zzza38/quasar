@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, type ReactNode } from 'react';
+import { scheduledPeriodIds } from '@/domain/period-status';
 import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
 import { addDays, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { ScheduleGrid } from './schedule-grid';
@@ -140,6 +141,7 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
 
 function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
   const update = (index: number, patch: Partial<SchoolPeriod>) => set({ periods: value.periods.map((period, position) => position === index ? { ...period, ...patch } : period) });
+  const scheduled = scheduledPeriodIds(value);
   const usage = (id: string) => value.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === id)).length;
   const remove = (index: number) => {
     const id = value.periods[index].id;
@@ -160,7 +162,7 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
     <p className="text-sm text-text-2">Periods are the stable names students assign classes to, such as <em>A</em>, <em>Period 3</em> or <em>Lunch</em>. Their times and order are set per rotation day.</p>
     <div className="grid gap-2">
       {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 items-center">
-        <Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />
+        <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <span className="hint">Unscheduled</span>}</div>
         <Select small aria-label={`Period ${index + 1} type`} value={period.kind} disabled={disabled} className="w-[104px]" onChange={(event) => update(index, { kind: event.target.value as SchoolPeriod['kind'] })}>
           <option value="class">Class</option><option value="lunch">Lunch</option><option value="other">Other</option>
         </Select>

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
+import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { classColor, formatDate, slugId, todayIn } from '@/lib/format';
 import type { AppState } from '../app-state';
@@ -33,8 +34,10 @@ export function ClassesView({ state }: { state: AppState }) {
     for (const period of schedule.periods) map.set(period.id, schedule.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === period.id)).map((day) => day.label));
     return map;
   }, [schedule]);
+  const knownPeriods = [...schedule.periods, ...school.periods.filter(period => !schedule.periods.some(entry => entry.id === period.id))];
+  const scheduled = scheduledPeriodIds(schedule, personal);
   const assignable = schedule.periods.filter((period) => period.kind !== 'lunch');
-  const stale = Object.keys(personal.assignments).filter((periodId) => !schedule.periods.some((period) => period.id === periodId));
+  const stale = Object.keys(personal.assignments).filter((periodId) => !knownPeriods.some((period) => period.id === periodId));
   const run = async (next: PersonalSchedule) => { setError(''); try { await state.savePersonal(next); } catch (err) { setError(errorMessage(err)); } };
   const current = editing && editing !== 'new' ? personal.classes.find((entry) => entry.id === editing) ?? null : null;
 
@@ -49,7 +52,7 @@ export function ClassesView({ state }: { state: AppState }) {
     {personal.classes.length === 0 && <section className="card"><EmptyState icon="book" title="No classes yet" action={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button>}>Each class gets a colour and shows up in your day once it is matched to a period.</EmptyState></section>}
     {personal.classes.length > 0 && <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
       {personal.classes.map((cls) => {
-        const periods = schedule.periods.filter((period) => personal.assignments[period.id] === cls.id);
+        const periods = knownPeriods.filter((period) => personal.assignments[period.id] === cls.id);
         const days = new Set(periods.flatMap((period) => meets.get(period.id) ?? []));
         const color = classColor(cls.id, 'class', cls.color);
         return <li key={cls.id} className="card class-card" style={{ borderTopColor: color.dot }}>
@@ -62,8 +65,8 @@ export function ClassesView({ state }: { state: AppState }) {
           </div>
           <div className="flex gap-1.5 flex-wrap">
             {periods.length === 0 && <Chip tone="warning">Not matched to a period</Chip>}
-            {periods.map((period) => <Chip key={period.id} tone="accent">{period.label}</Chip>)}
-            {periods.length > 0 && schedule.cycleDays.length > 1 && <Chip>{days.size === schedule.cycleDays.length ? 'Every day' : `${days.size} of ${schedule.cycleDays.length} days`}</Chip>}
+            {periods.map((period) => <Chip key={period.id} tone="accent">{period.label}{!scheduled.has(period.id) ? ' · Unscheduled' : ''}</Chip>)}
+            {days.size > 0 && schedule.cycleDays.length > 1 && <Chip>{days.size === schedule.cycleDays.length ? 'Every day' : `${days.size} of ${schedule.cycleDays.length} days`}</Chip>}
           </div>
         </li>;
       })}

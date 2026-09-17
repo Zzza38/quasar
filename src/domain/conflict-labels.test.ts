@@ -25,3 +25,18 @@ it('describes unnamed override periods without presenting an internal ID', () =>
   expect(conflict?.message).toContain('personal adjustments');
   expect(conflict?.message).not.toContain('period-23');
 });
+
+it('labels an existing period with its last scheduled occurrence removed as Unscheduled', () => {
+  const current = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'A') })) };
+  const personal = { ...emptyPersonalSchedule(), classes: [{ id: 'wellness', name: 'Wellness' }], assignments: { A: 'wellness' } };
+  const conflicts = detectOverrideConflicts(exampleSchedule, current, personal);
+  expect(conflicts).toContainEqual(expect.objectContaining({ kind: 'period-unscheduled', target: 'A', message: expect.stringContaining('Unscheduled') }));
+  expect(conflicts.some(conflict => conflict.kind === 'period-removed')).toBe(false);
+  expect(detectOverrideConflicts(current, current, personal)).toEqual([]);
+});
+
+it('counts a period scheduled only on an exception date as scheduled', () => {
+  const current = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'A') })), exceptions: [{ date: '2026-09-10', kind: 'replacement' as const, advanceCycle: false, slots: [exampleSchedule.cycleDays[0].slots[0]] }] };
+  const personal = { ...emptyPersonalSchedule(), classes: [{ id: 'wellness', name: 'Wellness' }], assignments: { A: 'wellness' } };
+  expect(detectOverrideConflicts(exampleSchedule, current, personal)).toEqual([]);
+});
