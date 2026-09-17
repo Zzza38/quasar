@@ -75,7 +75,7 @@ function NowCard({ next, following, now, today, onSetup, hasSetup, noSchedule }:
   const total = current ? Math.max(1, minutesUntil(next.endAt, new Date(next.startAt))) : 0;
   const elapsed = current ? Math.min(total, Math.max(0, total - until)) : 0;
   const name = next.class?.name ?? next.label;
-  const color = classColor(next.class?.id, next.kind);
+  const color = classColor(next.class?.id, next.kind, next.class?.color);
   const when = next.date === today ? (current ? `Ends in ${formatMinutes(until)}` : until < 60 * 12 ? `Starts in ${formatMinutes(until)}` : `Today at ${formatTime(next.start)}`) : `${relativeDate(next.date, today, { weekday: 'long' })} at ${formatTime(next.start)}`;
   return <section className="card overflow-hidden text-white" style={{ background: `linear-gradient(135deg, ${color.dot}, color-mix(in srgb, ${color.dot} 70%, #111))`, borderColor: 'transparent' }} aria-label="Next class">
     <div className="card-pad grid gap-3">
@@ -108,7 +108,7 @@ export function Timeline({ periods, now, compact }: { periods: ReturnType<typeof
       const start = new Date(period.startAt).getTime();
       const end = new Date(period.endAt).getTime();
       const status = nowMs >= end ? 'past' : nowMs >= start ? 'now' : 'future';
-      const color = classColor(period.class?.id, period.kind);
+      const color = classColor(period.class?.id, period.kind, period.class?.color);
       return <li key={period.slotId} className={`timeline-row ${status}`}>
         <div className="timeline-time"><strong>{formatTime(period.start)}</strong>{!compact && <span>{formatTime(period.end)}</span>}</div>
         <div className="timeline-body">
@@ -153,7 +153,7 @@ export function TaskRow({ item, state, showDate = true }: { item: ReturnType<typ
       <span className="task-title text-[15px] font-medium">{task.title}</span>
       {(task.dueDate || cls || task.notes) && <span className="hint flex items-center gap-2 flex-wrap">
         {showDate && task.dueDate && <span style={overdue ? { color: 'var(--danger-text)', fontWeight: 600 } : undefined}>{overdue ? 'Overdue · ' : ''}{relativeDate(task.dueDate, state.today)}{task.dueTime ? ` · ${formatTime(task.dueTime)}` : ''}</span>}
-        {cls && <span className="inline-flex items-center gap-1.5"><ColorDot color={classColor(cls.id).dot} size={8} />{cls.name}</span>}
+        {cls && <span className="inline-flex items-center gap-1.5"><ColorDot color={classColor(cls.id, 'class', cls.color).dot} size={8} />{cls.name}</span>}
         {task.notes && <Icon name="edit" size={12} className="text-text-3" />}
       </span>}
       {error && <span className="hint" style={{ color: 'var(--danger-text)' }} role="alert">{error}</span>}

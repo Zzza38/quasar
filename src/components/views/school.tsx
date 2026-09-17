@@ -108,7 +108,7 @@ function SharedEditorBody({ onClose, schedule, schoolId, version, onSaved }: { o
       if (/changed\. Reload/i.test(text)) setStale(true);
     } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} wide title="Edit the shared schedule" description="Everyone at your school sees this change. It is saved as a new revision, and members are shown what changed."
+  return <Sheet open onClose={onClose} wide fullWidth title="Edit the shared schedule" description="Everyone at your school sees this change. It is saved as a new revision, and members are shown what changed."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{stale && <Button variant="secondary" disabled={pending} onClick={async () => { await onSaved(); setStale(false); setError('Reloaded. Your draft is still here; saving now replaces the newer revision.'); }}>Reload latest</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Publish revision</Button></>}>
     <ScheduleEditor value={draft} onChange={setDraft} />
     {error && <Callout tone={stale ? 'warning' : 'danger'} icon="alert" role="alert">{error}</Callout>}

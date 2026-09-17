@@ -126,9 +126,9 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     setError(''); setPending(true);
     try { await save({ ...personal, customSchedule: null }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} wide title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
+  return <Sheet open onClose={onClose} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{personal.customSchedule && <Button variant="danger" disabled={pending} onClick={() => void stop()}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
-    <ScheduleEditor value={draft} onChange={setDraft} />
+    <ScheduleEditor value={draft} onChange={setDraft} personal={personal} disabled={pending} />
     {error && <p className="callout callout-danger" role="alert">{error}</p>}
   </Sheet>;
 }

@@ -5,14 +5,14 @@ import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 
-function seed(email = `${randomUUID()}@example.com`, joined = true) {
+function seed(email = `${randomUUID()}@example.com`, joined = true, schedule = exampleSchedule) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const id = randomUUID();
     db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
       .run(id, id, email, 'Browser Student', 'Browser Test Student', new Date().toISOString());
     const service = new Service(db, 'browser-owner@example.com');
-    const school = service.createSchool(id, { name: `Browser High ${id.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
+    const school = service.createSchool(id, { name: `Browser High ${id.slice(0, 6)}`, location: 'Boston, MA', schedule });
     if (joined) service.join(id, { schoolId: school.id, choice: 'community' });
     return { id, school };
   } finally { db.close(); }
@@ -192,7 +192,8 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   await dialog(page).getByLabel('Class name').fill('Biology');
   await dialog(page).getByLabel('Room').fill('Lab 2');
   await dialog(page).getByRole('button', { name: 'Add class' }).click();
-  await page.getByLabel('Class for A').selectOption({ label: 'Biology' });
+  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
+  await page.getByRole('button', { name: 'Place in Day 1 at 8:00 AM', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.getByRole('link', { name: 'Today' }).click();
   await quickAdd(page, 'Read the next chapter');
@@ -289,4 +290,98 @@ test('sign-in page fits desktop and mobile screens', async ({ page }, testInfo) 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`sign-in-${width}.png`), fullPage: true });
   }
+});
+
+test('time canvas fits desktop, groups weeks, and drags and resizes freely timed blocks', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('group', { name: 'School days', exact: true }).getByRole('button', { name: 'Sat', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('button', { name: 'Add rotation day' }).click();
+  await dialog(page).getByRole('button', { name: 'Add rotation day' }).click();
+  await expect(dialog(page).getByRole('region', { name: /Rotation week/ })).toHaveCount(2);
+  expect(await dialog(page).locator('.time-canvas-scroll').first().evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  await dialog(page).getByRole('button', { name: 'Place D', exact: true }).dragTo(day, { targetPosition: { x: 40, y: 468 } });
+  await expect(day.getByRole('button', { name: 'Day 1, 2:00–2:45 PM: D', exact: true })).toBeVisible();
+  const edge = day.getByRole('button', { name: 'Resize Day 1 D end', exact: true });
+  await edge.scrollIntoViewIfNeeded();
+  const box = (await edge.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 19.5, { steps: 5 });
+  await page.mouse.up();
+  await expect(day.getByRole('button', { name: 'Day 1, 2:00–3:00 PM: D', exact: true })).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(day.getByRole('button', { name: 'Day 1, 2:00–3:00 PM: D', exact: true })).toHaveCount(1);
+});
+
+test('custom class color persists and appears on the class card', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#classes');
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await dialog(page).getByLabel('Class name').fill('Biology');
+  await dialog(page).getByLabel('Class color', { exact: true }).fill('#ff0088');
+  await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  const card = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Edit Biology' }) });
+  await expect(card).toHaveCSS('border-top-color', 'rgb(255, 0, 136)');
+  await page.getByRole('button', { name: 'Edit Biology' }).click();
+  await expect(dialog(page).getByLabel('Class color', { exact: true })).toHaveValue('#ff0088');
+  await dialog(page).getByRole('button', { name: 'Use automatic color' }).click();
+  await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await expect(card).not.toHaveCSS('border-top-color', 'rgb(255, 0, 136)');
+});
+
+test('Classes page drops and resizes actual classes with persistence and touch alternative', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#classes');
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await dialog(page).getByLabel('Class name').fill('Spanish 2H');
+  await dialog(page).getByLabel('Class color', { exact: true }).fill('#cc3366');
+  await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  const palette = page.getByRole('button', { name: 'Place Spanish 2H', exact: true });
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  await palette.dragTo(day, { targetPosition: { x: 35, y: 40 } });
+  const block = day.getByRole('button', { name: 'Day 1, 8:30–9:15 AM: Spanish 2H', exact: true });
+  await expect(block).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  await day.getByRole('button', { name: 'Resize Day 1 Spanish 2H end', exact: true }).press('ArrowDown');
+  await expect(day.getByRole('button', { name: 'Day 1, 8:30–9:20 AM: Spanish 2H', exact: true })).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  await expect(day.getByRole('button', { name: 'Day 1, 8:30–9:20 AM: Spanish 2H', exact: true })).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await palette.click();
+  await page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true }).click();
+  await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true })).toHaveCount(1);
+  await expect(saved(page)).toBeVisible();
+});
+
+
+test('large period palette stays beside the canvas on desktop', async ({ page, context }) => {
+  const schedule = structuredClone(exampleSchedule);
+  schedule.periods.push(...Array.from({ length: 22 }, (_, index) => ({ id: `extra-${index}`, label: `Long class name ${index + 1} / Study Hall`, kind: 'class' as const })));
+  const fixture = seed(undefined, true, schedule); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  const palette = dialog(page).locator('.timetable-palette');
+  const canvas = dialog(page).locator('.time-canvas-scroll').first();
+  const paletteBox = (await palette.boundingBox())!;
+  const canvasBox = (await canvas.boundingBox())!;
+  expect(paletteBox.x + paletteBox.width).toBeLessThan(canvasBox.x);
+  expect(paletteBox.height).toBeLessThan(600);
+  expect(await canvas.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: '/tmp/quasar-time-canvas-desktop.png' });
 });

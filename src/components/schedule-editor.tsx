@@ -1,9 +1,10 @@
 'use client';
 
 import { useMemo, useState, type ReactNode } from 'react';
-import { resolveDay, scheduleSchema, type Schedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
+import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
 import { addDays, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
-import { Icon } from './icon';
+import { ScheduleGrid } from './schedule-grid';
+import { ScheduleTimeInput } from './schedule-time-input';
 import { Button, Callout, Chip, Field, IconButton, Input, Segmented, Select, Toggle, WeekdayPicker } from './ui';
 
 type CycleDay = Schedule['cycleDays'][number];
@@ -57,6 +58,7 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
     onChange(next);
   };
   return <div className="grid gap-2">
+    <p className="hint">Changing between 11 and 12 flips AM/PM. Other hour changes use school-day times (7–11 AM, 12–6 PM). Click AM/PM to switch, or type it with the time.</p>
     {slots.length === 0 && <p className="hint">{emptyText}</p>}
     {slots.map((slot, index) => <div key={slot.id} className="slot-row">
       <Select small aria-label={`Slot ${index + 1} period`} value={slot.periodId} disabled={disabled} onChange={(event) => update(index, { periodId: event.target.value })}>
@@ -64,8 +66,8 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
         {periods.map((period) => <option key={period.id} value={period.id}>{period.label}{period.kind === 'lunch' ? ' (lunch)' : ''}</option>)}
       </Select>
       <div className="slot-times contents max-[480px]:grid">
-        <Input small type="time" aria-label={`Slot ${index + 1} start`} value={slot.start} disabled={disabled} onChange={(event) => update(index, { start: event.target.value })} />
-        <Input small type="time" aria-label={`Slot ${index + 1} end`} value={slot.end} disabled={disabled} onChange={(event) => update(index, { end: event.target.value })} />
+        <ScheduleTimeInput label={`Slot ${index + 1} start`} value={slot.start} disabled={disabled} onChange={(start) => update(index, { start })} />
+        <ScheduleTimeInput label={`Slot ${index + 1} end`} value={slot.end} disabled={disabled} onChange={(end) => update(index, { end })} />
       </div>
       <div className="flex items-center gap-0.5">
         <IconButton size="sm" label={`Move slot ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} className="max-[480px]:hidden" />
@@ -78,7 +80,7 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
 
 /* ---------- Editor ---------- */
 
-export function ScheduleEditor({ value, onChange, disabled, initialSection = 'basics' }: { value: Schedule; onChange: (value: Schedule) => void; disabled?: boolean; initialSection?: Section }) {
+export function ScheduleEditor({ value, onChange, disabled, personal, initialSection = 'basics' }: { personal?: PersonalSchedule; value: Schedule; onChange: (value: Schedule) => void; disabled?: boolean; initialSection?: Section }) {
   const [section, setSection] = useState<Section>(initialSection);
   const issues = useMemo(() => describeIssues(value), [value]);
   const set = (patch: Partial<Schedule>) => onChange({ ...value, ...patch });
@@ -93,7 +95,7 @@ export function ScheduleEditor({ value, onChange, disabled, initialSection = 'ba
     </Callout>}
     {section === 'basics' && <Basics value={value} set={set} disabled={disabled} />}
     {section === 'periods' && <Periods value={value} set={set} disabled={disabled} />}
-    {section === 'days' && <Days value={value} set={set} disabled={disabled} />}
+    {section === 'days' && <Days value={value} set={set} disabled={disabled} personal={personal} />}
     {section === 'exceptions' && <Exceptions value={value} set={set} disabled={disabled} />}
     {section === 'preview' && <Preview value={value} />}
   </div>;
@@ -176,15 +178,13 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
   </div>;
 }
 
-function Days({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
-  const [open, setOpen] = useState<string | null>(value.cycleDays[0]?.id ?? null);
+function Days({ value, set, disabled, personal }: { personal?: PersonalSchedule; value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState<string | null>(null);
   const updateDay = (id: string, patch: Partial<CycleDay>) => set({ cycleDays: value.cycleDays.map((day) => day.id === id ? { ...day, ...patch } : day) });
   const addDay = () => {
     const id = slugId(`day-${value.cycleDays.length + 1}`, value.cycleDays.map((day) => day.id));
-    const source = value.cycleDays[value.cycleDays.length - 1];
-    const day: CycleDay = { id, label: `Day ${value.cycleDays.length + 1}`, slots: source ? source.slots.map((slot) => ({ ...slot, id: randomId() })) : [] };
+    const day: CycleDay = { id, label: `Day ${value.cycleDays.length + 1}`, slots: [] };
     set({ cycleDays: [...value.cycleDays, day], ...(value.cycleDays.length === 0 ? { anchorCycleDayId: id } : {}) });
-    setOpen(id);
   };
   const removeDay = (id: string) => {
     const remaining = value.cycleDays.filter((day) => day.id !== id);
@@ -197,26 +197,14 @@ function Days({ value, set, disabled }: { value: Schedule; set: (patch: Partial<
     })),
   });
   return <div className="grid gap-4">
-    <p className="text-sm text-text-2">{value.cycleDays.length <= 1 ? 'This schedule uses one bell schedule for every school day. Add more days to build a rotation.' : `Each rotation day lists its periods in order with their times. The cycle repeats after ${value.cycleDays[value.cycleDays.length - 1]?.label || 'the last day'}.`}</p>
-    <div className="grid gap-2">
-      {value.cycleDays.map((day, index) => {
-        const expanded = open === day.id;
-        return <div key={day.id} className="card overflow-hidden" style={{ boxShadow: 'none' }}>
-          <div className="flex items-center gap-2 p-3">
-            <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${day.label || `day ${index + 1}`}`} onClick={() => setOpen(expanded ? null : day.id)}><Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={16} /></button>
-            <Input small aria-label={`Day ${index + 1} name`} value={day.label} maxLength={120} disabled={disabled} onChange={(event) => updateDay(day.id, { label: event.target.value })} className="max-w-[220px]" />
-            <span className="hint whitespace-nowrap">{day.slots.length} periods{day.slots.length > 0 ? ` · ${formatRange(day.slots[0].start, day.slots[day.slots.length - 1].end)}` : ''}</span>
-            <div className="ml-auto flex items-center gap-0.5">
-              {value.cycleDays.length > 1 && <IconButton size="sm" label={`Copy ${day.label} times to all days`} icon="copy" disabled={disabled || day.slots.length === 0} onClick={() => { if (confirm(`Apply the times from ${day.label} to every other day, keeping each day's period order?`)) copyTimesToAll(day); }} />}
-              <IconButton size="sm" label={`Remove ${day.label || `day ${index + 1}`}`} icon="trash" disabled={disabled || value.cycleDays.length <= 1} onClick={() => { if (confirm(`Remove ${day.label}? Dates will be recalculated across the remaining days.`)) removeDay(day.id); }} />
-            </div>
-          </div>
-          {expanded && <div className="border-t border-border p-3 bg-surface-2/60">
-            <SlotsEditor slots={day.slots} periods={value.periods} disabled={disabled} onChange={(slots) => updateDay(day.id, { slots })} emptyText="No periods on this day yet. Add the first one below." />
-          </div>}
-        </div>;
-      })}
-    </div>
+    <ScheduleGrid personal={personal} value={value} onChange={(next) => set(next)} disabled={disabled} onEditDay={setOpen} onRemoveDay={(id) => { if (confirm(`Remove ${value.cycleDays.find(day => day.id === id)?.label}? Dates will be recalculated across the remaining days.`)) removeDay(id); }} />
+    {value.cycleDays.filter(day => day.id === open).map(day => <div key={day.id} className="panel p-3 grid gap-3">
+      <div className="flex items-center gap-2"><strong className="text-sm">{day.label} times</strong><span className="spacer" />
+        <Button size="sm" disabled={disabled || !day.slots.length} onClick={() => { if (confirm(`Apply the times from ${day.label} to every other day, keeping each day's period order?`)) copyTimesToAll(day); }}>Copy times to all days</Button>
+        <IconButton icon="x" label="Close day times" onClick={() => setOpen(null)} />
+      </div>
+      <SlotsEditor slots={day.slots} periods={value.periods} disabled={disabled} onChange={(slots) => updateDay(day.id, { slots })} />
+    </div>)}
     <div><Button size="sm" icon="plus" disabled={disabled || value.cycleDays.length >= 366} onClick={addDay}>Add rotation day</Button></div>
   </div>;
 }

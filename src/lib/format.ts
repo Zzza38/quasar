@@ -87,7 +87,8 @@ const PALETTE = [
   { dot: '#0284c7', soft: 'rgb(2 132 199 / .13)' },
   { dot: '#c2410c', soft: 'rgb(194 65 12 / .13)' },
 ];
-export function classColor(id: string | undefined, kind: 'class' | 'lunch' | 'other' = 'class'): { dot: string; soft: string } {
+export function classColor(id: string | undefined, kind: 'class' | 'lunch' | 'other' = 'class', color?: string): { dot: string; soft: string } {
+  if (color && /^#[0-9a-fA-F]{6}$/.test(color)) return { dot: color, soft: `color-mix(in srgb, ${color} 14%, transparent)` };
   if (kind === 'lunch') return { dot: '#a16207', soft: 'rgb(161 98 7 / .12)' };
   if (!id) return { dot: 'var(--text-3)', soft: 'var(--surface-3)' };
   let hash = 0;

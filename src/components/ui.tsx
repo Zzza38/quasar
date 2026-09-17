@@ -77,7 +77,7 @@ export function EmptyState({ icon, title, children, action }: { icon: IconName; 
 }
 
 /** Accessible modal built on the native dialog element. Closing via Escape or backdrop calls onClose. */
-export function Sheet({ open, onClose, title, children, footer, wide, description }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Sheet({ open, onClose, title, children, footer, wide, fullWidth, description }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; fullWidth?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -95,7 +95,7 @@ export function Sheet({ open, onClose, title, children, footer, wide, descriptio
     dialog.addEventListener('click', onClick);
     return () => { dialog.removeEventListener('cancel', onCancel); dialog.removeEventListener('click', onClick); };
   }, [onClose]);
-  return <dialog ref={ref} className={`sheet${wide ? ' wide' : ''}`} aria-labelledby={titleId}>
+  return <dialog ref={ref} className={`sheet${wide ? ' wide' : ''}${fullWidth ? ' timetable-sheet' : ''}`} aria-labelledby={titleId}>
     {open && <div className="fade-in">
       <div className="sheet-head">
         <div className="min-w-0"><h2 id={titleId} className="text-[17px]">{title}</h2>{description && <p className="text-sm text-text-2 mt-0.5">{description}</p>}</div>
