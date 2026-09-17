@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { signIn } from 'next-auth/react';
+import { PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
@@ -15,7 +16,7 @@ import { Card, CardContent } from './ui/card';
 import { Separator } from './ui/separator';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger } from './ui/sidebar';
-import { TooltipProvider } from './ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import type { SyncState, WorkspaceSession } from './use-workspace';
 
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school' };
@@ -112,9 +113,20 @@ export function Shell({ session, context, view, taskCount, children }: { session
     <a className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg" href="#main">Skip to content</a>
 
     <Sidebar collapsible="icon" className="app-sidebar">
-      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
-        <Brand compact={!navOpen} />
-        <SidebarTrigger aria-label={navOpen ? 'Collapse navigation sidebar' : 'Expand navigation sidebar'} aria-expanded={navOpen} title={navOpen ? 'Collapse navigation' : 'Expand navigation'} className="text-muted-foreground" />
+      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
+        {navOpen ? <>
+          <Brand />
+          <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="text-muted-foreground" />
+        </> : <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" aria-label="Open sidebar" aria-expanded={false} onClick={() => setNavOpen(true)}
+              className="group/sidebar-open relative size-10 rounded-lg p-0 text-foreground hover:bg-muted">
+              <span data-slot="sidebar-logo" className="flex group-hover/sidebar-open:hidden group-focus-visible/sidebar-open:hidden"><Icon name="star" size={22} className="size-[22px]" /></span>
+              <span data-slot="sidebar-open-icon" className="hidden group-hover/sidebar-open:flex group-focus-visible/sidebar-open:flex"><PanelLeft aria-hidden="true" className="size-5" /></span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-medium text-popover-foreground shadow-sm [&_svg]:hidden">Open sidebar</TooltipContent>
+        </Tooltip>}
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -123,7 +135,7 @@ export function Shell({ session, context, view, taskCount, children }: { session
               {VIEWS.map((entry) => {
                 const active = entry.id === view;
                 return <SidebarMenuItem key={entry.id}>
-                  <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-lg px-3 font-medium text-muted-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center">
+                  <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-lg px-3 font-medium text-muted-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:text-foreground group-data-[collapsible=icon]:data-active:bg-muted group-data-[collapsible=icon]:data-active:text-foreground group-data-[collapsible=icon]:[&_svg]:size-5">
                     <a href={`#${entry.id}`} aria-label={entry.label} aria-current={active ? 'page' : undefined}>
                       <Icon name={VIEW_ICONS[entry.id]} size={18} strokeWidth={active ? 2.2 : 1.9} />
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>

@@ -288,11 +288,20 @@ test('collapsed navigation centers icons and retains accessible links', async ({
   await sidebar.getByRole('link', { name: 'School', exact: true }).click();
   await expect(page.getByRole('heading', { name: fixture.school.name })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('button', { name: 'Expand navigation sidebar' })).toBeVisible();
+  const openSidebar = page.getByRole('button', { name: 'Open sidebar', exact: true });
+  await expect(openSidebar).toBeVisible();
   await verify();
   await page.mouse.move(600, 400);
   await page.screenshot({ path: testInfo.outputPath('collapsed-sidebar.png') });
-  await page.getByRole('button', { name: 'Expand navigation sidebar' }).click();
+  await expect(openSidebar.locator('[data-slot="sidebar-logo"]')).toBeVisible();
+  await expect(openSidebar.locator('[data-slot="sidebar-open-icon"]')).toBeHidden();
+  await expect(sidebar.locator('[data-slot="sidebar-header"] button')).toHaveCount(1);
+  await openSidebar.hover();
+  await expect(openSidebar.locator('[data-slot="sidebar-logo"]')).toBeHidden();
+  await expect(openSidebar.locator('[data-slot="sidebar-open-icon"]')).toBeVisible();
+  await expect(page.getByRole('tooltip', { name: 'Open sidebar' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('collapsed-sidebar-hover.png') });
+  await openSidebar.click();
   await expect(sidebar.getByRole('link', { name: 'Classes', exact: true }).locator('span')).toBeVisible();
 });
 
