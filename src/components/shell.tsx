@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { signIn } from 'next-auth/react';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
 import { Icon, type IconName } from './icon';
 import { AppearanceToggle, ThemePicker } from './theme-picker';
-import { Button, Callout, Sheet } from './ui';
+import { Button, Callout, IconButton, Sheet } from './ui';
 import type { SyncState, WorkspaceSession } from './use-workspace';
 
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school' };
@@ -42,15 +42,15 @@ export function StatusPill({ sync, online, onRetry, onConflicts, compact }: { sy
     <span className={compact ? 'status-text' : undefined}>{label}</span>
   </>;
   if (clickable) {
-    return <button type="button" className={`status-pill status-${tone}`} role="status" aria-live="polite" title={sync.kind === 'conflict' ? 'Review the changes that need a choice' : 'Retry now'} onClick={sync.kind === 'conflict' ? onConflicts : onRetry}>{inner}</button>;
+    return <button type="button" className={`status-pill status-${tone}`} aria-label={label} role="status" aria-live="polite" title={sync.kind === 'conflict' ? 'Review the changes that need a choice' : 'Retry now'} onClick={sync.kind === 'conflict' ? onConflicts : onRetry}>{inner}</button>;
   }
-  return <span className={`status-pill status-${tone}`} role="status" aria-live="polite">{inner}</span>;
+  return <span className={`status-pill status-${tone}`} aria-label={label} role="status" aria-live="polite">{inner}</span>;
 }
 
 /* ---------- Navigation ---------- */
 
 function NavLinks({ view, taskCount, className }: { view: View; taskCount: number; className: string }) {
-  return <>{VIEWS.map((entry) => <a key={entry.id} href={`#${entry.id}`} className={className} aria-current={entry.id === view ? 'page' : undefined}>
+  return <>{VIEWS.map((entry) => <a key={entry.id} href={`#${entry.id}`} className={className} aria-label={entry.label} title={entry.label} aria-current={entry.id === view ? 'page' : undefined}>
     <Icon name={VIEW_ICONS[entry.id]} size={className === 'side-link' ? 18 : 22} strokeWidth={entry.id === view ? 2.2 : 1.9} />
     <span>{entry.label}</span>
     {entry.id === 'tasks' && taskCount > 0 && <span className="nav-badge" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</span>}
@@ -61,17 +61,27 @@ function NavLinks({ view, taskCount, className }: { view: View; taskCount: numbe
 
 export function Shell({ session, context, view, taskCount, children }: { session: WorkspaceSession; context: WorkspaceContext; view: View; taskCount: number; children: ReactNode }) {
   const [account, setAccount] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    try { setSidebarCollapsed(localStorage.getItem('quasar.navigationCollapsed') === 'true'); } catch { /* Storage may be unavailable. */ }
+  }, []);
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try { localStorage.setItem('quasar.navigationCollapsed', String(next)); } catch { /* Keep the preference for this session. */ }
+  };
   const { sync, online, snapshot } = session;
   const initials = (context.user.displayName || context.user.email || 'Q').slice(0, 1).toUpperCase();
   const conflictsAnchor = () => { document.getElementById('conflicts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
-  return <div className="app">
+  return <div className={`app${sidebarCollapsed ? ' app-nav-collapsed' : ''}`}>
     <a className="skip-link" href="#main">Skip to content</a>
-    <aside className="app-sidebar">
-      <div className="px-2 pb-4"><Brand /></div>
+    <aside className="app-sidebar" id="app-navigation">
+      <IconButton className="app-sidebar-toggle" size="sm" icon={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} label={sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="app-navigation" onClick={toggleSidebar} />
+      <div className="px-2 pb-4"><Brand compact={sidebarCollapsed} /></div>
       <nav aria-label="Main"><NavLinks view={view} taskCount={taskCount} className="side-link" /></nav>
       <div className="mt-auto grid gap-3">
         <StatusPill sync={sync} online={online} onRetry={() => void session.synchronize()} onConflicts={conflictsAnchor} />
-        <button type="button" className="account-button" onClick={() => setAccount(true)} aria-haspopup="dialog">
+        <button type="button" className="account-button" aria-label={context.user.displayName || 'Your account'} title={context.user.displayName || 'Your account'} onClick={() => setAccount(true)} aria-haspopup="dialog">
           <span className="avatar">{initials}</span>
           <span className="min-w-0 text-left grid"><strong className="truncate text-sm">{context.user.displayName || 'Your account'}</strong><small className="truncate hint">{context.school?.name ?? context.user.email}</small></span>
           <Icon name="more" size={16} className="text-text-3 ml-auto" />

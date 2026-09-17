@@ -442,3 +442,17 @@ dialog.sheet.timetable-sheet { width: calc(100vw - 32px); max-width: 1800px; max
 .time-block-detail span { display: block; margin-top: 3px; }
 .time-block:hover, .time-block:focus-within { z-index: 4; }
 .time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail { display: block; }
+
+/* Main navigation can shrink to an icon rail; the edge button remains reachable. */
+.app-sidebar-toggle { position: absolute; right: -14px; top: 24px; z-index: 25; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); }
+@media (min-width: 900px) {
+  .app.app-nav-collapsed { grid-template-columns: 72px minmax(0, 1fr); }
+  .app-nav-collapsed .app-sidebar { padding-inline: 10px; }
+  .app-nav-collapsed .side-link { position: relative; justify-content: center; padding: 12px; }
+  .app-nav-collapsed .side-link > span:not(.nav-badge) { display: none; }
+  .app-nav-collapsed .nav-badge { position: absolute; left: auto; right: -3px; top: 0; padding: 1px 4px; font-size: 9px; }
+  .app-nav-collapsed .account-button { justify-content: center; padding: 6px; }
+  .app-nav-collapsed .account-button > :not(.avatar) { display: none; }
+  .app-nav-collapsed .status-pill { justify-content: center; padding: 8px; }
+  .app-nav-collapsed .status-pill > span:not(.spinner) { display: none; }
+}
