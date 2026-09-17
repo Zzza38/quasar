@@ -2,18 +2,16 @@
 
 import { useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
-import { emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
+import { effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
 import { ScheduleEditor, SlotsEditor, describeIssues } from './schedule-editor';
 import { Button, Callout, Chip, Field, Input, Segmented, Sheet, Toggle } from './ui';
 
 /** The schedule a student's overrides are expressed against. */
-export function effectiveSchedule(school: Schedule, personal: PersonalSchedule): Schedule {
-  return personal.customSchedule ?? school;
-}
+export { effectiveSchedule } from '@/domain/schedule';
 
 function schoolOnly(personal: PersonalSchedule): PersonalSchedule {
-  return { ...emptyPersonalSchedule(), customSchedule: personal.customSchedule ?? null };
+  return { ...emptyPersonalSchedule(), grade: personal.grade, customSchedule: personal.customSchedule ?? null };
 }
 
 type DateMode = 'default' | 'closed' | 'open' | 'custom';
@@ -53,13 +51,13 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
     setError(''); setPending(true);
     try { await save(draft); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} title={`Adjust ${formatDate(date, { weekday: 'long' })}`} description="Only your view changes. The school schedule stays the same for everyone else."
+  return <Sheet open onClose={onClose} title={`Adjust ${formatDate(date, { weekday: 'long' })}`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{existing && <Button variant="danger" disabled={pending} onClick={async () => { setMode('default'); setShift(0); setError(''); setPending(true); try { await save({ ...personal, dateOverrides: personal.dateOverrides.filter((entry) => entry.date !== date) }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Remove adjustment</Button>}<Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
     <div className="grid gap-1.5"><span className="label">This day for me</span><Segmented label="Day mode" value={mode} onChange={setMode} options={modes} /></div>
     {mode === 'open' && schoolSlots.length === 0 && <Callout tone="info" icon="info">The school has no periods on this date. Choose “My own periods” to add some.</Callout>}
     {mode === 'custom' && <div className="grid gap-1.5"><span className="label">Periods on this day</span><SlotsEditor slots={slots} periods={schedule.periods} onChange={setSlots} emptyText="Add the periods you have on this day." /></div>}
     {mode !== 'closed' && <div className="grid gap-2">
-      <Field label="Shift all times" hint="Useful for late starts or early dismissals that only apply to you. Positive numbers move periods later." htmlFor="shift">
+      <Field label="Shift all times" hint="Positive numbers move periods later." htmlFor="shift">
         <div className="flex gap-2 items-center flex-wrap">
           <Input id="shift" small type="number" min={-720} max={720} step={5} value={shift} onChange={(event) => setShift(Math.max(-720, Math.min(720, Number(event.target.value) || 0)))} className="max-w-[110px]" />
           <span className="hint">minutes</span>
@@ -98,7 +96,7 @@ function CycleDayBody({ onClose, cycleDayId, school, personal, save }: { onClose
       onClose();
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} title={`Adjust ${day?.label ?? 'rotation day'}`} description="Applies every time this rotation day comes around, for you only."
+  return <Sheet open onClose={onClose} title={`Adjust ${day?.label ?? 'rotation day'}`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" /><Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
     {!day && <Callout tone="warning" icon="alert">This rotation day no longer exists in the school schedule. You can remove your adjustment.</Callout>}
     <Toggle label={`Use my own periods on ${day?.label ?? 'this day'}`} checked={enabled} onChange={setEnabled} />
@@ -113,7 +111,7 @@ export function PrivateScheduleSheet({ open, onClose, school, personal, save }: 
 }
 
 function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () => void; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
-  const [draft, setDraft] = useState<Schedule>(() => structuredClone(personal.customSchedule ?? school));
+  const [draft, setDraft] = useState<Schedule>(() => structuredClone(effectiveSchedule(school, personal)));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const issues = describeIssues(draft);

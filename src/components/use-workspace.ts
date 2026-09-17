@@ -151,6 +151,14 @@ export function useWorkspace(): WorkspaceSession {
         }
         return api.sync.mutate({ ...mutation, accountId: store.accountId });
       });
+      // Completing a recurring task also creates its successor on the server.
+      // Pull that authoritative result immediately instead of waiting for a
+      // later polling cycle; ingest preserves any new local edits.
+      const afterSync = await api.workspace.query();
+      if (workspaceRef.current !== store) return;
+      if (afterSync.user.id !== store.accountId) { requireSignIn('The signed-in account changed. Sign in again to continue.'); return; }
+      await store.setContext(contextOf(afterSync));
+      await store.ingest(afterSync.entities);
       const state = await store.read();
       if (workspaceRef.current === store) { setSnapshot(state); setOnline(true); setError(''); }
     } catch (err) {
@@ -259,11 +267,23 @@ export function useWorkspace(): WorkspaceSession {
           if (state.pending) throw new Error('Some changes are still waiting. Connect and resolve conflicts before signing out, or choose to discard them.');
         }
       }
+      // Stop reminders on this shared browser while the authenticated account
+      // can still remove its server subscription. A failure preserves the
+      // signed-in session and offline data so the user can retry safely.
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        const registration = await navigator.serviceWorker.getRegistration('/');
+        const subscription = await registration?.pushManager.getSubscription();
+        if (subscription) {
+          if (session) await api.notifications.unsubscribe.mutate({ accountId: session.user.id, endpoint: subscription.endpoint });
+          await subscription.unsubscribe();
+        }
+      }
       await signOut({ redirect: false, callbackUrl: '/' });
       // next-auth's client does not expose the sign-out response status. Check
       // the cookie-backed session before deleting the offline account.
       if (await api.session.query()) throw new Error('Sign-out did not finish. Your saved data is preserved; please try again.');
-      if (store) { const accountId = store.accountId; detach(); await clearOfflineAccount(accountId); }
+      if (session) localStorage.removeItem(`quasar-push:${session.user.id}`);
+      if (store) { const accountId = store.accountId; localStorage.removeItem(`quasar-push:${accountId}`); detach(); await clearOfflineAccount(accountId); }
       setContext(null); setSnapshot(null); setAuthRequired(true); setAskingLogout(false);
       window.location.assign('/');
     } catch (err) {

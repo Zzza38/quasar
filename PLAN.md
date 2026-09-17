@@ -124,10 +124,10 @@ The user requested phases and established the phase-1 boundaries below. Later ph
 
 ### Phase 2: connected homework and calendar
 
-- Proposed placement for richer task tools: subtasks, recurring tasks, priorities, reminders, and notifications. These are deferred beyond phase 1; exact sequencing remains flexible.
+- Implemented richer task tools: checklists with stable item IDs, daily/weekly/monthly recurring tasks, priority filtering/sorting, and opt-in browser push reminders. Recurrence is generated once when completion syncs; reminders require server keys and a running background worker.
 - Subscribe to iCal URLs and refresh automatically.
 - Show imported homework as both tasks and calendar entries; completed items stay visible, grayed out.
-- Define handling for changed deadlines, deleted source items, refresh failures, and local completion state.
+- Preserve completion and personal task fields during refresh. Source changes conflicting with locally edited details require a choice; removed source items stay marked as removed, and refresh failures preserve saved data. Subscription removal keeps imported items as regular tasks.
 - Exit gate: repeated refreshes do not duplicate items or reset completion, and source changes follow documented rules.
 
 ### Phase 3: school profiles and friends
@@ -284,9 +284,9 @@ The user requested this final plan update and will start implementation in anoth
 
 ## Implementation decisions
 
-Use Next.js, TypeScript, Tailwind CSS, and tRPC, with Google sign-in and hosting on the existing server. Phase 1 now uses NextAuth for Google OAuth, SQLite with versioned records and transactions, IndexedDB for offline storage, and a public-shell service worker. Docker packaging and backup/pilot instructions are included; no live deployment has been performed.
+Use Next.js, TypeScript, Tailwind CSS, and tRPC, with Google sign-in and hosting on the existing server. Phase 1 now uses NextAuth for Google OAuth, SQLite with versioned records and transactions, IndexedDB for offline storage, and a public-shell service worker. Docker packaging and backup/pilot instructions are included. The private installation and its phase-2 background worker are running at https://home-server.tail210f05.ts.net:3003/.
 
-Compatible package versions are pinned in `package-lock.json`. Database access uses parameterized SQL without an ORM. The implementation passes 76 unit/integration tests, four browser tests, TypeScript checking, and the production build. Live Google authorization and Docker container execution remain untested here; browser tests use isolated encrypted session fixtures without adding a production authentication bypass. Implementation details and resolved schedule/synchronization rules are recorded in [architecture](docs/ARCHITECTURE.md).
+Compatible package versions are pinned in `package-lock.json`. Database access uses parameterized SQL without an ORM. The phase-2 implementation passes 138 unit/integration tests, all ten browser scenarios, TypeScript checking, and the production build. Live Google authorization and Docker container execution remain untested here; browser tests use isolated encrypted session fixtures without adding a production authentication bypass. Implementation details and resolved schedule/synchronization rules are recorded in [architecture](docs/ARCHITECTURE.md).
 
 ### Suggested implementation order
 

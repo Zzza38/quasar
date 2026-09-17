@@ -6,6 +6,7 @@ import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
 import { Icon, type IconName } from './icon';
 import { AppearanceToggle, ThemePicker } from './theme-picker';
+import { NotificationSettings } from './notification-settings';
 import { Button, Callout, IconButton, Sheet } from './ui';
 import type { SyncState, WorkspaceSession } from './use-workspace';
 
@@ -117,6 +118,8 @@ export function Shell({ session, context, view, taskCount, children }: { session
         <div className="flex justify-between gap-3"><span className="text-text-2">Offline copy</span><span className="text-right">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</span></div>
       </div>
       <ThemePicker />
+      <hr className="divider" />
+      <NotificationSettings accountId={context.user.id} online={online} />
       <hr className="divider" />
       <div className="grid gap-2">
         {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}

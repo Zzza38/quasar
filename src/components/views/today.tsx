@@ -151,9 +151,14 @@ export function TaskRow({ item, state, showDate = true }: { item: ReturnType<typ
     <input type="checkbox" className="task-check" checked={task.completed} aria-label={`Mark ${task.title} ${task.completed ? 'incomplete' : 'complete'}`} onChange={async (event) => { setError(''); try { await state.saveTask(item.id, { ...task, completed: event.target.checked }); } catch (err) { setError(errorMessage(err)); } }} />
     <button type="button" className="min-w-0 flex-1 text-left grid gap-0.5" onClick={() => state.navigate('tasks', { edit: item.id })} aria-label={`Edit ${task.title}`}>
       <span className="task-title text-[15px] font-medium">{task.title}</span>
-      {(task.dueDate || cls || task.notes) && <span className="hint flex items-center gap-2 flex-wrap">
+      {(task.dueDate || cls || task.notes || task.priority || task.subtasks?.length || task.recurrence || task.imported || task.reminder) && <span className="hint flex items-center gap-2 flex-wrap">
         {showDate && task.dueDate && <span style={overdue ? { color: 'var(--danger-text)', fontWeight: 600 } : undefined}>{overdue ? 'Overdue · ' : ''}{relativeDate(task.dueDate, state.today)}{task.dueTime ? ` · ${formatTime(task.dueTime)}` : ''}</span>}
         {cls && <span className="inline-flex items-center gap-1.5"><ColorDot color={classColor(cls.id, 'class', cls.color).dot} size={8} />{cls.name}</span>}
+        {task.priority && task.priority !== 'normal' && <span style={task.priority === 'high' ? { color: 'var(--danger-text)' } : undefined}>{task.priority === 'high' ? 'High priority' : 'Low priority'}</span>}
+        {!!task.subtasks?.length && <span>{task.subtasks.filter(entry => entry.completed).length}/{task.subtasks.length} checklist</span>}
+        {task.recurrence && <span>Repeats {task.recurrence.frequency}</span>}
+        {task.reminder && <span>Reminder</span>}
+        {task.imported && <span>{task.imported.sourceRemoved ? 'Calendar · source removed' : 'Calendar'}</span>}
         {task.notes && <Icon name="edit" size={12} className="text-text-3" />}
       </span>}
       {error && <span className="hint" style={{ color: 'var(--danger-text)' }} role="alert">{error}</span>}

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { scheduleSchema, type Schedule } from '@/domain/schedule';
+import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { pluralize } from '@/lib/format';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
@@ -13,6 +13,8 @@ import { Button, Callout, Chip, Field, SectionHeader, Sheet, Textarea } from '..
 export function SchoolView({ state }: { state: AppState }) {
   const { context, personal, online } = state;
   const school = context.school;
+  const sharedSchedule = scheduleForGrade(school.schedule, personal.grade);
+  const [gradeError, setGradeError] = useState('');
   const locked = school.supportLocked || school.memberLocked || school.memberCount >= 10;
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
@@ -43,6 +45,16 @@ export function SchoolView({ state }: { state: AppState }) {
 
       <section className="card card-pad grid gap-3" aria-labelledby="source-title">
         <SectionHeader title={<span id="source-title">Your schedule source</span>} />
+        <div className="grid gap-2">
+          <span className="label">Your grade</span>
+          <div className="segmented flex-wrap" role="group" aria-label="Your grade">
+            {GRADES.map((grade) => <button key={grade} type="button" aria-pressed={personal.grade === grade} onClick={() => {
+              setGradeError('');
+              void state.savePersonal({ ...personal, grade }).catch((err) => setGradeError(errorMessage(err)));
+            }}>{gradeLabel(grade)}</button>)}
+          </div>
+        </div>
+        {gradeError && <Callout tone="danger" role="alert">{gradeError}</Callout>}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="min-w-0 flex-1 basis-[240px] text-sm">
             <strong>{personal.customSchedule ? 'Private schedule' : 'School schedule'}</strong>
@@ -56,26 +68,26 @@ export function SchoolView({ state }: { state: AppState }) {
     <section className="card card-pad grid gap-3" aria-labelledby="shared-title">
       <SectionHeader title={<span id="shared-title">Shared schedule</span>} description={`Revision ${school.version}`}
         action={!locked ? <Button size="sm" icon="edit" disabled={!online} title={!online ? 'Connect to edit the shared schedule.' : undefined} onClick={() => setEditing(true)}>Edit shared schedule</Button> : undefined} />
-      <ScheduleSummary schedule={school.schedule} />
+      <ScheduleSummary schedule={sharedSchedule} />
       <button type="button" className="text-sm text-accent text-left font-medium" aria-expanded={showPreview} onClick={() => setShowPreview(!showPreview)}>{showPreview ? 'Hide preview' : 'Preview on real dates'}</button>
-      {showPreview && <Preview value={school.schedule} />}
+      {showPreview && <Preview value={sharedSchedule} />}
       {!online && !locked && <p className="hint">Connect to the internet to edit the shared schedule.</p>}
     </section>
 
-    <CorrectionRequest online={online} locked={locked} />
+    <CorrectionRequest online={online} />
 
-    <SharedEditorSheet open={editing} onClose={() => setEditing(false)} schedule={school.schedule} schoolId={school.id} version={school.version} onSaved={state.refresh} />
-    <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school.schedule} personal={personal} save={state.savePersonal} />
+    <SharedEditorSheet open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />
+    <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={sharedSchedule} personal={personal} save={state.savePersonal} />
   </div>;
 }
 
-function CorrectionRequest({ online, locked }: { online: boolean; locked: boolean }) {
+function CorrectionRequest({ online }: { online: boolean }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [sent, setSent] = useState(false);
   const [pending, setPending] = useState(false);
   return <section className="card card-pad grid gap-3" aria-labelledby="correction-title">
-    <SectionHeader title={<span id="correction-title">Request a correction</span>} description={locked ? 'Tell support what is wrong. Include the correct times or dates and, if possible, a link to the school’s published schedule.' : 'Prefer not to edit the shared schedule yourself? Describe the problem and support will make the change.'} />
+    <SectionHeader title={<span id="correction-title">Request a correction</span>} />
     <form className="grid gap-3" onSubmit={async (event) => {
       event.preventDefault(); setPending(true); setError(''); setSent(false);
       try { await api.school.requestCorrection.mutate({ message: message.trim() }); setMessage(''); setSent(true); }
@@ -89,28 +101,71 @@ function CorrectionRequest({ online, locked }: { online: boolean; locked: boolea
   </section>;
 }
 
-function SharedEditorSheet({ open, onClose, schedule, schoolId, version, onSaved }: { open: boolean; onClose: () => void; schedule: Schedule; schoolId: string; version: number; onSaved: () => Promise<void> }) {
-  return open ? <SharedEditorBody onClose={onClose} schedule={schedule} schoolId={schoolId} version={version} onSaved={onSaved} /> : <Sheet open={false} onClose={onClose} title="Edit shared schedule"><span /></Sheet>;
+function SharedEditorSheet({ open, onClose, schedule, initialGrade, schoolId, version, onSaved }: { open: boolean; onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<void> }) {
+  return open ? <SharedEditorBody onClose={onClose} schedule={schedule} initialGrade={initialGrade} schoolId={schoolId} version={version} onSaved={onSaved} /> : <Sheet open={false} onClose={onClose} title="Edit shared schedule"><span /></Sheet>;
 }
 
-function SharedEditorBody({ onClose, schedule, schoolId, version, onSaved }: { onClose: () => void; schedule: Schedule; schoolId: string; version: number; onSaved: () => Promise<void> }) {
-  const [draft, setDraft] = useState<Schedule>(() => structuredClone(schedule));
+function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, onSaved }: { onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<void> }) {
+  const [grade, setGrade] = useState<Grade>(initialGrade);
+  const [copyGrades, setCopyGrades] = useState<Grade[]>([]);
+  const [drafts, setDrafts] = useState<Partial<Record<Grade, Schedule>>>({});
+  const draft = drafts[grade] ?? scheduleForGrade(schedule, grade);
+  const setDraft = (value: Schedule) => setDrafts((current) => ({ ...current, [grade]: value }));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [stale, setStale] = useState(false);
   const issues = describeIssues(draft);
   const submit = async () => {
     setPending(true); setError(''); setStale(false);
-    try { await api.school.update.mutate({ schoolId, expectedVersion: version, schedule: scheduleSchema.parse(draft) }); await onSaved(); onClose(); }
+    try {
+      await api.school.update.mutate({ schoolId, expectedVersion: version, schedule: scheduleSchema.parse(draft), grades: [grade, ...copyGrades] });
+      await onSaved();
+      const remaining = { ...drafts };
+      for (const savedGrade of [grade, ...copyGrades]) delete remaining[savedGrade];
+      setDrafts(remaining);
+      setCopyGrades([]);
+      if (Object.keys(remaining).length === 0) onClose();
+      else setError(`${gradeLabel(grade)} published. Other grades still have unpublished edits.`);
+    }
     catch (err) {
       const text = errorMessage(err);
       setError(text);
       if (/changed\. Reload/i.test(text)) setStale(true);
     } finally { setPending(false); }
   };
-  return <Sheet open onClose={onClose} wide fullWidth title="Edit the shared schedule" description="Everyone at your school sees this change. It is saved as a new revision, and members are shown what changed."
+  return <Sheet open onClose={onClose} wide fullWidth title="Edit the shared schedule"
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><span className="spacer" />{stale && <Button variant="secondary" disabled={pending} onClick={async () => { await onSaved(); setStale(false); setError('Reloaded. Your draft is still here; saving now replaces the newer revision.'); }}>Reload latest</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Publish revision</Button></>}>
-    <ScheduleEditor value={draft} onChange={setDraft} />
+    <div className="grid gap-2">
+      <span className="label">Grade to edit</span>
+      <div className="segmented flex-wrap" role="group" aria-label="Grade to edit">
+        {GRADES.map((entry) => <button key={entry} type="button" disabled={pending} aria-pressed={grade === entry} onClick={() => {
+          setGrade(entry);
+          setCopyGrades([]);
+          setError('');
+        }}>{gradeLabel(entry)}{drafts[entry] ? ' *' : ''}</button>)}
+      </div>
+      <p className="hint">* marks unpublished edits.</p>
+    </div>
+    <div className="panel p-3 grid gap-2">
+      <span className="label">Copy from</span>
+      <p className="hint">Replace the current {gradeLabel(grade)} draft with another grade’s schedule.</p>
+      <div className="flex gap-2 flex-wrap" role="group" aria-label="Copy from">
+        {GRADES.filter((entry) => entry !== grade).map((entry) => <Button key={entry} size="sm" disabled={pending} onClick={() => {
+          setDraft(structuredClone(drafts[entry] ?? scheduleForGrade(schedule, entry)));
+          setError('');
+        }}>{gradeLabel(entry)}</Button>)}
+      </div>
+    </div>
+    <ScheduleEditor key={grade} value={draft} onChange={setDraft} disabled={pending} />
+    <fieldset disabled={pending} className="panel p-3 grid gap-2">
+      <legend className="label">Copy to other grades (optional)</legend>
+      <p className="hint">Publishing saves {gradeLabel(grade)} and replaces the schedules of any grades selected below.</p>
+      <div className="flex gap-2 flex-wrap" role="group" aria-label="Copy to">
+        {GRADES.filter((entry) => entry !== grade).map((entry) => <Button key={entry} size="sm" variant={copyGrades.includes(entry) ? 'primary' : 'secondary'} aria-pressed={copyGrades.includes(entry)} onClick={() => setCopyGrades(copyGrades.includes(entry) ? copyGrades.filter((target) => target !== entry) : [...copyGrades, entry])}>
+          {copyGrades.includes(entry) && <Icon name="check" size={14} />}{gradeLabel(entry)}
+        </Button>)}
+      </div>
+    </fieldset>
     {error && <Callout tone={stale ? 'warning' : 'danger'} icon="alert" role="alert">{error}</Callout>}
   </Sheet>;
 }

@@ -131,7 +131,7 @@ export function timeZones(): string[] {
 }
 
 export function browserTimeZone(): string {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York'; } catch { return 'America/New_York'; }
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {

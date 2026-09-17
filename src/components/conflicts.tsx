@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react';
 import type { Workspace } from '@/client/api';
 import { errorMessage } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
-import { detectOverrideConflicts, personalScheduleSchema, resolveDay, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { scheduleForGrade, gradeLabel, detectOverrideConflicts, personalScheduleSchema, resolveDay, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import type { Entity } from '@/domain/sync';
 import { taskSchema } from '@/domain/task';
 import { formatDate, formatDateTime, formatRange, WEEKDAYS } from '@/lib/format';
@@ -34,12 +34,18 @@ export function DiffTable<T>({ left, right, leftTitle, rightTitle, fields, onlyC
 const empty = (value: unknown) => value === null || value === undefined || value === '' ? null : String(value);
 
 export function taskFields(classes: Array<{ id: string; name: string }>): FieldSpec<Record<string, unknown>>[] {
+  const parse = (task: Record<string, unknown>) => taskSchema.safeParse(task).data;
   return [
     { key: 'title', label: 'Title', render: (task) => empty(task.title) },
     { key: 'due', label: 'Due', render: (task) => typeof task.dueDate === 'string' ? formatDateTime(task.dueDate, typeof task.dueTime === 'string' ? task.dueTime : null) : null },
     { key: 'classId', label: 'Class', render: (task) => classes.find((item) => item.id === task.classId)?.name ?? empty(task.classId) },
     { key: 'notes', label: 'Notes', render: (task) => empty(task.notes) },
     { key: 'completed', label: 'Status', render: (task) => task.completed ? 'Completed' : 'Open' },
+    { key: 'priority', label: 'Priority', render: (task) => { const priority = parse(task)?.priority ?? 'normal'; return priority.charAt(0).toUpperCase() + priority.slice(1); } },
+    { key: 'subtasks', label: 'Checklist', render: (task) => parse(task)?.subtasks?.map((item) => `${item.completed ? 'Done' : 'Open'}: ${item.title}`).join('; ') || null },
+    { key: 'recurrence', label: 'Repeat', render: (task) => { const recurrence = parse(task)?.recurrence; if (!recurrence) return null; const unit = { daily: 'day', weekly: 'week', monthly: 'month' }[recurrence.frequency]; return `Every ${recurrence.interval} ${unit}${recurrence.interval === 1 ? '' : 's'}${recurrence.until ? ` through ${formatDate(recurrence.until)}` : ''}`; } },
+    { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminder.minutesBefore === 0 ? 'At due time' : `${reminder.minutesBefore} minutes before`} · ${reminder.timeZone.replaceAll('_', ' ')}` : null; } },
+    { key: 'imported', label: 'Calendar source', render: (task) => { const imported = parse(task)?.imported; return imported ? `${imported.sourceRemoved ? 'Removed from source' : 'Subscribed'} · ${formatDateTime(imported.startDate, imported.startTime)}${imported.endDate ? ` – ${formatDateTime(imported.endDate, imported.endTime)}` : ''} · ${imported.allDay ? 'All day' : imported.timeZone.replaceAll('_', ' ')}` : null; } },
   ];
 }
 
@@ -51,6 +57,7 @@ export function personalFields(schedule: Schedule): FieldSpec<Record<string, unk
     { key: 'assignments', label: 'Period assignments', render: (value) => { const personal = parse(value); return personal ? Object.entries(personal.assignments).map(([period, classId]) => `${periodLabel(period)} → ${personal.classes.find((item) => item.id === classId)?.name ?? classId}`).join('; ') || null : null; } },
     { key: 'cycleDayOverrides', label: 'Rotation-day adjustments', render: (value) => { const personal = parse(value); return personal ? personal.cycleDayOverrides.map((entry) => schedule.cycleDays.find((day) => day.id === entry.cycleDayId)?.label ?? entry.cycleDayId).join(', ') || null : null; } },
     { key: 'dateOverrides', label: 'Date adjustments', render: (value) => { const personal = parse(value); return personal ? personal.dateOverrides.map((entry) => `${formatDate(entry.date)}${entry.closed ? ' (closed)' : ''}${entry.shiftMinutes ? ` (${entry.shiftMinutes > 0 ? '+' : ''}${entry.shiftMinutes} min)` : ''}${entry.slots ? ' (custom periods)' : ''}`).join(', ') || null : null; } },
+    { key: 'grade', label: 'Grade', render: (value) => { const personal = parse(value); return personal?.grade ? gradeLabel(personal.grade) : 'School default'; } },
     { key: 'customSchedule', label: 'Private schedule', render: (value) => { const personal = parse(value); return personal ? (personal.customSchedule ? `${personal.customSchedule.cycleDays.length}-day private schedule` : 'Uses the school schedule') : null; } },
   ];
 }
@@ -134,7 +141,7 @@ export function describeScheduleChanges(previous: Schedule, current: Schedule): 
 
 export function SchoolReview({ review, personal, online, onAcknowledge, onOpenClasses, today }: { review: NonNullable<Workspace['review']>; personal: PersonalSchedule; online: boolean; onAcknowledge: () => Promise<void>; onOpenClasses: () => void; today: string }) {
   const conflicts = detectOverrideConflicts(review.previous, review.current, personal);
-  const changes = describeScheduleChanges(review.previous, review.current);
+  const changes = describeScheduleChanges(scheduleForGrade(review.previous, personal.grade), scheduleForGrade(review.current, personal.grade));
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const [showAll, setShowAll] = useState(false);

@@ -19,5 +19,25 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 5m
+    env_file: .env.local
+    environment:
+      DATABASE_PATH: /app/data/whatsnext.sqlite
+    volumes:
+      - whatsnext-data:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 volumes:
   whatsnext-data:

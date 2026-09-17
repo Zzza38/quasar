@@ -1,6 +1,6 @@
 # Deployment and pilot operations
 
-No server deployment, domain changes, OAuth registration, or external account setup has been performed by this implementation.
+The existing private installation is available at https://home-server.tail210f05.ts.net:3003/. The general deployment instructions below also support a separate Docker installation. Real Google sign-in and device push delivery still require interactive pilot verification.
 
 ## Configure and deploy
 
@@ -53,7 +53,7 @@ Automate daily backups before pilot launch, retain daily copies for 14 days and 
 
 Restore procedure:
 
-1. Stop the application and preserve the existing database plus `-wal` and `-shm` files as a recovery copy.
+1. Stop the application and background worker, then preserve the existing database plus `-wal` and `-shm` files as a recovery copy.
 2. Verify the backup with SQLite `PRAGMA integrity_check` using a read-only connection; expect `ok`.
 3. Replace the application's database with the backup while stopped. Remove the old companion WAL/SHM files only after preserving them; they must not be reused with the restored database. Restore the service user's ownership and restrictive file permissions.
 4. Restart, check health, sign in, inspect a known schedule/task and check queued sync. A restored older database can lack device base revisions; preserve those device queues and resolve them through a deliberate export/recovery workflow instead of clearing browser data. The current API rejects unknown base revisions to avoid silent overwrites.
@@ -81,3 +81,11 @@ Automated unit/integration tests cover schedule cases, persistence, server autho
 ## Remaining launch inputs
 
 The owner must supply Google OAuth credentials, owner email, domain/TLS configuration, local persistent storage and backup destination; set up uptime alerts; establish what evidence support accepts; and run the pilot against the actual school's schedule. UI polish and structured schedule editing are assigned to Fable. Later-phase community permissions remain deliberately unimplemented.
+
+## Phase 2 background processing
+
+Run `npm run worker` under a service manager alongside Next.js. It loads `.env.local` and must use the same database and session secret as the app. Docker Compose starts both services automatically. Stop both processes for database restoration. Monitor worker restarts and calendar status in the app as well as web health.
+
+Set the VAPID variables in `.env.local` (see `.env.example`). Keep the private key backed up and outside Git. Enabling server support does not request browser permission: each user must open Account and choose Enable browser reminders. Verify an actual reminder on every supported device before relying on it.
+
+The current host uses user services `whatsnext.service` and `quasar-worker.service`. Inspect with `systemctl --user status`, and restart both after a verified build. Transient services created with `systemd-run` must be recreated after reboot; install persistent units before an unattended pilot. The private Tailscale route remains on port 3003; the other existing routes are unrelated.

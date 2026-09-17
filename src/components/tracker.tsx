@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/client/api';
-import { emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
+import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
 import { VIEWS, taskItems, type AppState, type View } from './app-state';
@@ -81,14 +81,14 @@ export function Tracker() {
   }
 
   const school = context.school;
-  const schedule = personal.customSchedule ?? school.schedule;
+  const schedule = effectiveSchedule(school.schedule, personal);
   const timeZone = schedule.timeZone;
   const state: AppState = {
     context: { ...context, school },
     snapshot,
     personal,
     personalValid: parsedPersonal.success,
-    schedule: school.schedule,
+    schedule: scheduleForGrade(school.schedule, personal.grade),
     timeZone,
     now,
     today: todayIn(timeZone, now),

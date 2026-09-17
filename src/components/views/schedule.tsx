@@ -8,6 +8,8 @@ import { Icon } from '../icon';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, effectiveSchedule } from '../overrides';
 import { Button, Chip, ColorDot, IconButton, Input, SectionHeader } from '../ui';
 import { Timeline } from './today';
+import { CalendarFeeds } from '../calendar-feeds';
+import { ImportedEvents } from '../imported-events';
 
 export function ScheduleView({ state }: { state: AppState }) {
   const { schedule: school, personal, now, today } = state;
@@ -25,7 +27,7 @@ export function ScheduleView({ state }: { state: AppState }) {
 
   return <div className="grid gap-4 fade-in">
     <header className="flex items-end justify-between gap-3 flex-wrap">
-      <div><h1>Schedule</h1><p className="text-sm text-text-2">Times in {schedule.timeZone.replaceAll('_', ' ')}{personal.customSchedule ? ' · your private schedule' : ''}</p></div>
+      <h1>Schedule</h1>
       <div className="flex items-center gap-1.5">
         <IconButton label="Previous day" icon="chevronLeft" variant="secondary" onClick={() => setDate(addDays(date, -1))} />
         <Button size="sm" variant={date === today ? 'soft' : 'secondary'} onClick={() => setDate(today)}>Today</Button>
@@ -64,18 +66,20 @@ export function ScheduleView({ state }: { state: AppState }) {
       {selected && !selected.closed && selected.periods.length === 0 && <p className="text-sm text-text-2 py-2">No periods on this day.</p>}
       {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} />}
       {selected && selected.issues.length > 0 && <p className="hint" style={{ color: 'var(--danger-text)' }}>{selected.issues.length} period(s) could not be placed on this date{selected.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' because a time shift moves them outside the day' : ''}. Edit the adjustment to fix this.</p>}
+      <ImportedEvents state={state} date={date} />
     </section>
 
     <section className="card card-pad grid gap-3" aria-labelledby="rotation-title">
-      <SectionHeader title={<span id="rotation-title">{rotation ? 'Rotation' : 'Daily bell schedule'}</span>} description={rotation ? `${schedule.cycleDays.length} rotation days. Weekends${school.exceptions.length ? ', closures' : ''} and non-school days pause the cycle unless the school says otherwise.` : 'The same periods repeat every school day.'} />
+      <SectionHeader title={<span id="rotation-title">{rotation ? 'Rotation' : 'Daily bell schedule'}</span>} />
       <RotationOverview state={state} onAdjust={setAdjustCycleDay} onJump={setDate} />
     </section>
 
     {(personal.dateOverrides.length > 0 || personal.cycleDayOverrides.length > 0) && <section className="card card-pad grid gap-3" aria-labelledby="adjustments-title">
-      <SectionHeader title={<span id="adjustments-title">Your adjustments</span>} description="Only your view changes. The school schedule stays the same for everyone else." />
+      <SectionHeader title={<span id="adjustments-title">Your adjustments</span>} />
       <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={(entry) => { setDate(entry); setAdjustDate(entry); }} onEditCycleDay={setAdjustCycleDay} />
     </section>}
 
+    <CalendarFeeds state={state} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? date} school={school} personal={personal} save={state.savePersonal} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
   </div>;

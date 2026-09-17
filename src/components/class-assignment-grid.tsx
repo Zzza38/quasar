@@ -37,7 +37,6 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
     finally { saving.current = false; setPending(false); }
   };
   return <div className="grid gap-3 min-w-0">
-    <p className="hint">Your school provides the starting layout. Drop a class onto a school block to use its times. Move or resize blocks to adjust your own timetable; changes save automatically.</p>
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
     <ScheduleGrid value={draft} personal={displayPersonal} personalClassesOnly onAssign={async (periodId, classId) => {
       if (disabled || saving.current) return;

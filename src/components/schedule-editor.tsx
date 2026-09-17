@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
-import { addDays, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
+import { addDays, browserTimeZone, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
 import { Button, Callout, Chip, Field, IconButton, Input, Segmented, Select, Toggle, WeekdayPicker } from './ui';
@@ -59,7 +59,6 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
     onChange(next);
   };
   return <div className="grid gap-2">
-    <p className="hint">Changing between 11 and 12 flips AM/PM. Other hour changes use school-day times (7–11 AM, 12–6 PM). Click AM/PM to switch, or type it with the time.</p>
     {slots.length === 0 && <p className="hint">{emptyText}</p>}
     {slots.map((slot, index) => <div key={slot.id} className="slot-row">
       <Select small aria-label={`Slot ${index + 1} period`} value={slot.periodId} disabled={disabled} onChange={(event) => update(index, { periodId: event.target.value })}>
@@ -107,25 +106,24 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
   const sameAdvance = JSON.stringify(value.advanceWeekdays) === JSON.stringify(value.schoolWeekdays);
   const singleDay = value.cycleDays.length <= 1;
   return <div className="grid gap-5">
-    <Field label="School time zone" hint="All bell times are interpreted in this zone." htmlFor="tz">
+    <Field label="School time zone" htmlFor="tz">
       <Select id="tz" value={value.timeZone} disabled={disabled} onChange={(event) => set({ timeZone: event.target.value })}>
         {!zones.includes(value.timeZone) && <option value={value.timeZone}>{value.timeZone}</option>}
         {zones.map((zone) => <option key={zone} value={zone}>{zone.replaceAll('_', ' ')}</option>)}
       </Select>
+      <Button size="sm" disabled={disabled} onClick={() => set({ timeZone: browserTimeZone() })}>Use computer time zone</Button>
     </Field>
     <div className="grid gap-2">
       <span className="label">School days</span>
       <WeekdayPicker label="School days" value={value.schoolWeekdays} disabled={disabled} onChange={(schoolWeekdays) => set({ schoolWeekdays, ...(sameAdvance && !singleDay ? { advanceWeekdays: schoolWeekdays } : {}) })} />
-      <span className="hint">Days with classes. Other days are closed unless an exception adds a special schedule.</span>
     </div>
     {!singleDay && <div className="grid gap-2">
       <span className="label">Rotation advances after these days</span>
       <Toggle label="Same as school days" checked={sameAdvance} disabled={disabled} onChange={(checked) => set({ advanceWeekdays: checked ? value.schoolWeekdays : value.advanceWeekdays.filter((day) => value.schoolWeekdays.includes(day)) })} />
       {!sameAdvance && <WeekdayPicker label="Advance days" value={value.advanceWeekdays} disabled={disabled} onChange={(advanceWeekdays) => set({ advanceWeekdays })} />}
-      <span className="hint">Most schools move to the next rotation day after every school day. Weekends and closures pause the cycle unless an exception says otherwise.</span>
     </div>}
     {!singleDay && <div className="panel p-4 grid gap-3">
-      <div><strong className="text-sm">Starting point</strong><p className="hint">Pick any known date and which rotation day happened on it. Every other date is calculated from here.</p></div>
+      <strong className="text-sm">Starting point</strong>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Date" htmlFor="anchor-date"><Input id="anchor-date" type="date" value={value.anchorDate} disabled={disabled} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value) set({ anchorDate: event.target.value }); }} /></Field>
         <Field label="Rotation day on that date" htmlFor="anchor-day">
@@ -159,7 +157,6 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
     set({ periods: next });
   };
   return <div className="grid gap-4">
-    <p className="text-sm text-text-2">Periods are the stable names students assign classes to, such as <em>A</em>, <em>Period 3</em> or <em>Lunch</em>. Their times and order are set per rotation day.</p>
     <div className="grid gap-2">
       {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 items-center">
         <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <span className="hint">Unscheduled</span>}</div>
@@ -176,7 +173,6 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
       <Button size="sm" icon="plus" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId(`period-${value.periods.length + 1}`, value.periods.map((period) => period.id)), label: `Period ${value.periods.length + 1}`, kind: 'class' }] })}>Add period</Button>
       {!value.periods.some((period) => period.kind === 'lunch') && <Button size="sm" icon="coffee" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId('lunch', value.periods.map((period) => period.id)), label: 'Lunch', kind: 'lunch' }] })}>Add lunch</Button>}
     </div>
-    <p className="hint">Schools with lunch waves can add several lunch periods, for example “Lunch 1” and “Lunch 2”, and place each one in the rotation days where it applies.</p>
   </div>;
 }
 
@@ -229,7 +225,6 @@ function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Pa
     setEditing(date);
   };
   return <div className="grid gap-4">
-    <p className="text-sm text-text-2">Holidays, early-release days, assemblies and term restarts. Each date can have one exception.</p>
     {sorted.length === 0 && <p className="hint">No exceptions yet.</p>}
     <div className="grid gap-2">
       {sorted.map((exception) => {

@@ -161,3 +161,18 @@ describe('durable synchronization', () => {
     } finally { rmSync(directory,{recursive:true,force:true}); }
   });
 });
+
+describe('grade-specific school revisions', () => {
+  it('persists selected grades while preserving other schedules and revision history', () => {
+    const f = fixture();
+    f.service.join(f.student, { schoolId: f.school.id, choice: 'community' });
+    const draft = { ...schedule, cycleDays: [{ ...schedule.cycleDays[0], label: 'Junior day' }] };
+    const updated = f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 1, schedule: draft, grades: ['9', '10'] });
+    expect(updated.schedule.cycleDays).toEqual(schedule.cycleDays);
+    expect(updated.schedule.gradeSchedules?.['9']?.cycleDays).toEqual(draft.cycleDays);
+    expect(updated.schedule.gradeSchedules?.['10']?.cycleDays).toEqual(draft.cycleDays);
+    expect(f.service.workspace(f.student).review?.current).toEqual(updated.schedule);
+    expect(() => f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 1, schedule: draft, grades: ['11'] })).toThrow('changed');
+    expect(() => f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 2, schedule: draft, grades: [] })).toThrow();
+  });
+});

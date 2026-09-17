@@ -15,6 +15,8 @@ function worker() {
   const cache = new Map<string, Response>();
   const events = new Map<string, (event: any) => void>();
   const requests: Array<{ path: string; credentials?: string }> = [];
+  const notifications: Array<{ title: string; options: any }> = [];
+  const opened: string[] = [];
   let offline = false;
   let anonymousRedirect = false;
   let brokenBundle = false;
@@ -40,7 +42,8 @@ function worker() {
     self: {
       location: { origin: ORIGIN },
       addEventListener: (type: string, handler: (event: any) => void) => { events.set(type, handler); },
-      skipWaiting: async () => undefined, clients: { claim: async () => undefined },
+      registration: { showNotification: async (title: string, options: any) => { notifications.push({ title, options }); } },
+      skipWaiting: async () => undefined, clients: { claim: async () => undefined, matchAll: async () => [], openWindow: async (url: string) => { opened.push(url); } },
     },
   });
   async function dispatch(type: string, properties: Record<string, unknown> = {}) {
@@ -56,7 +59,7 @@ function worker() {
     return resolved;
   }
   return {
-    cache, requests, dispatch,
+    cache, requests, dispatch, notifications, opened,
     offline: () => { offline = true; },
     redirect: () => { anonymousRedirect = true; },
     breakBundle: () => { brokenBundle = true; },
@@ -102,5 +105,26 @@ describe("public offline service worker", () => {
     expect(sw.cache.has(address("/"))).toBe(false);
     sw.offline();
     expect((await sw.navigate("/"))?.status).toBe(503);
+  });
+});
+
+
+describe("push notifications", () => {
+  it("shows a generic reminder without exposing payload content", async () => {
+    const sw = worker();
+    await sw.dispatch("push", { data: { json: () => ({ title: "Private title", body: "Private task", tag: "task-1", url: "https://evil.example" }) } });
+    expect(sw.notifications[0].title).toBe("Quasar reminder");
+    expect(sw.notifications[0].options.body).not.toContain("Private");
+    expect(sw.notifications[0].options.data.url).toBe("/#tasks");
+    expect(sw.notifications[0].options.tag).toBe("task-1");
+  });
+  it("handles malformed payloads and only opens the local tasks view", async () => {
+    const sw = worker();
+    await sw.dispatch("push", { data: { json: () => { throw new Error("bad payload"); } } });
+    expect(sw.notifications).toHaveLength(1);
+    let closed = false;
+    await sw.dispatch("notificationclick", { notification: { data: { url: "https://evil.example" }, close: () => { closed = true; } } });
+    expect(closed).toBe(true);
+    expect(sw.opened).toEqual([ORIGIN + "/#tasks"]);
   });
 });

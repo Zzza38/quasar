@@ -44,7 +44,7 @@ export const exceptionSchema = z.discriminatedUnion("kind", [
 const weekdaysSchema = z.array(z.number().int().min(1).max(7)).max(7).refine((values) => new Set(values).size === values.length, "Weekdays must be unique; Monday is 1 and Sunday is 7");
 
 /** The anchor names the cycle day ON that date. Advancement occurs AFTER each date. */
-export const scheduleSchema = z.strictObject({
+const baseScheduleSchema = z.strictObject({
   version: z.literal(1),
   timeZone: z.string().min(1).max(100).refine((value) => {
     try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; }
@@ -78,6 +78,34 @@ export const scheduleSchema = z.strictObject({
   });
 });
 
+export const GRADES = ['9', '10', '11', '12'] as const;
+export const gradeSchema = z.enum(GRADES);
+export type Grade = z.infer<typeof gradeSchema>;
+export const gradesSchema = z.array(gradeSchema).min(1, 'Choose at least one grade').max(GRADES.length)
+  .refine((grades) => new Set(grades).size === grades.length, 'Grades must be unique');
+export const gradeLabel = (grade: Grade) => `Grade ${grade}`;
+export const scheduleSchema = baseScheduleSchema.safeExtend({
+  gradeSchedules: z.partialRecord(gradeSchema, baseScheduleSchema).optional(),
+});
+
+/** Grades without a separate schedule keep using the school's default. */
+export function scheduleForGrade(schedule: Schedule, grade?: Grade): Schedule {
+  return (grade && schedule.gradeSchedules?.[grade]) || schedule;
+}
+
+export function effectiveSchedule(schedule: Schedule, personal: PersonalSchedule): Schedule {
+  return personal.customSchedule ?? scheduleForGrade(schedule, personal.grade);
+}
+
+export function applyScheduleToGrades(current: Schedule, draft: Schedule, grades: Grade[]): Schedule {
+  gradesSchema.parse(grades);
+  const { gradeSchedules: _variants, ...base } = draft;
+  if (grades.length === GRADES.length) return scheduleSchema.parse(base);
+  return scheduleSchema.parse({ ...current, gradeSchedules: {
+    ...current.gradeSchedules, ...Object.fromEntries(grades.map((grade) => [grade, base])),
+  } });
+}
+
 export const classSchema = z.strictObject({
   id: idSchema,
   name: labelSchema,
@@ -87,6 +115,7 @@ export const classSchema = z.strictObject({
 });
 
 export const personalScheduleSchema = z.strictObject({
+  grade: gradeSchema.optional(),
   classes: z.array(classSchema).max(300),
   assignments: z.record(idSchema, idSchema),
   cycleDayOverrides: z.array(z.strictObject({ cycleDayId: idSchema, slots: slotsSchema })).max(366),
@@ -187,7 +216,7 @@ function cycleDayForDate(schedule: Schedule, date: Temporal.PlainDate) {
  * are reported in issues and skipped, leaving the saved edit intact for the student to adjust.
  */
 export function resolveDay(schoolSchedule: Schedule, dateString: string, personal: PersonalSchedule = emptyPersonalSchedule()): ResolvedDay {
-  const schedule = personal.customSchedule ?? schoolSchedule;
+  const schedule = effectiveSchedule(schoolSchedule, personal);
   const date = Temporal.PlainDate.from(dateSchema.parse(dateString));
   const cycleDay = cycleDayForDate(schedule, date);
   const exception = schedule.exceptions.find((entry) => entry.date === dateString);
@@ -256,7 +285,7 @@ export interface NextClass extends ResolvedPeriod {
 export function nextClass(schedule: Schedule, now: Date | string, personal: PersonalSchedule = emptyPersonalSchedule(), lookAheadDays = 370): NextClass | null {
   if (!Number.isInteger(lookAheadDays) || lookAheadDays < 1 || lookAheadDays > 3660) throw new RangeError("lookAheadDays must be an integer between 1 and 3660");
   const instant = Temporal.Instant.from(now instanceof Date ? now.toISOString() : now);
-  const firstDate = instant.toZonedDateTimeISO((personal.customSchedule ?? schedule).timeZone).toPlainDate();
+  const firstDate = instant.toZonedDateTimeISO(effectiveSchedule(schedule, personal).timeZone).toPlainDate();
   for (let offset = 0; offset < lookAheadDays; offset += 1) {
     const day = resolveDay(schedule, firstDate.add({ days: offset }).toString(), personal);
     const period = day.periods.find((entry) => Temporal.Instant.compare(entry.endAt, instant) > 0);
@@ -279,6 +308,8 @@ export function detectOverrideConflicts(previous: Schedule, current: Schedule, p
   if (personal.customSchedule) return [];
   const schoolPeriods = new Map(current.periods.map(period => [period.id, period]));
   const periodLabels = new Map([...current.periods, ...previous.periods].map(period => [period.id, period.label]));
+  previous = scheduleForGrade(previous, personal.grade);
+  current = scheduleForGrade(current, personal.grade);
   const conflicts: OverrideConflict[] = [];
   const add = (kind: OverrideConflict["kind"], target: string, message: string) => {
     const id = `${kind}:${target}`;

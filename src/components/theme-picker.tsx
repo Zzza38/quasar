@@ -20,7 +20,6 @@ export function ThemePicker() {
           {theme.accent === accent.id && <Icon name="check" size={14} strokeWidth={3} />}
         </button>)}
       </div>
-      <span className="hint">{ACCENTS.find((accent) => accent.id === theme.accent)?.label}. Saved on this device.</span>
     </div>
   </div>;
 }

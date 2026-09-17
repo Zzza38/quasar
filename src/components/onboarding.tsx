@@ -79,7 +79,7 @@ function SchoolStep({ error, onSelect, onCreate, footer }: { error: string; onSe
     }, query ? 250 : 0);
     return () => { current = false; clearTimeout(timer); };
   }, [query]);
-  return <Frame step={2} total={3} title="Find your school" description="Search by name or town. If nobody has added your school yet, you can add it and enter its bell schedule." footer={footer}>
+  return <Frame step={2} total={3} title="Find your school" footer={footer}>
     <div className="relative">
       <Icon name="search" size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
       <Input aria-label="School name or location" placeholder="School name or town" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="pl-10" />
@@ -119,7 +119,7 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
   const [message, setMessage] = useState('');
   const issues = schedule ? describeIssues(schedule) : [];
   if (phase === 'details') {
-    return <Frame step={2} total={3} title="Add your school" description="New schools start with a community schedule that support can review and lock later." footer={footer}>
+    return <Frame step={2} total={3} title="Add your school" footer={footer}>
       <form className="grid gap-4" onSubmit={(event) => {
         event.preventDefault();
         const timeZone = browserTimeZone();
@@ -137,12 +137,11 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
           </div>
           {template === 'rotation' && <Field label="Days in the cycle" htmlFor="cycle-length" className="max-w-[160px]"><Input id="cycle-length" type="number" min={2} max={60} value={cycleLength} onChange={(event) => setCycleLength(Math.max(2, Math.min(60, Number(event.target.value) || 2)))} /></Field>}
         </div>
-        <p className="hint">You’ll adjust period names, times and the starting day next. Everything can be corrected later.</p>
         <div className="flex gap-2 flex-wrap"><Button variant="ghost" icon="arrowLeft" onClick={onBack}>Back</Button><span className="flex-1" /><Button type="submit" variant="primary" iconRight="arrowRight" disabled={name.trim().length < 2 || location.trim().length < 2}>Set up the schedule</Button></div>
       </form>
     </Frame>;
   }
-  return <Frame step={2} total={3} wide title={`${name.trim()} schedule`} description="Enter the bell schedule as your school publishes it. Use Preview to check a few real dates before creating the school." footer={footer}>
+  return <Frame step={2} total={3} wide title={`${name.trim()} schedule`} footer={footer}>
     {schedule && <ScheduleEditor value={schedule} onChange={setSchedule} initialSection="periods" />}
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     <div className="flex gap-2 flex-wrap items-center">
@@ -178,7 +177,7 @@ function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBa
       await onJoined();
     } catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Frame step={3} total={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" description="You can change this later. Personal adjustments never change the shared school schedule." footer={footer}>
+  return <Frame step={3} total={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" footer={footer}>
     <div className="panel p-4 grid gap-2">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div><strong>{school.name}</strong><div className="hint">{school.location} · {pluralize(school.memberCount, 'member')}</div></div>

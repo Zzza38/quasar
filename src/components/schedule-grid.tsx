@@ -78,7 +78,6 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   return <div className="timetable-workspace">
     <aside className="timetable-palette panel p-3 grid gap-2">
       <strong className="text-sm">Classes & periods</strong>
-      <p className="hint">Drop at a start time. Drag a block to move it. Drag its top or bottom edge to resize in 5-minute steps.</p>
       <div className="timetable-palette-items" aria-label="Available periods">
         {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
           const cls = clsFor(period.id);
@@ -92,7 +91,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
       </div>
     </aside>
     <div className="timetable-content">
-      <p role="status" className="hint">{message || (personalClassesOnly ? 'School blocks are snap targets. Select a class and tap a block, or drag it onto one.' : 'No fixed period rows. Blocks use their actual start and end times. Select a class and tap a time, or drag it into a day.')}</p>
+      <p role="status" className={message ? 'hint' : 'sr-only'}>{message}</p>
       {weeks.map((days, weekIndex) => <section key={days[0].id} className="grid gap-2 min-w-0" aria-label={`Rotation week ${weekIndex + 1}`}>
         <h3 className="text-sm font-semibold">Week {weekIndex + 1}</h3>
         <div className="time-canvas-scroll">

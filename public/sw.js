@@ -1,6 +1,6 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "whatsnext-public-shell-v2";
+const CACHE = "whatsnext-public-shell-v3";
 const SHELL_PATHS = new Set(["/", "/admin"]);
 
 function publicShell(response, expectedPath) {
@@ -93,4 +93,28 @@ self.addEventListener("fetch", (event) => {
       return response;
     })());
   }
+});
+
+// Notification payloads contain no task content. Navigation stays on this origin.
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try { payload = event.data?.json() || {}; } catch { /* Show a generic reminder. */ }
+  event.waitUntil(self.registration.showNotification("Quasar reminder", {
+    body: "You have a task reminder. Open Quasar to view it.",
+    icon: "/icon.svg", badge: "/icon.svg",
+    tag: typeof payload.tag === "string" ? payload.tag.slice(0, 200) : "quasar-reminder",
+    data: { url: "/#tasks" },
+  }));
+});
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const target = new URL("/#tasks", self.location.origin).href;
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const existing = windows.find(client => new URL(client.url).origin === self.location.origin);
+    if (existing) {
+      await existing.navigate(target);
+      await existing.focus();
+    } else await self.clients.openWindow(target);
+  })());
 });

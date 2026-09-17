@@ -247,7 +247,7 @@ dialog.sheet::backdrop { background: rgb(8 10 16 / 0.5); backdrop-filter: blur(2
 /* ---------- App layout ---------- */
 .app { min-height: 100dvh; }
 .app-sidebar { display: none; }
-.app-main { min-width: 0; padding: 14px 16px calc(var(--nav-h) + 24px); max-width: 1120px; margin: 0 auto; }
+.app-main { width: 100%; min-width: 0; padding: 14px 16px calc(var(--nav-h) + 24px); max-width: 1120px; margin: 0 auto; }
 .app-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
@@ -266,6 +266,7 @@ dialog.sheet::backdrop { background: rgb(8 10 16 / 0.5); backdrop-filter: blur(2
   .app { display: grid; grid-template-columns: 240px minmax(0, 1fr); }
   .app-sidebar { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100dvh; padding: 20px 14px; border-right: 1px solid var(--border); background: var(--surface); }
   .app-main { padding: 22px 32px 40px; }
+  .app-topbar { display: none; }
   .tabbar { display: none; }
   .side-link { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; color: var(--text-2); font-weight: 600; font-size: 14px; text-decoration: none; }
   .side-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }

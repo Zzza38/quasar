@@ -36,20 +36,19 @@ export function ClassesView({ state }: { state: AppState }) {
   }, [schedule]);
   const knownPeriods = [...schedule.periods, ...school.periods.filter(period => !schedule.periods.some(entry => entry.id === period.id))];
   const scheduled = scheduledPeriodIds(schedule, personal);
-  const assignable = schedule.periods.filter((period) => period.kind !== 'lunch');
   const stale = Object.keys(personal.assignments).filter((periodId) => !knownPeriods.some((period) => period.id === periodId));
   const run = async (next: PersonalSchedule) => { setError(''); try { await state.savePersonal(next); } catch (err) { setError(errorMessage(err)); } };
   const current = editing && editing !== 'new' ? personal.classes.find((entry) => entry.id === editing) ?? null : null;
 
   return <div className="grid gap-4 fade-in">
     <header className="flex items-end justify-between gap-3 flex-wrap">
-      <div><h1>Classes</h1><p className="text-sm text-text-2">{personal.classes.length === 0 ? 'Add your classes, then match them to the school’s periods.' : `${personal.classes.length} classes · ${Object.keys(personal.assignments).length} of ${assignable.length} periods assigned`}</p></div>
+      <h1>Classes</h1>
       <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button>
     </header>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {!state.personalValid && <Callout tone="warning" icon="alert">Your saved personal schedule could not be read. Retry sync before editing.</Callout>}
 
-    {personal.classes.length === 0 && <section className="card"><EmptyState icon="book" title="No classes yet" action={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button>}>Each class gets a colour and shows up in your day once it is matched to a period.</EmptyState></section>}
+    {personal.classes.length === 0 && <section className="card"><EmptyState icon="book" title="No classes yet" action={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button>} /></section>}
     {personal.classes.length > 0 && <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
       {personal.classes.map((cls) => {
         const periods = knownPeriods.filter((period) => personal.assignments[period.id] === cls.id);
@@ -73,7 +72,7 @@ export function ClassesView({ state }: { state: AppState }) {
     </ul>}
 
     <section className="card card-pad grid gap-3" aria-labelledby="assignments-title">
-      <SectionHeader title={<span id="assignments-title">Your class timetable</span>} description="Drag your classes into the schedule. Days run across the top, with periods and times down the side." />
+      <SectionHeader title={<span id="assignments-title">Your class timetable</span>} />
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'} — assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
@@ -81,7 +80,7 @@ export function ClassesView({ state }: { state: AppState }) {
     </section>
 
     <section className="card card-pad grid gap-3" aria-labelledby="adjust-title">
-      <SectionHeader title={<span id="adjust-title">Adjustments</span>} description="Change what a date or rotation day looks like for you only. The school schedule stays the same for everyone else." />
+      <SectionHeader title={<span id="adjust-title">Adjustments</span>} />
       <div className="flex gap-2 flex-wrap items-end">
         <Field label="Adjust a date" htmlFor="adjust-date"><div className="flex gap-2"><Input id="adjust-date" small type="date" value={pickDate} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value) setPickDate(event.target.value); }} className="max-w-[160px]" /><Button size="sm" onClick={() => setAdjustDate(pickDate)} disabled={!pickDate}>Open {formatDate(pickDate)}</Button></div></Field>
         {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) setAdjustCycleDay(event.target.value); }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
@@ -90,7 +89,6 @@ export function ClassesView({ state }: { state: AppState }) {
       <div className="panel p-4 flex items-center gap-3 flex-wrap">
         <div className="min-w-0 flex-1 basis-[240px] text-sm">
           <strong>{personal.customSchedule ? 'Your timetable has personal changes' : 'Your timetable starts with the school schedule'}</strong>
-          <p className="text-text-2">Edit your timetable above. Your changes save automatically and only affect you.</p>
         </div>
         <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>Advanced schedule settings</Button>
       </div>
@@ -138,8 +136,8 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
         </div>
       </Field>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Room" hint="Optional" htmlFor="class-room"><Input id="class-room" maxLength={120} value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} /></Field>
-        <Field label="Teacher" hint="Optional" htmlFor="class-teacher"><Input id="class-teacher" maxLength={120} value={draft.teacher ?? ''} onChange={(event) => setDraft({ ...draft, teacher: event.target.value })} /></Field>
+        <Field label="Room (optional)" htmlFor="class-room"><Input id="class-room" maxLength={120} value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} /></Field>
+        <Field label="Teacher (optional)" htmlFor="class-teacher"><Input id="class-teacher" maxLength={120} value={draft.teacher ?? ''} onChange={(event) => setDraft({ ...draft, teacher: event.target.value })} /></Field>
       </div>
       {changed && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={classFields} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setAcknowledged(serialized); } else onClose(); }} />}
       {error && <p className="callout callout-danger" role="alert">{error}</p>}

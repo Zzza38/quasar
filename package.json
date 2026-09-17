@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:backup": "node --import tsx scripts/backup.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "worker": "node --import tsx scripts/worker.ts"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -21,12 +22,14 @@
     "@trpc/client": "11.18.0",
     "@trpc/server": "11.18.0",
     "better-sqlite3": "13.0.3",
+    "ical.js": "2.2.1",
     "idb": "8.0.3",
     "next": "16.3.4",
     "next-auth": "4.24.15",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",
+    "web-push": "3.6.7",
     "zod": "4.6.2"
   },
   "devDependencies": {
@@ -35,6 +38,7 @@
     "@types/node": "24.13.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@types/web-push": "3.6.4",
     "fake-indexeddb": "6.2.5",
     "tsx": "4.23.13",
     "typescript": "5.9.3",

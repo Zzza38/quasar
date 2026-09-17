@@ -2,9 +2,10 @@ import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Db } from './db';
-import { scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
-import { taskSchema } from '@/domain/task';
+import { applyScheduleToGrades, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { nextRecurringTask, taskSchema } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
+import { listSubscriptions, listImportConflicts } from './calendar';
 
 export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null };
 export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number };
@@ -14,7 +15,7 @@ const fail = (code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'B
 const now = () => new Date().toISOString();
 export const namesSchema = z.object({ displayName: z.string().trim().min(1).max(80), fullName: z.string().trim().min(1).max(160) });
 export const createSchoolSchema = z.object({ name: z.string().trim().min(2).max(160), location: z.string().trim().min(2).max(200), schedule: scheduleSchema });
-export const schoolUpdateSchema = z.object({ schoolId: z.string().uuid(), expectedVersion: z.number().int().positive(), schedule: scheduleSchema });
+export const schoolUpdateSchema = z.object({ schoolId: z.string().uuid(), expectedVersion: z.number().int().positive(), schedule: scheduleSchema, grades: gradesSchema.optional() });
 export const adminUpdateSchema = schoolUpdateSchema.extend({ approved: z.boolean(), supportLocked: z.boolean() });
 export const joinSchema = z.object({ schoolId: z.string().uuid(), choice: z.enum(['approved', 'community', 'personal']), personalSchedule: scheduleSchema.optional() });
 const entitySchema = z.object({ id: z.string().min(1).max(100), kind: z.enum(['task', 'personal']), version: z.number().int().positive(), data: z.record(z.string(), z.unknown()), deleted: z.boolean() });
@@ -104,10 +105,11 @@ export class Service {
         if (school.memberLocked || school.supportLocked || school.memberCount >= 10) fail('FORBIDDEN', 'This schedule is locked. Send a correction to support.');
       }
       if (school.version !== input.expectedVersion) fail('CONFLICT', 'The school schedule changed. Reload and review it before saving.');
+      const updatedSchedule = input.grades ? applyScheduleToGrades(school.schedule, input.schedule, input.grades) : input.schedule;
       const admin = asAdmin ? input as z.infer<typeof adminUpdateSchema> : null;
       this.db.prepare('UPDATE schools SET schedule=?,version=version+1,approved=?,support_locked=? WHERE id=?')
-        .run(JSON.stringify(input.schedule), admin ? Number(admin.approved) : 0, admin ? Number(admin.supportLocked) : Number(school.supportLocked), school.id);
-      this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, JSON.stringify(input.schedule), id, now());
+        .run(JSON.stringify(updatedSchedule), admin ? Number(admin.approved) : 0, admin ? Number(admin.supportLocked) : Number(school.supportLocked), school.id);
+      this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, JSON.stringify(updatedSchedule), id, now());
       this.audit(id, asAdmin ? 'school.adminUpdate' : 'school.update', school.id, { fromVersion: school.version, approved: admin?.approved ?? false, supportLocked: admin?.supportLocked ?? school.supportLocked });
       return this.school(school.id);
     })();
@@ -129,7 +131,7 @@ export class Service {
       if (old) review = {previous: JSON.parse(old.schedule), current: school.schedule, version: school.version};
     }
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
-    return { user, school, entities: rows.map(entityFromRow), review, isAdmin: this.isAdmin(id) };
+    return { user, school, entities: rows.map(entityFromRow), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), importConflicts: listImportConflicts(this.db, id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
@@ -162,6 +164,9 @@ export class Service {
         if (!history || canonical(JSON.parse(history.entity)) !== canonical(input.base)) fail('BAD_REQUEST', 'The base revision is not recognized. Reload before retrying.');
       }
       if (input.data) this.validateData(input.kind, input.data);
+      if (input.kind === 'task' && input.data && canonical(input.data.imported ?? null) !== canonical(input.base?.data.imported ?? null)) {
+        fail('BAD_REQUEST', 'Calendar source metadata can only be changed by calendar synchronization.');
+      }
       let result = mergeMutation(input, current);
       if (result.status === 'applied') {
         if (!result.entity.deleted) {
@@ -170,7 +175,19 @@ export class Service {
           else result = { status: 'conflict', current, paths: parsed.error.issues.map(issue => '/' + issue.path.join('/')) };
         }
         // A no-op merge may return the current revision.
-        if (result.status === 'applied' && (!current || result.entity.version > current.version)) this.writeEntity(id, result.entity);
+        if (result.status === 'applied' && (!current || result.entity.version > current.version)) {
+          this.writeEntity(id, result.entity);
+          if (input.kind === 'task' && current && !current.deleted && !current.data.completed && !result.entity.deleted && result.entity.data.completed) {
+            const next = nextRecurringTask(taskSchema.parse(result.entity.data));
+            const existing = this.db.prepare('SELECT successor_id FROM recurring_successors WHERE owner_id=? AND parent_id=?').get(id, input.id);
+            if (next && !existing) {
+              const successorId = 'repeat_' + createHash('sha256').update(JSON.stringify([id, input.id, next.dueDate])).digest('hex');
+              if (this.entity(id, successorId)) fail('CONFLICT', 'The next repeating task ID is already in use.');
+              this.writeEntity(id, { id: successorId, kind: 'task', version: 1, data: next, deleted: false });
+              this.db.prepare('INSERT INTO recurring_successors(owner_id,parent_id,successor_id) VALUES(?,?,?)').run(id, input.id, successorId);
+            }
+          }
+        }
       }
       this.db.prepare('INSERT INTO mutation_receipts VALUES(?,?,?,?,?)').run(id, input.mutationId, fingerprint, JSON.stringify(result), now());
       return result;

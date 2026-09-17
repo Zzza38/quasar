@@ -3,6 +3,7 @@ import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
+import { CalendarService } from '../../src/server/calendar';
 import { exampleSchedule } from '../../src/domain/example';
 
 function seed(email = `${randomUUID()}@example.com`, joined = true, schedule = exampleSchedule) {
@@ -179,7 +180,7 @@ test('shared schedule edits use the structured editor and appear as a reviewable
   await expect(dialog(page)).toBeHidden();
   await expect(page.getByText('Revision 2')).toBeVisible();
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try { expect(new Service(db).school(fixture.school.id).schedule.periods[0].label).toBe('Advisory'); }
+  try { expect(new Service(db).school(fixture.school.id).schedule.gradeSchedules?.['9']?.periods[0].label).toBe('Advisory'); }
   finally { db.close(); }
 });
 
@@ -219,6 +220,25 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   await page.screenshot({ path: testInfo.outputPath('today-mobile.png'), fullPage: true });
   await page.getByRole('link', { name: 'Schedule' }).click();
   await page.screenshot({ path: testInfo.outputPath('schedule-mobile.png'), fullPage: true });
+});
+
+test('empty tasks fill the available width with one responsive navigation shell', async ({ page, context }, testInfo) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
+  await page.goto('/#tasks');
+  await expect(page.getByRole('heading', { name: 'All clear', exact: true })).toBeVisible();
+  for (const width of [2048, 1280, 900, 899, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const desktop = width >= 900;
+    await expect(page.locator('.app-sidebar')).toBeVisible({ visible: desktop });
+    await expect(page.locator('.app-topbar')).toBeVisible({ visible: !desktop });
+    await expect(page.locator('.tabbar')).toBeVisible({ visible: !desktop });
+    await expect(page.getByRole('link', { name: 'Quasar home' })).toHaveCount(1);
+    const main = await page.locator('.app-main').boundingBox();
+    expect(main!.width).toBe(Math.min(1120, width - (desktop ? 240 : 0)));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`tasks-${width}.png`), fullPage: true });
+  }
 });
 
 test('remaining screens render without horizontal overflow on desktop and mobile', async ({ page, context }, testInfo) => {
@@ -290,6 +310,182 @@ test('sign-in page fits desktop and mobile screens', async ({ page }, testInfo) 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`sign-in-${width}.png`), fullPage: true });
   }
+});
+
+
+test('rich tasks persist and completing a recurring checklist creates one fresh occurrence', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#tasks');
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  await dialog(page).getByLabel('Task', { exact: true }).fill('Weekly lab preparation');
+  await dialog(page).getByLabel('Due date', { exact: true }).fill('2026-09-14');
+  await dialog(page).getByLabel('Due time', { exact: true }).fill('15:00');
+  await dialog(page).getByLabel('Priority', { exact: true }).selectOption('high');
+  await dialog(page).getByRole('button', { name: 'Add checklist item', exact: true }).click();
+  await dialog(page).getByLabel('Checklist item 1', { exact: true }).fill('Read the safety notes');
+  await dialog(page).getByLabel('Complete checklist item 1', { exact: true }).check();
+  await dialog(page).getByRole('button', { name: 'Add checklist item', exact: true }).click();
+  await dialog(page).getByLabel('Checklist item 2', { exact: true }).fill('Pack the notebook');
+  await dialog(page).getByLabel('Repeat', { exact: true }).selectOption('weekly');
+  await dialog(page).getByLabel('Reminder', { exact: true }).selectOption('30');
+  await dialog(page).getByRole('button', { name: 'Add task', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  const row = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Edit Weekly lab preparation', exact: true }) });
+  await expect(row).toContainText('High priority');
+  await expect(row).toContainText('1/2 checklist');
+  await expect(row).toContainText('Repeats weekly');
+  await page.getByLabel('Priority', { exact: true }).selectOption('low');
+  await expect(page.getByRole('button', { name: 'Edit Weekly lab preparation', exact: true })).toBeHidden();
+  await page.getByLabel('Priority', { exact: true }).selectOption('high');
+  // Completing replaces this checkbox with the fresh successor, which is intentionally unchecked.
+  await page.getByLabel('Mark Weekly lab preparation complete', { exact: true }).click();
+  await expect(page.getByRole('button', { name: /Completed · 1/ })).toBeVisible();
+  // The server-generated successor must arrive through sync without a page reload.
+  await expect(page.getByLabel('Mark Weekly lab preparation complete', { exact: true })).toBeVisible({ timeout: 30000 });
+  await expect(saved(page)).toBeVisible();
+  await expect(row).toContainText('0/2 checklist');
+  await page.getByRole('button', { name: 'Edit Weekly lab preparation', exact: true }).click();
+  await expect(dialog(page).getByLabel('Due date', { exact: true })).toHaveValue('2026-09-21');
+  await expect(dialog(page).getByLabel('Reminder', { exact: true })).toHaveValue('30');
+  await expect(dialog(page).getByLabel('Complete checklist item 1', { exact: true })).not.toBeChecked();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(page.getByLabel('Mark Weekly lab preparation complete', { exact: true })).toHaveCount(1);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const tasks = new Service(db).workspace(fixture.id).entities.filter(e => e.kind === 'task' && !e.deleted);
+    expect(tasks).toHaveLength(2);
+    expect(tasks.filter(e => e.data.completed)).toHaveLength(1);
+    expect(tasks.find(e => !e.data.completed)?.data).toMatchObject({ dueDate: '2026-09-21', priority: 'high', subtasks: [{ completed: false }, { completed: false }], reminder: { minutesBefore: 30 } });
+  } finally { db.close(); }
+});
+
+test('imported homework stays visible and grayed in the calendar after completion and refresh', async ({ page, context }) => {
+  const fixture = seed();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let now = new Date('2026-09-11T12:00:00Z');
+  const calendars = new CalendarService(db, {
+    secret: process.env.E2E_AUTH_SECRET!, now: () => now,
+    fetcher: async () => ({ status: 200, text: [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Quasar//Browser fixture//EN',
+      'BEGIN:VEVENT', 'UID:browser-homework', 'DTSTAMP:20260911T120000Z',
+      'DTSTART;VALUE=DATE:20260914', 'DTEND;VALUE=DATE:20260915',
+      'SUMMARY:Imported biology worksheet', 'END:VEVENT', 'END:VCALENDAR', '',
+    ].join('\r\n') }),
+  });
+  try {
+    const feed = await calendars.subscribe(fixture.id, { name: 'Biology calendar', url: 'https://calendar.example.com/private-test-feed.ics', timeZone: 'America/New_York' });
+    expect(feed.lastError).toBeNull();
+    await authenticate(context, fixture.id);
+    await page.goto('/#schedule');
+    await page.getByLabel('Go to date').fill('2026-09-14');
+    const entry = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Imported biology worksheet', exact: true }) });
+    await expect(entry).toContainText('Biology calendar');
+    await expect(entry).toContainText('All day');
+    await page.getByLabel('Complete: Imported biology worksheet', { exact: true }).click();
+    await expect(entry).toContainText('Completed');
+    await expect(entry.getByRole('button', { name: 'Imported biology worksheet', exact: true })).toHaveCSS('text-decoration-line', 'line-through');
+    await expect(entry).toHaveCSS('opacity', '0.6');
+    await expect(saved(page)).toBeVisible();
+    now = new Date('2026-09-11T13:00:00Z');
+    await calendars.refresh(fixture.id, feed.id);
+    await page.reload();
+    await page.getByLabel('Go to date').fill('2026-09-14');
+    await expect(page.getByLabel('Mark incomplete: Imported biology worksheet', { exact: true })).toBeChecked();
+    await expect(entry).toHaveCSS('opacity', '0.6');
+    await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+    await page.getByRole('button', { name: /Completed · 1/ }).click();
+    await expect(page.getByLabel('Mark Imported biology worksheet incomplete', { exact: true })).toBeChecked();
+    expect(new Service(db).workspace(fixture.id).entities.filter(e => e.kind === 'task' && !e.deleted)).toHaveLength(1);
+  } finally { db.close(); }
+});
+
+test('edits one high-school grade and copies its schedule to other grades', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  const grades = dialog(page).getByRole('group', { name: 'Grade to edit', exact: true });
+  await expect(grades.getByRole('button', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(grades.getByRole('button')).toHaveText(['Grade 9', 'Grade 10', 'Grade 11', 'Grade 12']);
+  await expect(dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 9', exact: true })).toHaveCount(0);
+  await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByLabel('Day 1 name', { exact: true }).fill('Junior day');
+  await grades.getByRole('button', { name: 'Grade 11', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
+  await grades.getByRole('button', { name: 'Grade 9 *', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
+  await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 9', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await grades.getByRole('button', { name: 'Grade 10', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await grades.getByRole('button', { name: 'Grade 12', exact: true }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
+  await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('group', { name: 'Your grade', exact: true }).getByRole('button', { name: 'Grade 11', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
+  await dialog(page).getByRole('group', { name: 'Copy from', exact: true }).getByRole('button', { name: 'Grade 9', exact: true }).click();
+  await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test('schedule times infer AM and PM while typing and allow manual overrides', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('button', { name: `Edit times for ${fixture.school.schedule.cycleDays[0].label}`, exact: true }).click();
+  const end = dialog(page).getByLabel('Slot 4 end', { exact: true });
+  const meridiem = dialog(page).getByRole('button', { name: 'Slot 4 end AM/PM', exact: true });
+  await end.fill('12:15');
+  await expect(meridiem).toHaveText('PM');
+  await end.fill('11:55');
+  await expect(meridiem).toHaveText('AM');
+  await end.fill('11:55 PM');
+  await end.fill('');
+  await end.pressSequentially('12:15');
+  await expect(meridiem).toHaveText('AM');
+  await end.fill('');
+  await end.pressSequentially('11:55');
+  await expect(meridiem).toHaveText('PM');
+  await end.fill('9:15');
+  await expect(meridiem).toHaveText('AM');
+  await end.fill('1:30');
+  await expect(meridiem).toHaveText('PM');
+  await meridiem.click();
+  await expect(meridiem).toHaveText('AM');
+  await end.fill('1:45');
+  await expect(meridiem).toHaveText('AM');
+  await end.fill('1:45 PM');
+  await expect(meridiem).toHaveText('PM');
+  await end.fill('1:');
+  await expect(dialog(page).getByRole('button', { name: 'Publish revision' })).toBeDisabled();
+  await end.fill('1:30');
+  await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('button', { name: /Days ·/ }).click();
+  await dialog(page).getByRole('button', { name: `Edit times for ${fixture.school.schedule.cycleDays[0].label}`, exact: true }).click();
+  await expect(end).toHaveValue('1:30');
+  await expect(meridiem).toHaveText('PM');
 });
 
 test('time canvas fits desktop, groups weeks, and drags and resizes freely timed blocks', async ({ page, context }) => {
@@ -399,6 +595,7 @@ test('large period palette stays beside the canvas on desktop', async ({ page, c
   expect(await canvas.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: '/tmp/quasar-time-canvas-desktop.png' });
 });
+
 
 test('short adjacent blocks have readable compact labels and full details', async ({ page, context }) => {
   const schedule = structuredClone(exampleSchedule);
