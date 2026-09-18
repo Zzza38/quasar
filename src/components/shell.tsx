@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { signIn } from 'next-auth/react';
-import { GoogleLogo } from './google-logo';
 import { PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
 import { Icon, Spinner, type IconName } from './icon';
-import { AppearanceToggle, ThemePicker } from './theme-picker';
+import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Hint, Modal, Panel, Spacer } from './primitives';
 import { Avatar, AvatarFallback } from './ui/avatar';
@@ -241,46 +240,3 @@ export function CenteredNotice({ title, children, action }: { title: ReactNode; 
   </div>;
 }
 
-/* ---------- Welcome ---------- */
-
-export function Welcome({ message }: { message?: string }) {
-  return <main className="welcome-bg grid min-h-dvh place-items-center p-3 sm:px-4 sm:py-6">
-    <Card className="w-full max-w-[1000px] animate-in fade-in-0 slide-in-from-bottom-1 duration-200 sm:py-8 md:py-12">
-      <CardContent className="grid gap-8 sm:px-8 md:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] md:items-center md:px-12">
-        <div className="grid justify-items-start gap-5">
-          <div className="flex w-full items-center justify-between"><Brand /><AppearanceToggle /></div>
-          <div className="grid gap-2">
-            <h1 className="text-[34px] leading-[1.1]">Your next class and what’s due, at a glance.</h1>
-            <p className="max-w-[42ch] text-[15px] text-muted-foreground">Quasar follows your school’s rotation, including odd days, lunch waves and closures, and keeps working offline.</p>
-          </div>
-          {message && <Callout tone="warning" icon="info" role="status">{message}</Callout>}
-          <Button variant="primary" size="lg" className="gap-3" onClick={() => void signIn('google', { callbackUrl: '/' })}>
-            <GoogleLogo />Continue with Google
-          </Button>
-          <ul className="grid gap-2 text-sm text-muted-foreground">
-            <li className="flex items-start gap-2"><Icon name="clock" size={16} className="mt-0.5 text-primary" />What’s happening now, what’s next and how long is left.</li>
-            <li className="flex items-start gap-2"><Icon name="layers" size={16} className="mt-0.5 text-primary" />Any rotation: A/B days, numbered cycles or a plain weekly bell schedule.</li>
-            <li className="flex items-start gap-2"><Icon name="cloudOff" size={16} className="mt-0.5 text-primary" />Edits save on your device first and upload when you’re back online.</li>
-          </ul>
-        </div>
-        <WelcomeArt />
-      </CardContent>
-    </Card>
-  </main>;
-}
-
-function WelcomeArt() {
-  return <div className="grid gap-3 rounded-2xl bg-muted p-5" aria-hidden="true">
-    <div className="grid gap-2.5 rounded-xl p-4 text-white" style={{ background: 'linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #111))' }}>
-      <div className="flex items-center justify-between"><span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/80">Right now</span><span className="text-xs font-semibold text-white/90">Ends in 14 min</span></div>
-      <strong className="text-2xl leading-tight">Chemistry</strong>
-      <span className="text-sm text-white/85">10:50–11:40 AM · Period C · Room 214</span>
-      <div className="h-1.5 overflow-hidden rounded-full bg-white/25"><span className="block h-full w-[72%] rounded-full bg-white" /></div>
-      <span className="text-sm text-white/85">Then <strong className="text-white">Lunch</strong> at 11:45 AM</span>
-    </div>
-    <div className="grid gap-1 rounded-xl border bg-card p-2.5">
-      {[['11:45', 'Lunch', ''], ['12:15', 'US History', 'Room 305'], ['1:10', 'Algebra II', 'Room 101']].map(([time, name, room]) => <div key={time} className="flex items-center gap-2.5 px-2 py-1.5"><span className="w-12 text-sm tabular-nums text-muted-foreground">{time}</span><span className="w-1 min-h-[26px] self-stretch rounded-full bg-primary" /><span className="grid"><strong className="text-sm">{name}</strong>{room && <Hint>{room}</Hint>}</span></div>)}
-    </div>
-    <div className="flex items-center gap-2.5 rounded-xl border bg-card px-3.5 py-2.5"><span className="size-[18px] rounded-md border-2 border-input" /><span className="text-sm">Lab report · due tomorrow</span></div>
-  </div>;
-}

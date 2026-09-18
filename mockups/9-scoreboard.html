@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en" data-mock="scoreboard">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — Score your current schedule app</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --ink:#0b0e12; --paper:#f5f7f6; --card:#fff; --dim:#5b6771; --line:#e3e9ea;
+    --brand:#0e7490; --brand-2:#22b8c9; --soft:#e0f2f7; --lime:#d9f99d; --lime-deep:#65a30d;
+    --red:#dc2626; --green:#15803d; --amber:#d97706; --max:1080px;
+  }
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+  h1,h2,h3{margin:0;font-weight:800;letter-spacing:-.034em;line-height:1.05}
+
+  header{position:sticky;top:0;z-index:40;background:rgba(245,247,246,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  nav{display:flex;align-items:center;height:64px;gap:24px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.03em}
+  .brand img{width:28px;height:28px;color:var(--brand)}
+  .links{margin-left:auto;display:flex;gap:22px;font-size:14px;font-weight:650;color:var(--dim)}
+  .links a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:9px;border-radius:999px;padding:11px 20px;font-size:14.5px;font-weight:700;border:0;cursor:pointer;transition:.16s;background:var(--ink);color:#fff}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 14px 26px -14px rgba(11,14,18,.7)}
+  .btn.brandy{background:linear-gradient(135deg,var(--brand),var(--brand-2))}
+  .btn.ghost{background:var(--card);color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line)}
+  .btn.big{padding:16px 30px;font-size:16.5px}
+
+  .hero{padding:60px 0 52px;text-align:center}
+  .flag{display:inline-block;background:var(--lime);border:2px solid var(--ink);border-radius:999px;font-size:13px;font-weight:700;padding:5px 15px;transform:rotate(-1deg);margin-top:10px}
+  .hero h1{font-size:clamp(34px,5.4vw,62px);margin:26px auto 0;max-width:24ch;line-height:1.12}
+  .hero h1 u{text-decoration:none;background:var(--lime);color:var(--ink);padding:2px 12px;border-radius:12px;display:inline-block;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .hero p{font-size:18.5px;color:var(--dim);max-width:56ch;margin:24px auto 0}
+  .hero .sm{margin-top:20px;font-size:13.5px;color:#8b959e}
+
+  /* quiz */
+  .quiz{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;align-items:start;padding:20px 0 90px}
+  .qlist{display:grid;gap:10px}
+  .q{background:var(--card);border-radius:18px;padding:16px 18px;display:flex;align-items:center;gap:18px;box-shadow:0 1px 0 var(--line);transition:all .3s ease;animation:fadeIn .3s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+  .q.answered{box-shadow:0 1px 0 var(--line),inset 3px 0 0 var(--brand)}
+  .q .txt{flex:1;min-width:0}
+  .q b{display:block;font-size:15.5px;font-weight:700;letter-spacing:-.018em}
+  .q span{display:block;font-size:13px;color:var(--dim);margin-top:3px}
+  .pick{flex:none;display:flex;background:#eef2f3;border-radius:999px;padding:3px;gap:2px}
+  .pick button{border:0;background:transparent;border-radius:999px;padding:8px 15px;font:700 12.5px/1 inherit;color:var(--dim);cursor:pointer;transition:.15s}
+  .pick button[aria-pressed="true"][data-a="y"]{background:var(--green);color:#fff}
+  .pick button[aria-pressed="true"][data-a="n"]{background:var(--red);color:#fff}
+
+  .q-footer{display:flex;justify-content:space-between;align-items:center;padding:4px 2px 0;font-size:12.5px;color:var(--dim)}
+  .q-footer button{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--dim);text-decoration:underline;cursor:pointer}
+  .q-footer button:hover{color:var(--ink)}
+
+  .panel{background:var(--card);border-radius:24px;padding:24px;box-shadow:0 1px 0 var(--line);position:sticky;top:88px;text-align:center}
+  .lab{font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .score{font-size:62px;font-weight:800;letter-spacing:-.04em;line-height:1;margin-top:8px}
+  .score small{font-size:24px;font-weight:700;color:var(--dim);letter-spacing:0}
+  .meter{height:10px;background:#eef2f3;border-radius:999px;overflow:hidden;margin:16px 0 12px}
+  .meter i{display:block;height:100%;background:linear-gradient(90deg,var(--red),var(--amber) 40%,var(--green));width:0;transition:width .4s ease;border-radius:999px}
+  .verdict{font-size:14px;color:var(--dim);min-height:44px;margin:0;line-height:1.45}
+  .verdict b{color:var(--ink)}
+  .divider{height:1px;background:var(--line);margin:18px 0}
+  .qrow{display:flex;align-items:center;justify-content:space-between;background:var(--soft);color:var(--brand);padding:12px 16px;border-radius:14px;font-weight:700;font-size:14.5px;margin-bottom:14px}
+  .qrow .n{display:flex;align-items:center;gap:8px}
+  .qrow img{width:18px;height:18px}
+  .panel .btn{width:100%;justify-content:center}
+  .reset{margin-top:12px;background:transparent;border:0;color:var(--dim);font:600 12.5px inherit;cursor:pointer;text-decoration:underline}
+  .reset:hover{color:var(--ink)}
+
+  /* why */
+  .band{background:var(--ink);color:#fff;padding:84px 0;margin-top:40px}
+  .band h2{font-size:clamp(28px,4vw,44px);max-width:22ch;text-align:center;margin:0 auto}
+  .band .sub{text-align:center;color:#8b959e;max-width:58ch;margin:18px auto 44px;font-size:17.5px}
+  .bg3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .bc{background:#151a22;border:1px solid #222934;border-radius:20px;padding:26px}
+  .bc .ic{width:38px;height:38px;border-radius:10px;background:rgba(45,212,224,.12);color:var(--brand-2);display:grid;place-items:center;margin-bottom:16px}
+  .bc h3{font-size:18px;margin-bottom:8px}
+  .bc p{font-size:14.5px;color:#94a1b0;line-height:1.55;margin:0}
+
+  /* steps */
+  #start{padding:80px 0}
+  .shead{text-align:center;margin-bottom:40px}
+  .shead h2{font-size:clamp(28px,3.8vw,40px)}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .sp{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px}
+  .sp .n{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--lime);color:var(--ink);font-weight:800;font-size:15px;margin-bottom:14px}
+  .sp h3{font-size:18px;margin-bottom:8px}
+  .sp p{font-size:14px;color:var(--dim);line-height:1.55;margin:0}
+
+  /* end */
+  .end{background:linear-gradient(135deg,var(--brand),#164e63);color:#fff;padding:84px 24px;text-align:center;border-radius:28px;margin:20px auto 40px;max-width:calc(var(--max) - 48px)}
+  .end h2{font-size:clamp(30px,4.5vw,48px);max-width:18ch;margin:0 auto}
+  .end p{font-size:18px;color:rgba(255,255,255,.85);margin:18px auto 32px;max-width:44ch}
+  .end .btn{background:#fff;color:var(--ink)}
+
+  footer{display:flex;justify-content:space-between;align-items:center;padding:30px 0 50px;color:var(--dim);font-size:13px;border-top:1px solid var(--line);margin-top:20px}
+  footer .fl{display:flex;gap:18px}
+
+  @media(max-width:820px){
+    .quiz{grid-template-columns:1fr}
+    .panel{position:static;order:-1}
+    .bg3,.steps{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header><div class="wrap"><nav>
+  <a class="brand"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+  <div class="links"><a href="#quiz">Score your app</a><a href="#why">Why it matters</a><a href="#start">Get started</a></div>
+  <a class="btn brandy" href="#">Sign in</a>
+</nav></div></header>
+
+<div class="hero"><div class="wrap">
+  <span class="flag">★ 11 questions · takes 30 seconds</span>
+  <h1>How many of these does<br><u>your app get right?</u></h1>
+  <p>Not a feature list. The eleven behaviours that decide whether you still trust your schedule app on a weird week. Answer honestly. Quasar scores 11.</p>
+  <p class="sm">Nothing is submitted anywhere. The score is worked out in your browser.</p>
+</div></div>
+
+<div class="wrap"><div class="quiz" id="quiz">
+  <div>
+    <div class="qlist" id="qlist"></div>
+    <div class="q-footer" id="qfooter">
+      <span id="qstatus">Question 1 of 11</span>
+      <button type="button" id="showall">Show all 11 questions</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="lab">Your current app</div>
+    <div class="score"><span id="score">0</span><small>/11</small></div>
+    <div class="meter"><i id="meter"></i></div>
+    <p class="verdict" id="verdict">Answer the questions to see how it does.</p>
+    <div class="divider"></div>
+    <div class="qrow">
+      <span class="n"><img src="assets/logo-mark.svg" alt="">Quasar</span>
+      <span class="v">11 / 11</span>
+    </div>
+    <a class="btn brandy" href="#">Switch in two minutes</a>
+    <button class="reset" id="reset" type="button">Start over</button>
+  </div>
+</div></div>
+
+<div class="band" id="why"><div class="wrap">
+  <h2>Every one of those is a day you showed up to the wrong room.</h2>
+  <p class="sub">They look like edge cases on a feature list. In a school year they're most weeks, and they're exactly what Quasar was built around first.</p>
+  <div class="bg3">
+    <div class="bc"><div class="ic"><svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg></div><h3>The rotation is the product</h3><p>Cycles of any length, days that skip holidays, resets after closures, replacement days, lunch waves. Configured in forms, previewed on real dates before you save.</p></div>
+    <div class="bc"><div class="ic"><svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 10a6 6 0 0 0-11.3-2A4.5 4.5 0 0 0 7 17h10.5a4 4 0 0 0 .5-7z"/><path d="M3 3l18 18"/></svg></div><h3>Offline is the normal case</h3><p>Edits save on your device and upload later. A real conflict shows both values and lets you choose, never last-write-wins, never a silent overwrite.</p></div>
+    <div class="bc"><div class="ic"><svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M17 8.5h4M19 6.5v4"/></svg></div><h3>Yours, and who you share it with</h3><p>Send your schedule to the friends you choose, per person, and take it back whenever. No ads, no trackers, nothing sold about you.</p></div>
+  </div>
+</div></div>
+
+<section id="start"><div class="wrap">
+  <div class="shead"><h2>Two minutes, then it's just there</h2></div>
+  <div class="steps">
+    <div class="sp"><b class="n">1</b><h3>Sign in with Google</h3><p>No new password, nothing to install, no app store account.</p></div>
+    <div class="sp"><b class="n">2</b><h3>Find or build your school</h3><p>Already added? One tap. If not, start from a template and enter the bell schedule once. Everyone after you gets it for free.</p></div>
+    <div class="sp"><b class="n">3</b><h3>Drop classes on periods</h3><p>Browse the class directory, pick yours, drag them on. Today fills itself in from then on.</p></div>
+  </div>
+</section>
+
+<div class="end"><div class="wrap">
+  <h2>Eleven out of eleven, every weird week.</h2>
+  <p>Free, offline-friendly, and built around the days that break everything else.</p>
+  <a class="btn big" href="#">Get started free</a>
+</div></div>
+
+<div class="wrap"><footer>
+  <span>© 2026 Quasar · Made by a student, for students</span>
+  <span class="fl"><a href="#">Privacy</a><a href="#">Support</a><a href="#">Status</a></span>
+</footer></div>
+
+<script>
+  const QUESTIONS = [
+    ['Handles a rotating cycle of any length', 'Not just A/B. Ten-day cycles, letter days, periods that change position.'],
+    ['Skips holidays and closures in the cycle', 'A snow day should not push the rotation out by one for a month.'],
+    ['Supports a cycle reset mid-year', 'After a closed week, the school restarts the count. Can you tell it that?'],
+    ['Supports replacement days', '“Thursday will run on a Monday schedule”, in one date and one setting.'],
+    ['Treats lunch waves as real periods', 'Wave 1 and Wave 2 are different times, not a note in the description.'],
+    ['Lets you shift a whole day', 'A two-hour delay moves every start, end and countdown with it.'],
+    ['Keeps your personal overrides', 'When the school schedule is corrected, your own changes survive it.'],
+    ['Fully editable with no signal', 'Add a task on the bus and it is still there when you land.'],
+    ['Shows where a change stands', 'Saved, waiting, syncing, failed, or needs a choice. Always visible.'],
+    ['Lets you resolve conflicts yourself', 'Two devices, same field: you see both values and pick one.'],
+    ['No ads, no trackers, nothing sold', 'You are the student, not the product.'],
+  ];
+  const VERDICTS = [
+    [0, 3,  'Rough. <b>Most weird weeks, you are on your own</b>, which is when you needed it most.'],
+    [4, 6,  'Fine on a normal week. <b>The exceptions are where it drops you</b>, and schools run on exceptions.'],
+    [7, 9,  'Solid, but <b>the gaps are the expensive ones</b>. Those are the days you show up to the wrong room.'],
+    [10, 11,'Genuinely good. <b>Keep it</b>. If the last gap ever bites you, you know where we are.'],
+  ];
+  const list = document.getElementById('qlist');
+  const footer = document.getElementById('qfooter');
+  const statusEl = document.getElementById('qstatus');
+  const showallBtn = document.getElementById('showall');
+  const answers = new Array(QUESTIONS.length).fill(null);
+  let expandedCount = 1;
+
+  function renderList() {
+    list.innerHTML = '';
+    for (let i = 0; i < expandedCount; i++) {
+      const [title, sub] = QUESTIONS[i];
+      const el = document.createElement('div');
+      el.className = 'q' + (answers[i] !== null ? ' answered' : '');
+      el.innerHTML = `<div class="txt"><b>${i + 1}. ${title}</b><span>${sub}</span></div>
+        <div class="pick"><button type="button" data-a="y" aria-pressed="${answers[i] === 'y'}">Yes</button><button type="button" data-a="n" aria-pressed="${answers[i] === 'n'}">No</button></div>`;
+      el.querySelectorAll('.pick button').forEach(b => b.addEventListener('click', () => {
+        answers[i] = b.dataset.a;
+        if (expandedCount < Math.min(QUESTIONS.length, i + 2)) {
+          expandedCount = Math.min(QUESTIONS.length, i + 2);
+        }
+        renderList();
+        renderScore();
+      }));
+      list.appendChild(el);
+    }
+    if (expandedCount >= QUESTIONS.length) {
+      footer.style.display = 'none';
+    } else {
+      footer.style.display = 'flex';
+      statusEl.textContent = `Question ${expandedCount} of ${QUESTIONS.length}`;
+    }
+  }
+
+  showallBtn.addEventListener('click', () => {
+    expandedCount = QUESTIONS.length;
+    renderList();
+  });
+
+  const scoreEl = document.getElementById('score'), meter = document.getElementById('meter'), verdict = document.getElementById('verdict');
+  function renderScore(){
+    const yes = answers.filter(a => a === 'y').length;
+    const done = answers.filter(a => a !== null).length;
+    scoreEl.textContent = yes;
+    meter.style.width = (done ? (yes / QUESTIONS.length) * 100 : 0) + '%';
+    if (done === 0) {
+      verdict.textContent = 'Answer the questions to see how it does.';
+    } else if (done < QUESTIONS.length) {
+      verdict.innerHTML = `<b>${QUESTIONS.length - done}</b> to go.`;
+    } else {
+      verdict.innerHTML = (VERDICTS.find(([lo, hi]) => yes >= lo && yes <= hi) || [,, ''])[2];
+    }
+  }
+
+  document.getElementById('reset').addEventListener('click', () => {
+    answers.fill(null);
+    expandedCount = 1;
+    renderList();
+    verdict.textContent = 'Answer the questions to see how it does.';
+    scoreEl.textContent = '0'; meter.style.width = '0';
+  });
+
+  renderList();
+  renderScore();
+</script>
+</body>
+</html>

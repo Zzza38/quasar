@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en" data-mock="pocket">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — Where's my next class?</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --bg:#f2f7f8; --ink:#101820; --dim:#5d6b78; --line:#e3ebee; --card:#fff;
+    --brand:#0e7490; --brand-2:#22b8c9; --soft:#e0f2f7; --amber:#d97706; --amber-soft:#fff4dd;
+    --violet:#7c3aed; --rose:#be185d; --green:#15803d; --max:1120px;
+  }
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+  h1,h2,h3{margin:0;font-weight:750;letter-spacing:-.028em;line-height:1.08}
+  .blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:.5;z-index:0;pointer-events:none}
+
+  header{position:sticky;top:0;z-index:40;background:rgba(242,247,248,.8);backdrop-filter:blur(14px)}
+  nav{display:flex;align-items:center;height:70px;gap:26px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.03em}
+  .brand img{width:30px;height:30px;color:var(--brand)}
+  .links{margin-left:auto;display:flex;gap:24px;font-size:14.5px;font-weight:600;color:var(--dim)}
+  .links a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:10px;border-radius:999px;padding:12px 22px;font-size:15px;font-weight:700;border:0;cursor:pointer;transition:.18s;background:var(--ink);color:#fff}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 12px 24px -12px rgba(16,24,32,.6)}
+  .btn.brandy{background:linear-gradient(135deg,var(--brand),var(--brand-2));box-shadow:0 10px 26px -12px rgba(14,116,144,.8)}
+  .btn.ghost{background:#fff;color:var(--ink);box-shadow:0 2px 0 var(--line)}
+  .btn.big{padding:16px 30px;font-size:16.5px}
+
+  .hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:60px;align-items:center;padding:56px 0 80px}
+  .hero .b1{width:420px;height:420px;background:#7dd3fc;left:-160px;top:-40px}
+  .hero .b2{width:360px;height:360px;background:#c4b5fd;right:-60px;top:180px}
+  .hero>div{position:relative;z-index:1}
+  .hero>.blob,.final>.blob{position:absolute;z-index:0}
+  h1.big{font-size:clamp(42px,6vw,68px);margin:0}
+  h1.big .u{position:relative;white-space:nowrap}
+  h1.big .u::after{content:"";position:absolute;left:-2px;right:-2px;bottom:4px;height:14px;background:#a5f3fc;border-radius:99px;z-index:-1}
+  .lede{font-size:19px;color:var(--dim);max-width:46ch;margin:22px 0 0}
+  .acts{display:flex;gap:12px;margin-top:32px;flex-wrap:wrap}
+  .free{margin-top:18px;font-size:14px;color:#7d8b98;display:flex;gap:16px;flex-wrap:wrap}
+  .free span{display:flex;align-items:center;gap:7px}
+  .free svg{color:var(--green)}
+
+  /* phone */
+  .stage{position:relative;z-index:1;display:grid;place-items:center}
+  .phone{width:320px;border-radius:44px;background:#0f141b;padding:10px;box-shadow:0 44px 80px -34px rgba(16,24,32,.55),0 0 0 1px rgba(16,24,32,.08);position:relative}
+  .notch{position:absolute;left:50%;transform:translateX(-50%);top:10px;width:110px;height:24px;background:#0f141b;border-radius:0 0 16px 16px;z-index:3}
+  .screen{background:#f7fafb;border-radius:35px;overflow:hidden;height:658px;display:flex;flex-direction:column}
+  .stat{display:flex;justify-content:space-between;padding:14px 22px 6px;font-size:12px;font-weight:700;color:#3d4a57}
+  .view{flex:1;overflow:hidden;padding:6px 14px 8px;display:none}
+  .view.on{display:block;animation:fade .32s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .vh{display:flex;justify-content:space-between;align-items:baseline;padding:6px 4px 10px}
+  .vh b{font-size:17px;letter-spacing:-.02em}
+  .vh span{font-size:11.5px;color:#7d8b98;font-weight:600}
+  .nowc{border-radius:22px;padding:17px;color:#fff;background:linear-gradient(140deg,var(--brand),#0b5f78);box-shadow:0 14px 26px -14px rgba(14,116,144,.9);position:relative;overflow:hidden}
+  .nowc::after{content:"";position:absolute;width:130px;height:130px;right:-44px;top:-56px;border-radius:50%;background:rgba(255,255,255,.1)}
+  .nowc .l{display:flex;justify-content:space-between;font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.75)}
+  .nowc b{display:block;font-size:26px;margin:9px 0 3px;letter-spacing:-.025em}
+  .nowc .m{font-size:12.5px;color:rgba(255,255,255,.85)}
+  .pg{height:6px;border-radius:99px;background:rgba(255,255,255,.25);margin:14px 0 9px;overflow:hidden}
+  .pg i{display:block;height:100%;background:#fff;border-radius:99px;width:0;transition:width .9s cubic-bezier(.4,0,.2,1)}
+  .lst{margin-top:11px;background:#fff;border-radius:20px;padding:6px;box-shadow:0 1px 0 var(--line)}
+  .li{display:flex;align-items:center;gap:11px;padding:9px 10px;font-size:13.5px}
+  .li+.li{border-top:1px solid #f0f4f6}
+  .li .t{width:46px;font-size:12px;color:#7d8b98;font-variant-numeric:tabular-nums}
+  .li .c{width:4px;align-self:stretch;min-height:26px;border-radius:99px}
+  .li .r{font-size:11px;color:#93a0ab}
+  .li.hot{background:var(--amber-soft);border-radius:14px}
+  .cbx{width:18px;height:18px;border-radius:6px;border:2px solid #c9d5dc;flex:none}
+  .cbx.on{background:var(--brand);border-color:var(--brand);position:relative}
+  .cbx.on::after{content:"";position:absolute;left:4.5px;top:1px;width:4px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(43deg)}
+  .due{margin-left:auto;font-size:10.5px;font-weight:800;color:var(--amber);background:var(--amber-soft);padding:3px 9px;border-radius:99px}
+  .li.done span.n{text-decoration:line-through;color:#a8b3bd}
+  .grp{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#93a0ab;padding:12px 8px 5px}
+  .clsgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:4px}
+  .cls{background:#fff;border-radius:18px;padding:13px;box-shadow:0 1px 0 var(--line)}
+  .cls .dot{width:26px;height:26px;border-radius:9px;margin-bottom:9px}
+  .cls b{font-size:13.5px;display:block;letter-spacing:-.01em}
+  .cls span{font-size:11px;color:#93a0ab}
+  .tabs{display:flex;justify-content:space-around;padding:10px 4px 16px;background:#fff;border-top:1px solid #eef3f5}
+  .tab{display:grid;justify-items:center;gap:4px;font-size:9.5px;font-weight:700;color:#9fabb6;cursor:pointer}
+  .tab i{width:19px;height:19px;border-radius:6px;background:currentColor;opacity:.4}
+  .tab.on{color:var(--brand)}
+  .tab.on i{opacity:1}
+  .float{position:absolute;background:#fff;border-radius:16px;padding:11px 15px;box-shadow:0 16px 34px -18px rgba(16,24,32,.4);font-size:13px;font-weight:650;display:flex;align-items:center;gap:9px;z-index:2}
+  .float .ic{width:26px;height:26px;border-radius:9px;display:grid;place-items:center;color:#fff;font-size:13px}
+  .f1{left:-96px;top:88px;animation:bob 5s ease-in-out infinite}
+  .f2{right:-84px;bottom:130px;animation:bob 5.8s ease-in-out infinite .6s}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+  @media(max-width:1210px){.float{display:none}}
+
+  /* sections */
+  section{padding:88px 0;position:relative}
+  .shead{text-align:center;max-width:620px;margin:0 auto 46px}
+  .shead h2{font-size:clamp(30px,4vw,44px)}
+  .shead p{color:var(--dim);font-size:17.5px;margin-top:16px}
+  .bento{display:grid;grid-template-columns:repeat(6,1fr);gap:16px}
+  .bx{background:var(--card);border-radius:24px;padding:26px;box-shadow:0 1px 0 var(--line);transition:.2s}
+  .bx:hover{transform:translateY(-3px);box-shadow:0 20px 38px -24px rgba(16,24,32,.35)}
+  .bx.w3{grid-column:span 3}.bx.w2{grid-column:span 2}.bx.w4{grid-column:span 4}.bx.w6{grid-column:span 6}
+  .bx .ic{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;color:#fff;margin-bottom:16px}
+  .bx h3{font-size:19px;margin-bottom:9px}
+  .bx p{margin:0;color:var(--dim);font-size:15px}
+  .demo-days{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+  .dd{background:var(--bg);border-radius:13px;padding:10px 12px;text-align:center;min-width:56px}
+  .dd.on{background:var(--soft);outline:2px solid var(--brand)}
+  .dd b{display:block;font-size:10.5px;color:#93a0ab;font-weight:700}
+  .dd i{font-style:normal;font-weight:800;font-size:17px}
+  .dd.on i{color:var(--brand)}
+  .pilllist{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+  .pl{background:var(--bg);border-radius:999px;padding:6px 14px;font-size:13px;font-weight:600;color:var(--dim)}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .sp{background:var(--card);border-radius:24px;padding:28px;box-shadow:0 1px 0 var(--line);position:relative}
+  .sp b.n{display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:var(--soft);color:var(--brand);font-size:16px;font-weight:800;margin-bottom:16px}
+  .sp h3{font-size:18px;margin-bottom:8px}
+  .sp p{margin:0;color:var(--dim);font-size:14.5px}
+
+  .final{position:relative;text-align:center;padding:100px 0 110px}
+  .final .b3{width:520px;height:340px;background:#7dd3fc;left:50%;transform:translateX(-50%);top:30px;opacity:.4}
+  .final>.wrap{position:relative;z-index:1}
+  .final h2{font-size:clamp(34px,5vw,56px)}
+  .final p{font-size:18.5px;color:var(--dim);max-width:48ch;margin:20px auto 32px}
+  footer{padding:30px 0;font-size:13.5px;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+  footer .fl{display:flex;gap:20px}
+  @media(max-width:960px){
+    .hero{grid-template-columns:1fr;gap:56px;justify-items:center;text-align:center}
+    .lede{margin-inline:auto}.acts,.free{justify-content:center}
+    .bento{grid-template-columns:1fr}.bx.w3,.bx.w2,.bx.w4,.bx.w6{grid-column:span 1}
+    .steps{grid-template-columns:1fr}.links{display:none}
+    .float{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header><div class="wrap"><nav>
+  <a class="brand"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+  <div class="links"><a href="#features">Features</a><a href="#setup">Setup</a><a href="#privacy">Privacy</a></div>
+  <a class="btn brandy" href="#">Sign in</a>
+</nav></div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="blob b1"></div><div class="blob b2"></div>
+  <div>
+    <h1 class="big">Where's my <span class="u">next class</span>, and what's due?</h1>
+    <p class="lede">Quasar answers both the second you open it — and it knows your school's real rotation, lunch waves and closures, not a generic Monday–Friday.</p>
+    <div class="acts">
+      <a class="btn brandy big" href="#"><svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M21.35 11.1H12v3.2h5.35c-.23 1.4-1.7 4.1-5.35 4.1a6.4 6.4 0 1 1 0-12.8c1.83 0 3.06.78 3.76 1.45l2.56-2.47C16.9 3.1 14.66 2.1 12 2.1a9.9 9.9 0 1 0 0 19.8c5.72 0 9.5-4.02 9.5-9.68 0-.65-.07-1.15-.15-1.12z"/></svg>Start free with Google</a>
+      <a class="btn ghost big" href="#features">See it work</a>
+    </div>
+    <div class="free">
+      <span><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>Free forever</span>
+      <span><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>Works offline</span>
+      <span><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>No app store</span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="float f1"><span class="ic" style="background:var(--amber)">⏱</span>14 min left</div>
+    <div class="float f2"><span class="ic" style="background:var(--violet)">✓</span>Saved offline</div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="stat"><span id="clock">10:56</span><span>Tue · Day 6</span></div>
+
+        <div class="view on" data-v="today">
+          <div class="vh"><b>Today</b><span>Tue, Sep 22</span></div>
+          <div class="nowc">
+            <div class="l"><span>Right now</span><span id="left">Ends in 14 min</span></div>
+            <b>Chemistry</b>
+            <div class="m">10:50 – 11:40 AM · Period C · Rm 214</div>
+            <div class="pg"><i id="pgi"></i></div>
+            <div class="m">Then <strong>Lunch · Wave 2</strong> at 11:45 AM</div>
+          </div>
+          <div class="lst">
+            <div class="li"><span class="t">11:45</span><span class="c" style="background:#94a3b8"></span><span><b style="font-weight:650">Lunch · Wave 2</b></span></div>
+            <div class="li"><span class="t">12:15</span><span class="c" style="background:var(--rose)"></span><span><b style="font-weight:650">US History</b><br><span class="r">Room 305</span></span></div>
+            <div class="li"><span class="t">1:10</span><span class="c" style="background:var(--green)"></span><span><b style="font-weight:650">Algebra II</b><br><span class="r">Room 101</span></span></div>
+          </div>
+          <div class="grp">Due soon</div>
+          <div class="lst">
+            <div class="li"><span class="cbx"></span><span class="n">Lab report</span><span class="due">Tomorrow</span></div>
+            <div class="li"><span class="cbx"></span><span class="n">Ch. 7 problems</span><span class="due">Thu</span></div>
+          </div>
+        </div>
+
+        <div class="view" data-v="schedule">
+          <div class="vh"><b>Schedule</b><span>Day 6 of 10</span></div>
+          <div class="lst">
+            <div class="li"><span class="t">8:05</span><span class="c" style="background:var(--violet)"></span><span><b style="font-weight:650">English 11</b><br><span class="r">Period B · Rm 118</span></span></div>
+            <div class="li"><span class="t">9:00</span><span class="c" style="background:#0891b2"></span><span><b style="font-weight:650">Spanish III</b><br><span class="r">Period D · Rm 221</span></span></div>
+            <div class="li"><span class="t">9:55</span><span class="c" style="background:#ca8a04"></span><span><b style="font-weight:650">Study hall</b><br><span class="r">Period G · Library</span></span></div>
+            <div class="li hot"><span class="t">10:50</span><span class="c" style="background:var(--brand)"></span><span><b style="font-weight:650">Chemistry</b><br><span class="r">Period C · Rm 214 · now</span></span></div>
+            <div class="li"><span class="t">11:45</span><span class="c" style="background:#94a3b8"></span><span><b style="font-weight:650">Lunch · Wave 2</b></span></div>
+            <div class="li"><span class="t">12:15</span><span class="c" style="background:var(--rose)"></span><span><b style="font-weight:650">US History</b><br><span class="r">Period A · Rm 305</span></span></div>
+            <div class="li"><span class="t">1:10</span><span class="c" style="background:var(--green)"></span><span><b style="font-weight:650">Algebra II</b><br><span class="r">Period F · Rm 101</span></span></div>
+          </div>
+        </div>
+
+        <div class="view" data-v="tasks">
+          <div class="vh"><b>Tasks</b><span>4 open</span></div>
+          <div class="grp">Tomorrow</div>
+          <div class="lst">
+            <div class="li"><span class="cbx"></span><span class="n">Lab report · Chemistry</span><span class="due">11:59 PM</span></div>
+          </div>
+          <div class="grp">This week</div>
+          <div class="lst">
+            <div class="li"><span class="cbx"></span><span class="n">Ch. 7 problems</span><span class="due">Thu</span></div>
+            <div class="li"><span class="cbx"></span><span class="n">Permission slip</span><span class="due">Fri</span></div>
+            <div class="li"><span class="cbx"></span><span class="n">Practice · 30 min</span><span class="due">Daily</span></div>
+          </div>
+          <div class="grp">Completed</div>
+          <div class="lst">
+            <div class="li done"><span class="cbx on"></span><span class="n">Read Act II</span></div>
+          </div>
+        </div>
+
+        <div class="view" data-v="classes">
+          <div class="vh"><b>Classes</b><span>6 classes</span></div>
+          <div class="clsgrid">
+            <div class="cls"><span class="dot" style="background:var(--violet)"></span><b>English 11</b><span>Period B · Rm 118</span></div>
+            <div class="cls"><span class="dot" style="background:var(--brand)"></span><b>Chemistry</b><span>Period C · Rm 214</span></div>
+            <div class="cls"><span class="dot" style="background:var(--rose)"></span><b>US History</b><span>Period A · Rm 305</span></div>
+            <div class="cls"><span class="dot" style="background:var(--green)"></span><b>Algebra II</b><span>Period F · Rm 101</span></div>
+            <div class="cls"><span class="dot" style="background:#0891b2"></span><b>Spanish III</b><span>Period D · Rm 221</span></div>
+            <div class="cls"><span class="dot" style="background:#ca8a04"></span><b>Study hall</b><span>Period G · Library</span></div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <span class="tab on" data-go="today"><i></i>Today</span>
+          <span class="tab" data-go="schedule"><i></i>Schedule</span>
+          <span class="tab" data-go="tasks"><i></i>Tasks</span>
+          <span class="tab" data-go="classes"><i></i>Classes</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<section id="features"><div class="wrap">
+  <div class="shead"><h2>Built around the stuff that breaks other apps</h2><p>Rotations, exceptions and bad Wi‑Fi. Get those right and the rest is easy.</p></div>
+  <div class="bento">
+    <div class="bx w3">
+      <div class="ic" style="background:linear-gradient(135deg,var(--brand),var(--brand-2))"><svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg></div>
+      <h3>Any rotation you can describe</h3>
+      <p>Ten‑day cycles, letter days, periods that move around. Cycle days skip holidays, resets after closures, and “Thursday runs as Monday” is a setting — not a workaround.</p>
+      <div class="demo-days">
+        <div class="dd"><b>MON</b><i>5</i></div><div class="dd on"><b>TUE</b><i>6</i></div><div class="dd"><b>WED</b><i>7</i></div><div class="dd"><b>THU</b><i>—</i></div><div class="dd"><b>FRI</b><i>8</i></div>
+      </div>
+    </div>
+    <div class="bx w3">
+      <div class="ic" style="background:linear-gradient(135deg,var(--violet),#a78bfa)"><svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24"><path d="M18 10a6 6 0 0 0-11.3-2A4.5 4.5 0 0 0 7 17h10.5a4 4 0 0 0 .5-7z"/><path d="M3 3l18 18"/></svg></div>
+      <h3>Offline is the normal case</h3>
+      <p>Edits save on your device and upload later. Independent changes merge on their own; a real conflict shows both values and lets you pick. Nothing gets silently overwritten.</p>
+      <div class="pilllist"><span class="pl">✓ Saved</span><span class="pl">↑ 3 waiting</span><span class="pl">⚠ needs a choice</span></div>
+    </div>
+    <div class="bx w2">
+      <div class="ic" style="background:linear-gradient(135deg,var(--amber),#fbbf24)"><svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+      <h3>A countdown, not a grid</h3>
+      <p>Minutes left in this period, and what's next. That's the home screen.</p>
+    </div>
+    <div class="bx w2">
+      <div class="ic" style="background:linear-gradient(135deg,var(--rose),#f472b6)"><svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l2.5 2.5L16 8"/><rect x="3" y="4" width="18" height="17" rx="3"/></svg></div>
+      <h3>Tasks that fit real life</h3>
+      <p>Priorities, checklists, repeats, notes, and calendar feeds that import themselves.</p>
+    </div>
+    <div class="bx w2" id="privacy">
+      <div class="ic" style="background:linear-gradient(135deg,var(--green),#4ade80)"><svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+      <h3>You pick who sees it</h3>
+      <p>Share your schedule with the friends you choose. No ads, no trackers, nothing sold about you.</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="setup" style="padding-top:0"><div class="wrap">
+  <div class="shead"><h2>Two minutes from now, you're done</h2></div>
+  <div class="steps">
+    <div class="sp"><b class="n">1</b><h3>Sign in with Google</h3><p>No new password, no app to install. Add it to your home screen if you want the icon.</p></div>
+    <div class="sp"><b class="n">2</b><h3>Pick your school &amp; grade</h3><p>Already added? One tap. If not, start from a template and enter the bell schedule once — everyone after you gets it.</p></div>
+    <div class="sp"><b class="n">3</b><h3>Drop classes on periods</h3><p>Browse your school's directory, pick your classes, drag them onto periods. Today fills itself in from then on.</p></div>
+  </div>
+</div></section>
+
+<div class="final">
+  <div class="blob b3"></div>
+  <div class="wrap">
+    <h2>Never wonder what period it is again.</h2>
+    <p>Free, offline‑friendly, and built around the way your school actually runs its days.</p>
+    <a class="btn brandy big" href="#">Start free with Google</a>
+  </div>
+</div>
+
+<div class="wrap"><footer>
+  <span>© 2026 Quasar · Made by a student, for students</span>
+  <span class="fl"><a href="#">Privacy</a><a href="#">Support</a><a href="#">Status</a></span>
+</footer></div>
+
+<script>
+  // Phone demo: tab switching + a live-ish countdown for the current period.
+  const views = document.querySelectorAll('.view');
+  const tabs = document.querySelectorAll('.tab');
+  let auto = true;
+  function show(name){
+    views.forEach(v => v.classList.toggle('on', v.dataset.v === name));
+    tabs.forEach(t => t.classList.toggle('on', t.dataset.go === name));
+  }
+  tabs.forEach(t => t.addEventListener('click', () => { auto = false; show(t.dataset.go); }));
+  const order = ['today','schedule','tasks','classes'];
+  let i = 0;
+  setInterval(() => { if (auto) show(order[i = (i + 1) % order.length]); }, 3800);
+
+  // Chemistry runs 10:50–11:40; loop a 14-minutes-left moment so the card feels alive.
+  const start = 10 * 60 + 50, end = 11 * 60 + 40, span = end - start;
+  let t = 36; // minutes elapsed
+  const clock = document.getElementById('clock'), left = document.getElementById('left'), pgi = document.getElementById('pgi');
+  function tick(){
+    const mins = start + t, h = Math.floor(mins / 60), m = mins % 60;
+    clock.textContent = ((h > 12 ? h - 12 : h)) + ':' + String(m).padStart(2, '0');
+    const remaining = end - mins;
+    left.textContent = remaining > 0 ? 'Ends in ' + remaining + ' min' : 'Ending now';
+    pgi.style.width = Math.min(100, (t / span) * 100) + '%';
+    t = t >= span ? 30 : t + 1;
+  }
+  tick(); setInterval(tick, 2400);
+</script>
+</body>
+</html>

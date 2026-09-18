@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Quasar">
+  <rect width="64" height="64" rx="16" fill="currentColor"/>
+  <path d="M32 13l4.9 10.9L48 28l-11.1 4.1L32 43l-4.9-10.9L16 28l11.1-4.1z" fill="#fff"/>
+  <circle cx="45.5" cy="45.5" r="4.5" fill="#fff" opacity=".85"/>
+</svg>

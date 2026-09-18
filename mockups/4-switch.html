@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en" data-mock="switch">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — Because your schedule app keeps being wrong</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --ink:#0b0d10; --paper:#fff; --dim:#5b6570; --line:#e5e8ec;
+    --brand:#0e7490; --brand-ink:#083f50; --lime:#d9f99d; --red:#dc2626; --green:#15803d;
+    --max:1100px;
+  }
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+  h1,h2,h3{margin:0;font-weight:800;letter-spacing:-.035em;line-height:1.02}
+
+  header{border-bottom:2px solid var(--ink);position:sticky;top:0;background:var(--paper);z-index:30}
+  nav{display:flex;align-items:center;height:66px;gap:24px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:19px;letter-spacing:-.03em}
+  .brand img{width:27px;height:27px;color:var(--brand)}
+  .links{margin-left:auto;display:flex;gap:24px;font-size:14px;font-weight:600;color:var(--dim)}
+  .links a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:9px;padding:11px 20px;font-size:14.5px;font-weight:700;border-radius:999px;background:var(--ink);color:#fff;border:2px solid var(--ink);cursor:pointer;transition:.15s}
+  .btn:hover{background:var(--brand);border-color:var(--brand)}
+  .btn.o{background:transparent;color:var(--ink)}
+  .btn.o:hover{background:var(--ink);color:#fff}
+  .btn.big{padding:16px 30px;font-size:17px}
+
+  .hero{padding:76px 0 72px;text-align:center;border-bottom:2px solid var(--ink)}
+  .flag{display:inline-block;background:var(--lime);border:2px solid var(--ink);border-radius:999px;font-size:13px;font-weight:700;padding:5px 15px;transform:rotate(-1.2deg)}
+  .hero h1{font-size:clamp(40px,6.6vw,76px);margin:26px auto 0;max-width:17ch}
+  .hero h1 u{text-decoration:none;background:linear-gradient(transparent 60%,var(--lime) 60%);padding:0 6px}
+  .hero p{font-size:19.5px;color:var(--dim);max-width:54ch;margin:26px auto 0}
+  .hero .acts{display:flex;gap:12px;justify-content:center;margin-top:34px;flex-wrap:wrap}
+  .hero .sm{margin-top:16px;font-size:13.5px;color:#8a949f}
+
+  /* pain */
+  .pain{background:var(--ink);color:#fff;padding:78px 0}
+  .pain h2{font-size:clamp(28px,4vw,44px);max-width:20ch;margin-bottom:14px}
+  .pain .sub{color:#9aa4b0;font-size:17.5px;max-width:56ch}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+  .pc{border:1px solid #262c35;border-radius:14px;padding:24px;background:#12161c}
+  .pc .x{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(220,38,38,.14);color:#f87171;font-weight:800;margin-bottom:14px}
+  .pc h3{font-size:17px;letter-spacing:-.02em;margin-bottom:8px}
+  .pc p{margin:0;color:#94a0ad;font-size:14.5px}
+
+  /* compare */
+  .cmp{padding:84px 0}
+  .chead{text-align:center;max-width:620px;margin:0 auto 42px}
+  .chead h2{font-size:clamp(30px,4vw,46px)}
+  .chead p{color:var(--dim);font-size:17px;margin-top:14px}
+  table{width:100%;border-collapse:collapse;border:2px solid var(--ink);border-radius:0}
+  thead th{background:var(--ink);color:#fff;font-size:13px;font-weight:700;letter-spacing:.02em;padding:14px 16px;text-align:left}
+  thead th:nth-child(2){background:var(--brand);text-align:center;width:150px}
+  thead th:nth-child(3){text-align:center;width:150px;color:#9aa4b0}
+  tbody td{padding:14px 16px;border-top:1px solid var(--line);font-size:14.5px}
+  tbody td:nth-child(n+2){text-align:center;width:150px;font-weight:700}
+  tbody tr:nth-child(odd){background:#fafbfc}
+  .yes{color:var(--green)}
+  .no{color:#b9c1c9}
+  .part{color:#a16207;font-size:12.5px;font-weight:700}
+
+  /* quotes */
+  .quotes{background:#f6f8f9;border-block:2px solid var(--ink);padding:78px 0}
+  .qg{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .qc{background:#fff;border:2px solid var(--ink);border-radius:16px;padding:22px}
+  .qc p{margin:0 0 16px;font-size:16px;font-weight:600;letter-spacing:-.012em}
+  .qc .who{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--dim)}
+  .av{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
+  .disclaim{text-align:center;font-size:12.5px;color:#93a0ab;margin-top:22px}
+
+  /* how */
+  .how{padding:84px 0}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+  .st{border:2px solid var(--ink);border-radius:16px;padding:26px;position:relative}
+  .st b{position:absolute;top:-16px;left:22px;background:var(--lime);border:2px solid var(--ink);border-radius:999px;width:32px;height:32px;display:grid;place-items:center;font-size:14px;font-weight:800}
+  .st h3{font-size:18px;margin:12px 0 8px;letter-spacing:-.02em}
+  .st p{margin:0;color:var(--dim);font-size:14.5px}
+
+  /* faq */
+  .faq{padding:0 0 84px;max-width:780px;margin:0 auto}
+  details{border-bottom:1px solid var(--line);padding:18px 0}
+  summary{cursor:pointer;font-weight:700;font-size:16.5px;letter-spacing:-.015em;list-style:none;display:flex;justify-content:space-between;gap:16px}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";font-weight:800;color:var(--brand)}
+  details[open] summary::after{content:"–"}
+  details p{margin:12px 0 0;color:var(--dim);font-size:15px}
+
+  .end{background:var(--brand);color:#fff;padding:96px 0;text-align:center}
+  .end h2{font-size:clamp(34px,5.4vw,60px);max-width:16ch;margin:0 auto}
+  .end p{font-size:18.5px;color:rgba(255,255,255,.85);max-width:50ch;margin:20px auto 32px}
+  .end .btn{background:#fff;color:var(--ink);border-color:#fff}
+  .end .btn:hover{background:var(--lime);border-color:var(--lime)}
+  footer{padding:30px 0;font-size:13.5px;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+  footer .fl{display:flex;gap:20px}
+  @media(max-width:880px){.cards,.qg,.steps{grid-template-columns:1fr}.links{display:none}thead th:nth-child(n+2),tbody td:nth-child(n+2){width:92px;font-size:13px}}
+</style>
+</head>
+<body>
+
+<header><div class="wrap"><nav>
+  <a class="brand"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+  <div class="links"><a href="#why">Why switch</a><a href="#compare">Compare</a><a href="#how">How it works</a><a href="#faq">FAQ</a></div>
+  <a class="btn" href="#">Sign in</a>
+</nav></div></header>
+
+<div class="hero"><div class="wrap">
+  <span class="flag">★ Built by a student who got tired of it being wrong</span>
+  <h1>Your schedule app keeps<br><u>being wrong.</u></h1>
+  <p>Wrong day in the rotation. Missing the half day. Blank when the Wi‑Fi drops. Quasar gets the boring stuff right — the rotation, the lunch waves, the closures — and shows you exactly where to be next.</p>
+  <div class="acts">
+    <a class="btn big" href="#"><svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M21.35 11.1H12v3.2h5.35c-.23 1.4-1.7 4.1-5.35 4.1a6.4 6.4 0 1 1 0-12.8c1.83 0 3.06.78 3.76 1.45l2.56-2.47C16.9 3.1 14.66 2.1 12 2.1a9.9 9.9 0 1 0 0 19.8c5.72 0 9.5-4.02 9.5-9.68 0-.65-.07-1.15-.15-1.12z"/></svg>Switch in two minutes</a>
+    <a class="btn o big" href="#compare">See the comparison</a>
+  </div>
+  <p class="sm">Free forever · No ads · No trackers · No app store</p>
+</div></div>
+
+<div class="pain" id="why"><div class="wrap">
+  <h2>You know the feeling.</h2>
+  <p class="sub">Three things break every schedule app, and they're the three things schools do constantly.</p>
+  <div class="cards">
+    <div class="pc"><div class="x">✕</div><h3>It lost track of the rotation</h3><p>One snow day and the cycle is off by one for the rest of the month. You end up counting days on your fingers again.</p></div>
+    <div class="pc"><div class="x">✕</div><h3>It doesn't know about today</h3><p>Two‑hour delay, assembly schedule, a Thursday running as a Monday. The app shows a normal day that isn't happening.</p></div>
+    <div class="pc"><div class="x">✕</div><h3>It needs a signal to be useful</h3><p>You check it in a basement classroom and get a spinner, or worse, lose the thing you just typed.</p></div>
+  </div>
+</div></div>
+
+<div class="cmp" id="compare"><div class="wrap">
+  <div class="chead"><h2>What actually makes the difference</h2><p>Not features on a list — the specific behaviours that decide whether you trust the app on a weird week.</p></div>
+  <table>
+    <thead><tr><th>Behaviour</th><th>Quasar</th><th>Typical schedule app</th></tr></thead>
+    <tbody>
+      <tr><td>Rotating cycles of any length (not just A/B)</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Cycle skips holidays and closures, with resets</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Replacement days (“Thursday runs as Monday”)</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Lunch waves as real periods</td><td class="yes">✓</td><td class="part">sometimes</td></tr>
+      <tr><td>Personal overrides that survive school corrections</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Fully editable offline, with a visible sync state</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Conflicts you resolve, not last‑write‑wins</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Tasks with priorities, checklists and repeats</td><td class="yes">✓</td><td class="part">basic</td></tr>
+      <tr><td>Subscribe to a teacher's calendar feed</td><td class="yes">✓</td><td class="part">sometimes</td></tr>
+      <tr><td>No ads, no trackers, nothing sold about you</td><td class="yes">✓</td><td class="no">✕</td></tr>
+      <tr><td>Price</td><td class="yes">Free</td><td class="no">Free‑ish</td></tr>
+    </tbody>
+  </table>
+</div></div>
+
+<div class="quotes"><div class="wrap">
+  <div class="chead"><h2>What we're going for</h2><p>The bar Quasar is being built to clear, in the words of the students it's for.</p></div>
+  <div class="qg">
+    <div class="qc"><p>“I want to open it between classes and immediately know where I'm going. That's the whole app.”</p><div class="who"><span class="av">A</span>Junior · 10‑day rotation</div></div>
+    <div class="qc"><p>“Half the year my schedule doesn't match the default. I need to change mine without breaking everyone else's.”</p><div class="who"><span class="av">M</span>Senior · split lunch</div></div>
+    <div class="qc"><p>“If it eats something I typed because the Wi‑Fi died, I'm never opening it again.”</p><div class="who"><span class="av">J</span>Sophomore · no data plan</div></div>
+  </div>
+  <p class="disclaim">Illustrative of the design goals for this release, not customer testimonials.</p>
+</div></div>
+
+<div class="how" id="how"><div class="wrap">
+  <div class="chead"><h2>Two minutes, then it's just there</h2></div>
+  <div class="steps">
+    <div class="st"><b>1</b><h3>Sign in with Google</h3><p>No new password, no email verification loop, no app store account.</p></div>
+    <div class="st"><b>2</b><h3>Find or build your school</h3><p>Already there? Pick it and your grade. Not there? Start from a template and enter the bell schedule once — with a live preview of real dates.</p></div>
+    <div class="st"><b>3</b><h3>Drop your classes on periods</h3><p>Browse the class directory, pick yours, drag them onto periods. Done — Today fills itself in from then on.</p></div>
+  </div>
+</div></div>
+
+<div class="wrap"><div class="faq" id="faq">
+  <div class="chead"><h2>Straight answers</h2></div>
+  <details open><summary>Is it really free?</summary><p>Yes. No paid tier, no ads, no selling data. It's a personal project, not a startup runway.</p></details>
+  <details><summary>Who can see my schedule?</summary><p>Only the people you choose. Sharing is per‑person, off until you turn it on, and you can take it back at any time.</p></details>
+  <details><summary>What if my school isn't listed?</summary><p>Add it yourself in a few minutes. Everyone after you gets it for free, and once ten people join it locks so it can't be quietly changed.</p></details>
+  <details><summary>What happens to my edits when I'm offline?</summary><p>They save on your device and upload when you're back. If another device changed the same thing, you get both values and pick — never a silent overwrite.</p></details>
+  <details><summary>Do I need to install an app?</summary><p>No. It's a website. Add it to your home screen and it behaves like an app, including offline.</p></details>
+  <details><summary>Will it nag me?</summary><p>Only if you ask it to. Reminders are opt‑in per device and off by default.</p></details>
+</div></div>
+
+<div class="end"><div class="wrap">
+  <h2>Stop counting cycle days on your fingers.</h2>
+  <p>Sign in with Google and let Quasar keep track of the rotation for the rest of the year.</p>
+  <a class="btn big" href="#">Get started free</a>
+</div></div>
+
+<div class="wrap"><footer>
+  <span>© 2026 Quasar</span>
+  <span class="fl"><a href="#">Privacy</a><a href="#">Support</a><a href="#">Status</a></span>
+</footer></div>
+
+</body>
+</html>
