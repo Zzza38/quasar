@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="146 164 948 909" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+<title id="title">Quasar logo</title>
+<desc id="desc">Crisp vector Quasar logo with stars inside the large Q.</desc>
+<defs>
+  <radialGradient id="qGrad" cx="72%" cy="21%" r="92%">
+    <stop offset="0%" stop-color="#1559c7"/><stop offset="28%" stop-color="#10469f"/><stop offset="58%" stop-color="#0b3276"/><stop offset="100%" stop-color="#082357"/>
+  </radialGradient>
+  <linearGradient id="wordGrad" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#e9f0ff"/><stop offset="48%" stop-color="#dbe6ff"/><stop offset="100%" stop-color="#cfdcff"/>
+  </linearGradient>
+  <linearGradient id="orbitLeftGrad" x1="235" y1="640" x2="585" y2="620" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#8763fc"/><stop offset="52%" stop-color="#617afc"/><stop offset="100%" stop-color="#3477f8"/>
+  </linearGradient>
+  <linearGradient id="orbitRightGrad" x1="661" y1="595" x2="1015" y2="350" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#3778f9"/><stop offset="58%" stop-color="#5578fb"/><stop offset="100%" stop-color="#7d67fc"/>
+  </linearGradient>
+  <linearGradient id="orbitTopGrad" x1="833" y1="260" x2="1016" y2="260" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#7865fc"/><stop offset="100%" stop-color="#9662fc"/>
+  </linearGradient>
+  <linearGradient id="planetGrad" x1="985" y1="286" x2="1043" y2="347" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#8f68fc"/><stop offset="42%" stop-color="#526ffc"/><stop offset="100%" stop-color="#1e72f7"/>
+  </linearGradient>
+  <linearGradient id="starGrad" x1="452" y1="488" x2="797" y2="488" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#2977f9"/><stop offset="48%" stop-color="#5f84fc"/><stop offset="100%" stop-color="#9167fc"/>
+  </linearGradient>
+  <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/><stop offset="20%" stop-color="#ffffff" stop-opacity=".96"/><stop offset="52%" stop-color="#d8efff" stop-opacity=".58"/><stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="dotGlow" x="-250%" y="-250%" width="500%" height="500%">
+    <feGaussianBlur stdDeviation="2.2"/>
+  </filter>
+</defs>
+<!-- Large Q: mathematically smooth ellipses -->
+<path d="M622 194 A300 294 0 1 1 621.9 782 A300 294 0 1 1 622 194 Z M622 273 A217 214 0 1 0 622.1 701 A217 214 0 1 0 622 273 Z" fill="url(#qGrad)" fill-rule="evenodd"/>
+<path d="M758 657 Q779 631 804 644 L927 765 Q936 774 934 783 Q932 791 923 791 L842 791 Q836 791 831 786 L765 721 Q751 708 750 691 Q750 673 758 657 Z" fill="url(#qGrad)"/>
+
+<!-- Subtle starfield dots, only in the dark blue Q parts -->
+<g>
+  <!-- soft glow layer -->
+  <g filter="url(#dotGlow)">
+    <circle cx="450" cy="286" r="4.6" fill="#ffffff" opacity=".17"/>
+    <circle cx="553" cy="242" r="4.2" fill="#dce9ff" opacity=".14"/>
+    <circle cx="693" cy="248" r="4.8" fill="#ffffff" opacity=".16"/>
+    <circle cx="794" cy="280" r="4.2" fill="#dce9ff" opacity=".13"/>
+    <circle cx="866" cy="359" r="4.5" fill="#ffffff" opacity=".13"/>
+    <circle cx="902" cy="463" r="4.0" fill="#dce9ff" opacity=".12"/>
+    <circle cx="890" cy="601" r="3.8" fill="#ffffff" opacity=".12"/>
+    <circle cx="842" cy="696" r="4.4" fill="#dce9ff" opacity=".12"/>
+    <circle cx="775" cy="758" r="4.0" fill="#ffffff" opacity=".12"/>
+    <circle cx="670" cy="789" r="3.9" fill="#dce9ff" opacity=".11"/>
+    <circle cx="564" cy="772" r="4.3" fill="#ffffff" opacity=".12"/>
+    <circle cx="468" cy="716" r="4.2" fill="#dce9ff" opacity=".12"/>
+    <circle cx="395" cy="621" r="3.9" fill="#ffffff" opacity=".11"/>
+    <circle cx="367" cy="510" r="4.1" fill="#dce9ff" opacity=".11"/>
+    <circle cx="383" cy="403" r="3.7" fill="#ffffff" opacity=".10"/>
+    <circle cx="442" cy="330" r="3.4" fill="#dce9ff" opacity=".10"/>
+    <circle cx="742" cy="675" r="3.4" fill="#ffffff" opacity=".10"/>
+    <circle cx="824" cy="731" r="3.6" fill="#dce9ff" opacity=".10"/>
+    <circle cx="618" cy="733" r="3.2" fill="#ffffff" opacity=".09"/>
+    <circle cx="508" cy="664" r="3.1" fill="#dce9ff" opacity=".09"/>
+    <circle cx="706" cy="324" r="3.2" fill="#ffffff" opacity=".09"/>
+    <circle cx="508" cy="282" r="3.0" fill="#dce9ff" opacity=".09"/>
+  </g>
+
+  <!-- crisp core dots -->
+  <circle cx="450" cy="286" r="1.55" fill="#ffffff" opacity=".62"/>
+  <circle cx="553" cy="242" r="1.35" fill="#dce9ff" opacity=".50"/>
+  <circle cx="693" cy="248" r="1.65" fill="#ffffff" opacity=".58"/>
+  <circle cx="794" cy="280" r="1.25" fill="#dce9ff" opacity=".46"/>
+  <circle cx="866" cy="359" r="1.35" fill="#ffffff" opacity=".46"/>
+  <circle cx="902" cy="463" r="1.2" fill="#dce9ff" opacity=".40"/>
+  <circle cx="890" cy="601" r="1.1" fill="#ffffff" opacity=".38"/>
+  <circle cx="842" cy="696" r="1.3" fill="#dce9ff" opacity=".40"/>
+  <circle cx="775" cy="758" r="1.2" fill="#ffffff" opacity=".38"/>
+  <circle cx="670" cy="789" r="1.1" fill="#dce9ff" opacity=".36"/>
+  <circle cx="564" cy="772" r="1.35" fill="#ffffff" opacity=".40"/>
+  <circle cx="468" cy="716" r="1.25" fill="#dce9ff" opacity=".38"/>
+  <circle cx="395" cy="621" r="1.1" fill="#ffffff" opacity=".34"/>
+  <circle cx="367" cy="510" r="1.1" fill="#dce9ff" opacity=".34"/>
+  <circle cx="383" cy="403" r="1.0" fill="#ffffff" opacity=".32"/>
+  <circle cx="442" cy="330" r="0.95" fill="#dce9ff" opacity=".30"/>
+  <circle cx="742" cy="675" r="0.95" fill="#ffffff" opacity=".28"/>
+  <circle cx="824" cy="731" r="1.0" fill="#dce9ff" opacity=".30"/>
+  <circle cx="618" cy="733" r="0.9" fill="#ffffff" opacity=".26"/>
+  <circle cx="508" cy="664" r="0.9" fill="#dce9ff" opacity=".26"/>
+  <circle cx="706" cy="324" r="0.95" fill="#ffffff" opacity=".28"/>
+  <circle cx="508" cy="282" r="0.85" fill="#dce9ff" opacity=".24"/>
+</g>
+
+<!-- Orbit -->
+<path d="M311 523 C244 563 207 623 252 657 C308 700 439 686 582 626" fill="none" stroke="#fff" stroke-width="31" stroke-linecap="round"/>
+<path d="M311 523 C244 563 207 623 252 657 C308 700 439 686 582 626" fill="none" stroke="url(#orbitLeftGrad)" stroke-width="19" stroke-linecap="round"/>
+<!-- Right/top orbit rebuilt as one smooth continuous curve behind the planet -->
+<path d="M659 598
+         C788 538 930 455 1006 354
+         C1031 322 1032 297 1009 275
+         C969 236 905 234 829 254"
+      fill="none" stroke="#fff" stroke-width="31"
+      stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M659 598
+         C788 538 930 455 1006 354
+         C1031 322 1032 297 1009 275
+         C969 236 905 234 829 254"
+      fill="none" stroke="url(#orbitRightGrad)" stroke-width="19"
+      stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1012" cy="314" r="36" fill="url(#planetGrad)"/>
+
+<!-- Quasar center -->
+<path d="M623 305 C616 391 594 454 451 486 C594 501 614 555 623 668 C635 554 661 506 797 488 C660 474 637 419 623 305 Z" fill="url(#starGrad)"/>
+<circle cx="623" cy="487" r="78" fill="url(#starGlow)"/>
+<path d="M623 430 C628 467 638 482 676 487 C638 493 628 507 623 545 C618 507 608 493 570 487 C608 482 618 467 623 430 Z" fill="#fff" opacity=".98"/>
+
+<!-- Custom smooth wordmark Q -->
+<path d="M279 833 A103 99 0 1 1 278.9 1031 A103 99 0 1 1 279 833 Z M279 865 A69 66 0 1 0 279.1 997 A69 66 0 1 0 279 865 Z" fill="url(#wordGrad)" fill-rule="evenodd"/>
+<path d="M286 937 Q294 928 304 938 L375 1008 Q381 1014 377 1021 L361 1040 Q357 1045 351 1039 L273 961 Q265 953 272 945 Z" fill="url(#wordGrad)"/>
+<!-- Remaining letters are true paths, no font dependency -->
+<path d="M542.049 880.082H506.538V949.769C506.538 969.527 505.203 978.872 500.93100000000004 985.28C495.858 994.091 485.979 998.897 473.964 998.897C464.886 998.897 457.944 995.96 453.13800000000003 989.552C448.065 983.144 445.929 972.4639999999999 445.929 952.439V880.082H410.418V959.381C410.418 984.479 413.355 997.562 421.632 1009.577C431.511 1023.728 447.264 1031.471 466.755 1031.471C484.644 1031.471 495.591 1026.932 509.208 1013.849V1028.0H542.049Z M709.4050000000001 880.082H676.831V899.84C664.5490000000001 883.553 649.864 876.611 628.504 876.611C584.716 876.611 553.21 909.452 553.21 954.575C553.21 999.164 584.4490000000001 1031.471 627.7030000000001 1031.471C648.529 1031.471 662.6800000000001 1025.063 676.831 1008.776V1028.0H709.4050000000001ZM632.2420000000001 909.185C657.6070000000001 909.185 675.763 928.142 675.763 955.109C675.763 965.789 671.4910000000001 978.071 665.0830000000001 985.547C657.874 994.358 646.393 998.897 632.7760000000001 998.897C606.8770000000001 998.897 588.988 981.275 588.988 955.376C588.988 928.409 606.8770000000001 909.185 632.2420000000001 909.185Z M715.493 981.008C717.095 995.426 719.498 1003.169 725.3720000000001 1010.912C734.984 1023.728 751.8050000000001 1031.471 769.6940000000001 1031.471C799.3310000000001 1031.471 822.5600000000001 1009.31 822.5600000000001 981.008C822.5600000000001 958.58 811.3460000000001 946.832 781.4420000000001 937.754C766.7570000000001 933.215 766.7570000000001 933.215 763.2860000000001 931.613C759.0140000000001 929.477 756.344 926.006 756.344 921.467C756.344 914.525 762.2180000000001 909.185 769.9610000000001 909.185C777.4370000000001 909.185 782.243 913.19 783.845 920.933H818.5550000000001C818.0210000000001 908.384 815.0840000000001 900.908 807.8750000000001 892.898C798.5300000000001 882.485 784.6460000000001 876.611 769.9610000000001 876.611C742.1930000000001 876.611 720.8330000000001 896.369 720.8330000000001 921.734C720.8330000000001 943.361 732.3140000000001 955.643 761.951 965.522C775.301 970.061 776.6360000000001 970.595 780.374 972.998C784.6460000000001 975.668 787.0490000000001 979.673 787.0490000000001 984.479C787.0490000000001 992.756 780.374 998.897 771.0290000000001 998.897C760.6160000000001 998.897 754.7420000000001 993.557 751.2710000000001 981.008Z M981.1050000000001 880.082H948.5310000000001V899.84C936.2490000000001 883.553 921.5640000000001 876.611 900.2040000000001 876.611C856.416 876.611 824.9100000000001 909.452 824.9100000000001 954.575C824.9100000000001 999.164 856.1490000000001 1031.471 899.4030000000001 1031.471C920.229 1031.471 934.3800000000001 1025.063 948.5310000000001 1008.776V1028.0H981.1050000000001ZM903.9420000000001 909.185C929.3070000000001 909.185 947.4630000000001 928.142 947.4630000000001 955.109C947.4630000000001 965.789 943.1910000000001 978.071 936.7830000000001 985.547C929.5740000000001 994.358 918.0930000000001 998.897 904.4760000000001 998.897C878.5770000000001 998.897 860.6880000000001 981.275 860.6880000000001 955.376C860.6880000000001 928.409 878.5770000000001 909.185 903.9420000000001 909.185Z M996.538 1028.0H1032.049V945.764C1031.248 923.87 1042.462 911.588 1063.8220000000001 910.787V876.611H1061.152C1045.933 876.611 1038.457 880.883 1029.112 894.5V880.082H996.538Z" fill="url(#wordGrad)"/>
+</svg>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { GoogleLogo } from './google-logo';
-import { Icon } from './icon';
+import { BrandLockup, BrandMark } from './shell';
 import { AppearanceToggle } from './theme-picker';
 import { Callout } from './primitives';
 import { cn } from '@/lib/utils';
@@ -106,7 +106,7 @@ export function Welcome({ message }: { message?: string }) {
     <div className="mx-auto max-w-[1000px] px-6 pl-14 max-md:pl-10">
       <header className="flex items-center justify-between py-[22px] font-sans">
         <a className="inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-[var(--ink)] no-underline hover:no-underline" href="#" aria-label="Quasar home">
-          <Icon name="star" size={22} strokeWidth={2.2} />Quasar
+          <BrandMark size={26} />Quasar
         </a>
         <div className="flex items-center gap-2">
           <AppearanceToggle />
@@ -186,6 +186,7 @@ export function Welcome({ message }: { message?: string }) {
           </h2>
           <p className="mx-auto mt-2 mb-[26px] text-[var(--pencil)]">Free for students. No ads, no trackers, nothing sold about you.</p>
           <button type="button" className={INK_BUTTON} onClick={signInWithGoogle}><GoogleLogo />Get started free</button>
+          <div className="mt-14 flex justify-center"><BrandLockup height={150} /></div>
         </section>
       </main>
 

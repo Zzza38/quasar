@@ -22,9 +22,25 @@ import type { SyncState, WorkspaceSession } from './use-workspace';
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school' };
 const NAV_KEY = 'quasar.navigationCollapsed';
 
+/** The Quasar mark: the orbiting Q from /public/brand, sized as a square. */
+export function BrandMark({ size = 32, className }: { size?: number; className?: string }) {
+  // eslint-disable-next-line @next/next/no-img-element -- static SVG, no optimization needed
+  return <img src="/brand/quasar-icon.svg" alt="" aria-hidden="true" width={size} height={size} draggable={false} className={cn('shrink-0 select-none', className)} style={{ width: size, height: size }} />;
+}
+
+/** The stacked lockup (mark above the wordmark); swaps to a light wordmark in dark mode. */
+export function BrandLockup({ height = 120, className }: { height?: number; className?: string }) {
+  return <span aria-label="Quasar" role="img" className={cn('inline-block shrink-0 select-none', className)} style={{ height, aspectRatio: '948 / 909' }}>
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <img src="/brand/quasar-full.svg" alt="" aria-hidden="true" draggable={false} className="h-full w-full dark:hidden" />
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <img src="/brand/quasar-full-dark.svg" alt="" aria-hidden="true" draggable={false} className="hidden h-full w-full dark:block" />
+  </span>;
+}
+
 export function Brand({ compact, className }: { compact?: boolean; className?: string }) {
   return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-foreground no-underline hover:no-underline', className)} href="#today" aria-label="Quasar home">
-    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><Icon name="star" size={16} strokeWidth={2.2} /></span>
+    <BrandMark />
     {!compact && <span>Quasar</span>}
   </a>;
 }
@@ -121,7 +137,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
           <TooltipTrigger asChild>
             <Button variant="ghost" aria-label="Open sidebar" aria-expanded={false} onClick={() => setNavOpen(true)}
               className="group/sidebar-open relative size-10 rounded-lg p-0 text-foreground hover:bg-muted">
-              <span data-slot="sidebar-logo" className="flex group-hover/sidebar-open:hidden group-focus-visible/sidebar-open:hidden"><Icon name="star" size={22} className="size-[22px]" /></span>
+              <span data-slot="sidebar-logo" className="flex group-hover/sidebar-open:hidden group-focus-visible/sidebar-open:hidden"><BrandMark size={30} /></span>
               <span data-slot="sidebar-open-icon" className="hidden group-hover/sidebar-open:flex group-focus-visible/sidebar-open:flex"><PanelLeft aria-hidden="true" className="size-5" /></span>
             </Button>
           </TooltipTrigger>
@@ -232,7 +248,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
 export function CenteredNotice({ title, children, action }: { title: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return <div className="welcome-bg grid min-h-dvh place-items-center px-4 py-6">
     <Card className="w-full max-w-[420px]"><CardContent className="grid justify-items-center gap-3 text-center">
-      <Brand />
+      <BrandLockup height={112} />
       <h1 className="text-xl">{title}</h1>
       {children && <p className="text-sm text-muted-foreground">{children}</p>}
       {action}
