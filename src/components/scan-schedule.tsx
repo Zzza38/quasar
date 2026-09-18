@@ -1,0 +1,125 @@
+'use client';
+
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { api, errorMessage, type RouterOutput } from '@/client/api';
+import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import { slugId } from '@/lib/format';
+import { Button, Callout, Chip, Field, Hint, Input, Modal, Select, Spacer } from './primitives';
+
+type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
+type Draft = ScanRow & { include: boolean };
+const MAX_EDGE = 1600;
+
+/** Downscales the photo in the browser so uploads stay small and the model gets a clean JPEG. */
+export async function prepareImage(file: File): Promise<{ image: string; mediaType: 'image/jpeg'; preview: string }> {
+  const bitmap = await createImageBitmap(file).catch(() => { throw new Error('That file is not an image the browser can read.'); });
+  try {
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not process the photo on this device.');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    let quality = 0.85;
+    let preview = canvas.toDataURL('image/jpeg', quality);
+    while (preview.length > 1_400_000 && quality > 0.4) { quality -= 0.15; preview = canvas.toDataURL('image/jpeg', quality); }
+    return { image: preview.slice(preview.indexOf(',') + 1), mediaType: 'image/jpeg', preview };
+  } finally { bitmap.close(); }
+}
+
+/** Turns confirmed rows into saved classes and period assignments, reusing classes the student already has. */
+export function applyScan(personal: PersonalSchedule, rows: Draft[]): PersonalSchedule {
+  const classes = [...personal.classes];
+  const assignments = { ...personal.assignments };
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  for (const row of rows) {
+    if (!row.include || !row.name.trim()) continue;
+    let existing = classes.find(cls => (row.directoryId && cls.directoryId === row.directoryId) || same(cls.name, row.name));
+    if (!existing) {
+      const id = row.directoryId && !classes.some(cls => cls.id === row.directoryId) ? row.directoryId : slugId(row.name, classes.map(cls => cls.id), 'class');
+      existing = classSchema.parse({ id, name: row.name.trim(), ...(row.directoryId ? { directoryId: row.directoryId } : {}), ...(row.room?.trim() ? { room: row.room.trim() } : {}), ...(row.teacher?.trim() ? { teacher: row.teacher.trim() } : {}) });
+      classes.push(existing);
+    }
+    if (row.periodId) assignments[row.periodId] = existing.id;
+  }
+  return { ...personal, classes, assignments };
+}
+
+export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal, disabled, onSave }: {
+  open: boolean; onClose: () => void; accountId: string; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [payload, setPayload] = useState<{ image: string; mediaType: 'image/jpeg' } | null>(null);
+  const [rows, setRows] = useState<Draft[] | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (!open) { setPreview(null); setPayload(null); setRows(null); setNotes([]); setError(''); } }, [open]);
+  const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
+  const choose = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    void run(async () => { const prepared = await prepareImage(file); setPreview(prepared.preview); setPayload(prepared); setRows(null); setNotes([]); });
+  };
+  const scan = () => run(async () => {
+    if (!payload) return;
+    const result = await api.scan.schedule.mutate({ accountId, ...payload });
+    setRows(result.rows.map(row => ({ ...row, include: true })));
+    setNotes(result.notes);
+  });
+  const update = (index: number, patch: Partial<Draft>) => setRows(current => current?.map((row, i) => i === index ? { ...row, ...patch } : row) ?? null);
+  const ready = rows?.filter(row => row.include && row.name.trim()) ?? [];
+  const alreadyAssigned = (row: Draft) => row.periodId && personal.assignments[row.periodId] ? personal.classes.find(cls => cls.id === personal.assignments[row.periodId!])?.name : undefined;
+
+  return <Modal open={open} onClose={onClose} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
+      {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || ready.length === 0} onClick={() => void run(async () => { await onSave(applyScan(personal, rows)); onClose(); })}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
+        : <Button variant="primary" icon="sparkle" busy={pending} disabled={!payload} onClick={() => void scan()}>Read schedule</Button>}</>}>
+    <input ref={fileRef} type="file" accept="image/*" capture="environment" className="sr-only" aria-label="Choose a timetable photo" onChange={choose} />
+    {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+    {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
+    <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid content-start gap-2">
+        {preview
+          ? <img src={preview} alt="Your timetable photo" className="w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]" />
+          : <div className="grid aspect-[3/4] place-items-center rounded-2xl border border-dashed border-foreground/15 bg-muted/50 p-4 text-center text-xs text-muted-foreground">Straight-on, well lit, whole timetable in frame.</div>}
+        <Button icon="camera" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>{preview ? 'Choose another photo' : 'Take or choose a photo'}</Button>
+        <Hint>The photo is sent to the scanning service once and is not stored.</Hint>
+      </div>
+      <div className="grid content-start gap-3">
+        {!rows && <Hint>{payload ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
+        {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
+        {rows && rows.length > 0 && <>
+          <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread and untick what you do not take.</Hint>
+          <ul className="grid gap-3" aria-label="Classes read from the photo">
+            {rows.map((row, index) => {
+              const replaces = row.include ? alreadyAssigned(row) : undefined;
+              return <li key={index} className={row.include ? 'grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]' : 'grid gap-2 rounded-2xl p-3 opacity-60 ring-1 ring-inset ring-foreground/[0.06]'}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={row.include} onChange={event => update(index, { include: event.target.checked })} /> Include</label>
+                  {row.directoryId && <Chip tone="accent" icon="school">From the school directory</Chip>}
+                  {!row.periodId && <Chip tone="warning" icon="alert">{row.periodLabel ? `Period “${row.periodLabel}” not matched` : 'No period matched'}</Chip>}
+                  {row.days.length > 0 && <Chip tone="neutral">{row.days.join(', ')}</Chip>}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1fr)]">
+                  <Field label="Class" htmlFor={`scan-name-${index}`}><Input id={`scan-name-${index}`} small maxLength={120} value={row.name} disabled={!row.include} onChange={event => update(index, { name: event.target.value })} /></Field>
+                  <Field label="Teacher" htmlFor={`scan-teacher-${index}`}><Input id={`scan-teacher-${index}`} small maxLength={120} value={row.teacher ?? ''} disabled={!row.include} onChange={event => update(index, { teacher: event.target.value })} /></Field>
+                  <Field label="Room" htmlFor={`scan-room-${index}`}><Input id={`scan-room-${index}`} small maxLength={120} value={row.room ?? ''} disabled={!row.include} onChange={event => update(index, { room: event.target.value })} /></Field>
+                  <Field label="Period" htmlFor={`scan-period-${index}`}><Select id={`scan-period-${index}`} small value={row.periodId ?? ''} disabled={!row.include} onChange={event => update(index, { periodId: event.target.value || undefined })}>
+                    <option value="">Not placed</option>{schedule.periods.map(period => <option key={period.id} value={period.id}>{period.label}</option>)}
+                  </Select></Field>
+                </div>
+                {replaces && <Hint tone="danger">Replaces {replaces} on this period.</Hint>}
+              </li>;
+            })}
+          </ul>
+        </>}
+      </div>
+    </div>
+  </Modal>;
+}

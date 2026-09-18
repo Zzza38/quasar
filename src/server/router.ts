@@ -4,6 +4,7 @@ import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from 
 import { Service, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema } from './directory';
+import { ScanService, scanInputSchema } from './scan';
 export type Context = { userId: string | null; service: Service };
 const t = initTRPC.context<Context>().create();
 const authenticated = t.procedure.use(({ ctx, next }) => {
@@ -22,6 +23,10 @@ export const appRouter = t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
     save: accountScoped.input(directorySaveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).save(ctx.userId, input)),
     remove: accountScoped.input(directoryRemoveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).remove(ctx.userId, input)),
+  }),
+  scan: t.router({
+    status: authenticated.query(({ ctx }) => ({ enabled: new ScanService(ctx.service).enabled() })),
+    schedule: accountScoped.input(scanInputSchema).mutation(({ ctx, input }) => new ScanService(ctx.service).scan(ctx.userId, input)),
   }),
   calendar: t.router({
     list: authenticated.query(({ ctx }) => listSubscriptions(ctx.service.db, ctx.userId)),

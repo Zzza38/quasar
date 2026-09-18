@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { errorMessage } from '@/client/api';
+import { useEffect, useMemo, useState } from 'react';
+import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { classColor, formatDate, slugId, todayIn } from '@/lib/format';
@@ -14,6 +14,7 @@ import { Card } from '../ui/card';
 import { ClassColorPicker } from '../class-color-picker';
 import { ColorPicker } from '../ui/color-picker';
 import { SchoolDirectory } from '../school-directory';
+import { ScanScheduleSheet } from '../scan-schedule';
 
 const classFields: FieldSpec<Record<string, unknown>>[] = [
   { key: 'name', label: 'Name', render: (value) => (value.name as string) || null },
@@ -31,6 +32,14 @@ export function ClassesView({ state }: { state: AppState }) {
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
   const [privateOpen, setPrivateOpen] = useState(false);
   const [directoryOpen, setDirectoryOpen] = useState(state.params.get('directory') === 'open');
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanEnabled, setScanEnabled] = useState(false);
+  useEffect(() => {
+    if (!state.online) return;
+    let active = true;
+    api.scan.status.query().then(result => { if (active) setScanEnabled(result.enabled); }).catch(() => {});
+    return () => { active = false; };
+  }, [state.online]);
   const [pickDate, setPickDate] = useState(() => todayIn(schedule.timeZone, state.now));
 
   /** Which rotation days each period appears on. */
@@ -48,7 +57,7 @@ export function ClassesView({ state }: { state: AppState }) {
   return <div className="grid gap-4 animate-in fade-in-0 duration-200">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <h1>Classes</h1>
-      <div className="flex flex-wrap gap-2"><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></div>
+      <div className="flex flex-wrap gap-2">{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan timetable</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></div>
     </header>
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
       if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
@@ -116,6 +125,7 @@ export function ClassesView({ state }: { state: AppState }) {
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
+    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
   </div>;
 }

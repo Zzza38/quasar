@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BookOpen, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, Moon, Palette, Pencil, Plus, RefreshCw, Search, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BookOpen, Calendar, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, Moon, Palette, Pencil, Plus, RefreshCw, Search, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -8,6 +8,7 @@ import {
 const icons = {
   home: House,
   calendar: Calendar,
+  camera: Camera,
   check: Check,
   checkCircle: CircleCheck,
   tasks: ListChecks,
