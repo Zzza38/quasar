@@ -96,6 +96,20 @@ describe('timetable scanning', () => {
     expect(result.notes).toEqual(['Skipped a line the scanner could not read.']);
   });
 
+  it('splits a class that meets in several periods into one row per period', async () => {
+    const f = fixture();
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'Band', periodIds: ['A', 'c', 'nope'], periodLabel: 'Various periods' },
+      { className: 'Band', periodId: 'A' },
+      { className: 'Choir', periodIds: [], periodLabel: 'Various periods' },
+      { className: 'Art', periodIds: ['Lunch'] },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows.map(row => [row.name, row.periodId, row.periodLabel])).toEqual([
+      ['Band', 'A', undefined], ['Band', 'C', undefined], ['Choir', undefined, 'Various periods'], ['Art', 'lunch', undefined],
+    ]);
+  });
+
   it('tolerates fenced JSON and reports unusable answers', async () => {
     const fenced = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '```json\n{"rows":[{"className":"Art"}]}\n```' } }] }))));
     expect((await fenced.scan.scan(fenced.student, image)).rows.map(row => row.name)).toEqual(['Art']);

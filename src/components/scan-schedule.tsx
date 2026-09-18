@@ -73,7 +73,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
     setNotes(result.notes);
   });
   const update = (index: number, patch: Partial<Draft>) => setRows(current => current?.map((row, i) => i === index ? { ...row, ...patch } : row) ?? null);
-  const ready = rows?.filter(row => row.include && row.name.trim()) ?? [];
+  const ready = [...new Set((rows ?? []).filter(row => row.include && row.name.trim()).map(row => row.name.trim().toLowerCase()))];
   const alreadyAssigned = (row: Draft) => row.periodId && personal.assignments[row.periodId] ? personal.classes.find(cls => cls.id === personal.assignments[row.periodId!])?.name : undefined;
 
   return <Modal open={open} onClose={onClose} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
@@ -95,7 +95,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
         {!rows && <Hint>{payload ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
         {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
         {rows && rows.length > 0 && <>
-          <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread and untick what you do not take.</Hint>
+          <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. A class that meets in several periods appears once per period. Fix anything that was misread and untick what you do not take.</Hint>
           <ul className="grid gap-3" aria-label="Classes read from the photo">
             {rows.map((row, index) => {
               const replaces = row.include ? alreadyAssigned(row) : undefined;

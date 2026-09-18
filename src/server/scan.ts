@@ -38,6 +38,7 @@ const rowSchema = z.object({
   teacher: text(120),
   room: text(120),
   periodId: text(100),
+  periodIds: z.array(z.string().trim().max(100)).max(50).nullish(),
   periodLabel: text(120),
   directoryId: text(100),
   days: z.array(z.string().trim().max(60)).max(20).nullish(),
@@ -145,21 +146,24 @@ export class ScanService {
       const match = row.data.directoryId ? entries.get(row.data.directoryId) : undefined;
       const name = row.data.className ?? match?.name;
       if (!name) continue;
-      let periodId = row.data.periodId && periods.has(row.data.periodId) ? row.data.periodId : undefined;
-      if (!periodId && row.data.periodLabel) periodId = byLabel.get(normalize(row.data.periodLabel));
-      if (!periodId && row.data.periodId) periodId = byLabel.get(normalize(row.data.periodId));
-      const key = `${normalize(name)}|${periodId ?? ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({
-        name: match && normalize(match.name) === normalize(name) ? match.name : name,
-        teacher: row.data.teacher ?? match?.teacher,
-        room: row.data.room ?? match?.room,
-        periodId,
-        periodLabel: periodId ? undefined : row.data.periodLabel ?? row.data.periodId,
-        directoryId: match?.id,
-        days: (row.data.days ?? []).filter(Boolean),
-      });
+      // A class may meet in several periods across the rotation; the sheet shows one row per period.
+      const resolve = (value: string | undefined) => value ? (periods.has(value) ? value : byLabel.get(normalize(value))) : undefined;
+      const matched = [...new Set([...(row.data.periodIds ?? []), row.data.periodId, row.data.periodLabel].map(resolve).filter((id): id is string => !!id))];
+      const label = matched.length ? undefined : row.data.periodLabel ?? row.data.periodId ?? row.data.periodIds?.find(Boolean);
+      for (const periodId of matched.length ? matched : [undefined]) {
+        const key = `${normalize(name)}|${periodId ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          name: match && normalize(match.name) === normalize(name) ? match.name : name,
+          teacher: row.data.teacher ?? match?.teacher,
+          room: row.data.room ?? match?.room,
+          periodId,
+          periodLabel: periodId ? undefined : label,
+          directoryId: match?.id,
+          days: (row.data.days ?? []).filter(Boolean),
+        });
+      }
     }
     if (rows.length === 0) notes.push('No classes were found in the photo. Try a straight-on, well-lit shot of the whole timetable.');
     return { rows, model: this.config?.model ?? '', notes };
@@ -177,10 +181,10 @@ function parseJson(body: string): unknown {
 
 const SYSTEM_PROMPT = `You read photos of a student's printed or on-screen class timetable and return JSON only.
 Return an object {"rows": [...]}. Each row is one class the student takes:
-{"className": string, "teacher": string|null, "room": string|null, "periodId": string|null, "periodLabel": string|null, "directoryId": string|null, "days": string[]}
+{"className": string, "teacher": string|null, "room": string|null, "periodIds": string[], "periodLabel": string|null, "directoryId": string|null, "days": string[]}
 Rules:
 - One row per distinct class. If the same class appears on several days, return it once and list the days in "days".
-- "periodId" must be one of the school period IDs you are given, matched by the period name or by its start time. Use null if unsure and put the printed period text in "periodLabel".
+- "periodIds" lists every school period ID the class meets in, matched by the period name or by its start time. A class that sits in different periods on different days lists all of them. Use an empty list only when no period can be matched, and then put the printed period text in "periodLabel".
 - "directoryId" must be the ID of a listed directory class only when the name (and teacher or room, if printed) clearly match. Otherwise null.
 - Copy names exactly as printed. Do not invent teachers or rooms that are not visible.
 - Skip lunch, homeroom, advisory, free periods and headings unless they are clearly a class the student attends.
@@ -197,5 +201,5 @@ function userPrompt(schedule: Schedule, directory: DirectoryClass[]): string {
     ? directory.map(entry => `- id "${entry.id}": ${entry.name}${entry.teacher ? `, teacher ${entry.teacher}` : ''}${entry.room ? `, room ${entry.room}` : ''}`).join('\n')
     : '(none listed)';
   const days = schedule.cycleDays.map(day => day.label).join(', ');
-  return `School periods (use these IDs for "periodId"):\n${periods}\n\nRotation days: ${days || 'single schedule'}\n\nSchool class directory (use these IDs for "directoryId"):\n${classes}\n\nRead the attached timetable photo and return the JSON.`;
+  return `School periods (use these IDs for "periodIds"):\n${periods}\n\nRotation days: ${days || 'single schedule'}\n\nSchool class directory (use these IDs for "directoryId"):\n${classes}\n\nRead the attached timetable photo and return the JSON.`;
 }
