@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from 'next';
-import Script from 'next/script';
 import { Manrope } from 'next/font/google';
 import { themeBootScript } from '@/lib/theme';
 import './globals.css';
@@ -20,7 +19,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   // The theme attributes are applied by the inline script before hydration, so
   // the server-rendered <html> intentionally differs from the client.
   return <html lang="en" suppressHydrationWarning className={manrope.variable}>
-    <head><Script id="theme-boot" strategy="beforeInteractive">{themeBootScript}</Script></head>
+    {/* A raw inline script: next/script queues even beforeInteractive scripts until its runtime
+        loads, which paints the light theme first. This runs synchronously before any styles apply. */}
+    <head><script id="theme-boot" dangerouslySetInnerHTML={{ __html: themeBootScript }} /></head>
     <body>{children}</body>
   </html>;
 }

@@ -177,6 +177,20 @@ export function useWorkspace(): WorkspaceSession {
     const generation = ++generationRef.current;
     setLoading(true); setError('');
     let authenticatedId: string | null = null;
+    // Show this device's last saved workspace straight away and refresh it in the
+    // background. A sign-out clears the cache, so what appears is the same account's
+    // own data; a changed or expired session below replaces it with the sign-in screen.
+    try {
+      const cachedId = await getLastAccountId();
+      if (generation !== generationRef.current) return;
+      if (cachedId) {
+        const store = workspaceRef.current?.accountId === cachedId ? workspaceRef.current : await openWorkspace(cachedId);
+        if (generation !== generationRef.current) { if (workspaceRef.current !== store) store.close(); return; }
+        const saved = await store.read();
+        if (saved.context) { unsubscribeRef.current?.(); await attach(store); setAuthRequired(false); }
+        else if (workspaceRef.current !== store) store.close();
+      }
+    } catch { /* No usable cache; the network path below decides. */ }
     try {
       const session = await api.session.query();
       if (generation !== generationRef.current) return;
