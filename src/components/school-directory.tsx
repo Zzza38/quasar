@@ -62,9 +62,9 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
       <ul className="grid gap-2" aria-label="School classes">
         {entries.map(entry => {
           const added = personal?.classes.some(cls => isCopy(cls, entry));
-          return <li key={entry.id} className="flex flex-wrap items-center gap-3 rounded-xl border p-3">
-            {onAdd && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onChange={event => setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
-            <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm">{entry.name}</strong><Hint>{[entry.teacher, entry.room && `Room ${entry.room}`].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
+          return <li key={entry.id} className={`flex flex-wrap items-center gap-3 rounded-2xl p-3 ring-1 ring-inset transition-colors ${selected.includes(entry.id) && !added ? 'bg-primary-soft/60 ring-primary/40' : 'bg-muted/60 ring-foreground/[0.04]'}`}>
+            {onAdd && <input type="checkbox" className="size-5 shrink-0 accent-primary" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onChange={event => setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
+            <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm font-bold">{entry.name}</strong><Hint>{[entry.teacher, entry.room && `Room ${entry.room}`].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
             {directory.canEdit ? <div className="flex gap-1"><Button size="sm" disabled={!online || pending} onClick={() => setEditing(entry)}>Edit shared</Button><Button size="sm" variant="ghost" disabled={!online || pending} aria-label={`Remove ${entry.name} from directory`} onClick={() => {
               if (confirm(`Remove ${entry.name} from the shared directory? Existing personal copies stay saved.`)) void run(async () => { await api.directory.remove.mutate({ accountId: directory.accountId, schoolId, id: entry.id, expectedVersion: entry.version }); await refresh(); setSelected(ids => ids.filter(id => id !== entry.id)); });
             }}>Remove</Button></div> : <Button size="sm" disabled={!online || pending} onClick={() => void run(async () => {
@@ -83,8 +83,8 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
 
 function DirectoryEditor({ initial, pending, onSave, onCancel }: { initial: Details; pending: boolean; onSave: (details: Details) => Promise<void>; onCancel: () => void }) {
   const [draft, setDraft] = useState<Details>({ name: initial.name, teacher: initial.teacher, room: initial.room, grades: initial.grades });
-  return <Panel className="grid gap-3 p-3">
-    <strong className="text-sm">Shared class details</strong>
+  return <Panel className="grid gap-3 bg-card p-4 ring-2 ring-primary/40">
+    <strong className="text-sm font-bold">Shared class details</strong>
     <Field label="Class name" htmlFor="directory-name"><Input id="directory-name" maxLength={120} value={draft.name} disabled={pending} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field>
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Teacher" htmlFor="directory-teacher"><Input id="directory-teacher" maxLength={120} value={draft.teacher ?? ''} disabled={pending} onChange={event => setDraft({ ...draft, teacher: event.target.value })} /></Field>

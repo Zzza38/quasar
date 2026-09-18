@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { browserTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
-import { Button, Callout, Chip, ErrorText, Field, Hint, Input, Modal, Section } from './primitives';
+import { Icon } from './icon';
+import { Button, Callout, Chip, ErrorText, Field, Hint, Input, Modal, Panel, Section } from './primitives';
 
 export function CalendarFeeds({ state }: { state: AppState }) {
   const [adding, setAdding] = useState(false);
@@ -21,7 +22,7 @@ export function CalendarFeeds({ state }: { state: AppState }) {
     finally { setPending(null); }
   };
   const stamp = (value: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: state.timeZone }).format(new Date(value));
-  return <Section id="calendar-feeds-title" title="Connected calendars" action={<Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setTimeZone(browserTimeZone()); setAdding(true); }}>Add calendar</Button>}>
+  return <Section id="calendar-feeds-title" title="Connected calendars" icon="calendar" description="Subscribe to an iCal link and its events show up as tasks." action={<Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setTimeZone(browserTimeZone()); setAdding(true); }}>Add calendar</Button>}>
     {!state.online && <Hint>Connect to the internet to manage calendars. Saved events are still available offline.</Hint>}
     {(state.context.importConflicts ?? []).map((conflict) => {
       const local = state.snapshot.entities.find((entry) => entry.id === conflict.entityId)?.data;
@@ -39,14 +40,17 @@ export function CalendarFeeds({ state }: { state: AppState }) {
         </div>)}</dl>
       </Callout>;
     })}
-    {subscriptions.length === 0 && <p className="text-sm text-muted-foreground">Subscribe with an iCal link from your school or learning platform.</p>}
-    {subscriptions.length > 0 && <ul className="grid gap-2">{subscriptions.map((feed) => <li key={feed.id} className="grid gap-2 rounded-lg bg-muted p-3">
+    {subscriptions.length === 0 && <Panel className="text-sm text-muted-foreground">No calendars yet. Google Classroom, Canvas and most school portals offer an iCal link under calendar settings.</Panel>}
+    {subscriptions.length > 0 && <ul className="grid gap-2">{subscriptions.map((feed) => <li key={feed.id} className="grid gap-2 rounded-2xl bg-muted/70 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
       <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 gap-3">
+        <span aria-hidden="true" className={`mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl ${feed.lastError ? 'bg-warning-soft text-warning' : feed.enabled ? 'bg-primary-soft text-primary-soft-foreground' : 'bg-secondary text-secondary-foreground'}`}><Icon name="calendar" size={16} /></span>
         <div className="grid min-w-0 gap-1">
-          <strong className="break-words text-sm">{feed.name}</strong>
+          <strong className="break-words text-sm font-bold">{feed.name}</strong>
           <div className="flex flex-wrap gap-1.5"><Chip icon="calendar">{feed.itemCount} items</Chip>{!feed.enabled && <Chip>Paused</Chip>}{feed.lastError && <Chip tone="warning" icon="alert">Refresh failed</Chip>}</div>
           <Hint>{feed.lastSuccessAt ? `Last updated ${stamp(feed.lastSuccessAt)}` : 'No successful refresh yet'} · {feed.timeZone.replaceAll('_', ' ')}</Hint>
           {feed.enabled && <Hint>Next refresh {stamp(feed.nextRefreshAt)}</Hint>}
+        </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <Button size="sm" icon="refresh" disabled={!state.online || !feed.enabled || pending !== null} busy={pending === `refresh:${feed.id}`} onClick={() => void run(`refresh:${feed.id}`, () => api.calendar.refresh.mutate({ accountId: state.context.user.id, id: feed.id }))}>Refresh</Button>

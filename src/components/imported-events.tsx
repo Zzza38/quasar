@@ -43,13 +43,13 @@ export function ImportedEvents({ state, date }: { state: AppState; date: string 
   const [pending, setPending] = useState<string[]>([]);
   const [error, setError] = useState('');
   if (items.length === 0) return null;
-  return <div className="grid gap-2 border-t pt-3" aria-label="Imported calendar entries">
-    <h3 className="text-[13px] font-bold uppercase tracking-wide text-muted-foreground">From your calendars</h3>
+  return <div className="grid gap-2 border-t border-foreground/[0.06] pt-4" aria-label="Imported calendar entries">
+    <h3 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">From your calendars</h3>
     <ul className="grid gap-2">{items.map((item) => {
       const source = item.task.imported!;
       const feed = state.context.subscriptions?.find((entry) => entry.id === source.subscriptionId);
-      return <li key={item.id} className={cn('flex items-start gap-3 rounded-lg bg-muted p-3', item.task.completed && 'opacity-60')}>
-        <Checkbox className="mt-0.5 size-5 rounded-md [&_svg]:size-4" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onCheckedChange={(checked) => {
+      return <li key={item.id} className={cn('flex items-start gap-3 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]', item.task.completed && 'opacity-60')}>
+        <Checkbox className="mt-0.5 size-[22px] rounded-full border-2 border-input shadow-none [&_svg]:size-3.5" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onCheckedChange={(checked) => {
           const completed = checked === true;
           setError(''); setPending((value) => [...value, item.id]);
           void state.saveTask(item.id, { ...item.task, completed }).catch((err) => setError(errorMessage(err))).finally(() => setPending((value) => value.filter((id) => id !== item.id)));

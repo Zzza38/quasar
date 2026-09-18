@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   output: process.env.QUASAR_STANDALONE === '1' ? "standalone" : undefined,
   serverExternalPackages: ["better-sqlite3"],
+  // The tailnet-only dev server is reached through tailscale serve.
+  allowedDevOrigins: ["home-server.tail210f05.ts.net"],
   async headers() {
     return [
       { source: "/:path*", headers: [

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { signIn } from 'next-auth/react';
 import { PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
@@ -9,11 +8,10 @@ import { VIEWS } from './app-state';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
-import { Button, Callout, Hint, Modal, Panel, Spacer } from './primitives';
+import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
-import { Separator } from './ui/separator';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger } from './ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
@@ -39,10 +37,17 @@ export function BrandLockup({ height = 120, className }: { height?: number; clas
 }
 
 export function Brand({ compact, className }: { compact?: boolean; className?: string }) {
-  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-foreground no-underline hover:no-underline', className)} href="#today" aria-label="Quasar home">
+  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href="#today" aria-label="Quasar home">
     <BrandMark />
     {!compact && <span>Quasar</span>}
   </a>;
+}
+
+/** Gradient initial avatar shared by the sidebar, top bar and account sheet. */
+function UserAvatar({ initials, size = 'default', className }: { initials: string; size?: 'default' | 'lg'; className?: string }) {
+  return <Avatar size={size} className={cn('ring-0', className)}>
+    <AvatarFallback className="font-extrabold text-primary-foreground" style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 75%, white) 0%, var(--primary) 60%, color-mix(in srgb, var(--primary) 70%, black) 100%)' }}>{initials}</AvatarFallback>
+  </Avatar>;
 }
 
 /* ---------- Sync status ---------- */
@@ -71,9 +76,9 @@ export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName,
   const icon: IconName = sync.kind === 'saved' ? 'checkCircle' : sync.kind === 'offline' ? 'cloudOff' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'alert' : sync.kind === 'pending' ? 'cloud' : 'refresh';
   const label = statusLabel(sync);
   const clickable = sync.kind === 'conflict' || sync.kind === 'failed' || (sync.kind === 'pending' && online);
-  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-semibold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', className);
+  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', className);
   const inner = <>
-    {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.2} />}
+    {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
     <span className={cn('truncate', labelClassName)}>{label}</span>
   </>;
   if (clickable) {
@@ -87,16 +92,18 @@ export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName,
 /* ---------- Navigation ---------- */
 
 function TabBar({ view, taskCount }: { view: View; taskCount: number }) {
-  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col border-t bg-background/90 backdrop-blur-md lg:hidden" style={{ height: 'calc(var(--nav-h) + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }} aria-label="Main">
-    {VIEWS.map((entry) => {
-      const active = entry.id === view;
-      return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} title={entry.label} aria-current={active ? 'page' : undefined}
-        className={cn('relative flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold no-underline transition-colors hover:no-underline', active ? 'text-primary' : 'text-muted-foreground')}>
-        <Icon name={VIEW_ICONS[entry.id]} size={22} strokeWidth={active ? 2.2 : 1.9} />
-        <span>{entry.label}</span>
-        {entry.id === 'tasks' && taskCount > 0 && <span className="absolute left-[calc(50%+6px)] top-2 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] leading-none text-primary-foreground" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</span>}
-      </a>;
-    })}
+  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))' }} aria-label="Main">
+    <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
+      {VIEWS.map((entry) => {
+        const active = entry.id === view;
+        return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} title={entry.label} aria-current={active ? 'page' : undefined}
+          className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
+          <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
+          <span>{entry.label}</span>
+          {entry.id === 'tasks' && taskCount > 0 && <span className="absolute left-[calc(50%+6px)] top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</span>}
+        </a>;
+      })}
+    </div>
   </nav>;
 }
 
@@ -125,39 +132,39 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
 
   // The tooltip provider lives here rather than in the server layout: a client
   // boundary directly under <body> made the prerendered page fail to hydrate.
-  return <TooltipProvider><SidebarProvider open={navOpen} onOpenChange={setNavOpen} className="app" style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties}>
+  return <TooltipProvider><SidebarProvider open={navOpen} onOpenChange={setNavOpen} className="app app-canvas" style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties}>
     <a className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg" href="#main">Skip to content</a>
 
     <Sidebar collapsible="icon" className="app-sidebar">
-      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
+      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
         {navOpen ? <>
           <Brand />
-          <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="text-muted-foreground" />
+          <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="rounded-lg text-muted-foreground hover:bg-sidebar-accent" />
         </> : <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" aria-label="Open sidebar" aria-expanded={false} onClick={() => setNavOpen(true)}
-              className="group/sidebar-open relative size-10 rounded-lg p-0 text-foreground hover:bg-muted">
+              className="group/sidebar-open relative size-10 rounded-xl p-0 text-foreground hover:bg-sidebar-accent">
               <span data-slot="sidebar-logo" className="flex group-hover/sidebar-open:hidden group-focus-visible/sidebar-open:hidden"><BrandMark size={30} /></span>
               <span data-slot="sidebar-open-icon" className="hidden group-hover/sidebar-open:flex group-focus-visible/sidebar-open:flex"><PanelLeft aria-hidden="true" className="size-5" /></span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-medium text-popover-foreground shadow-sm [&_svg]:hidden">Open sidebar</TooltipContent>
+          <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-semibold text-popover-foreground shadow-float [&_svg]:hidden">Open sidebar</TooltipContent>
         </Tooltip>}
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="pt-2">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1" aria-label="Main">
               {VIEWS.map((entry) => {
                 const active = entry.id === view;
                 return <SidebarMenuItem key={entry.id}>
-                  <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-lg px-3 font-medium text-muted-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:text-foreground group-data-[collapsible=icon]:data-active:bg-muted group-data-[collapsible=icon]:data-active:text-foreground group-data-[collapsible=icon]:[&_svg]:size-5">
+                  <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-xl px-3 text-[14px] font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground data-active:hover:bg-primary-soft data-active:hover:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:text-foreground group-data-[collapsible=icon]:[&_svg]:size-5">
                     <a href={`#${entry.id}`} aria-label={entry.label} aria-current={active ? 'page' : undefined}>
-                      <Icon name={VIEW_ICONS[entry.id]} size={18} strokeWidth={active ? 2.2 : 1.9} />
+                      <Icon name={VIEW_ICONS[entry.id]} size={18} strokeWidth={active ? 2.4 : 2} />
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
-                  {entry.id === 'tasks' && taskCount > 0 && <SidebarMenuBadge className="top-2.5 right-2.5 h-5 min-w-5 rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</SidebarMenuBadge>}
+                  {entry.id === 'tasks' && taskCount > 0 && <SidebarMenuBadge className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</SidebarMenuBadge>}
                 </SidebarMenuItem>;
               })}
             </SidebarMenu>
@@ -170,10 +177,10 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
         </div>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" tooltip={displayName} onClick={() => setAccount(true)} aria-haspopup="dialog" className="h-12 rounded-xl border bg-card px-2 hover:bg-muted group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
-              <Avatar><AvatarFallback className="bg-primary-soft font-bold text-primary-soft-foreground">{initials}</AvatarFallback></Avatar>
-              <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden"><strong className="truncate text-sm">{displayName}</strong><span className="truncate text-xs text-muted-foreground">{context.school?.name ?? context.user.email}</span></span>
-              <Icon name="more" size={16} className="text-muted-foreground group-data-[collapsible=icon]:hidden" />
+            <SidebarMenuButton size="lg" tooltip={displayName} onClick={() => setAccount(true)} aria-haspopup="dialog" className="h-14 rounded-2xl bg-card px-2.5 shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-full group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:shadow-none group-data-[collapsible=icon]:ring-0">
+              <UserAvatar initials={initials} />
+              <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden"><strong className="truncate text-[13.5px] font-bold">{displayName}</strong><span className="truncate text-xs text-muted-foreground">{context.school?.name ?? context.user.email}</span></span>
+              <Icon name="settings" size={16} className="text-muted-foreground group-data-[collapsible=icon]:hidden" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -181,17 +188,17 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
       <SidebarRail />
     </Sidebar>
 
-    <SidebarInset className="min-w-0">
-      <header className="app-topbar sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b bg-background/90 px-4 backdrop-blur-md lg:hidden">
+    <SidebarInset className="min-w-0 bg-transparent">
+      <header className="app-topbar glass sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-foreground/[0.06] px-4 lg:hidden">
         <Brand />
         <div className="flex items-center gap-2">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="hidden min-[480px]:inline" />
           <button type="button" className="rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
-            <Avatar><AvatarFallback className="bg-primary-soft font-bold text-primary-soft-foreground">{initials}</AvatarFallback></Avatar>
+            <UserAvatar initials={initials} />
           </button>
         </div>
       </header>
-      <div className="app-main mx-auto w-full max-w-[1120px] px-4 pt-4 pb-[calc(var(--nav-h)+24px)] lg:px-8 lg:pt-6 lg:pb-10" id="main">
+      <div className="app-main mx-auto w-full max-w-[1120px] px-4 pt-5 pb-[calc(var(--nav-h)+28px)] lg:px-8 lg:pt-8 lg:pb-12" id="main">
         <div className="mb-4 grid gap-3 empty:hidden">
           {session.error && <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout>}
           {!online && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Schedule and task changes stay saved on this device until you reconnect.{!context.school && ' Connect to finish school setup.'}</Callout>}
@@ -204,27 +211,25 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
     </SidebarInset>
 
     <Sheet open={account} onOpenChange={setAccount}>
-      <SheetContent side="right" className="w-full gap-0 p-0 text-foreground sm:max-w-md">
+      <SheetContent side="right" className="w-full gap-0 border-l-0 p-0 text-foreground shadow-pop sm:max-w-md">
         <SheetHeader className="border-b px-5 py-4">
-          <SheetTitle className="text-[17px]">Account</SheetTitle>
+          <SheetTitle className="text-[17px] font-bold">Account</SheetTitle>
           <SheetDescription className="sr-only">Your profile, appearance, reminders and sign-out.</SheetDescription>
         </SheetHeader>
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-5 overflow-y-auto px-5 py-5">
-          <div className="flex items-center gap-3">
-            <Avatar size="lg" className="size-12"><AvatarFallback className="bg-primary-soft text-lg font-bold text-primary-soft-foreground">{initials}</AvatarFallback></Avatar>
-            <div className="min-w-0"><strong className="block truncate">{displayName}</strong><Hint className="truncate">{context.user.fullName}</Hint><Hint className="truncate">{context.user.email}</Hint></div>
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 py-5">
+          <div className="flex items-center gap-3.5">
+            <UserAvatar initials={initials} size="lg" className="size-14 text-xl" />
+            <div className="min-w-0"><strong className="block truncate text-[16px] font-bold">{displayName}</strong><Hint className="truncate">{context.user.fullName}</Hint><Hint className="truncate">{context.user.email}</Hint></div>
           </div>
-          <Panel className="grid gap-1.5 p-3 text-sm">
-            <div className="flex justify-between gap-3"><span className="text-muted-foreground">School</span><strong className="text-right">{context.school?.name ?? 'Not chosen yet'}</strong></div>
-            <div className="flex justify-between gap-3"><span className="text-muted-foreground">Sync</span><span className="text-right">{statusLabel(sync)}</span></div>
-            <div className="flex justify-between gap-3"><span className="text-muted-foreground">Offline copy</span><span className="text-right">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</span></div>
-          </Panel>
-          {gradeSettings}
-          <ThemePicker />
-          <Separator />
-          <NotificationSettings accountId={context.user.id} online={online} />
-          <Separator />
-          <div className="grid gap-2">
+          <dl className="grid overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
+            <div><dt className="text-muted-foreground">School</dt><dd className="text-right font-semibold">{context.school?.name ?? 'Not chosen yet'}</dd></div>
+            <div><dt className="text-muted-foreground">Sync</dt><dd className="text-right font-semibold">{statusLabel(sync)}</dd></div>
+            <div><dt className="text-muted-foreground">Offline copy</dt><dd className="text-right font-semibold">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</dd></div>
+          </dl>
+          {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
+          <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
+          <div className="grid gap-3"><Eyebrow>Reminders</Eyebrow><NotificationSettings accountId={context.user.id} online={online} /></div>
+          <div className="grid gap-2 border-t pt-5">
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
             <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.syncing || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
             {!online && <Hint>Signing out removes this account’s saved data from this device, so it needs a connection to make sure everything is uploaded first.</Hint>}
@@ -247,12 +252,13 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
 
 export function CenteredNotice({ title, children, action }: { title: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return <div className="welcome-bg grid min-h-dvh place-items-center px-4 py-6">
-    <Card className="w-full max-w-[420px]"><CardContent className="grid justify-items-center gap-3 text-center">
+    <Card className="w-full max-w-[420px] rounded-3xl shadow-float animate-in fade-in-0 zoom-in-95 duration-300"><CardContent className="grid justify-items-center gap-4 py-4 text-center">
       <BrandLockup height={112} />
-      <h1 className="text-xl">{title}</h1>
-      {children && <p className="text-sm text-muted-foreground">{children}</p>}
+      <div className="grid gap-1.5">
+        <h1 className="text-xl">{title}</h1>
+        {children && <p className="text-sm text-muted-foreground">{children}</p>}
+      </div>
       {action}
     </CardContent></Card>
   </div>;
 }
-

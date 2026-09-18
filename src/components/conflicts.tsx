@@ -8,6 +8,7 @@ import { scheduleForGrade, gradeLabel, detectOverrideConflicts, personalSchedule
 import { taskSchema } from '@/domain/task';
 import { formatDate, formatDateTime, formatRange, WEEKDAYS } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { Icon } from './icon';
 import { Button, Callout, Chip, Hint } from './primitives';
 import { Card, CardContent } from './ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
@@ -95,8 +96,8 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
       };
       return <Card key={conflict.mutation.mutationId} className="border-l-4 border-l-now" aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
         <CardContent className="grid gap-3">
-          <div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-semibold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div>
-          <DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} />
+          <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="alert" size={17} /></span><div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-bold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div></div>
+          <div className="overflow-hidden rounded-xl ring-1 ring-foreground/[0.06]"><DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} /></div>
           {error && <Callout tone="danger" role="alert">{error}</Callout>}
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" busy={pending === conflict.mutation.mutationId} onClick={() => void choose('local')}>Keep my changes</Button>
@@ -159,7 +160,7 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   return <Card className="border-l-4 border-l-primary" aria-labelledby="review-title">
     <CardContent className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 id="review-title" className="text-base font-semibold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div>
+        <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div></div>
         {todayChanged ? <Chip tone="now" icon="alert">Today looks different</Chip> : <Chip tone="success" icon="check">Today is unaffected</Chip>}
       </div>
       <ul className="grid list-disc gap-1 pl-5 text-sm">{(showAll ? changes : changes.slice(0, 6)).map((change) => <li key={change}>{change}</li>)}</ul>

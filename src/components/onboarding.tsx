@@ -15,25 +15,43 @@ import { Card, CardContent } from './ui/card';
 import { Label } from './ui/label';
 
 type Step = 'names' | 'school' | 'create' | 'choice';
+const STEP_TITLES = ['Your name', 'Your school', 'Your schedule'];
 
 function Frame({ step, total, title, description, children, wide, footer }: { step: number; total: number; title: ReactNode; description?: ReactNode; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
-  return <main className="welcome-bg grid min-h-dvh place-items-center items-start p-3 sm:items-center sm:px-4 sm:py-6">
-    <Card className={cn('w-full animate-in fade-in-0 slide-in-from-bottom-1 duration-200 sm:py-7', wide ? 'max-w-[960px]' : 'max-w-[560px]')}>
-      <CardContent className="grid gap-5 sm:px-6">
-        <div className="flex items-center justify-between gap-3"><Brand /><Eyebrow>Step {step} of {total}</Eyebrow></div>
-        <div className="grid gap-1"><h1 className="text-2xl">{title}</h1>{description && <p className="text-sm text-muted-foreground">{description}</p>}</div>
+  return <main className="welcome-bg grid min-h-dvh place-items-center items-start p-3 sm:items-center sm:px-4 sm:py-8">
+    <Card className={cn('w-full rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
+      <CardContent className="grid gap-6 sm:px-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Brand />
+          <ol className="flex items-center gap-1.5" aria-label={`Step ${step} of ${total}`}>
+            {STEP_TITLES.slice(0, total).map((label, index) => {
+              const number = index + 1;
+              const state = number < step ? 'done' : number === step ? 'current' : 'todo';
+              return <li key={label} className="flex items-center gap-1.5" aria-current={state === 'current' ? 'step' : undefined}>
+                <span className={cn('grid size-6 place-items-center rounded-full text-[11px] font-extrabold transition-colors', state === 'current' ? 'bg-primary text-primary-foreground shadow-[0_0_0_4px_color-mix(in_srgb,var(--primary)_22%,transparent)]' : state === 'done' ? 'bg-success-soft text-success' : 'bg-muted text-muted-foreground')}>{state === 'done' ? <Icon name="check" size={12} strokeWidth={3} /> : number}</span>
+                <span className={cn('text-xs font-semibold max-sm:hidden', state === 'current' ? 'text-foreground' : 'text-muted-foreground')}>{label}</span>
+                {number < total && <span aria-hidden="true" className="mx-1 h-px w-4 bg-border" />}
+              </li>;
+            })}
+          </ol>
+        </div>
+        <div className="grid gap-1.5"><Eyebrow>Step {step} of {total}</Eyebrow><h1 className="text-[28px]">{title}</h1>{description && <p className="text-sm text-muted-foreground">{description}</p>}</div>
         {children}
-        {footer && <div className="flex flex-wrap items-center gap-2 border-t pt-4">{footer}</div>}
+        {footer && <div className="flex flex-wrap items-center gap-2 border-t pt-5">{footer}</div>}
       </CardContent>
     </Card>
   </main>;
 }
 
 /** Large selectable option, used as a radio inside a radiogroup. */
-function OptionCard({ selected, onSelect, title, description, className }: { selected: boolean; onSelect: () => void; title: ReactNode; description: ReactNode; className?: string }) {
+function OptionCard({ selected, onSelect, title, description, className, icon }: { selected: boolean; onSelect: () => void; title: ReactNode; description: ReactNode; className?: string; icon?: 'layers' | 'edit' | 'check' | 'users' }) {
   return <button type="button" role="radio" aria-checked={selected} onClick={onSelect}
-    className={cn('grid gap-1 rounded-xl border bg-card px-4 py-3.5 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50', selected && 'border-primary bg-primary-soft ring-1 ring-primary hover:bg-primary-soft', className)}>
-    <strong className="text-sm">{title}</strong><Hint className={cn(selected && 'text-primary-soft-foreground/80')}>{description}</Hint>
+    className={cn('flex gap-3 rounded-2xl bg-card px-4 py-3.5 text-left ring-1 ring-foreground/[0.08] transition-[background-color,box-shadow] outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50', selected && 'bg-primary-soft ring-2 ring-primary hover:bg-primary-soft', className)}>
+    <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 transition-colors', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{selected && <Icon name="check" size={12} strokeWidth={3} />}</span>
+    <span className="grid gap-1">
+      <strong className="flex items-center gap-2 text-sm font-bold">{icon && <Icon name={icon} size={14} className="text-muted-foreground" />}{title}</strong>
+      <Hint className={cn(selected && 'text-primary-soft-foreground/80')}>{description}</Hint>
+    </span>
   </button>;
 }
 
@@ -70,8 +88,8 @@ function NamesStep({ user, error, onSaved, footer }: { user: WorkspaceContext['u
       try { await api.profile.save.mutate({ displayName: displayName.trim(), fullName: fullName.trim() }); await onSaved(); }
       catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
     }}>
-      <Field label="Display name" htmlFor="display-name"><Input id="display-name" required autoFocus autoComplete="nickname" maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field>
-      <Field label="Full name" htmlFor="full-name"><Input id="full-name" required autoComplete="name" maxLength={160} value={fullName} onChange={(event) => setFullName(event.target.value)} /></Field>
+      <Field label="Display name" htmlFor="display-name"><Input id="display-name" required autoFocus autoComplete="nickname" maxLength={80} placeholder="Maya" value={displayName} className="h-11" onChange={(event) => setDisplayName(event.target.value)} /></Field>
+      <Field label="Full name" htmlFor="full-name"><Input id="full-name" required autoComplete="name" maxLength={160} placeholder="Maya Chen" value={fullName} className="h-11" onChange={(event) => setFullName(event.target.value)} /></Field>
       <Hint>Signed in as {user.email}.</Hint>
       {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
       <div><Button type="submit" variant="primary" size="lg" busy={pending} disabled={!displayName.trim() || !fullName.trim()} iconRight="arrowRight">Continue</Button></div>
@@ -92,23 +110,24 @@ function SchoolStep({ error, onSelect, onCreate, footer }: { error: string; onSe
     }, query ? 250 : 0);
     return () => { current = false; clearTimeout(timer); };
   }, [query]);
-  return <Frame step={2} total={3} title="Find your school" footer={footer}>
+  return <Frame step={2} total={3} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." footer={footer}>
     <div className="relative">
-      <Icon name="search" size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-      <Input aria-label="School name or location" placeholder="School name or town" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 pl-10" />
+      <Icon name="search" size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+      <Input aria-label="School name or location" placeholder="School name or town" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="h-12 rounded-2xl pl-11 text-[15px]" />
     </div>
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     {schools === null && !message && <Hint role="status">Loading schools…</Hint>}
     {schools && schools.length === 0 && <Panel className="text-sm text-muted-foreground">{query ? `No schools match “${query}”.` : 'No schools have been added yet.'}</Panel>}
     {schools && schools.length > 0 && <ul className="grid gap-2" aria-label="Schools">
       {schools.map((school) => <li key={school.id}>
-        <button type="button" className="flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left transition-colors outline-none hover:border-primary hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => onSelect(school)}>
+        <button type="button" className="group/school flex w-full items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-foreground/[0.08] transition-[box-shadow,background-color] outline-none hover:bg-muted hover:ring-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => onSelect(school)}>
+          <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
           <div className="grid min-w-0 flex-1 gap-1">
-            <strong className="text-[15px]">{school.name}</strong>
+            <strong className="text-[15px] font-bold">{school.name}</strong>
             <Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint>
             <div className="flex flex-wrap gap-1.5">{school.approved ? <Chip tone="success" icon="check">Approved schedule</Chip> : <Chip tone="warning" icon="users">Community schedule</Chip>}{(school.supportLocked || school.memberLocked) && <Chip icon="lock">Locked</Chip>}</div>
           </div>
-          <Icon name="chevronRight" size={18} className="text-muted-foreground" />
+          <Icon name="chevronRight" size={18} className="text-muted-foreground transition-transform group-hover/school:translate-x-0.5" />
         </button>
       </li>)}
     </ul>}
@@ -132,17 +151,17 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
   const [message, setMessage] = useState('');
   const issues = schedule ? describeIssues(schedule) : [];
   if (phase === 'details') {
-    return <Frame step={2} total={3} title="Add your school" footer={footer}>
+    return <Frame step={2} total={3} title="Add your school" description="You only need the basics now; the bell schedule comes next." footer={footer}>
       <form className="grid gap-4" onSubmit={(event) => {
         event.preventDefault();
         const timeZone = browserTimeZone();
         setSchedule(buildTemplate(template, { timeZone, today: todayIn(timeZone), cycleLength }));
         setPhase('schedule');
       }}>
-        <Field label="School name" htmlFor="school-name"><Input id="school-name" required autoFocus minLength={2} maxLength={160} value={name} onChange={(event) => setName(event.target.value)} /></Field>
-        <Field label="City and state" htmlFor="school-location"><Input id="school-location" required minLength={2} maxLength={200} placeholder="Boston, MA" value={location} onChange={(event) => setLocation(event.target.value)} /></Field>
+        <Field label="School name" htmlFor="school-name"><Input id="school-name" required autoFocus minLength={2} maxLength={160} placeholder="Lincoln High School" value={name} className="h-11" onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label="City and state" htmlFor="school-location"><Input id="school-location" required minLength={2} maxLength={200} placeholder="Boston, MA" value={location} className="h-11" onChange={(event) => setLocation(event.target.value)} /></Field>
         <div className="grid gap-2">
-          <Label className="text-muted-foreground">How does the schedule repeat?</Label>
+          <Label className="text-[13px] font-semibold text-foreground/80">How does the schedule repeat?</Label>
           <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Schedule type">
             {TEMPLATES.map((entry) => <OptionCard key={entry.kind} selected={template === entry.kind} onSelect={() => setTemplate(entry.kind)} title={entry.title} description={entry.description} />)}
           </div>
@@ -152,7 +171,7 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
       </form>
     </Frame>;
   }
-  return <Frame step={2} total={3} wide title={`${name.trim()} schedule`} footer={footer}>
+  return <Frame step={2} total={3} wide title={`${name.trim()} schedule`} description="Enter periods, then the order and times for each rotation day. The preview shows real dates." footer={footer}>
     {schedule && <ScheduleEditor value={schedule} onChange={setSchedule} initialSection="periods" />}
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     <div className="flex flex-wrap items-center gap-2">
@@ -198,19 +217,19 @@ function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBa
         setCustom(structuredClone(scheduleForGrade(school.schedule, next || undefined)));
       }}><option value="" disabled>Choose your grade…</option>{GRADES.map(entry => <option key={entry} value={entry}>{gradeLabel(entry)}</option>)}</Select>
     </Field>
-    <Panel className="grid gap-2">
+    <Panel className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><strong>{school.name}</strong><Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint></div>
+        <div className="flex items-center gap-3"><span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span><div><strong className="font-bold">{school.name}</strong><Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint></div></div>
         {school.approved ? <Chip tone="success" icon="check">Approved by support</Chip> : <Chip tone="warning" icon="users">Community schedule · not reviewed</Chip>}
       </div>
       <ScheduleSummary schedule={sharedSchedule} />
-      <button type="button" className="w-fit text-left text-sm font-medium text-primary hover:underline" aria-expanded={showPreview} onClick={() => setShowPreview(!showPreview)}>{showPreview ? 'Hide preview' : 'Preview this schedule on real dates'}</button>
-      {showPreview && <div className="rounded-xl border bg-card p-4"><Preview value={sharedSchedule} /></div>}
+      <button type="button" className="inline-flex w-fit items-center gap-1 text-left text-sm font-semibold text-primary hover:underline" aria-expanded={showPreview} onClick={() => setShowPreview(!showPreview)}>{showPreview ? 'Hide preview' : 'Preview this schedule on real dates'}<Icon name="chevronDown" size={14} className={cn('transition-transform', showPreview && 'rotate-180')} /></button>
+      {showPreview && <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/[0.06]"><Preview value={sharedSchedule} /></div>}
     </Panel>
     <div className="grid gap-2" role="radiogroup" aria-label="Schedule choice">
-      <OptionCard selected={choice === shared} onSelect={() => setChoice(shared)} title={school.approved ? 'Use the approved school schedule' : 'Use the community schedule'}
+      <OptionCard icon={school.approved ? 'check' : 'users'} selected={choice === shared} onSelect={() => setChoice(shared)} title={school.approved ? 'Use the approved school schedule' : 'Use the community schedule'}
         description={school.approved ? 'Support has checked this schedule. Corrections from support reach you automatically.' : 'Entered by students and not yet checked by support. Compare it with your school’s published schedule. Corrections still reach you automatically.'} />
-      <OptionCard selected={choice === 'personal'} onSelect={() => setChoice('personal')} title="Build my own private schedule" description="Starts as a copy of the school schedule. Only you see it, and school corrections will not change it." />
+      <OptionCard icon="edit" selected={choice === 'personal'} onSelect={() => setChoice('personal')} title="Build my own private schedule" description="Starts as a copy of the school schedule. Only you see it, and school corrections will not change it." />
     </div>
     {choice === 'personal' && <div className="grid gap-3"><ScheduleEditor value={custom} onChange={setCustom} initialSection="days" /></div>}
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}

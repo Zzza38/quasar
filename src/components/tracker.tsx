@@ -8,7 +8,7 @@ import { todayIn } from '@/lib/format';
 import { VIEWS, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
 import { Onboarding } from './onboarding';
-import { Spinner } from './icon';
+import { Icon, Spinner } from './icon';
 import { CenteredNotice, Shell } from './shell';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
@@ -104,9 +104,10 @@ export function Tracker() {
   };
 
   return <Shell session={session} context={context} view={route.view} taskCount={openTasks} gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
-    {!personal.grade && state.personalValid && <div className="mb-4 rounded-xl border border-primary/40 bg-card p-4">
-      <p className="mb-3 text-sm">Choose your grade to see the right school schedule and lunch times.</p>
-      <GradePicker personal={personal} save={state.savePersonal} />
+    {!personal.grade && state.personalValid && <div className="mb-4 flex flex-wrap items-center gap-4 rounded-2xl bg-card p-4 shadow-card ring-2 ring-primary/40">
+      <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
+      <p className="min-w-0 flex-1 basis-[220px] text-sm font-medium">Choose your grade to see the right school schedule and lunch times.</p>
+      <div className="min-w-[220px]"><GradePicker personal={personal} save={state.savePersonal} /></div>
     </div>}
     <div className="grid gap-4 mb-4 empty:hidden" id="conflicts">
       {!parsedPersonal.success && <Callout tone="danger" icon="alert" role="alert" title="Your saved personal schedule needs review" actions={<Button size="sm" onClick={() => void session.synchronize()} disabled={!session.online}>Retry sync</Button>}>It could not be read on this device. Retry sync before making more changes so nothing is overwritten.</Callout>}

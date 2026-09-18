@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
+import { Icon } from './icon';
 import { ScheduleEditor, SlotsEditor, describeIssues } from './schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, Panel, Segmented, Spacer, Toggle } from './primitives';
 import { Label } from './ui/label';
@@ -68,9 +69,9 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
       </Field>
     </div>}
     <Panel className="grid gap-2">
-      <div className="flex items-center justify-between"><strong className="text-sm">Preview</strong>{preview?.closed ? <Chip>No school</Chip> : preview ? <Chip tone="accent">{preview.cycleDayLabel}</Chip> : null}</div>
+      <div className="flex items-center justify-between"><strong className="text-sm font-bold">Preview</strong>{preview?.closed ? <Chip>No school</Chip> : preview ? <Chip tone="accent">{preview.cycleDayLabel}</Chip> : null}</div>
       {preview && !preview.closed && preview.periods.length === 0 && <Hint>No periods.</Hint>}
-      {preview && preview.periods.length > 0 && <ul className="grid gap-1 text-sm">{preview.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.class?.name ?? period.label}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}</ul>}
+      {preview && preview.periods.length > 0 && <ul className="grid gap-1 text-sm">{preview.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3 rounded-lg bg-card px-3 py-1.5 ring-1 ring-foreground/[0.05]"><span className="font-medium">{period.class?.name ?? period.label}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}</ul>}
       {preview && preview.issues.length > 0 && <Hint tone="danger">{preview.issues.length} period(s) would fall outside this day with the current shift.</Hint>}
     </Panel>
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
@@ -143,13 +144,15 @@ export function AdjustmentsList({ school, personal, save, onEditDate, onEditCycl
     {personal.cycleDayOverrides.map((entry) => {
       const day = schedule.cycleDays.find((item) => item.id === entry.cycleDayId);
       return <Panel key={entry.cycleDayId} className="flex items-center gap-3 px-3 py-2.5">
-        <div className="min-w-0 flex-1"><strong className="text-sm">{day?.label ?? entry.cycleDayId}</strong><Hint>{day ? `Your own ${entry.slots.length} periods every ${day.label}` : 'This rotation day no longer exists'}</Hint></div>
+        <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="layers" size={16} /></span>
+        <div className="min-w-0 flex-1"><strong className="text-sm font-bold">{day?.label ?? entry.cycleDayId}</strong><Hint>{day ? `Your own ${entry.slots.length} periods every ${day.label}` : 'This rotation day no longer exists'}</Hint></div>
         <Button size="sm" variant="ghost" onClick={() => onEditCycleDay(entry.cycleDayId)}>Edit</Button>
         <Button size="sm" variant="ghost" icon="x" aria-label={`Remove adjustment for ${day?.label ?? entry.cycleDayId}`} onClick={() => void run({ ...personal, cycleDayOverrides: personal.cycleDayOverrides.filter((item) => item.cycleDayId !== entry.cycleDayId) })} />
       </Panel>;
     })}
     {[...personal.dateOverrides].sort((left, right) => left.date.localeCompare(right.date)).map((entry) => <Panel key={entry.date} className="flex items-center gap-3 px-3 py-2.5">
-      <div className="min-w-0 flex-1"><strong className="text-sm">{formatDate(entry.date, { weekday: 'short', year: true })}</strong><Hint>{[entry.closed === true && 'No school for me', entry.closed === false && 'Open for me', entry.slots && `${entry.slots.length} custom periods`, entry.shiftMinutes && `times shifted ${entry.shiftMinutes > 0 ? '+' : ''}${entry.shiftMinutes} min`].filter(Boolean).join(' · ') || 'Adjusted'}</Hint></div>
+      <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="calendar" size={16} /></span>
+      <div className="min-w-0 flex-1"><strong className="text-sm font-bold">{formatDate(entry.date, { weekday: 'short', year: true })}</strong><Hint>{[entry.closed === true && 'No school for me', entry.closed === false && 'Open for me', entry.slots && `${entry.slots.length} custom periods`, entry.shiftMinutes && `times shifted ${entry.shiftMinutes > 0 ? '+' : ''}${entry.shiftMinutes} min`].filter(Boolean).join(' · ') || 'Adjusted'}</Hint></div>
       <Button size="sm" variant="ghost" onClick={() => onEditDate(entry.date)}>Edit</Button>
       <Button size="sm" variant="ghost" icon="x" aria-label={`Remove adjustment for ${entry.date}`} onClick={() => void run({ ...personal, dateOverrides: personal.dateOverrides.filter((item) => item.date !== entry.date) })} />
     </Panel>)}

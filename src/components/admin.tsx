@@ -10,7 +10,7 @@ import { formatDate, pluralize } from '@/lib/format';
 import { Icon, Spinner } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
 import { Brand, CenteredNotice } from './shell';
-import { Button, Callout, Chip, EmptyState, Hint, Input, Modal, Panel, Section, Spacer, Toggle } from './primitives';
+import { Button, Callout, Chip, EmptyState, Hint, Input, Modal, PageHeader, Panel, Section, Spacer, StatTile, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
@@ -50,34 +50,43 @@ export function Admin() {
   }
 
   const visible = filter ? schools.filter((entry) => `${entry.name} ${entry.location}`.toLowerCase().includes(filter.toLowerCase())) : schools;
-  return <div className="mx-auto min-h-dvh w-full max-w-[1120px] px-4 pb-10 pt-4 lg:px-8">
-    <header className="mb-5 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-3"><Brand /><Chip tone="accent" icon="inbox">Support</Chip></div>
-      <div className="flex items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} onClick={() => void refresh()}>Refresh</Button><ShadButton asChild variant="outline" size="sm"><a href="/">My schedule</a></ShadButton></div>
+  const approved = schools.filter((entry) => entry.approved).length;
+  return <div className="app-canvas min-h-dvh">
+    <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
+      <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
+        <div className="flex items-center gap-3"><Brand /><Chip tone="accent" icon="inbox">Support</Chip></div>
+        <div className="flex items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} onClick={() => void refresh()}>Refresh</Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
+      </div>
     </header>
-    <main className="grid gap-4">
+    <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
+      <PageHeader title="Support" eyebrow="Owner tools" description="Review shared schedules, publish corrections and manage class directories." />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <StatTile icon="inbox" tone={requests.length ? 'now' : 'success'} value={requests.length} label="open requests" />
+        <StatTile icon="school" tone="accent" value={schools.length} label="schools" />
+        <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
+      </div>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
-      <Section id="inbox-title" title="Correction requests" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
+      <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
         {requests.length === 0 && <EmptyState icon="inbox" title="Inbox is empty" />}
-        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-lg bg-muted p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3"><strong className="text-sm">{request.schoolName}</strong><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><strong className="text-sm font-bold">{request.schoolName}</strong><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.message}</p>
           <div className="flex flex-wrap gap-2"><Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button><Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
         </li>)}</ul>}
       </Section>
 
-      <Section id="schools-title" title="Schools" description={`${pluralize(schools.length, 'school')} · ${schools.filter((entry) => entry.approved).length} approved`} action={<Input small className="max-w-[220px]" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} />}>
+      <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}
-        {visible.length > 0 && <Table>
-          <TableHeader><TableRow><TableHead>School</TableHead><TableHead>Members</TableHead><TableHead>Status</TableHead><TableHead>Rev.</TableHead><TableHead><span className="sr-only">Actions</span></TableHead></TableRow></TableHeader>
+        {visible.length > 0 && <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/[0.06]"><Table>
+          <TableHeader className="bg-muted/70"><TableRow><TableHead>School</TableHead><TableHead>Members</TableHead><TableHead>Status</TableHead><TableHead>Rev.</TableHead><TableHead><span className="sr-only">Actions</span></TableHead></TableRow></TableHeader>
           <TableBody>{visible.map((entry) => <TableRow key={entry.id}>
-            <TableCell className="whitespace-normal"><strong className="text-sm">{entry.name}</strong><Hint>{entry.location}</Hint></TableCell>
+            <TableCell className="whitespace-normal"><strong className="text-sm font-bold">{entry.name}</strong><Hint>{entry.location}</Hint></TableCell>
             <TableCell className="tabular-nums">{entry.memberCount}</TableCell>
             <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}</div></TableCell>
             <TableCell className="tabular-nums">{entry.version}</TableCell>
-            <TableCell className="text-right"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></TableCell>
+            <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
           </TableRow>)}</TableBody>
-        </Table>}
+        </Table></div>}
       </Section>
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
@@ -95,18 +104,17 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
   const issues = describeIssues(draft);
   const dirty = JSON.stringify(draft) !== JSON.stringify(school.schedule) || approved !== school.approved || supportLocked !== school.supportLocked;
   return <Modal open onClose={onClose} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm font-semibold text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
       setPending(true); setError(''); setSaved(false);
       try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked }); setSaved(true); await onSaved(); }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
     <Panel className="grid gap-3">
       <ScheduleSummary schedule={school.schedule} />
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Toggle label="Approved default schedule" checked={approved} onChange={setApproved} />
-        <Toggle label="Lock shared edits to support" checked={supportLocked} onChange={setSupportLocked} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Toggle label="Approved default schedule" checked={approved} onChange={setApproved} description="New members get this schedule by default." />
+        <Toggle label="Lock shared edits to support" checked={supportLocked} onChange={setSupportLocked} description={school.memberLocked ? 'The 10-member editing lock is also in effect.' : 'Members can no longer publish revisions.'} />
       </div>
-      <Hint>{approved ? 'New members get this schedule by default.' : 'Members must explicitly choose this unreviewed schedule or build their own.'} {school.memberLocked ? 'The 10-member editing lock is also in effect.' : ''}</Hint>
     </Panel>
     <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}

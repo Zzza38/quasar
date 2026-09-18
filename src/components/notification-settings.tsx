@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
+import { Icon } from './icon';
 import { Button, ErrorText, Hint } from './primitives';
 import { Label } from './ui/label';
 
@@ -80,8 +81,8 @@ export function NotificationSettings({ accountId, online }: { accountId: string;
     : !config.enabled ? 'Browser reminders need to be configured on the server.'
     : enabled ? 'Reminders are enabled on this browser. Choose a reminder when editing a task. Delivery depends on your browser and connection.'
     : 'Enable reminders on this browser, then choose a reminder when editing a task. Task details stay hidden in notifications.';
-  return <div className="grid gap-2">
-    <Label className="text-muted-foreground">Task reminders</Label>
+  return <div className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+    <Label className="flex items-center gap-2 text-[13px] font-semibold text-foreground/80"><span className={`grid size-7 place-items-center rounded-lg ${enabled ? 'bg-success-soft text-success' : 'bg-secondary text-secondary-foreground'}`}><Icon name="bell" size={14} /></span>Task reminders{enabled && <span className="text-xs font-bold text-success">· On</span>}</Label>
     <Hint>{description}</Hint>
     <ErrorText>{error}</ErrorText>
     {supported && <div><Button size="sm" icon="bell" busy={busy} disabled={!online || (!enabled && (!config?.enabled || permission === 'denied'))} onClick={enabled ? disable : enable}>{enabled ? 'Disable on this browser' : 'Enable browser reminders'}</Button></div>}

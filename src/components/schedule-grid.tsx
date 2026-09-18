@@ -78,8 +78,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
   return <div className="timetable-workspace">
-    <aside className="timetable-palette grid gap-2 rounded-lg bg-muted p-3">
-      <strong className="text-sm">Classes & periods</strong>
+    <aside className="timetable-palette grid gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+      <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
       <div className="timetable-palette-items" aria-label="Available periods">
         {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
           const cls = clsFor(period.id);
@@ -87,8 +87,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           const color = classColor(cls?.id ?? period.id, period.kind, cls?.color);
           const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
           const active = selected?.periodId === period.id && !selected.dayId;
-          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab text-foreground shadow-none', active && 'ring-2 ring-ring/60')} draggable={!disabled} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
-            style={{ borderColor: color.dot, background: color.soft }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">Unscheduled</span>}</span></ShadButton>;
+          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', active && 'ring-2 ring-ring/60')} draggable={!disabled} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
+            style={{ borderColor: 'transparent', borderLeftColor: color.dot, background: `color-mix(in srgb, ${color.dot} 14%, var(--card))` }} onDragStart={event => beginDrag(event, { periodId: period.id })} onDragEnd={() => setHover(null)} onClick={() => { setSelected({ periodId: period.id }); setMessage(`${label} selected. Tap a time in a day column.`); }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">Unscheduled</span>}</span></ShadButton>;
         })}
         {selected && <Button size="sm" variant="ghost" onClick={() => { setSelected(null); setHover(null); }}>Cancel selection</Button>}
       </div>
@@ -96,7 +96,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     <div className="timetable-content">
       <p role="status" className={message ? 'text-xs text-muted-foreground' : 'sr-only'}>{message}</p>
       {weeks.map((days, weekIndex) => <section key={days[0].id} className="grid gap-2 min-w-0" aria-label={`Rotation week ${weekIndex + 1}`}>
-        <h3 className="text-sm font-semibold">Week {weekIndex + 1}</h3>
+        <h3 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Week {weekIndex + 1}</h3>
         <div className="time-canvas-scroll">
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
             <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>

@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
 import { addDays, browserTimeZone, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
+import { Icon } from './icon';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Panel, Segmented, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
@@ -88,12 +89,12 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
   const set = (patch: Partial<Schedule>) => onChange({ ...value, ...patch });
   return <Tabs value={section} onValueChange={(next) => setSection(next as Section)} className="gap-4">
     <div className="-mx-1 overflow-x-auto px-1">
-      <TabsList aria-label="Schedule editor section">
-        <TabsTrigger value="basics" className="px-3">Basics</TabsTrigger>
-        <TabsTrigger value="periods" className="px-3">Periods · {value.periods.length}</TabsTrigger>
-        <TabsTrigger value="days" className="px-3">Days · {value.cycleDays.length}</TabsTrigger>
-        <TabsTrigger value="exceptions" className="px-3">Exceptions · {value.exceptions.length}</TabsTrigger>
-        <TabsTrigger value="preview" className="px-3">Preview</TabsTrigger>
+      <TabsList aria-label="Schedule editor section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
+        <TabsTrigger value="basics" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Basics</TabsTrigger>
+        <TabsTrigger value="periods" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Periods · {value.periods.length}</TabsTrigger>
+        <TabsTrigger value="days" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Days · {value.cycleDays.length}</TabsTrigger>
+        <TabsTrigger value="exceptions" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Exceptions · {value.exceptions.length}</TabsTrigger>
+        <TabsTrigger value="preview" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Preview</TabsTrigger>
       </TabsList>
     </div>
     {issues.length > 0 && <Callout tone="warning" icon="alert" title={`${issues.length === 1 ? 'One thing' : `${issues.length} things`} to fix before saving`} role="alert">
@@ -164,7 +165,8 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
   };
   return <div className="grid gap-4">
     <div className="grid gap-2">
-      {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+      {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-xl bg-muted/60 p-2 ring-1 ring-inset ring-foreground/[0.04]">
+        <span aria-hidden="true" className="grid size-7 place-items-center rounded-lg bg-card text-[11px] font-extrabold text-muted-foreground shadow-card">{index + 1}</span>
         <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <Hint>Unscheduled</Hint>}</div>
         <Select small aria-label={`Period ${index + 1} type`} value={period.kind} disabled={disabled} className="w-[104px]" onChange={(event) => update(index, { kind: event.target.value as SchoolPeriod['kind'] })}>
           <option value="class">Class</option><option value="lunch">Lunch</option><option value="other">Other</option>
@@ -235,16 +237,17 @@ function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Pa
     <div className="grid gap-2">
       {sorted.map((exception) => {
         const expanded = editing === exception.date;
-        return <div key={exception.date} className="overflow-hidden rounded-xl border bg-card">
+        return <div key={exception.date} className="overflow-hidden rounded-2xl bg-muted/60 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex items-center gap-3 p-3">
+            <span aria-hidden="true" className={`grid size-9 shrink-0 place-items-center rounded-xl ${exception.kind === 'closure' ? 'bg-secondary text-secondary-foreground' : exception.kind === 'replacement' ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground'}`}><Icon name={exception.kind === 'closure' ? 'coffee' : exception.kind === 'replacement' ? 'clock' : 'refresh'} size={16} /></span>
             <div className="min-w-0 flex-1">
-              <strong className="text-sm">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
+              <strong className="text-sm font-bold">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
               <Hint>{summarizeException(exception, value)}</Hint>
             </div>
             <Button size="sm" variant="ghost" onClick={() => setEditing(expanded ? null : exception.date)} aria-expanded={expanded}>{expanded ? 'Done' : 'Edit'}</Button>
             <IconButton size="sm" label={`Remove exception on ${exception.date}`} icon="trash" disabled={disabled} onClick={() => replace(exception.date, null)} />
           </div>
-          {expanded && <div className="grid gap-3 border-t bg-muted/60 p-3">
+          {expanded && <div className="grid gap-3 border-t border-foreground/[0.05] bg-card p-3">
             <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(exception.date, next)} />
           </div>}
         </div>;
@@ -305,12 +308,12 @@ export function Preview({ value }: { value: Schedule }) {
     </div>
     <Panel className="grid gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong>{formatDate(date, { weekday: 'long', year: true })}</strong>
+        <strong className="font-bold">{formatDate(date, { weekday: 'long', year: true })}</strong>
         {selected.closed ? <Chip>No school</Chip> : <Chip tone="accent">{selected.cycleDayLabel}</Chip>}
       </div>
       {!selected.closed && selected.periods.length === 0 && <Hint>No periods on this day.</Hint>}
       {selected.periods.length > 0 && <ul className="grid gap-1 text-sm">
-        {selected.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3"><span>{period.label}{period.kind === 'lunch' ? ' · lunch' : ''}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}
+        {selected.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3 rounded-lg bg-card px-3 py-1.5 ring-1 ring-foreground/[0.05]"><span className="font-medium">{period.label}{period.kind === 'lunch' ? ' · lunch' : ''}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}
       </ul>}
       {selected.issues.length > 0 && <Hint tone="danger">{selected.issues.length} period(s) could not be placed on this date.</Hint>}
     </Panel>
@@ -323,7 +326,7 @@ export function ScheduleSummary({ schedule }: { schedule: Schedule }): ReactNode
   const classes = schedule.periods.filter((period) => period.kind === 'class').length;
   const lunches = schedule.periods.filter((period) => period.kind === 'lunch').length;
   return <div className="flex flex-wrap gap-1.5">
-    <Chip icon="layers">{schedule.cycleDays.length === 1 ? 'Same every day' : `${schedule.cycleDays.length}-day rotation`}</Chip>
+    <Chip tone="accent" icon="layers">{schedule.cycleDays.length === 1 ? 'Same every day' : `${schedule.cycleDays.length}-day rotation`}</Chip>
     <Chip icon="book">{classes} class periods</Chip>
     {lunches > 0 && <Chip icon="coffee">{lunches === 1 ? 'Lunch' : `${lunches} lunch waves`}</Chip>}
     {schedule.exceptions.length > 0 && <Chip icon="calendar">{schedule.exceptions.length} exceptions</Chip>}
