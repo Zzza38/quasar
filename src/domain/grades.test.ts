@@ -28,3 +28,16 @@ describe('grade schedules', () => {
     expect(scheduleSchema.safeParse({ ...exampleSchedule, gradeSchedules: { '9': { ...changed, periods: [] } } }).success).toBe(false);
   });
 });
+
+
+it('uses grade-nine lunch on Days 6–10 even when the old default has no lunch', () => {
+  const fallback = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'lunch') })) };
+  const school = applyScheduleToGrades(fallback, exampleSchedule, ['9']);
+  const dates = ['2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-21'];
+  dates.forEach((date, index) => {
+    const day = resolveDay(school, date, { ...emptyPersonalSchedule(), grade: '9' });
+    expect(day.cycleDayId).toBe(`day-${index + 6}`);
+    expect(day.periods.filter(period => period.kind === 'lunch')).toHaveLength(1);
+    expect(resolveDay(school, date).periods.some(period => period.kind === 'lunch')).toBe(false);
+  });
+});

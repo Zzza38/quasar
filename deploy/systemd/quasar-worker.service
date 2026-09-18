@@ -1,0 +1,19 @@
+[Unit]
+Description=Quasar calendar and reminder worker
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/NAS/Private/school-schedule-tracker
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/NAS/Private/school-schedule-tracker
+ExecStart=%h/.local/bin/node --import tsx scripts/worker.ts
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

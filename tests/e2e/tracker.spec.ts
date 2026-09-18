@@ -3,6 +3,7 @@ import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
+import { DirectoryService } from '../../src/server/directory';
 import { CalendarService } from '../../src/server/calendar';
 import { exampleSchedule } from '../../src/domain/example';
 
@@ -96,6 +97,7 @@ test('explicit community choice, class and task persistence, offline reload and 
   await expect(page.getByRole('heading', { name: 'Which schedule should Quasar follow?' })).toBeVisible();
   const join = page.getByRole('button', { name: `Join ${fixture.school.name}` });
   await expect(join).toBeDisabled();
+  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
   await page.getByRole('radio', { name: /Use the community schedule/ }).click();
   await join.click();
   await expect(page.getByRole('heading', { name: /Browser Student/ })).toBeVisible();
@@ -786,4 +788,69 @@ test('short adjacent blocks have readable compact labels and full details', asyn
   await first.focus();
   await expect(day.locator('.time-block-detail').filter({ hasText: 'Morning advisory and announcements' })).toBeVisible();
   await page.screenshot({ path: '/tmp/quasar-short-blocks.png' });
+});
+
+
+test('school directory selection, personal edits, shared edits and period placement', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let directoryId: string;
+  try {
+    const directory = new DirectoryService(new Service(db, 'browser-owner@example.com'));
+    directoryId = directory.save(fixture.id, { schoolId: fixture.school.id, details: { name: 'Directory Biology', teacher: 'Dr Example', room: '204', grades: ['9'] } }).id;
+  } finally { db.close(); }
+  await page.goto('/#classes');
+  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
+  await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Browse school classes' }).click();
+  await dialog(page).getByLabel('Search classes').fill('Dr Example');
+  await dialog(page).getByRole('checkbox', { name: 'Select Directory Biology' }).check();
+  await dialog(page).getByRole('button', { name: 'Add selected classes (1)' }).click();
+  await expect(page.getByRole('button', { name: 'Edit Directory Biology' })).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  await page.getByRole('button', { name: 'Place Directory Biology', exact: true }).dragTo(day, { targetPosition: { x: 35, y: 40 } });
+  await expect(day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Directory Biology', exact: true })).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Edit Directory Biology' }).click();
+  await dialog(page).getByLabel('Room (optional)').fill('My room');
+  await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Browse school classes' }).click();
+  await expect(dialog(page).getByRole('checkbox', { name: 'Select Directory Biology' })).toBeDisabled();
+  await expect(dialog(page).getByText('Dr Example · Room 204')).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Edit shared' }).click();
+  await dialog(page).getByLabel('Room', { exact: true }).fill('305');
+  await dialog(page).getByRole('button', { name: 'Save shared class' }).click();
+  await expect(dialog(page).getByText('Shared class saved.')).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Done', exact: true }).click();
+  await page.reload();
+  await expect(page.getByText('Room My room · Dr Example', { exact: true })).toBeVisible();
+  const check = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(check, 'browser-owner@example.com');
+    expect(new DirectoryService(service).list(fixture.id, fixture.school.id).classes[0].room).toBe('305');
+    expect((service.entity(fixture.id, 'personal')!.data.classes as {directoryId:string}[])[0].directoryId).toBe(directoryId!);
+  } finally { check.close(); }
+});
+
+test('existing students choose their grade and see lunch throughout the second rotation week', async ({ page, context }) => {
+  const defaultSchedule = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'lunch') })) };
+  const ninthGrade = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.map(slot => slot.periodId === 'lunch' ? { ...slot, start: '12:00', end: '12:40' } : slot).sort((a,b) => a.start.localeCompare(b.start)) })) };
+  const fixture = seed(undefined, true, { ...defaultSchedule, gradeSchedules: { '9': ninthGrade, '10': exampleSchedule } });
+  await authenticate(context, fixture.id);
+  await page.goto('/#classes');
+  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
+  await expect(saved(page)).toBeVisible();
+  for (let day = 6; day <= 10; day++) {
+    await expect(page.getByRole('group', { name: `Day ${day} time canvas`, exact: true }).getByRole('button', { name: `Day ${day}, 12:00–12:40 PM: Lunch`, exact: true })).toBeVisible();
+  }
+  await page.reload();
+  await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 12:00–12:40 PM: Lunch', exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await dialog(page).getByLabel('Your grade', { exact: true }).selectOption('10');
+  await expect(dialog(page).getByLabel('Your grade', { exact: true })).toHaveValue('10');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 10:15–10:45 AM: Lunch', exact: true })).toBeVisible();
 });

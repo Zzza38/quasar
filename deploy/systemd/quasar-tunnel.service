@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare Tunnel for Quasar
+After=network-online.target quasar.service
+Wants=network-online.target quasar.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cloudflared --no-autoupdate tunnel --config %h/.cloudflared/quasar.yml run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

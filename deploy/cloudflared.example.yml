@@ -1,0 +1,8 @@
+# Substitute the named tunnel UUID, credentials path, and public hostname.
+# Store the real config in ~/.cloudflared/quasar.yml, outside Git.
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /home/zion/.cloudflared/YOUR_TUNNEL_UUID.json
+ingress:
+  - hostname: quasar.example.com
+    service: http://127.0.0.1:3003
+  - service: http_status:404

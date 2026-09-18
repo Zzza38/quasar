@@ -13,6 +13,7 @@ import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, Panel, Se
 import { Card } from '../ui/card';
 import { ClassColorPicker } from '../class-color-picker';
 import { ColorPicker } from '../ui/color-picker';
+import { SchoolDirectory } from '../school-directory';
 
 const classFields: FieldSpec<Record<string, unknown>>[] = [
   { key: 'name', label: 'Name', render: (value) => (value.name as string) || null },
@@ -29,6 +30,7 @@ export function ClassesView({ state }: { state: AppState }) {
   const [adjustDate, setAdjustDate] = useState<string | null>(null);
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
   const [privateOpen, setPrivateOpen] = useState(false);
+  const [directoryOpen, setDirectoryOpen] = useState(state.params.get('directory') === 'open');
   const [pickDate, setPickDate] = useState(() => todayIn(schedule.timeZone, state.now));
 
   /** Which rotation days each period appears on. */
@@ -46,8 +48,13 @@ export function ClassesView({ state }: { state: AppState }) {
   return <div className="grid gap-4 animate-in fade-in-0 duration-200">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <h1>Classes</h1>
-      <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button>
+      <div className="flex flex-wrap gap-2"><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></div>
     </header>
+    {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
+      if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
+      const added = classes.filter(cls => !personal.classes.some(existing => existing.id === cls.id || existing.directoryId === cls.directoryId));
+      await state.savePersonal({ ...personal, classes: [...personal.classes, ...added] });
+    }} />}
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {!state.personalValid && <Callout tone="warning" icon="alert">Your saved personal schedule could not be read. Retry sync before editing.</Callout>}
 
@@ -125,7 +132,7 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
   if (open && initial === null && !isNew) return <Modal open onClose={onClose} title="Class not found"><p className="text-sm text-muted-foreground">This class was removed on another device.</p></Modal>;
   const submit = () => run(async () => {
     const id = draft.id || slugId(draft.name, usedIds, 'class');
-    const value = classSchema.parse({ id, name: draft.name.trim(), ...(draft.color ? { color: draft.color } : {}), ...(draft.room?.trim() ? { room: draft.room.trim() } : {}), ...(draft.teacher?.trim() ? { teacher: draft.teacher.trim() } : {}) });
+    const value = classSchema.parse({ id, ...(draft.directoryId ? { directoryId: draft.directoryId } : {}), name: draft.name.trim(), ...(draft.color ? { color: draft.color } : {}), ...(draft.room?.trim() ? { room: draft.room.trim() } : {}), ...(draft.teacher?.trim() ? { teacher: draft.teacher.trim() } : {}) });
     await onSave(value);
   });
   return <Modal open={open} onClose={onClose} title={isNew ? 'Add a class' : 'Edit class'}

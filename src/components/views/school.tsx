@@ -71,6 +71,9 @@ export function SchoolView({ state }: { state: AppState }) {
       {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
     </Section>
 
+    <Section id="school-directory-title" title="School class directory" description="Find classes shared by schoolmates and add personal copies to your timetable.">
+      <div><Button icon="search" onClick={() => state.navigate('classes', { directory: 'open' })}>Browse school classes</Button></div>
+    </Section>
     <CorrectionRequest online={online} />
 
     <SharedEditorSheet open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />

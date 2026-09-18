@@ -17,6 +17,7 @@ import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
+import { GradePicker } from './grade-picker';
 
 /* ---------- Hash routing keeps the public offline shell at "/" ---------- */
 
@@ -101,7 +102,11 @@ export function Tracker() {
     params: route.params,
   };
 
-  return <Shell session={session} context={context} view={route.view} taskCount={openTasks}>
+  return <Shell session={session} context={context} view={route.view} taskCount={openTasks} gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
+    {!personal.grade && state.personalValid && <div className="mb-4 rounded-xl border border-primary/40 bg-card p-4">
+      <p className="mb-3 text-sm">Choose your grade to see the right school schedule and lunch times.</p>
+      <GradePicker personal={personal} save={state.savePersonal} />
+    </div>}
     <div className="grid gap-4 mb-4 empty:hidden" id="conflicts">
       {!parsedPersonal.success && <Callout tone="danger" icon="alert" role="alert" title="Your saved personal schedule needs review" actions={<Button size="sm" onClick={() => void session.synchronize()} disabled={!session.online}>Retry sync</Button>}>It could not be read on this device. Retry sync before making more changes so nothing is overwritten.</Callout>}
       <DeviceConflicts snapshot={snapshot} schedule={schedule} classes={personal.classes} resolve={session.resolve} />

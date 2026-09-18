@@ -112,6 +112,7 @@ export const classSchema = z.strictObject({
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Choose a valid hex color").optional(),
   room: z.string().trim().max(120).optional(),
   teacher: z.string().trim().max(120).optional(),
+  directoryId: z.string().uuid().optional(),
 });
 
 export const personalScheduleSchema = z.strictObject({

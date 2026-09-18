@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, errorMessage, type School } from '@/client/api';
-import { scheduleSchema, type Schedule } from '@/domain/schedule';
+import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { browserTimeZone, pluralize, todayIn } from '@/lib/format';
 import { buildTemplate, TEMPLATES, type TemplateKind } from '@/lib/templates';
 import { cn } from '@/lib/utils';
@@ -10,7 +10,7 @@ import type { WorkspaceContext } from './app-state';
 import { Icon } from './icon';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from './schedule-editor';
 import { Brand } from './shell';
-import { Button, Callout, Chip, Eyebrow, Field, Hint, Input, Panel, Spacer } from './primitives';
+import { Button, Callout, Chip, Eyebrow, Field, Hint, Input, Panel, Select, Spacer } from './primitives';
 import { Card, CardContent } from './ui/card';
 import { Label } from './ui/label';
 
@@ -173,6 +173,8 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
 type Choice = 'approved' | 'community' | 'personal';
 
 function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBack: () => void; onJoined: () => Promise<void>; footer: ReactNode }) {
+  const [grade, setGrade] = useState<Grade | ''>('');
+  const sharedSchedule = scheduleForGrade(school.schedule, grade || undefined);
   const shared: Choice = school.approved ? 'approved' : 'community';
   const [choice, setChoice] = useState<Choice | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -181,22 +183,29 @@ function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBa
   const [message, setMessage] = useState('');
   const customIssues = useMemo(() => choice === 'personal' ? describeIssues(custom) : [], [choice, custom]);
   const join = async () => {
-    if (!choice) return;
+    if (!choice || !grade) return;
     setPending(true); setMessage('');
     try {
-      await api.school.join.mutate({ schoolId: school.id, choice, ...(choice === 'personal' ? { personalSchedule: scheduleSchema.parse(custom) } : {}) });
+      await api.school.join.mutate({ schoolId: school.id, choice, grade, ...(choice === 'personal' ? { personalSchedule: scheduleSchema.parse(custom) } : {}) });
       await onJoined();
     } catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
   };
   return <Frame step={3} total={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" footer={footer}>
+    <Field label="Your grade" htmlFor="onboarding-grade" hint="This chooses your bell schedule and lunch times. You can change it later in Account or School.">
+      <Select id="onboarding-grade" required value={grade} disabled={pending} onChange={(event) => {
+        const next = event.target.value as Grade | '';
+        setGrade(next); setChoice(null);
+        setCustom(structuredClone(scheduleForGrade(school.schedule, next || undefined)));
+      }}><option value="" disabled>Choose your grade…</option>{GRADES.map(entry => <option key={entry} value={entry}>{gradeLabel(entry)}</option>)}</Select>
+    </Field>
     <Panel className="grid gap-2">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><strong>{school.name}</strong><Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint></div>
         {school.approved ? <Chip tone="success" icon="check">Approved by support</Chip> : <Chip tone="warning" icon="users">Community schedule · not reviewed</Chip>}
       </div>
-      <ScheduleSummary schedule={school.schedule} />
+      <ScheduleSummary schedule={sharedSchedule} />
       <button type="button" className="w-fit text-left text-sm font-medium text-primary hover:underline" aria-expanded={showPreview} onClick={() => setShowPreview(!showPreview)}>{showPreview ? 'Hide preview' : 'Preview this schedule on real dates'}</button>
-      {showPreview && <div className="rounded-xl border bg-card p-4"><Preview value={school.schedule} /></div>}
+      {showPreview && <div className="rounded-xl border bg-card p-4"><Preview value={sharedSchedule} /></div>}
     </Panel>
     <div className="grid gap-2" role="radiogroup" aria-label="Schedule choice">
       <OptionCard selected={choice === shared} onSelect={() => setChoice(shared)} title={school.approved ? 'Use the approved school schedule' : 'Use the community schedule'}
@@ -208,7 +217,7 @@ function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBa
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="ghost" icon="arrowLeft" onClick={onBack} disabled={pending}>Back</Button>
       <Spacer />
-      <Button variant="primary" size="lg" busy={pending} disabled={!choice || customIssues.length > 0} onClick={() => void join()}>Join {school.name}</Button>
+      <Button variant="primary" size="lg" busy={pending} disabled={!grade || !choice || customIssues.length > 0} onClick={() => void join()}>Join {school.name}</Button>
     </div>
   </Frame>;
 }

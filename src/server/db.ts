@@ -98,6 +98,15 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     const columns = db.pragma('table_info(calendar_subscriptions)') as {name: string}[];
     if (!columns.some(column => column.name === 'cached_feed')) db.exec('ALTER TABLE calendar_subscriptions ADD COLUMN cached_feed TEXT');
   })();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS school_classes (
+      id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id),
+      data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+      deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS school_classes_school ON school_classes(school_id, deleted);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, datetime('now'));
+  `);
   return db;
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };

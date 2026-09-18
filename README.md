@@ -78,3 +78,12 @@ Phase 2 verification completed on 2026-09-11: 138 unit/integration tests, all te
 - `src/components/`: replaceable React presentation.
 
 Compatibility was checked against the [Next.js installation guide](https://nextjs.org/docs/app/getting-started/installation), [tRPC fetch adapter](https://trpc.io/docs/server/adapters/fetch), and installed package declarations. Exact dependency versions are pinned in `package-lock.json`.
+
+
+### School class directory and grades
+
+Choose a grade when joining a school; existing students can choose it from the setup reminder, Account, or School. Grade changes use the selected grade's bell schedule and lunch times. Personal timetable copies and explicit adjustments stay intact.
+
+Classes → Browse school classes opens the searchable, grade-filtered directory. Select multiple classes, add them, then drag them onto school periods (or select a class and tap a period). Personal edits affect only your copy. Shared directory editing follows the school's permanent ten-member lock and support lock; the owner can manage directories in Support → Schools → Classes. Locked entries have a correction-request action. Directory changes and removals preserve existing personal copies.
+
+The additive SQLite migration creates `school_classes`; existing schedules and tasks are retained. Only with the owner's explicit permission, publish their saved class names, rooms, and teachers with `node --env-file=.env.local --import tsx scripts/seed-directory.ts`. Back up first. This command uses the configured owner, is repeatable, and preserves personal class IDs, colors, assignments, and sync history. It does not publish other students' personal classes.

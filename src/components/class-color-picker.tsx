@@ -81,7 +81,7 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
       onClick={() => changeOpen(!open)} onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !disabled) changeOpen(true); }} />
     <div ref={surface} id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
       data-slot="class-color-expansion"
-      className="absolute inset-x-0 overflow-hidden rounded-t-xl border-t-4 bg-card text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[top,height] duration-200 ease-out"
+      className="absolute inset-x-0 overflow-hidden rounded-xl border-t-4 bg-card text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[top,height] duration-200 ease-out"
       onTransitionEnd={(event) => {
         if (event.target !== event.currentTarget || event.propertyName !== 'height') return;
         if (open) setReady(true);

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { signIn } from 'next-auth/react';
+import { GoogleLogo } from './google-logo';
+import { SchoolDirectory } from './school-directory';
 import { api, errorMessage, type RouterOutput, type School } from '@/client/api';
 import { scheduleSchema, type Schedule } from '@/domain/schedule';
 import { formatDate, pluralize } from '@/lib/format';
@@ -22,6 +24,7 @@ export function Admin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [directorySchool, setDirectorySchool] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
     setLoading(true); setError('');
@@ -39,7 +42,7 @@ export function Admin() {
   if (loading && !allowed) return <CenteredNotice title="Loading support tools…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
   if (!allowed) {
     return <CenteredNotice title={signedIn ? 'Owner access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
-      {!signedIn && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}>Continue with Google</Button>}
+      {!signedIn && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}><GoogleLogo />Continue with Google</Button>}
       <div className="flex gap-2"><Button size="sm" onClick={() => void refresh()}>Retry</Button><Button size="sm" variant="ghost" onClick={() => window.location.assign('/')}>Back to my schedule</Button></div>
     </div>}>
       {error || (signedIn ? 'This page is available to the project owner.' : 'Sign in with the owner account to review school schedules.')}
@@ -72,11 +75,12 @@ export function Admin() {
             <TableCell className="tabular-nums">{entry.memberCount}</TableCell>
             <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}</div></TableCell>
             <TableCell className="tabular-nums">{entry.version}</TableCell>
-            <TableCell className="text-right"><Button size="sm" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></TableCell>
+            <TableCell className="text-right"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></TableCell>
           </TableRow>)}</TableBody>
         </Table>}
       </Section>
     </main>
+    {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
     {school && <ReviewSheet key={school.id} school={school} onClose={() => setSelected(null)} onSaved={refresh} />}
   </div>;
 }

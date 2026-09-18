@@ -1,6 +1,6 @@
 # Deployment and pilot operations
 
-The existing private installation is available at https://home-server.tail210f05.ts.net:3003/. The general deployment instructions below also support a separate Docker installation. Real Google sign-in and device push delivery still require interactive pilot verification.
+The production installation is available at https://quasar.ziona.dev/ through Cloudflare Tunnel. Quasar's former Tailscale route has been removed. See [Cloudflare Tunnel deployment](CLOUDFLARE.md) for services, recovery instructions, and remaining Google authentication checks. The general deployment instructions below also support a separate Docker installation. Google sign-in with a second account has been verified by the owner. Actual device push delivery still requires interactive pilot verification.
 
 ## Configure and deploy
 
@@ -88,7 +88,7 @@ Run `npm run worker` under a service manager alongside Next.js. It loads `.env.l
 
 Set the VAPID variables in `.env.local` (see `.env.example`). Keep the private key backed up and outside Git. Enabling server support does not request browser permission: each user must open Account and choose Enable browser reminders. Verify an actual reminder on every supported device before relying on it.
 
-For new installations, name the user services `quasar.service` and `quasar-worker.service`. The existing host still uses the legacy `whatsnext.service` app unit until it is renamed during deployment. Inspect with `systemctl --user status`, and restart both after a verified build. Transient services created with `systemd-run` must be recreated after reboot; install persistent units before an unattended pilot. The private Tailscale route remains on port 3003; the other existing routes are unrelated.
+The existing host now uses persistent user services `quasar.service` and `quasar-worker.service`, with unit files in `deploy/systemd/`. Inspect with `systemctl --user status`, and restart both after a verified build. Cloudflare Tunnel forwards `quasar.ziona.dev` to loopback port 3003. Quasar's Tailscale route has been removed; other services' routes remain unchanged.
 
 ## Upgrading an existing installation to Quasar
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { signIn } from 'next-auth/react';
+import { GoogleLogo } from './google-logo';
 import { PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
@@ -98,7 +99,7 @@ function useNavigationOpen(): [boolean, (open: boolean) => void] {
 
 /* ---------- Shell ---------- */
 
-export function Shell({ session, context, view, taskCount, children }: { session: WorkspaceSession; context: WorkspaceContext; view: View; taskCount: number; children: ReactNode }) {
+export function Shell({ session, context, view, taskCount, children, gradeSettings }: { session: WorkspaceSession; context: WorkspaceContext; view: View; taskCount: number; children: ReactNode; gradeSettings?: ReactNode }) {
   const [account, setAccount] = useState(false);
   const [navOpen, setNavOpen] = useNavigationOpen();
   const { sync, online, snapshot } = session;
@@ -203,6 +204,7 @@ export function Shell({ session, context, view, taskCount, children }: { session
             <div className="flex justify-between gap-3"><span className="text-muted-foreground">Sync</span><span className="text-right">{statusLabel(sync)}</span></div>
             <div className="flex justify-between gap-3"><span className="text-muted-foreground">Offline copy</span><span className="text-right">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</span></div>
           </Panel>
+          {gradeSettings}
           <ThemePicker />
           <Separator />
           <NotificationSettings accountId={context.user.id} online={online} />
@@ -253,7 +255,7 @@ export function Welcome({ message }: { message?: string }) {
           </div>
           {message && <Callout tone="warning" icon="info" role="status">{message}</Callout>}
           <Button variant="primary" size="lg" className="gap-3" onClick={() => void signIn('google', { callbackUrl: '/' })}>
-            <span className="grid size-6 place-items-center rounded-md bg-white text-sm font-extrabold text-[#1a73e8]" aria-hidden="true">G</span>Continue with Google
+            <GoogleLogo />Continue with Google
           </Button>
           <ul className="grid gap-2 text-sm text-muted-foreground">
             <li className="flex items-start gap-2"><Icon name="clock" size={16} className="mt-0.5 text-primary" />What’s happening now, what’s next and how long is left.</li>

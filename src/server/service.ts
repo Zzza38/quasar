@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Db } from './db';
-import { applyScheduleToGrades, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
 import { nextRecurringTask, taskSchema } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
 import { listSubscriptions, listImportConflicts } from './calendar';
@@ -17,7 +17,7 @@ export const namesSchema = z.object({ displayName: z.string().trim().min(1).max(
 export const createSchoolSchema = z.object({ name: z.string().trim().min(2).max(160), location: z.string().trim().min(2).max(200), schedule: scheduleSchema });
 export const schoolUpdateSchema = z.object({ schoolId: z.string().uuid(), expectedVersion: z.number().int().positive(), schedule: scheduleSchema, grades: gradesSchema.optional() });
 export const adminUpdateSchema = schoolUpdateSchema.extend({ approved: z.boolean(), supportLocked: z.boolean() });
-export const joinSchema = z.object({ schoolId: z.string().uuid(), choice: z.enum(['approved', 'community', 'personal']), personalSchedule: scheduleSchema.optional() });
+export const joinSchema = z.object({ schoolId: z.string().uuid(), choice: z.enum(['approved', 'community', 'personal']), personalSchedule: scheduleSchema.optional(), grade: gradeSchema.optional() });
 const entitySchema = z.object({ id: z.string().min(1).max(100), kind: z.enum(['task', 'personal']), version: z.number().int().positive(), data: z.record(z.string(), z.unknown()), deleted: z.boolean() });
 export const mutationSchema = z.object({ mutationId: z.string().uuid(), id: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), kind: z.enum(['task', 'personal']), base: entitySchema.nullable(), data: z.record(z.string(), z.unknown()).nullable() });
 function canonical(value: unknown): string {
@@ -87,7 +87,7 @@ export class Service {
       const existing = this.entity(id, 'personal');
       const data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
       // Joining is online and deliberately establishes the schedule source. Existing classes and overrides survive.
-      const updated = personalScheduleSchema.parse({ ...data, customSchedule: input.choice === 'personal' ? input.personalSchedule : null });
+      const updated = personalScheduleSchema.parse({ ...data, ...(input.grade ? { grade: input.grade } : {}), customSchedule: input.choice === 'personal' ? input.personalSchedule : null });
       this.writeEntity(id, { id: 'personal', kind: 'personal', version: (existing?.version || 0) + 1, data: updated, deleted: false });
       this.db.prepare('UPDATE users SET school_id=?,reviewed_version=? WHERE id=?').run(school.id, school.version, id);
       this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);

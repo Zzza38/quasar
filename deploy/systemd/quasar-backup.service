@@ -1,0 +1,10 @@
+[Unit]
+Description=Verified daily Quasar database backup
+RequiresMountsFor=/srv/NAS/Private/school-schedule-tracker
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/NAS/Private/school-schedule-tracker
+ExecStart=/bin/bash scripts/backup-daily.sh
+UMask=0077
+NoNewPrivileges=true
