@@ -9,12 +9,16 @@ import type { Service } from './service';
  * vision model (OpenAI, DeepSeek, OpenRouter, Ollama, ...) and returns rows the
  * student confirms before anything is saved. The provider is chosen by env only.
  */
-export type ScanConfig = { url: string; key: string; model: string };
+export const SCAN_REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export type ScanReasoning = typeof SCAN_REASONING[number];
+export type ScanConfig = { url: string; key: string; model: string; reasoning?: ScanReasoning };
 export function scanConfig(env: Record<string, string | undefined> = process.env): ScanConfig | null {
   const url = env.SCAN_API_URL?.trim().replace(/\/+$/, '');
   const model = env.SCAN_MODEL?.trim();
   if (!url || !model) return null;
-  return { url, key: env.SCAN_API_KEY?.trim() ?? '', model };
+  const reasoning = env.SCAN_MODEL_REASONING?.trim().toLowerCase();
+  if (reasoning && !SCAN_REASONING.includes(reasoning as ScanReasoning)) throw new Error(`SCAN_MODEL_REASONING must be one of ${SCAN_REASONING.join(', ')}.`);
+  return { url, key: env.SCAN_API_KEY?.trim() ?? '', model, ...(reasoning ? { reasoning: reasoning as ScanReasoning } : {}) };
 }
 
 export const SCAN_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -97,6 +101,7 @@ export class ScanService {
           model: config.model,
           temperature: 0,
           response_format: { type: 'json_object' },
+          ...(config.reasoning ? { reasoning_effort: config.reasoning } : {}),
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: [

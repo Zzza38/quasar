@@ -66,7 +66,7 @@ The current private installation has its worker and VAPID keys configured. Local
 
 ## Timetable photo scanning
 
-Students can add classes from a photo of a printed or on-screen timetable (Classes → Scan timetable). The browser downsizes the photo, the server sends it once to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory, and the student confirms or edits every row before anything is saved. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Each account may scan 10 photos per hour and 30 per day, recorded in `audit_log` as `schedule.scan`.
+Students can add classes from a photo of a printed or on-screen timetable (Classes → Scan timetable). The browser downsizes the photo, the server sends it once to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory, and the student confirms or edits every row before anything is saved. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY` and `SCAN_MODEL_REASONING` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Each account may scan 10 photos per hour and 30 per day, recorded in `audit_log` as `schedule.scan`.
 
 ## Project guide
 

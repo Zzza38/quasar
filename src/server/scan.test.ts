@@ -34,6 +34,8 @@ describe('timetable scanning', () => {
   it('is hidden until an API URL and model are configured', async () => {
     expect(scanConfig({})).toBeNull();
     expect(scanConfig({ SCAN_API_URL: 'https://api.example/v1/', SCAN_MODEL: 'm' })).toEqual({ url: 'https://api.example/v1', key: '', model: 'm' });
+    expect(scanConfig({ SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm', SCAN_MODEL_REASONING: ' Low ' })).toMatchObject({ reasoning: 'low' });
+    expect(() => scanConfig({ SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm', SCAN_MODEL_REASONING: 'turbo' })).toThrow('SCAN_MODEL_REASONING');
     const f = fixture();
     expect(new ScanService(f.service, null).enabled()).toBe(false);
     expect(f.scan.enabled()).toBe(true);
@@ -58,11 +60,19 @@ describe('timetable scanning', () => {
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe('test-vision');
     expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.reasoning_effort).toBeUndefined();
     const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
     expect(parts[1].image_url?.url).toBe(`data:image/jpeg;base64,${image.image}`);
     expect(parts[0].text).toContain(`id "${firstPeriod.id}"`);
     expect(parts[0].text).toContain(`id "${f.algebra.id}"`);
     expect(parts[0].text).not.toContain(f.senior.id);
+  });
+
+  it('passes the configured reasoning effort through', async () => {
+    const f = fixture();
+    const scan = new ScanService(f.service, { ...config, reasoning: 'low' }, f.fetcher);
+    await scan.scan(f.student, image);
+    expect(JSON.parse(f.fetcher.mock.calls[0][1].body as string).reasoning_effort).toBe('low');
   });
 
   it('keeps only verified periods and directory matches, filling details from the directory', async () => {
