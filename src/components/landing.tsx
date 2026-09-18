@@ -128,7 +128,13 @@ export function Welcome({ message }: { message?: string }) {
             {message && <Callout tone="warning" icon="info" role="status" className="mb-6 max-w-lg font-sans">{message}</Callout>}
             <div className="flex flex-wrap items-center gap-3">
               <button type="button" className={INK_BUTTON} onClick={signInWithGoogle}><GoogleLogo />Continue with Google</button>
-              <a className={OUTLINE_BUTTON} href="#why">See what it handles</a>
+              <a className={OUTLINE_BUTTON} href="#why" onClick={(event) => {
+                const target = document.getElementById('why');
+                if (!target) return;
+                event.preventDefault();
+                target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+                history.pushState(null, '', '#why');
+              }}>See what it handles</a>
               <small className="font-sans text-[13px] text-[var(--pencil)]">Two minutes to set up.</small>
             </div>
           </div>
@@ -136,7 +142,7 @@ export function Welcome({ message }: { message?: string }) {
         </section>
 
         {/* Sticky notes */}
-        <section id="why" className="scroll-mt-6 py-13">
+        <section id="why" className="scroll-mt-8 py-13">
           <h2 className="[font-family:inherit] mb-2 text-[clamp(28px,3.6vw,40px)] leading-[1.15] font-semibold tracking-[-0.015em]">
             Things my school did this year, <Highlight>and what Quasar did about it.</Highlight>
           </h2>
