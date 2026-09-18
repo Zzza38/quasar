@@ -74,18 +74,18 @@ export function ClassesView({ state }: { state: AppState }) {
         const days = new Set(periods.flatMap((period) => meets.get(period.id) ?? []));
         const color = classColor(cls.id, 'class', cls.color);
         // Same surface as <Card>, rendered as a list item so the colour bar sits on the item itself.
-        return <li key={cls.id} className="relative grid gap-3 rounded-2xl border-t-4 bg-card px-4 pt-3.5 pb-4 text-sm text-card-foreground shadow-card ring-1 ring-foreground/[0.06] transition-shadow hover:shadow-float has-[[data-color-picker-open=true]]:border-t-transparent! dark:ring-foreground/[0.09]" style={{ borderTopColor: color.dot }}>
+        return <li key={cls.id} className="relative grid grid-cols-[minmax(0,1fr)] content-start gap-3 rounded-2xl border-t-4 bg-card px-4 pt-3.5 pb-4 text-sm text-card-foreground shadow-card ring-1 ring-foreground/[0.06] transition-shadow hover:shadow-float has-[[data-color-picker-open=true]]:border-t-transparent! dark:ring-foreground/[0.09]" style={{ borderTopColor: color.dot }}>
           <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })} />
           <div className="flex items-start gap-3">
             <span aria-hidden="true" className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25)]" style={{ background: `linear-gradient(135deg, ${color.dot}, color-mix(in srgb, ${color.dot} 75%, #0b1020))` }}>{cls.name.trim().slice(0, 1).toUpperCase()}</span>
             <div className="grid min-w-0 flex-1 gap-1">
-              <strong className="truncate text-[16px] font-bold tracking-tight">{cls.name}</strong>
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                {(cls.room || cls.teacher) && <Icon name="pin" size={12} strokeWidth={2.2} />}
-                {cls.room || cls.teacher ? <span className="truncate">{[cls.room && `Room ${cls.room}`, cls.teacher].filter(Boolean).join(' · ')}</span> : <span className="italic">No room or teacher yet</span>}
+              <strong className="line-clamp-3 text-[16px] leading-snug font-bold tracking-tight break-words" title={cls.name}>{cls.name}</strong>
+              <span className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+                {(cls.room || cls.teacher) && <Icon name="pin" size={12} strokeWidth={2.2} className="mt-0.5 shrink-0" />}
+                {cls.room || cls.teacher ? <span className="min-w-0 break-words">{[cls.room && `Room ${cls.room}`, cls.teacher].filter(Boolean).join(' · ')}</span> : <span className="italic">No room or teacher yet</span>}
               </span>
             </div>
-            <Button size="sm" variant="ghost" icon="edit" aria-label={`Edit ${cls.name}`} onClick={() => setEditing(cls.id)}>Edit</Button>
+            <Button size="sm" variant="ghost" icon="edit" className="shrink-0" aria-label={`Edit ${cls.name}`} onClick={() => setEditing(cls.id)}>Edit</Button>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {periods.length === 0 && <Chip tone="warning" icon="alert">Not matched to a period</Chip>}

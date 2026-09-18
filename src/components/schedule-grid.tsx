@@ -78,7 +78,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
   return <div className="timetable-workspace">
-    <aside className="timetable-palette grid gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+    <aside className="timetable-palette gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
       <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
       <div className="timetable-palette-items" aria-label="Available periods">
         {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
@@ -120,11 +120,16 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const color = classColor(cls?.id ?? period?.id, period?.kind, cls?.color);
                 const active = resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
                 const start = active?.start ?? minutes(slot.start); const end = active?.end ?? minutes(slot.end);
-                const compact = axis.y(end) - axis.y(start) < 48;
-                return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : ''}`} style={{ top: axis.y(start), height: axis.y(end) - axis.y(start), borderColor: color.dot, background: isGuide ? 'var(--muted)' : `color-mix(in srgb, ${color.dot} 22%, var(--card))` }}>
+                const blockHeight = axis.y(end) - axis.y(start);
+                const compact = blockHeight < 48;
+                // Whole title lines that fit above the time label: 14px of padding, a 17px time row, 14.5px per line.
+                const titleLines = Math.max(1, Math.min(4, Math.floor((blockHeight - 31) / 14.5)));
+                return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, borderColor: color.dot, background: isGuide ? 'var(--muted)' : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
                   <button type="button" title={`${cls?.name ?? period?.label ?? slot.periodId} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" draggable={!disabled} disabled={disabled} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${cls?.name ?? period?.label ?? slot.periodId}`}
                     onDragStart={event => beginDrag(event, { periodId: slot.periodId, dayId: day.id, slotId: slot.id })} onDragEnd={() => setHover(null)} onClick={() => { if (selected && onAssign) { placeAt(selected, day.id, minutes(slot.start)); return; } if (isGuide) { setMessage('Select a class first, then tap this school block.'); return; } setSelected({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }); setMessage('Select another time to move this block.'); }}>
-                    <strong>{cls?.name ?? period?.label ?? slot.periodId}</strong>{isGuide && <span>School block · drop class here</span>}<span>{formatRange(clockTime(start), clockTime(end))}</span>
+                    <strong>{cls?.name ?? period?.label ?? slot.periodId}</strong>{isGuide && <span>School block · drop class here</span>}
+                    {/* The axis already says AM or PM; the full range stays in the tooltip, the hover card and the label. */}
+                    <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
                   <div className="time-block-detail" aria-hidden="true"><strong>{cls?.name ?? period?.label ?? slot.periodId}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
                   <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={() => onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) })}>×</button>

@@ -201,8 +201,10 @@
 /* ---------- Time canvas (drag-and-drop timetable) ----------
    Positioned layout that Tailwind utilities do not express well; tokens follow the theme. */
 .timetable-workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
-.timetable-palette { position: sticky; top: 12px; max-height: min(65dvh, 650px); overflow-y: auto; align-content: start; }
-.timetable-palette-items { display: grid; gap: 6px; }
+/* The heading stays put; only the list scrolls, inside the rounded panel. */
+.timetable-palette { position: sticky; top: 12px; display: flex; flex-direction: column; max-height: min(65dvh, 650px); overflow: hidden; }
+/* Rows keep their full content height; without this a height-limited grid squashes wrapped labels into each other. */
+.timetable-palette-items { display: grid; grid-auto-rows: max-content; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: thin; align-content: start; margin: 0 -4px -4px; padding: 0 4px 4px; }
 .timetable-palette-items > button { white-space: normal; text-align: left; justify-content: flex-start; height: auto; min-height: 2.25rem; padding: 8px 10px; overflow-wrap: anywhere; border-left-width: 4px; border-radius: 10px; }
 .timetable-content { display: grid; gap: 14px; min-width: 0; }
 @media (max-width: 900px) {
@@ -213,7 +215,10 @@
 /* Positioned so absolutely placed descendants (e.g. sr-only labels) stay inside the scroll area. */
 .time-canvas-scroll { position: relative; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--card); }
 .time-canvas { display: grid; grid-template-columns: 64px repeat(var(--days), minmax(0, 1fr)); }
-.time-canvas-heading { padding: 8px; min-width: 0; background: color-mix(in srgb, var(--muted) 70%, var(--card)); border-bottom: 1px solid var(--border); display: grid; gap: 4px; }
+.time-canvas-heading { padding: 8px 6px; min-width: 0; background: color-mix(in srgb, var(--muted) 70%, var(--card)); border-bottom: 1px solid var(--border); display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.time-canvas-heading input { min-width: 0; width: 100%; }
+.time-canvas-heading button { min-width: 0; flex-shrink: 1; padding-inline: 2px; }
+.time-canvas-heading button:first-child { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .time-axis { position: relative; background: color-mix(in srgb, var(--muted) 70%, var(--card)); font-size: 11px; font-weight: 600; color: var(--muted-foreground); border-right: 1px solid var(--border); }
 .time-axis > span { position: absolute; right: 8px; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 .time-day { position: relative; min-width: 0; border-left: 1px solid var(--border); background-image: linear-gradient(to bottom, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px); }
@@ -223,11 +228,12 @@
 .time-targets > button:focus-visible, .time-targets > button:not(:disabled):hover { background: var(--primary-soft); outline: 1px solid var(--primary); }
 .time-block { position: absolute; left: 4px; right: 4px; border: 1px solid; border-left-width: 4px; border-radius: 9px; z-index: 1; min-width: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .06); transition: box-shadow .15s ease, transform .15s ease; }
 .time-block:hover { box-shadow: 0 6px 18px -6px rgb(0 0 0 / .25); }
-.time-block-body { display: flex; flex-direction: column; width: 100%; height: 100%; text-align: left; padding: 8px 20px 6px 8px; overflow: hidden; font-size: 11.5px; line-height: 1.25; cursor: grab; border: 0; background: transparent; color: inherit; border-radius: inherit; }
+.time-block-body { display: flex; flex-direction: column; width: 100%; height: 100%; text-align: left; padding: 8px 16px 6px 8px; overflow: hidden; font-size: 11.5px; line-height: 1.25; cursor: grab; border: 0; background: transparent; color: inherit; border-radius: inherit; }
 .time-block-body:active { cursor: grabbing; }
-.time-block-body strong { min-height: 0; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 700; }
-.time-block-body > span { flex-shrink: 0; font-size: 10.5px; margin-top: 3px; opacity: .8; font-variant-numeric: tabular-nums; }
-.time-block-clear { position: absolute; right: 3px; top: 4px; font-size: 15px; line-height: 18px; width: 18px; height: 18px; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 0; opacity: .6; }
+/* --title-lines is how many whole lines fit the block, so a title is never cut through the middle of a line. */
+.time-block-body strong { flex-shrink: 0; overflow: hidden; overflow-wrap: break-word; hyphens: auto; display: -webkit-box; -webkit-line-clamp: var(--title-lines, 2); -webkit-box-orient: vertical; font-weight: 700; letter-spacing: -0.015em; }
+.time-block-body > span { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; margin-top: 3px; opacity: .8; font-variant-numeric: tabular-nums; }
+.time-block-clear { position: absolute; right: 1px; top: 4px; font-size: 15px; line-height: 16px; width: 16px; height: 16px; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 0; opacity: .6; }
 .time-block-clear:hover { opacity: 1; background: rgb(0 0 0 / .08); }
 .time-resize { position: absolute; left: 0; right: 0; width: 100%; height: 8px; cursor: ns-resize; touch-action: none; z-index: 2; border: 0; background: transparent; padding: 0; color: inherit; }
 .time-resize-start { top: -3px; }
@@ -239,9 +245,10 @@
 .time-school-guide { border-style: dashed; border-left-style: solid; box-shadow: none; }
 .time-school-guide .time-block-body { color: var(--muted-foreground); }
 /* Small events keep one readable line; full details remain available on hover/focus. */
-.time-block-compact .time-block-body { padding: 3px 20px 3px 7px; justify-content: center; }
+.time-block-compact .time-block-body { padding: 3px 16px 3px 7px; justify-content: center; }
 .time-block-compact .time-block-body strong { display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 14px; }
 .time-block-compact .time-block-body > span { display: none; }
+.time-block-short .time-block-body strong { display: block; white-space: nowrap; text-overflow: ellipsis; }
 .time-block-compact .time-block-clear { top: 1px; }
 .time-block-compact .time-resize::after { opacity: 0; }
 .time-block-compact:hover .time-resize::after, .time-block-compact:focus-within .time-resize::after { opacity: .5; }
