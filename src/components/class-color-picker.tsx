@@ -22,6 +22,9 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   const content = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHoverOpen = () => { if (hoverTimer.current !== null) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } };
+  useEffect(() => cancelHoverOpen, []);
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setReady(open);
@@ -73,12 +76,15 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   };
 
   return <div ref={root} data-color-picker-open={surfaceVisible} className="absolute -top-1 inset-x-0" style={{ zIndex: surfaceVisible ? 40 : 1 }}
-    onPointerLeave={(event) => { if (event.pointerType === 'mouse') changeOpen(false); }}
+    onPointerLeave={(event) => { cancelHoverOpen(); if (event.pointerType === 'mouse') changeOpen(false); }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) changeOpen(false); }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); trigger.current?.focus(); } }}>
     <button ref={trigger} type="button" disabled={disabled} aria-label={`Change color for ${cls.name}`} aria-expanded={open} aria-controls={id}
       className="absolute inset-x-0 top-0 h-4 rounded-t-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-      onClick={() => changeOpen(!open)} onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !disabled) changeOpen(true); }} />
+      onClick={() => { cancelHoverOpen(); changeOpen(!open); }}
+      // Hovering opens only after the mouse has rested on the strip for a quarter second, so passing over cards stays quiet.
+      onPointerEnter={(event) => { if (event.pointerType !== 'mouse' || disabled || open) return; cancelHoverOpen(); hoverTimer.current = setTimeout(() => { hoverTimer.current = null; changeOpen(true); }, 250); }}
+      onPointerLeave={cancelHoverOpen} />
     <div ref={surface} id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
       data-slot="class-color-expansion"
       className="absolute inset-x-0 overflow-hidden rounded-xl border-t-4 bg-card text-card-foreground shadow-lg ring-1 ring-foreground/10 transition-[top,height] duration-200 ease-out"
