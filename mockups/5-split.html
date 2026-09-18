@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — Their app / Your app</title>
+<link rel="icon" href="assets/logo.svg">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{--ink:#0b0e12;--lime:#d9f99d;--lime-ink:#1a2e05;--grey:#26292e;--grey2:#33373d;--dim:#9aa0a6;--line:#e6e8e3}
+  body{margin:0;background:#fff;color:var(--ink);font:16px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  a{color:inherit}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--ink);color:#fff;border:0;border-radius:999px;padding:12px 20px;font:700 14px/1 inherit;text-decoration:none;cursor:pointer}
+  .btn.lime{background:var(--lime);color:var(--lime-ink)}
+  .btn.w{background:#fff;color:var(--ink)}
+
+  header{position:absolute;inset:0 0 auto;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:20px 28px;color:#fff}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;text-decoration:none;letter-spacing:-.02em}
+  .brand img{width:22px;height:22px}
+  header .btn{background:var(--ink);color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.6)}
+
+  .split{position:relative;height:100dvh;min-height:640px;user-select:none;cursor:ew-resize;touch-action:none}
+  .pane{position:absolute;inset:0;overflow:hidden}
+  .pane .in{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:40px;padding:0 6vw;width:100vw}
+  .left{background:var(--grey);color:#fff}
+  .right{background:var(--lime);color:var(--lime-ink);clip-path:inset(0 0 0 50%)}
+  .tag{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;opacity:.6;margin-bottom:14px}
+  .big{font-size:clamp(44px,7.4vw,108px);font-weight:900;letter-spacing:-.05em;line-height:.9;margin:0 0 20px}
+  .left .big{color:#d7dadd}
+  .left .big s{text-decoration-color:#f0655a;text-decoration-thickness:6px}
+  .lede{max-width:440px;font-size:17px;opacity:.85;margin:0 0 24px}
+
+  .mock{justify-self:center;width:min(380px,40vw);border-radius:26px;padding:18px;font-size:14px}
+  .left .mock{background:var(--grey2);color:#cfd3d8;box-shadow:0 30px 60px -20px rgba(0,0,0,.6);transform:rotate(-2deg)}
+  .right .mock{background:#fff;color:var(--ink);box-shadow:0 30px 60px -20px rgba(26,46,5,.35);transform:rotate(2deg)}
+  .mock .h{display:flex;justify-content:space-between;font-size:12px;font-weight:700;opacity:.7;margin-bottom:10px}
+  .mock .num{font-size:44px;font-weight:900;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+  .mock .num small{font-size:13px;letter-spacing:0;font-weight:600;opacity:.7;margin-left:6px}
+  .mock .r{display:grid;grid-template-columns:50px 1fr auto;gap:10px;padding:9px 0;border-top:1px solid rgba(127,127,127,.25);font-size:13.5px;align-items:center}
+  .mock .r .t{font-variant-numeric:tabular-nums;opacity:.6;font-size:12px}
+  .mock .r .rm{font-size:11.5px;font-weight:800;background:var(--lime);color:var(--lime-ink);padding:2px 7px;border-radius:6px}
+  .left .mock .r .rm{background:#4b5058;color:#cfd3d8}
+  .left .mock .r.bad{color:#f0655a}
+  .left .mock .r.bad .rm{background:#5a2c29;color:#f0655a}
+  .toast{margin-top:12px;background:#1d2024;border:1px solid #4b5058;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#f0655a;display:flex;gap:8px;align-items:center}
+  .toast i{font-style:normal;background:#f0655a;color:#1d2024;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:900}
+  .left .q{position:absolute;font-weight:900;color:#f0655a;opacity:.25;font-size:clamp(60px,10vw,160px);letter-spacing:-.05em;pointer-events:none}
+
+  .handle{position:absolute;top:0;bottom:0;left:50%;width:0;z-index:4;pointer-events:none}
+  .handle::before{content:"";position:absolute;top:0;bottom:0;left:-1px;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.15)}
+  .knob{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:50%;background:#fff;color:var(--ink);display:grid;place-items:center;font-weight:900;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.3);letter-spacing:-.1em}
+  .hintbar{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);z-index:4;font-size:12.5px;font-weight:600;background:rgba(0,0,0,.55);color:#fff;padding:7px 12px;border-radius:999px;backdrop-filter:blur(6px);pointer-events:none;white-space:nowrap}
+
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  .pairs{padding:80px 0 40px}
+  h2{font-size:clamp(30px,4.4vw,52px);letter-spacing:-.04em;line-height:1;margin:0 0 36px;font-weight:900}
+  .pair{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line)}
+  .pair > div{padding:24px 0}
+  .pair .a{color:var(--dim);padding-right:30px}
+  .pair .b{padding-left:30px;border-left:1px solid var(--line)}
+  .pair b{display:block;font-size:18px;letter-spacing:-.02em;margin-bottom:4px;color:inherit}
+  .pair .b b{color:var(--ink)}
+  .pair p{margin:0;font-size:14.5px}
+  .pair .a s{text-decoration-thickness:2px;text-decoration-color:#f0655a}
+  .cols{display:grid;grid-template-columns:1fr 1fr;font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  .cols span:last-child{padding-left:30px;color:var(--lime-ink)}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:40px 0 80px}
+  .step{background:#f6f7f4;border-radius:18px;padding:22px}
+  .step i{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--ink);color:var(--lime);font-style:normal;font-weight:900;font-size:13px;margin-bottom:12px}
+  .step b{display:block;margin-bottom:4px;font-size:16.5px;letter-spacing:-.01em}
+  .step p{margin:0;color:#5f6368;font-size:14.5px}
+
+  .end{background:var(--ink);color:#fff;padding:90px 0;text-align:center}
+  .end h2{margin-bottom:14px}
+  .end p{color:var(--dim);margin:0 0 26px}
+  footer{padding:24px 0 36px;font-size:13px;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media(max-width:820px){
+    .pane .in{grid-template-columns:1fr;gap:16px;padding:90px 20px 60px;align-content:center}
+    .mock{display:none}
+    .pair{grid-template-columns:1fr}.pair .b{padding-left:0;border-left:0;padding-top:0}.pair .a{padding-right:0;padding-bottom:6px}
+    .cols{display:none}.steps{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="#"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+  <a class="btn" href="#end">Sign in with Google</a>
+</header>
+
+<div class="split" id="split" aria-label="Drag to compare">
+  <div class="pane left">
+    <span class="q" style="left:4vw;top:8vh">?</span><span class="q" style="right:6vw;bottom:6vh">?</span>
+    <div class="in">
+      <div>
+        <div class="tag">Every other app</div>
+        <h1 class="big">Day 3?<br><s>Day 4?</s><br>Wrong room.</h1>
+        <p class="lede">Snow day slid the rotation by one. Thursday ran on a Monday schedule. Lunch was Wave 2. The app didn't know any of it. And it went blank on the bus.</p>
+      </div>
+      <div class="mock">
+        <div class="h"><span>Today</span><span>Day 3 ?</span></div>
+        <div class="num">--:--<small>no connection</small></div>
+        <div style="margin-top:14px">
+          <div class="r bad"><span class="t">9:20</span><span>Chemistry</span><span class="rm">302?</span></div>
+          <div class="r"><span class="t">10:10</span><span>English</span><span class="rm">302</span></div>
+          <div class="r bad"><span class="t">11:00</span><span>Lunch</span><span class="rm">Wave 1?</span></div>
+        </div>
+        <div class="toast"><i>!</i> Couldn't sync. Your changes were discarded.</div>
+      </div>
+    </div>
+  </div>
+  <div class="pane right" id="right">
+    <div class="in">
+      <div>
+        <div class="tag">Quasar</div>
+        <h1 class="big">Day 4.<br>Room 204.<br>14 min left.</h1>
+        <p class="lede">Rotations of any length that skip closures and reset when the school does. Replacement days as a setting. Lunch waves as real periods. Fully editable with no signal.</p>
+        <a class="btn" href="#end">Sign in with Google</a>
+      </div>
+      <div class="mock">
+        <div class="h"><span>Today · Thu</span><span>Day 4 of 8 · runs as Mon</span></div>
+        <div class="num">14:32<small>left in Chemistry</small></div>
+        <div style="margin-top:14px">
+          <div class="r"><span class="t">9:20</span><span>Chemistry</span><span class="rm">204</span></div>
+          <div class="r"><span class="t">10:10</span><span>Algebra II</span><span class="rm">117</span></div>
+          <div class="r"><span class="t">11:00</span><span>Lunch · Wave 2</span><span class="rm">Caf</span></div>
+        </div>
+        <div class="toast" style="background:#f4fbe6;border-color:#c5e59a;color:#3f6212"><i style="background:#3f6212;color:#f4fbe6">✓</i> Offline · 1 change waiting. It'll upload itself.</div>
+      </div>
+    </div>
+  </div>
+  <div class="handle" id="handle"><div class="knob">‹ ›</div></div>
+  <div class="hintbar">Drag to compare</div>
+</div>
+
+<div class="wrap pairs">
+  <h2>Same week. Two apps.</h2>
+  <div class="cols"><span>Every other app</span><span>Quasar</span></div>
+  <div class="pair"><div class="a"><b>A/B days, maybe.</b><p>Ten-day cycles and letter days are a spreadsheet you keep on the side.</p></div><div class="b"><b>Rotations of any length.</b><p>Periods that change position, cycle days that skip holidays and reset mid-year.</p></div></div>
+  <div class="pair"><div class="a"><b>Snow day <s>pushes everything</s>.</b><p>The rotation is out by one for a month.</p></div><div class="b"><b>Closures are skipped.</b><p>Wednesday is Day 4, like the school says.</p></div></div>
+  <div class="pair"><div class="a"><b>“Thursday runs as Monday” is a note.</b><p>You remember it, or you don't.</p></div><div class="b"><b>Replacement days are a setting.</b><p>One date, one choice. Every period and lunch wave follows.</p></div></div>
+  <div class="pair"><div class="a"><b>Blank when the Wi‑Fi drops.</b><p>Or worse: a spinner, then your edits are gone.</p></div><div class="b"><b>Fully editable offline.</b><p>Saved, waiting, syncing, failed or needs a choice. Always visible.</p></div></div>
+  <div class="pair"><div class="a"><b>Last write wins.</b><p>Your laptop silently overwrites your phone.</p></div><div class="b"><b>You resolve conflicts.</b><p>Both values shown, you pick. Independent changes merge on their own.</p></div></div>
+  <div class="pair"><div class="a"><b>Free, with ads.</b><p>And a “premium” tier for the features that matter.</p></div><div class="b"><b>Free. No ads, no trackers, nothing sold.</b><p>You are the student, not the product.</p></div></div>
+</div>
+
+<div class="wrap steps">
+  <div class="step"><i>1</i><b>Sign in with Google</b><p>No new password, nothing to install, no app store account.</p></div>
+  <div class="step"><i>2</i><b>Find or build your school</b><p>Already added? One tap. If not, enter the bell schedule once. Everyone after you gets it for free.</p></div>
+  <div class="step"><i>3</i><b>Drop classes on periods</b><p>Browse the class directory, pick yours, drag them on. Today fills itself in from then on.</p></div>
+</div>
+
+<div class="end" id="end"><div class="wrap">
+  <h2>Pick the right side.</h2>
+  <p>Two minutes to set up. Free for students.</p>
+  <a class="btn lime" href="#">Sign in with Google</a>
+</div></div>
+<div class="wrap"><footer><span>© 2026 Quasar</span><span>Privacy · Contact</span></footer></div>
+
+<script>
+  const split = document.getElementById('split'), right = document.getElementById('right'), handle = document.getElementById('handle');
+  let pos = 0.5, dragging = false, auto = true;
+  function set(p){ pos = Math.min(.96, Math.max(.04, p)); right.style.clipPath = `inset(0 0 0 ${pos*100}%)`; handle.style.left = `${pos*100}%`; }
+  function fromEvent(e){ const r = split.getBoundingClientRect(); const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left; set(x / r.width); }
+  split.addEventListener('pointerdown', e => { dragging = true; auto = false; split.setPointerCapture(e.pointerId); fromEvent(e); });
+  split.addEventListener('pointermove', e => { if (dragging) fromEvent(e); });
+  split.addEventListener('pointerup', () => dragging = false);
+  split.addEventListener('pointercancel', () => dragging = false);
+  addEventListener('keydown', e => { if (e.key==='ArrowLeft'){auto=false;set(pos-.04);} if (e.key==='ArrowRight'){auto=false;set(pos+.04);} });
+  // gentle idle sway until the visitor touches it
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let t0 = performance.now();
+  (function sway(now){ if (auto && !reduce) set(0.5 + Math.sin((now - t0)/1400) * 0.06); requestAnimationFrame(sway); })(t0);
+  set(0.5);
+</script>
+</body>
+</html>

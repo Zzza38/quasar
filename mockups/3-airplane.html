@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — Turn off the Wi‑Fi. Go on.</title>
+<link rel="icon" href="assets/logo.svg">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{--bg:#0c1220;--bg2:#111a2c;--line:#22304a;--fg:#e9eef8;--dim:#8a98b4;--cyan:#2dd4e0;--amber:#f5b342;--red:#f0655a;--violet:#a78bfa;--green:#5be3a3}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  .wrap{max-width:1100px;margin:0 auto;padding:0 24px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;text-decoration:none;letter-spacing:-.02em}
+  .brand img{width:22px;height:22px;color:var(--cyan)}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--fg);color:#0c1220;border:0;border-radius:10px;padding:11px 16px;font:600 14px/1 inherit;text-decoration:none;cursor:pointer}
+  .btn.cy{background:var(--cyan);color:#052026}
+  .btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+
+  .hero{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;padding:48px 0 60px}
+  h1{font-size:clamp(38px,5.6vw,68px);letter-spacing:-.04em;line-height:1;margin:0 0 16px;font-weight:800}
+  h1 span{color:var(--cyan)}
+  .lede{color:var(--dim);font-size:17px;max-width:520px;margin:0 0 26px}
+
+  .toggle{display:inline-flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:14px 16px;cursor:pointer;user-select:none}
+  .toggle .sw{position:relative;width:58px;height:32px;border-radius:999px;background:#2b3a55;transition:.25s}
+  .toggle .sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;transition:.25s;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+  .toggle[aria-pressed="true"] .sw{background:var(--cyan)}
+  .toggle[aria-pressed="true"] .sw::after{left:29px}
+  .toggle b{display:block;font-size:15px}
+  .toggle small{display:block;color:var(--dim);font-size:12.5px}
+  .hint{margin:14px 0 0;font-size:13px;color:var(--dim)}
+  .hint kbd{font:inherit;border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
+
+  .phone{justify-self:center;width:340px;border-radius:40px;background:#05080f;border:1px solid #2a3652;padding:12px;box-shadow:0 40px 90px -30px rgba(0,0,0,.9),0 0 0 6px #0b1120}
+  .screen{background:#0f172a;border-radius:30px;overflow:hidden;min-height:600px;display:flex;flex-direction:column}
+  .sb{display:flex;justify-content:space-between;padding:12px 20px 4px;font-size:12px;font-weight:600;color:#cbd5e1}
+  .sb .net{display:inline-flex;align-items:center;gap:5px}
+  .sb .net i{width:14px;height:10px;background:linear-gradient(90deg,#cbd5e1 0 22%,transparent 22% 30%,#cbd5e1 30% 52%,transparent 52% 60%,#cbd5e1 60% 82%,transparent 82% 90%,#cbd5e1 90%);display:inline-block}
+  .sb .net.off i{background:#475569}
+  .sb .net.off::after{content:"✈";color:var(--amber);margin-left:4px}
+  .band{margin:8px 14px 0;border-radius:12px;padding:8px 12px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;transition:.3s}
+  .band.on{background:rgba(91,227,163,.12);color:var(--green)}
+  .band.off{background:rgba(245,179,66,.14);color:var(--amber)}
+  .band .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+  .band.off .dot{animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .ttl{padding:16px 18px 6px;font-weight:700;font-size:20px;letter-spacing:-.02em}
+  .ttl small{display:block;font-size:12.5px;color:var(--dim);font-weight:500}
+  .tasks{flex:1;padding:0 12px;display:grid;gap:6px;align-content:start}
+  .task{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:center;background:#111a2c;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px;animation:in .3s ease}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}}
+  .task .cb{width:18px;height:18px;border-radius:6px;border:1.5px solid #3b4a68}
+  .task .cb.done{background:var(--cyan);border-color:var(--cyan)}
+  .task .m{color:var(--dim);font-size:11.5px;display:block}
+  .pill{font-size:10.5px;font-weight:700;letter-spacing:.02em;border-radius:999px;padding:3px 8px;text-transform:uppercase;transition:.3s}
+  .pill.saved{background:rgba(91,227,163,.15);color:var(--green)}
+  .pill.waiting{background:rgba(245,179,66,.15);color:var(--amber)}
+  .pill.syncing{background:rgba(45,212,224,.15);color:var(--cyan)}
+  .pill.failed{background:rgba(240,101,90,.15);color:var(--red)}
+  .pill.choice{background:rgba(167,139,250,.15);color:var(--violet)}
+  .add{margin:10px 12px 14px;display:flex;gap:8px}
+  .add input{flex:1;background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--fg);font:inherit;font-size:14px;outline:none}
+  .add input:focus{border-color:var(--cyan)}
+  .add button{background:var(--cyan);color:#052026;border:0;border-radius:10px;padding:0 14px;font:700 14px inherit;cursor:pointer}
+  .tabs{display:flex;justify-content:space-around;padding:10px 0 14px;border-top:1px solid var(--line);font-size:10.5px;color:var(--dim)}
+  .tabs span.on{color:var(--cyan)}
+
+  section{padding:64px 0;border-top:1px solid var(--line)}
+  h2{font-size:clamp(28px,3.8vw,42px);letter-spacing:-.03em;line-height:1.08;margin:0 0 12px;font-weight:750}
+  .states{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:30px}
+  .state{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .state .pill{display:inline-block;margin-bottom:10px}
+  .state p{margin:0;color:var(--dim);font-size:13.5px}
+
+  .conf{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
+  .cc{background:var(--bg2);border:1px solid var(--line);border-radius:18px;padding:18px}
+  .cc .h{font-size:13px;color:var(--violet);font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .cc .f{font-size:12px;color:var(--dim);margin-bottom:6px}
+  .opts{display:grid;gap:8px}
+  .opt{display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#0f172a;cursor:pointer;font:inherit;color:inherit;text-align:left}
+  .opt small{display:block;color:var(--dim);font-size:12px}
+  .opt b{font-size:16px}
+  .opt:hover{border-color:var(--violet)}
+  .opt[aria-pressed="true"]{border-color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}
+  .opt .k{font-size:11px;color:var(--dim)}
+  .opt[aria-pressed="true"] .k{color:var(--cyan);font-weight:700}
+  .resolved{margin-top:12px;font-size:13px;color:var(--green);min-height:20px}
+
+  .feat{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}
+  .f{background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:20px}
+  .f b{display:block;margin-bottom:6px;letter-spacing:-.01em}
+  .f p{margin:0;color:var(--dim);font-size:14px}
+  .cta{text-align:center;padding:80px 0}
+  .cta p{color:var(--dim);margin:12px 0 24px}
+  footer{border-top:1px solid var(--line);padding:24px 0 36px;font-size:13px;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media(max-width:900px){.hero,.conf{grid-template-columns:1fr}.states{grid-template-columns:1fr 1fr}.feat{grid-template-columns:1fr}.phone{width:100%;max-width:340px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="#"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+    <a class="btn" href="#cta">Sign in with Google</a>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>Turn off the Wi‑Fi.<br><span>Go on.</span></h1>
+      <p class="lede">Most schedule apps go blank the moment the bus leaves the parking lot. Quasar treats no signal as the normal case. Try it: flip the switch, add a task, flip it back.</p>
+      <button class="toggle" id="toggle" aria-pressed="true">
+        <span class="sw"></span>
+        <span><b id="tlabel">Wi‑Fi on</b><small id="tsub">Everything syncs as you go</small></span>
+      </button>
+      <p class="hint">Then type in the phone and press <kbd>Enter</kbd>. Watch the pills.</p>
+    </div>
+
+    <div class="phone">
+      <div class="screen">
+        <div class="sb"><span id="clock">9:41</span><span class="net" id="net"><i></i> 5G</span></div>
+        <div class="band on" id="band"><span class="dot"></span><span id="bandtext">All changes saved</span></div>
+        <div class="ttl">Tasks<small>Thursday · Cycle day 4 · running as Monday</small></div>
+        <div class="tasks" id="tasks"></div>
+        <form class="add" id="add"><input id="inp" placeholder="Add a task…" autocomplete="off"><button type="submit">Add</button></form>
+        <div class="tabs"><span>Today</span><span>Schedule</span><span class="on">Tasks</span><span>Classes</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section><div class="wrap">
+  <h2>Every change shows where it stands.</h2>
+  <p class="lede">No mystery spinner. Each edit carries one of five states, and you can always see which.</p>
+  <div class="states">
+    <div class="state"><span class="pill saved">Saved</span><p>On your device and on the server. Done.</p></div>
+    <div class="state"><span class="pill waiting">Waiting</span><p>On your device. Uploads the moment there's signal.</p></div>
+    <div class="state"><span class="pill syncing">Syncing</span><p>In flight right now. Usually gone before you notice.</p></div>
+    <div class="state"><span class="pill failed">Failed</span><p>The server said no. The change is kept and you can retry.</p></div>
+    <div class="state"><span class="pill choice">Needs a choice</span><p>Two devices changed the same thing. You pick.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap conf">
+  <div>
+    <h2>Conflicts you resolve. Not last‑write‑wins.</h2>
+    <p class="lede">You edited History's room on your laptop. Your phone had the old value and edited the note. Independent changes merge on their own. The same field changed twice? Both values, your call.</p>
+  </div>
+  <div class="cc">
+    <div class="h"><span class="pill choice">Needs a choice</span> History · Room</div>
+    <div class="f">Which value should win?</div>
+    <div class="opts" id="opts">
+      <button class="opt" type="button"><span><b>Room 221</b><small>Laptop · 8:52 this morning</small></span><span class="k">Pick</span></button>
+      <button class="opt" type="button"><span><b>Room 117</b><small>Phone · 8:47 this morning</small></span><span class="k">Pick</span></button>
+    </div>
+    <div class="resolved" id="resolved"></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>And the boring stuff, done right.</h2>
+  <div class="feat">
+    <div class="f"><b>Any rotation you can describe</b><p>Ten-day cycles, letter days, periods that move. Cycle days skip holidays, reset after closures. “Thursday runs as Monday” is a setting.</p></div>
+    <div class="f"><b>Shift a whole day</b><p>A two-hour delay moves every start, end and countdown. Your personal overrides survive when the school corrects its schedule.</p></div>
+    <div class="f"><b>No ads, no trackers, nothing sold</b><p>You are the student, not the product. Share your schedule with the friends you choose, and take it back whenever.</p></div>
+  </div>
+</div></section>
+
+<div class="wrap cta" id="cta">
+  <h2>Works on the bus. Works in the basement. Works.</h2>
+  <p>Free. Sign in with Google, find your school, drop classes on periods. Two minutes.</p>
+  <a class="btn cy" href="#">Sign in with Google</a>
+</div>
+<div class="wrap"><footer><span>© 2026 Quasar</span><span>Privacy · Contact · Status</span></footer></div>
+
+<script>
+  const online = { v: true };
+  const toggle = document.getElementById('toggle'), tlabel = document.getElementById('tlabel'), tsub = document.getElementById('tsub');
+  const net = document.getElementById('net'), band = document.getElementById('band'), bandtext = document.getElementById('bandtext');
+  const tasks = document.getElementById('tasks'), form = document.getElementById('add'), inp = document.getElementById('inp');
+  const seed = [
+    { t:'Chem lab write-up', m:'Due tomorrow · High', s:'saved' },
+    { t:'Read ch. 7', m:'History · Due Fri', s:'saved', done:true },
+    { t:'Spanish vocab', m:'Repeats weekly', s:'saved' },
+  ];
+  const items = [];
+  function render(){
+    tasks.innerHTML = '';
+    items.forEach(it => {
+      const d = document.createElement('div'); d.className = 'task';
+      const lbl = {saved:'Saved',waiting:'Waiting',syncing:'Syncing',failed:'Failed',choice:'Needs a choice'}[it.s];
+      d.innerHTML = `<span class="cb ${it.done?'done':''}"></span><span>${it.t}<span class="m">${it.m}</span></span><span class="pill ${it.s}">${lbl}</span>`;
+      tasks.appendChild(d);
+    });
+    const waiting = items.filter(i => i.s==='waiting').length, syncing = items.filter(i=>i.s==='syncing').length;
+    if (!online.v){ band.className='band off'; bandtext.textContent = waiting ? `Offline · ${waiting} change${waiting>1?'s':''} waiting` : 'Offline · edits still work'; }
+    else if (syncing){ band.className='band on'; bandtext.textContent = `Syncing ${syncing} change${syncing>1?'s':''}…`; }
+    else { band.className='band on'; bandtext.textContent = 'All changes saved'; }
+  }
+  seed.forEach(s => items.push({...s}));
+  render();
+
+  toggle.addEventListener('click', () => {
+    online.v = !online.v;
+    toggle.setAttribute('aria-pressed', online.v);
+    tlabel.textContent = online.v ? 'Wi‑Fi on' : 'Wi‑Fi off';
+    tsub.textContent = online.v ? 'Everything syncs as you go' : 'Edits save on your device';
+    net.classList.toggle('off', !online.v);
+    if (online.v) flush(); else render();
+  });
+  function flush(){
+    const w = items.filter(i => i.s==='waiting');
+    w.forEach(i => i.s='syncing'); render();
+    w.forEach((i,k) => setTimeout(() => { i.s='saved'; render(); }, 600 + k*350));
+  }
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const v = inp.value.trim(); if (!v) return;
+    const it = { t:v, m:'Just now', s: online.v ? 'syncing' : 'waiting' };
+    items.push(it); inp.value=''; render();
+    if (online.v) setTimeout(() => { it.s='saved'; render(); }, 700);
+  });
+  // clock
+  const clock = document.getElementById('clock'); setInterval(() => { const d=new Date(); clock.textContent = `${((d.getHours()+11)%12)+1}:${String(d.getMinutes()).padStart(2,'0')}`; }, 1000);
+  // conflict picker
+  const opts = [...document.querySelectorAll('#opts .opt')], resolved = document.getElementById('resolved');
+  opts.forEach(o => o.addEventListener('click', () => {
+    opts.forEach(x => x.setAttribute('aria-pressed', x===o));
+    o.querySelector('.k').textContent = 'Chosen'; opts.filter(x=>x!==o).forEach(x => x.querySelector('.k').textContent='Pick');
+    resolved.textContent = `Resolved. History is in ${o.querySelector('b').textContent} everywhere. The note from your phone was kept too.`;
+  }));
+</script>
+</body>
+</html>

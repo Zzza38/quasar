@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — The home screen is the pitch</title>
+<link rel="icon" href="assets/logo.svg">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{--paper:#fbfbf8;--ink:#0b0e12;--mute:#6b7280;--line:#e5e7e3;--lime:#d9f99d;--lime-ink:#365314}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  header{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.02em;text-decoration:none}
+  .brand img{width:22px;height:22px}
+  nav a{font-size:14px;color:var(--mute);text-decoration:none;margin-left:22px}
+  nav a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--ink);color:#fff;border:0;border-radius:999px;padding:11px 18px;font:600 14px/1 inherit;text-decoration:none;cursor:pointer}
+  .btn.lime{background:var(--lime);color:var(--lime-ink)}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+
+  .hero{padding:48px 0 32px;text-align:center}
+  .chips{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:34px}
+  .chip{font-size:12.5px;font-weight:600;color:var(--mute);border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:#fff}
+  .chip b{color:var(--ink);font-weight:700}
+  .chip.warn{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+  .label{font-size:14px;color:var(--mute);font-weight:500;letter-spacing:.01em}
+  .label b{color:var(--ink);font-weight:650}
+  .timer{font-size:clamp(96px,22vw,240px);font-weight:800;letter-spacing:-.06em;line-height:.95;font-variant-numeric:tabular-nums;margin:6px 0 10px;transition:color .3s}
+  .timer.soon{color:#b45309}
+  .timer.passing{color:var(--lime-ink)}
+  .next{font-size:15px;color:var(--mute)}
+  .next b{color:var(--ink);font-weight:650}
+  .next .room{display:inline-block;background:var(--lime);color:var(--lime-ink);font-weight:700;padding:1px 7px;border-radius:6px;margin-left:4px}
+  .rail{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin:38px auto 0;max-width:760px}
+  .p{position:relative;font-size:12px;font-weight:600;color:var(--mute);border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 11px;min-width:86px;text-align:left;overflow:hidden}
+  .p small{display:block;font-weight:500;font-size:10.5px;color:#9ca3af;font-variant-numeric:tabular-nums}
+  .p .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--ink);width:0}
+  .p.now{border-color:var(--ink);color:var(--ink)}
+  .p.done{opacity:.45}
+  .p.lunch{border-style:dashed}
+  .hero-cta{margin-top:40px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+  .sub{margin:14px auto 0;max-width:520px;color:var(--mute);font-size:15px}
+  .speed{font-size:11.5px;color:#9ca3af;margin-top:20px}
+
+  section{padding:64px 0;border-top:1px solid var(--line)}
+  h1{font-size:clamp(30px,4.6vw,52px);letter-spacing:-.035em;line-height:1.05;margin:0 0 14px;font-weight:800}
+  h2{font-size:clamp(26px,3.6vw,38px);letter-spacing:-.03em;line-height:1.1;margin:0 0 10px;font-weight:750}
+  .lede{color:var(--mute);font-size:17px;max-width:600px;margin:0}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:34px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px}
+  .card .t{font-weight:700;letter-spacing:-.01em;margin:0 0 6px;font-size:16.5px}
+  .card p{margin:0;color:var(--mute);font-size:14.5px}
+  .card .ex{margin-top:14px;padding:10px 12px;background:var(--paper);border-radius:10px;font-size:13px;font-variant-numeric:tabular-nums;display:grid;gap:4px}
+  .card .ex s{color:#9ca3af}
+  .card .ex b{font-weight:650}
+  .two{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center}
+  .list{margin:20px 0 0;padding:0;list-style:none;display:grid;gap:12px}
+  .list li{display:grid;grid-template-columns:22px 1fr;gap:10px;font-size:15px}
+  .list li i{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--lime);color:var(--lime-ink);font-style:normal;font-size:12px;font-weight:800}
+  .list li span{color:var(--mute)}
+  .list li b{display:block;color:var(--ink);font-weight:650}
+  .steps{counter-reset:s;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}
+  .step{counter-increment:s;padding:20px 20px 20px 0;border-top:2px solid var(--ink)}
+  .step::before{content:"0" counter(s);display:block;font-variant-numeric:tabular-nums;font-weight:800;font-size:13px;margin-bottom:10px;color:var(--mute)}
+  .step b{display:block;font-size:16.5px;letter-spacing:-.01em;margin-bottom:4px}
+  .step p{margin:0;color:var(--mute);font-size:14.5px}
+  .end{text-align:center;padding:80px 0}
+  .end .timer{font-size:clamp(64px,12vw,120px)}
+  footer{border-top:1px solid var(--line);padding:26px 0;font-size:13px;color:var(--mute);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media(max-width:820px){.grid,.steps,.two{grid-template-columns:1fr}nav a:not(:last-child){display:none}}
+  @media(prefers-reduced-motion:reduce){.timer{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="#"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+    <nav><a href="#weird">Weird days</a><a href="#offline">Offline</a><a href="#start">Start</a><a class="btn" href="#start">Sign in with Google</a></nav>
+  </header>
+
+  <div class="hero">
+    <div class="chips">
+      <span class="chip"><b id="dayname">Thursday</b></span>
+      <span class="chip">Cycle day <b id="cycleday">4</b> of 8</span>
+      <span class="chip warn" id="special">Running on a Monday schedule</span>
+    </div>
+    <div class="label" id="label">left in <b>Chemistry</b> · Room 204</div>
+    <div class="timer" id="timer">14:32</div>
+    <div class="next" id="next">Next: <b>Algebra II</b> <span class="room">117</span> · then Wave 2 lunch</div>
+    <div class="rail" id="rail"></div>
+    <div class="hero-cta">
+      <a class="btn lime" href="#start">Sign in with Google</a>
+      <a class="btn ghost" href="#weird">Why it's different</a>
+    </div>
+    <p class="sub">That's the home screen. Minutes left, where to be next. Quasar does the cycle-day maths so you never have to.</p>
+    <p class="speed">The demo runs at 200× so you can watch a day go by. Press <b>space</b> to pause.</p>
+  </div>
+</div>
+
+<section id="weird"><div class="wrap">
+  <h1>Schools run on exceptions.<br>Most apps don't.</h1>
+  <p class="lede">A snow day, a two-hour delay, a Thursday that runs as a Monday. Every one of these is a setting in Quasar, not a workaround.</p>
+  <div class="grid">
+    <div class="card"><p class="t">Rotations of any length</p><p>Ten-day cycles, letter days, periods that swap position. Cycle days skip holidays and closures, and reset when the school restarts the count.</p>
+      <div class="ex"><span>Mon · Day 3</span><span>Tue · <s>Day 4</s> Snow day</span><span>Wed · <b>Day 4</b></span></div></div>
+    <div class="card"><p class="t">Replacement days</p><p>“Thursday will run on a Monday schedule.” One date, one setting. Every period, room and lunch wave follows.</p>
+      <div class="ex"><span>Thu 24 Sep</span><span>Runs as: <b>Monday</b></span><span>Lunch: <b>Wave 2</b></span></div></div>
+    <div class="card"><p class="t">Shift a whole day</p><p>A two-hour delay moves every start, end and countdown. Your own edits to a day survive when the school corrects theirs.</p>
+      <div class="ex"><span>P1 · <s>8:10</s> <b>10:10</b></span><span>P2 · <s>9:00</s> <b>10:52</b></span><span>Your note on P3: kept</span></div></div>
+  </div>
+</div></section>
+
+<section id="offline"><div class="wrap two">
+  <div>
+    <h2>Fully editable with no signal.</h2>
+    <p class="lede">Add a task on the bus. It's there when you land, and it uploads by itself. Every change shows where it stands.</p>
+    <ul class="list">
+      <li><i>✓</i><span><b>Saved, waiting, syncing, failed or needs a choice</b>Always visible, never a mystery spinner.</span></li>
+      <li><i>✓</i><span><b>Conflicts you resolve yourself</b>Two devices, same field: you see both values and pick one. Nothing is silently overwritten.</span></li>
+      <li><i>✓</i><span><b>No ads, no trackers, nothing sold</b>You are the student, not the product.</span></li>
+    </ul>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--line);font-weight:650;font-size:14px;display:flex;justify-content:space-between"><span>Tasks</span><span style="color:#9a3412;font-size:12px">● Offline</span></div>
+    <div style="padding:8px 18px;display:grid;gap:0;font-size:14px">
+      <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line)"><span>Chem lab write-up</span><span style="font-size:11.5px;color:#9a3412;font-weight:600">Waiting</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line)"><span>Read ch. 7</span><span style="font-size:11.5px;color:var(--mute);font-weight:600">Saved</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line)"><span>Spanish vocab · repeats weekly</span><span style="font-size:11.5px;color:var(--mute);font-weight:600">Saved</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0"><span>Room for History</span><span style="font-size:11.5px;color:#7c3aed;font-weight:600">Needs a choice</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <h2>Two minutes, then it's just there.</h2>
+  <div class="steps">
+    <div class="step"><b>Sign in with Google</b><p>No new password, nothing to install, no app store account.</p></div>
+    <div class="step"><b>Find or build your school</b><p>Already added? One tap. If not, enter the bell schedule once and everyone after you gets it for free.</p></div>
+    <div class="step"><b>Drop classes on periods</b><p>Pick from the class directory, drag them on. Today fills itself in from then on.</p></div>
+  </div>
+</div></section>
+
+<div class="wrap end">
+  <div class="label">time spent counting cycle days on your fingers</div>
+  <div class="timer" style="color:var(--lime-ink)">00:00</div>
+  <div class="hero-cta" style="margin-top:22px"><a class="btn lime" href="#">Sign in with Google</a></div>
+  <p class="sub">Free. No ads, no trackers, nothing sold about you.</p>
+</div>
+
+<div class="wrap"><footer><span>© 2026 Quasar</span><span>Free for students · Privacy · Contact</span></footer></div>
+
+<script>
+  const DAY = [
+    {n:'Homeroom', r:'118', s:8*60+10, e:8*60+25},
+    {n:'English', r:'302', s:8*60+30, e:9*60+15},
+    {n:'Chemistry', r:'204', s:9*60+20, e:10*60+5},
+    {n:'Algebra II', r:'117', s:10*60+10, e:10*60+55},
+    {n:'Lunch · Wave 2', r:'Caf', s:11*60+0, e:11*60+30, lunch:true},
+    {n:'History', r:'221', s:11*60+35, e:12*60+20},
+    {n:'Spanish', r:'140', s:12*60+25, e:13*60+10},
+    {n:'Study hall', r:'Lib', s:13*60+15, e:14*60+0},
+  ];
+  const rail = document.getElementById('rail');
+  const cells = DAY.map(p => {
+    const d = document.createElement('div');
+    d.className = 'p' + (p.lunch ? ' lunch' : '');
+    d.innerHTML = `${p.n}<small>${fmt(p.s)}–${fmt(p.e)} · ${p.r}</small><span class="bar"></span>`;
+    rail.appendChild(d); return d;
+  });
+  function fmt(m){ const h=Math.floor(m/60), mm=m%60; return `${((h+11)%12)+1}:${String(mm).padStart(2,'0')}`; }
+  function mmss(sec){ sec=Math.max(0,Math.round(sec)); return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`; }
+
+  const timer=document.getElementById('timer'), label=document.getElementById('label'), next=document.getElementById('next');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let t = (9*60+20+31)*60; // seconds since midnight, sim
+  let paused = false, last = performance.now();
+  const RATE = reduce ? 1 : 200;
+  addEventListener('keydown', e => { if (e.code==='Space' && !e.target.closest('input,textarea')) { paused=!paused; e.preventDefault(); } });
+
+  function tick(now){
+    if(!paused){ t += (now-last)/1000*RATE; }
+    last = now;
+    const m = t/60;
+    if (m > DAY[DAY.length-1].e + 2) t = (DAY[0].s - 2)*60;
+    let cur = DAY.findIndex(p => m>=p.s && m<p.e);
+    let upcoming = DAY.findIndex(p => m<p.s);
+    timer.classList.remove('soon','passing');
+    if (cur >= 0){
+      const p = DAY[cur], left = p.e*60 - t;
+      label.innerHTML = `left in <b>${p.n}</b> · Room ${p.r}`;
+      timer.textContent = mmss(left);
+      if (left < 5*60) timer.classList.add('soon');
+      const nx = DAY[cur+1];
+      next.innerHTML = nx ? `Next: <b>${nx.n}</b> <span class="room">${nx.r}</span>${DAY[cur+2]?` · then ${DAY[cur+2].n}`:''}` : 'Next: <b>Home</b> · that’s the day';
+    } else if (upcoming >= 0){
+      const p = DAY[upcoming], left = p.s*60 - t;
+      label.innerHTML = `until <b>${p.n}</b> · Room ${p.r}`;
+      timer.textContent = mmss(left);
+      timer.classList.add('passing');
+      next.innerHTML = `Passing time · head to <span class="room">${p.r}</span>`;
+    } else {
+      label.innerHTML = `<b>Day done.</b>`; timer.textContent = '00:00'; next.innerHTML = 'Next: <b>Home</b>';
+    }
+    cells.forEach((c,i) => {
+      const p = DAY[i];
+      c.classList.toggle('now', i===cur);
+      c.classList.toggle('done', m>=p.e);
+      c.querySelector('.bar').style.width = i===cur ? `${((m-p.s)/(p.e-p.s))*100}%` : (m>=p.e?'100%':'0');
+    });
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

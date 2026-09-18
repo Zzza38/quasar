@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quasar — For schools that can't make up their mind</title>
+<link rel="icon" href="assets/logo.svg">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{--paper:#fcf9f1;--rule:#cfe0f1;--margin:#efaaaa;--ink:#1f2430;--pencil:#5b6270;--hl:#fff27a;--sticky:#fff3a3;--pink:#ffd1dc;--blue:#cfe8ff;--green:#d3f4d0;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif}
+  body{margin:0;color:var(--ink);font:17px/1.6 var(--serif);-webkit-font-smoothing:antialiased;
+    background:var(--paper) repeating-linear-gradient(transparent 0 31px,var(--rule) 31px 32px);background-attachment:scroll}
+  body::before{content:"";position:fixed;left:max(24px,calc(50% - 560px));top:0;bottom:0;width:2px;background:var(--margin);opacity:.7;pointer-events:none}
+  a{color:inherit}
+  .sans{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px 0 56px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:22px 0;font-family:ui-sans-serif,system-ui,sans-serif}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;text-decoration:none;letter-spacing:-.02em;font-size:17px}
+  .brand img{width:22px;height:22px}
+  .btn{display:inline-block;background:var(--ink);color:#fff;border-radius:10px;padding:11px 18px;font:600 14px/1 ui-sans-serif,system-ui,sans-serif;text-decoration:none;box-shadow:3px 3px 0 #b8c4d6;cursor:pointer;border:0}
+  .btn.o{background:#fff;color:var(--ink);border:1.5px solid var(--ink)}
+  .btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #b8c4d6}
+
+  .hero{padding:44px 0 40px;display:grid;grid-template-columns:1.2fr .8fr;gap:40px;align-items:center}
+  .date{font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;color:var(--pencil);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
+  h1{font-size:clamp(38px,5.6vw,66px);line-height:1.05;letter-spacing:-.02em;margin:0 0 18px;font-weight:600}
+  .hl{background:linear-gradient(transparent 40%,var(--hl) 40% 92%,transparent 92%);padding:0 3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+  .lede{font-size:19px;color:var(--pencil);margin:0 0 26px;max-width:520px}
+  .ctas{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .ctas small{font-family:ui-sans-serif,system-ui,sans-serif;color:var(--pencil);font-size:13px}
+
+  .card{background:#fff;border:1.5px solid var(--ink);border-radius:14px;box-shadow:5px 5px 0 #d9e2ef;padding:18px;font-family:ui-sans-serif,system-ui,sans-serif;transform:rotate(1.2deg)}
+  .card .h{display:flex;justify-content:space-between;font-size:12.5px;color:var(--pencil);margin-bottom:10px;font-weight:600}
+  .card .big{font-size:56px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+  .card .big small{font-size:15px;font-weight:600;color:var(--pencil);letter-spacing:0;margin-left:6px}
+  .card .row{display:grid;grid-template-columns:52px 1fr auto;gap:10px;font-size:13.5px;padding:8px 0;border-top:1px dashed #d5dbe5;align-items:center}
+  .card .row:first-of-type{border-top:0}
+  .card .row .t{color:var(--pencil);font-variant-numeric:tabular-nums;font-size:12px}
+  .card .row .r{font-size:11.5px;font-weight:700;background:var(--hl);padding:2px 6px;border-radius:5px}
+  .card .row.now{background:#f5f9ff;margin:0 -8px;padding:8px;border-radius:8px}
+  .scribble{position:absolute;right:-8px;top:-26px;font-family:var(--serif);font-style:italic;color:#c8443f;font-size:15px;transform:rotate(-6deg)}
+  .cardwrap{position:relative}
+
+  section{padding:52px 0}
+  h2{font-size:clamp(28px,3.6vw,40px);line-height:1.15;margin:0 0 8px;font-weight:600;letter-spacing:-.015em}
+  .sub{color:var(--pencil);margin:0 0 26px;font-size:17px;max-width:600px}
+
+  .stickies{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  .st{position:relative;padding:22px 20px 24px;min-height:190px;font-family:ui-sans-serif,system-ui,sans-serif;box-shadow:2px 6px 14px rgba(0,0,0,.12);background:var(--sticky);transform:rotate(-1.5deg)}
+  .st:nth-child(2){background:var(--pink);transform:rotate(1deg)}
+  .st:nth-child(3){background:var(--blue);transform:rotate(-.6deg)}
+  .st:nth-child(4){background:var(--green);transform:rotate(1.4deg)}
+  .st:nth-child(5){background:#e9dcff;transform:rotate(-1deg)}
+  .st:nth-child(6){background:#ffe0c2;transform:rotate(.8deg)}
+  .st::before{content:"";position:absolute;top:-8px;left:50%;width:70px;height:18px;margin-left:-35px;background:rgba(255,255,255,.55);transform:rotate(-2deg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .st b{display:block;font-size:17px;letter-spacing:-.01em;margin-bottom:6px}
+  .st p{margin:0;font-size:14px;line-height:1.5;color:#333a48}
+  .st .ex{font-family:var(--serif);font-style:italic;color:#7a4e4e;margin-top:10px;font-size:14px}
+
+  .syll{background:#fff;border:1.5px solid var(--ink);border-radius:10px;padding:26px 30px;box-shadow:5px 5px 0 #d9e2ef}
+  .syll .t{font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--pencil);margin-bottom:12px;display:flex;justify-content:space-between}
+  .syll ol{margin:0;padding-left:26px;display:grid;gap:8px;font-size:16.5px}
+  .syll li span{color:var(--pencil);font-size:15px}
+  .syll li::marker{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:700;color:var(--pencil)}
+  .check{display:inline-block;width:18px;height:18px;border:1.5px solid var(--ink);border-radius:4px;vertical-align:-3px;margin-right:8px;position:relative;background:#fff}
+  .check::after{content:"✓";position:absolute;left:2px;top:-6px;font-family:ui-sans-serif,system-ui,sans-serif;font-weight:800;color:#c8443f;font-size:18px;transform:rotate(-8deg)}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;counter-reset:s}
+  .step{counter-increment:s;font-family:ui-sans-serif,system-ui,sans-serif}
+  .step::before{content:counter(s);display:grid;place-items:center;width:34px;height:34px;border-radius:50%;border:1.5px solid var(--ink);font-weight:800;margin-bottom:12px;background:#fff;box-shadow:2px 2px 0 #d9e2ef}
+  .step b{display:block;margin-bottom:4px;font-size:16.5px}
+  .step p{margin:0;color:var(--pencil);font-size:14.5px}
+
+  .cta{text-align:center;padding:70px 0 90px}
+  .cta h2{font-size:clamp(30px,4.6vw,52px)}
+  .cta .sub{margin:8px auto 26px}
+  footer{padding:20px 0 40px;font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;color:var(--pencil);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  @media(max-width:860px){.hero,.stickies,.steps{grid-template-columns:1fr}.wrap{padding-left:40px}body::before{left:24px}.card{transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="#"><img src="assets/logo-mark.svg" alt=""> Quasar</a>
+    <a class="btn" href="#cta">Sign in with Google</a>
+  </header>
+
+  <div class="hero">
+    <div>
+      <div class="date">Thursday · Cycle day 4 · running as a Monday, apparently</div>
+      <h1>The schedule app for schools that <span class="hl">can't make up their mind.</span></h1>
+      <p class="lede">Snow days, two-hour delays, a Thursday that runs on a Monday schedule, lunch in two waves. Quasar keeps up. It's free, it works with no signal, and it never shows you an ad.</p>
+      <div class="ctas"><a class="btn" href="#cta">Sign in with Google</a><a class="btn o" href="#why">See what it handles</a><small>Two minutes to set up.</small></div>
+    </div>
+    <div class="cardwrap">
+      <span class="scribble">actually right today ↓</span>
+      <div class="card">
+        <div class="h"><span>Today</span><span>Day 4 of 8</span></div>
+        <div class="big">14:32<small>left in Chemistry</small></div>
+        <div style="margin-top:14px">
+          <div class="row"><span class="t">9:20</span><span>Chemistry</span><span class="r">204</span></div>
+          <div class="row now"><span class="t">10:10</span><span>Algebra II · <i style="color:var(--pencil)">next</i></span><span class="r">117</span></div>
+          <div class="row"><span class="t">11:00</span><span>Lunch · Wave 2</span><span class="r">Caf</span></div>
+          <div class="row"><span class="t">11:35</span><span>History</span><span class="r">221</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="why"><div class="wrap">
+  <h2>Things my school did this year, <span class="hl">and what Quasar did about it.</span></h2>
+  <p class="sub">Every one of these is a setting, not a workaround.</p>
+  <div class="stickies">
+    <div class="st"><b>Eight-day rotation</b><p>Not A/B. Any cycle length, letter days, periods that change position from day to day.</p><div class="ex">“Is it day 3 or day 4?” Never again.</div></div>
+    <div class="st"><b>Snow day on a Tuesday</b><p>Cycle days skip holidays and closures. The rotation doesn't slide out by one for a month.</p><div class="ex">Wed became Day 4, like it should.</div></div>
+    <div class="st"><b>“Thursday runs as Monday”</b><p>Replacement days: one date, one setting. Every period, room and lunch wave follows.</p><div class="ex">Wave 2 lunch. It knew.</div></div>
+    <div class="st"><b>Two-hour delay</b><p>Shift the whole day. Every start, end and countdown moves with it. Your own edits survive when the school corrects theirs.</p><div class="ex">My note on P3 was still there.</div></div>
+    <div class="st"><b>The bus has no signal</b><p>Fully editable offline. Add a task, it's there when you land and uploads by itself. Every change shows where it stands.</p><div class="ex">Saved · Waiting · Syncing</div></div>
+    <div class="st"><b>Reset after break</b><p>The school restarted the count after a closed week. You can tell Quasar that in one tap.</p><div class="ex">Cycle reset: Jan 6 → Day 1.</div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="syll">
+    <div class="t"><span>Course requirements · Schedule app 101</span><span>Grade: Pass</span></div>
+    <ol>
+      <li><span class="check"></span>Tasks with priorities, checklists, repeats and notes. <span>Teacher calendar feeds import themselves.</span></li>
+      <li><span class="check"></span>Conflicts you resolve yourself. <span>Two devices, same field: both values shown, you pick. Nothing silently overwritten.</span></li>
+      <li><span class="check"></span>Lunch waves as real periods. <span>Wave 1 and Wave 2 are different times, not a note.</span></li>
+      <li><span class="check"></span>No ads, no trackers, nothing sold. <span>You are the student, not the product.</span></li>
+      <li><span class="check"></span>Share with the people you choose. <span>One friend at a time, and take it back whenever.</span></li>
+    </ol>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Homework: two minutes.</h2>
+  <p class="sub">Then it's just there.</p>
+  <div class="steps">
+    <div class="step"><b>Sign in with Google</b><p>No new password, nothing to install, no app store account.</p></div>
+    <div class="step"><b>Find or build your school</b><p>Already added? One tap. If not, enter the bell schedule once. Everyone after you gets it for free.</p></div>
+    <div class="step"><b>Drop classes on periods</b><p>Browse the class directory, pick yours, drag them on. Today fills itself in from then on.</p></div>
+  </div>
+</div></section>
+
+<div class="wrap cta" id="cta">
+  <h2>Stop counting cycle days <span class="hl">on your fingers.</span></h2>
+  <p class="sub">Free for students. No ads, no trackers, nothing sold about you.</p>
+  <a class="btn" href="#">Sign in with Google</a>
+</div>
+<div class="wrap"><footer><span>© 2026 Quasar</span><span>Privacy · Contact</span></footer></div>
+</body>
+</html>

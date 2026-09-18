@@ -1,36 +1,24 @@
 # Quasar landing page mockups
 
-Ten self-contained landing page directions, plus a chooser shell.
-
-**Round 2** — bred from Switch (4) and Pocket (5), which the owner picked:
-
-| File | Direction |
-| ---- | --------- |
-| `6-verdict.html`    | The straight hybrid: Switch's blunt argument, Pocket's warmth and live phone. |
-| `7-receipts.html`   | Proof-driven. Four weird days, each flippable between "usually" and "with Quasar". |
-| `8-aurora.html`     | Pocket's phone-first layout in a dark neon treatment. Same demo, different mood. |
-| `9-scoreboard.html` | Interactive: score your current app out of 11, live meter and verdict. |
-| `10-week.html`      | Scroll-driven story of one weird week; the sticky phone updates per chapter. |
-
-**Round 1**:
+Five self-contained landing page directions, plus a chooser shell.
+(The earlier ten rounds live in git history before this commit.)
 
 | File | Direction |
 | ---- | --------- |
-| `4-switch.html` ★  | Blunt and conversion-led. Names the pain, comparison table, straight answers. |
-| `5-pocket.html` ★  | Playful, phone-centred. Animated live phone demo, bento features, soft colours. |
-| `1-nebula.html`   | Dark, cosmic, premium. Plays on the name; glowing hero, starfield, phone mock. |
-| `2-daylight.html` | Light, product-first SaaS. Big app screenshot, feature grid, FAQ. |
-| `3-bell.html`     | Editorial. The page is laid out as a school day on a time rail, serif headlines. |
+| `1-countdown.html` | The home screen is the pitch. A huge live timer and a period rail; the demo day runs at 200×. Almost no copy. |
+| `2-spec.html`      | Brutalist, monospace spec sheet. The eleven behaviours as numbered requirements with SHIPPED stamps. |
+| `3-airplane.html`  | Interactive offline demo. Flip the Wi‑Fi off, add a task, flip it back; click through a conflict. |
+| `4-notebook.html`  | Student voice on ruled notebook paper. Marker highlights, sticky-note features, a syllabus checklist. |
+| `5-split.html`     | Full-bleed before/after hero with a draggable divider, then paired "their app / Quasar" rows. |
 
-`index.html` is the chooser: a grouped side rail, an iframe preview, viewport
-width presets, and `1`–`9`/`0` / `←` `→` keyboard shortcuts.
+`index.html` is the chooser: side rail, iframe preview, viewport width presets,
+and `1`–`5` / `←` `→` keyboard shortcuts.
 
 ## Product copy note
 
 Schedule sharing with chosen friends is a planned feature, so no page claims
 schedules are never shared. "No ads, no trackers, nothing sold about you"
-stays. Round 2 pages frame it positively as "share with the people you
-choose"; say the word and that can be dropped until it ships.
+stays. Pages frame sharing positively as "share with the people you choose".
 
 Each page is one HTML file with inline CSS and no build step or network
 dependency. The only shared asset is the logo.
@@ -46,8 +34,6 @@ To take it down: `tailscale serve --https=3005 off` and `pkill -f "http.server 3
 
 ## Swapping the logo
 
-All five pages reference `assets/logo-mark.svg` (the glyph alone, inherits
-`color`) and `index.html` also uses `assets/logo.svg` as the favicon. Replace
-those two files and every page picks it up on reload. The current files are
-placeholders. If the real logo is a PNG, drop it in as
-`assets/logo-mark.png` and change the five `<img src>` references.
+All pages reference `assets/logo-mark.svg` (the glyph alone, inherits
+`color`) and `index.html` uses `assets/logo.svg` as the favicon. Replace
+those two files and every page picks it up on reload.
