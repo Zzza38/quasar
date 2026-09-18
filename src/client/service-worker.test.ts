@@ -38,7 +38,7 @@ function worker() {
         match: async (key: string | { url: string }) => cache.get(address(key))?.clone(),
         put: async (key: string | { url: string }, value: Response) => { cache.set(address(key), value.clone()); },
       }),
-      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "unrelated-cache"],
+      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "unrelated-cache"],
       delete: async (name: string) => { deletedCaches.push(name); return true; },
     },
     self: {
@@ -67,6 +67,7 @@ function worker() {
     breakBundle: () => { brokenBundle = true; },
     personalize: () => { personalizedNavigation = true; },
     navigate: (path: string) => dispatch("fetch", { request: { method: "GET", url: address(path), mode: "navigate" } }),
+    fetch: (path: string) => dispatch("fetch", { request: { method: "GET", url: address(path), mode: "cors" } }),
   };
 }
 
@@ -74,7 +75,7 @@ describe("public offline service worker", () => {
   it("cleans up pre-rebrand and outdated shells while preserving current and unrelated caches", async () => {
     const sw = worker();
     await sw.dispatch("activate");
-    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2"]);
+    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3"]);
   });
 
   it("prepares the shell and bundles for the first offline reload", async () => {
@@ -86,6 +87,16 @@ describe("public offline service worker", () => {
     sw.offline();
     expect(await (await sw.navigate("/"))?.text()).toContain("Public shell");
     expect(await (await sw.navigate("/admin"))?.text()).toContain("Public shell");
+  });
+
+  it("serves fresh bundles from the network and falls back to the cache offline", async () => {
+    const sw = worker();
+    await sw.dispatch("install");
+    const stale = new Response("stale bundle", { headers: { "content-type": "text/javascript" } });
+    sw.cache.set(address("/_next/static/app.js"), stale);
+    expect(await (await sw.fetch("/_next/static/app.js"))?.text()).toBe("app bundle");
+    sw.offline();
+    expect(await (await sw.fetch("/_next/static/app.js"))?.text()).toBe("app bundle");
   });
 
   it("never caches authenticated HTML, authentication redirects, or API responses", async () => {

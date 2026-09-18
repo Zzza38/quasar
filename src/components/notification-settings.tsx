@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { serviceWorkerEnabled } from '@/client/service-worker-support';
 import { api, errorMessage } from '@/client/api';
 import { Icon } from './icon';
 import { Button, ErrorText, Hint } from './primitives';
@@ -21,7 +22,7 @@ export function NotificationSettings({ accountId, online }: { accountId: string;
   const storageKey = `quasar-push:${accountId}`;
   useEffect(() => {
     let alive = true;
-    const supported = window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+    const supported = serviceWorkerEnabled && window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
     setSupported(supported); setEnabled(false); setConfig(null); setError('');
     if (!supported) return;
     setPermission(Notification.permission);

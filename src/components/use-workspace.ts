@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { removeStaleWorkers, serviceWorkerEnabled } from '@/client/service-worker-support';
 import { signOut } from 'next-auth/react';
 import { api, errorMessage, isUnauthorized, type Workspace } from '@/client/api';
 import { clearOfflineAccount, getLastAccountId, openWorkspace, type OfflineWorkspace, type WorkspaceSnapshot } from '@/client/offline';
@@ -87,6 +88,7 @@ export function useWorkspace(): WorkspaceSession {
   const prepareOffline = useCallback(async (prepare = true) => {
     setOfflineReady(null);
     try {
+      if (!serviceWorkerEnabled) { await removeStaleWorkers(); setOfflineReady(false); return; }
       if (!('serviceWorker' in navigator)) { setOfflineReady(false); return; }
       const registration = prepare ? await navigator.serviceWorker.register('/sw.js') : await navigator.serviceWorker.getRegistration();
       if (!registration) { setOfflineReady(false); return; }

@@ -1,6 +1,6 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "quasar-public-shell-v3";
+const CACHE = "quasar-public-shell-v4";
 const SHELL_PATHS = new Set(["/", "/admin"]);
 
 function publicShell(response, expectedPath) {
@@ -84,14 +84,21 @@ self.addEventListener("fetch", (event) => {
 
   // Next's content-addressed bundles are public. Do not intercept RSC requests,
   // API routes, OAuth redirects, external resources, or arbitrary user content.
+  // Network first so a fresh deployment (or a dev bundle that is not content-addressed)
+  // never hydrates against stale JavaScript; the cached copy only serves offline.
   if (url.pathname.startsWith("/_next/static/") || url.pathname === "/manifest.webmanifest" || url.pathname === "/icon.svg") {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      const cached = await cache.match(request);
-      if (cached) return cached;
-      const response = await fetch(request);
-      if (response.ok && !response.redirected && response.type === "basic") await cache.put(request, response.clone());
-      return response;
+      try {
+        const response = await fetch(request);
+        if (response.ok && !response.redirected && response.type === "basic") await cache.put(request, response.clone());
+        else if (!response.ok) { const cached = await cache.match(request); if (cached) return cached; }
+        return response;
+      } catch (error) {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        throw error;
+      }
     })());
   }
 });
