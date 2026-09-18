@@ -13,7 +13,8 @@ export const SCAN_REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhig
 export type ScanReasoning = typeof SCAN_REASONING[number];
 export type ScanConfig = { url: string; key: string; model: string; reasoning?: ScanReasoning };
 export function scanConfig(env: Record<string, string | undefined> = process.env): ScanConfig | null {
-  const url = env.SCAN_API_URL?.trim().replace(/\/+$/, '');
+  // Accept either the API base (…/v1) or the full completions URL people paste from provider docs.
+  const url = env.SCAN_API_URL?.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
   const model = env.SCAN_MODEL?.trim();
   if (!url || !model) return null;
   const reasoning = env.SCAN_MODEL_REASONING?.trim().toLowerCase();

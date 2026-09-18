@@ -34,6 +34,7 @@ describe('timetable scanning', () => {
   it('is hidden until an API URL and model are configured', async () => {
     expect(scanConfig({})).toBeNull();
     expect(scanConfig({ SCAN_API_URL: 'https://api.example/v1/', SCAN_MODEL: 'm' })).toEqual({ url: 'https://api.example/v1', key: '', model: 'm' });
+    expect(scanConfig({ SCAN_API_URL: 'https://api.example/v1/chat/completions', SCAN_MODEL: 'm' })).toMatchObject({ url: 'https://api.example/v1' });
     expect(scanConfig({ SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm', SCAN_MODEL_REASONING: ' Low ' })).toMatchObject({ reasoning: 'low' });
     expect(() => scanConfig({ SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm', SCAN_MODEL_REASONING: 'turbo' })).toThrow('SCAN_MODEL_REASONING');
     const f = fixture();
