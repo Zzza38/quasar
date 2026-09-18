@@ -9,6 +9,7 @@ import type { AppState } from '../app-state';
 import { sortByDue, taskItems } from '../app-state';
 import { Icon } from '../icon';
 import { Button, Chip, ColorDot, EmptyState, Eyebrow, Hint, Input, Section } from '../primitives';
+import { buttonVariants } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
 import { Progress } from '../ui/progress';
@@ -207,5 +208,6 @@ export function TaskRow({ item, state, showDate = true }: { item: ReturnType<typ
       </span>}
       {error && <Hint tone="danger" role="alert">{error}</Hint>}
     </button>
+    {task.imported?.url && <a href={task.imported.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0 text-muted-foreground')} aria-label={`Open link for ${task.title}`} title="Open link"><Icon name="externalLink" /></a>}
   </li>;
 }

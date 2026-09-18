@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BookOpen, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, Moon, Palette, Pencil, Plus, RefreshCw, Search, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BookOpen, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, Moon, Palette, Pencil, Plus, RefreshCw, Search, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -42,6 +42,7 @@ const icons = {
   moon: Moon,
   copy: Copy,
   eye: Eye,
+  externalLink: ExternalLink,
   inbox: Inbox,
   more: Ellipsis,
   coffee: Coffee,

@@ -116,7 +116,7 @@ export class CalendarService {
       const entityId=existing?.entity_id??'ical_'+hash(subscriptionId+'\0'+key);
       const entity=readEntity(this.db,owner,entityId);
       const incoming=fieldsOf(source);
-      const metadata={subscriptionId,uid:source.uid,recurrenceId:source.recurrenceId,startDate:source.startDate,startTime:source.startTime,endDate:source.endDate,endTime:source.endTime,timeZone:source.timeZone,allDay:source.allDay,sourceRemoved:source.cancelled,sourceUpdatedAt:stamp};
+      const metadata={subscriptionId,uid:source.uid,recurrenceId:source.recurrenceId,startDate:source.startDate,startTime:source.startTime,endDate:source.endDate,endTime:source.endTime,timeZone:source.timeZone,allDay:source.allDay,sourceRemoved:source.cancelled,sourceUpdatedAt:stamp,url:source.url??null};
       if(!entity&&!source.cancelled){writeEntity(this.db,owner,{id:entityId,kind:'task',version:1,deleted:false,data:taskSchema.parse({...incoming,classId:null,completed:false,imported:metadata})});}
       else if(entity&&!entity.deleted){
         const previous=existing?fieldsOf(JSON.parse(existing.source_data) as FeedItem):incoming;

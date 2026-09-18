@@ -25,6 +25,18 @@ function fixture() {
 }
 
 describe('calendar subscriptions',()=>{
+  it('stores the event link on the imported task and follows source changes',async()=>{
+    const f=fixture();
+    f.fetcher.mockResolvedValue({status:200,text:calendar(event('Read chapter 1',['URL:https://classroom.example/a/1'])),etag:'v1'});
+    const subscription=await f.subscribe();
+    expect(f.entities()[0].data).toMatchObject({imported:{url:'https://classroom.example/a/1'}});
+    f.fetcher.mockResolvedValue({status:200,text:calendar(event('Read chapter 1',['URL:https://classroom.example/a/2'])),etag:'v2'});
+    f.advance(); await f.service.refresh(f.owner,subscription.id);
+    expect(f.entities()[0].data).toMatchObject({imported:{url:'https://classroom.example/a/2'}});
+    f.fetcher.mockResolvedValue({status:200,text:calendar(event()),etag:'v3'});
+    f.advance(); await f.service.refresh(f.owner,subscription.id);
+    expect((f.entities()[0].data as {imported:{url:string|null}}).imported.url).toBeNull();
+  });
   it('deduplicates subscription URLs, encrypts credentials, and isolates owners',async()=>{
     const f=fixture(), subscription=await f.subscribe();
     expect((await f.subscribe()).id).toBe(subscription.id);

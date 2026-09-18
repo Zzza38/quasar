@@ -20,6 +20,20 @@ describe('iCalendar import',()=>{
     const [item] = parseICalendar(wrap('BEGIN:VTODO\nUID:todo\nDUE:20260911T150000Z\nSUMMARY:Home\n work\\, chapter 1\nDESCRIPTION:Line 1\\nLine 2\nEND:VTODO'),options);
     expect(item).toMatchObject({title:'Homework, chapter 1',notes:'Line 1\nLine 2',dueDate:'2026-09-11',dueTime:'11:00'});
   });
+  it('surfaces web links from the URL property and drops other schemes',()=>{
+    const items = parseICalendar(wrap([
+      event('UID:web\nDTSTART;VALUE=DATE:20260911\nURL:https://classroom.example/assignment/1?x=1'),
+      event('UID:typed\nDTSTART;VALUE=DATE:20260911\nURL;VALUE=URI:http://school.example/page'),
+      event('UID:mail\nDTSTART;VALUE=DATE:20260911\nURL:mailto:teacher@example.com'),
+      event('UID:script\nDTSTART;VALUE=DATE:20260911\nURL:javascript:alert(1)'),
+      event('UID:none\nDTSTART;VALUE=DATE:20260911'),
+    ].join('\n')),options);
+    expect(items.find(i=>i.uid==='web')?.url).toBe('https://classroom.example/assignment/1?x=1');
+    expect(items.find(i=>i.uid==='typed')?.url).toBe('http://school.example/page');
+    expect(items.find(i=>i.uid==='mail')?.url).toBeNull();
+    expect(items.find(i=>i.uid==='script')?.url).toBeNull();
+    expect(items.find(i=>i.uid==='none')?.url).toBeNull();
+  });
   it('expands RRULE/RDATE, respects EXDATE and moved/cancelled instances with stable identities',()=>{
     const items = parseICalendar(wrap([
       event('UID:repeat\nDTSTART:20260901T090000\nDTEND:20260901T100000\nRRULE:FREQ=DAILY;COUNT=4\nRDATE:20260910T090000\nEXDATE:20260902T090000\nSUMMARY:Class'),

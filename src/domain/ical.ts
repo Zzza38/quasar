@@ -1,11 +1,17 @@
 import ICAL from 'ical.js';
 import { Temporal } from '@js-temporal/polyfill';
 
-export type FeedItem = { uid:string; recurrenceId:string|null; title:string; notes:string; startDate:string; startTime:string|null; endDate:string|null; endTime:string|null; dueDate:string; dueTime:string|null; timeZone:string; allDay:boolean; cancelled:boolean };
+export type FeedItem = { uid:string; recurrenceId:string|null; title:string; notes:string; startDate:string; startTime:string|null; endDate:string|null; endTime:string|null; dueDate:string; dueTime:string|null; timeZone:string; allDay:boolean; cancelled:boolean; url:string|null };
 export type ParseCalendarOptions = {timeZone:string;windowStart?:string;windowEnd?:string};
 const MAX_ITEMS = 2000;
 const MAX_STEPS = 50_000;
 const value = (c:ICAL.Component, name:string) => c.getFirstPropertyValue(name);
+/** Only web links are surfaced; other schemes (mailto, javascript, file) are dropped rather than rendered as buttons. */
+export function webLink(raw:unknown):string|null {
+  if(typeof raw !== 'string') return null;
+  const text = raw.trim(); if(!text || text.length > 2000) return null;
+  try { const url = new URL(text); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null; } catch { return null; }
+}
 const time = (c:ICAL.Component, name:string):ICAL.Time|null => {
   const v = value(c,name); if(v == null) return null;
   if(!(v instanceof ICAL.Time)) throw new Error(`Invalid calendar ${name}.`);
@@ -70,7 +76,7 @@ export function parseICalendar(text:string, options:ParseCalendarOptions):FeedIt
     const title = String(value(c,'summary') || 'Untitled calendar item').slice(0,300);
     const notes = String(value(c,'description') || '').slice(0,10000);
     const due = c.name === 'vtodo' && e ? e : s;
-    output.set(JSON.stringify([uid,recurrenceId]),{uid,recurrenceId,title,notes,startDate:s.date,startTime:s.time,endDate:e?.date ?? null,endTime:e?.time ?? null,dueDate:due.date,dueTime:due.time,timeZone:options.timeZone,allDay:start.isDate,cancelled:String(value(c,'status')).toUpperCase() === 'CANCELLED'});
+    output.set(JSON.stringify([uid,recurrenceId]),{uid,recurrenceId,title,notes,startDate:s.date,startTime:s.time,endDate:e?.date ?? null,endTime:e?.time ?? null,dueDate:due.date,dueTime:due.time,timeZone:options.timeZone,allDay:start.isDate,cancelled:String(value(c,'status')).toUpperCase() === 'CANCELLED',url:webLink(value(c,'url'))});
     if(output.size > MAX_ITEMS) throw new Error('Calendar expands to more than 2000 occurrences.');
   };
   for(const group of groups.values()) {

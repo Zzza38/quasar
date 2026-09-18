@@ -8,7 +8,9 @@ import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { sortByDue, taskItems } from '../app-state';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
+import { Icon } from '../icon';
 import { Button, Callout, EmptyState, Field, Hint, Input, Modal, Select, Spacer, Textarea } from '../primitives';
+import { buttonVariants } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
@@ -103,7 +105,7 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
         {draft.dueDate && <Button size="sm" variant="ghost" onClick={() => setDraft({ ...draft, dueDate: null, dueTime: null, recurrence: null, reminder: null })}>No date</Button>}
       </div>
       <Field label="Class" htmlFor="task-class"><Select id="task-class" value={draft.classId ?? ''} onChange={(event) => setDraft({ ...draft, classId: event.target.value || null })}><option value="">No class</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>{cls.name}</option>)}{draft.classId && !classes.some((cls) => cls.id === draft.classId) && <option value={draft.classId}>Removed class</option>}</Select></Field>
-      {draft.imported && <Callout tone="neutral" icon="calendar">Imported calendar event{draft.imported.sourceRemoved ? ' · Removed from its source; your task is kept.' : '. Calendar updates keep your completion and checklist.'}</Callout>}
+      {draft.imported && <Callout tone="neutral" icon="calendar" actions={draft.imported.url ? <a href={draft.imported.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}><Icon name="externalLink" />Open link</a> : undefined}>Imported calendar event{draft.imported.sourceRemoved ? ' · Removed from its source; your task is kept.' : '. Calendar updates keep your completion and checklist.'}</Callout>}
       <Field label="Priority" htmlFor="task-priority"><Select id="task-priority" value={draft.priority ?? 'normal'} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Task['priority'] })}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></Select></Field>
       <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-medium text-muted-foreground">Checklist</legend>
         {(draft.subtasks ?? []).map((item, index) => <div key={item.id} className="flex items-center gap-2">
