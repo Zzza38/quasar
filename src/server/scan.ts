@@ -48,8 +48,8 @@ const responseSchema = z.object({ rows: z.array(z.unknown()).max(100) });
 
 export type ScanRow = {
   name: string; teacher?: string; room?: string;
-  /** A school period the model matched, verified to exist. */
-  periodId?: string;
+  /** Every school period the model matched, verified to exist. */
+  periodIds: string[];
   /** What the photo said about the period when no verified match exists. */
   periodLabel?: string;
   /** A directory class the model matched, verified to exist for this school. */
@@ -139,31 +139,27 @@ export class ScanService {
     const entries = new Map(directory.map(entry => [entry.id, entry]));
     const notes: string[] = [];
     const rows: ScanRow[] = [];
-    const seen = new Set<string>();
     for (const candidate of parsed.data.rows) {
       const row = rowSchema.safeParse(candidate);
       if (!row.success) { notes.push('Skipped a line the scanner could not read.'); continue; }
       const match = row.data.directoryId ? entries.get(row.data.directoryId) : undefined;
       const name = row.data.className ?? match?.name;
       if (!name) continue;
-      // A class may meet in several periods across the rotation; the sheet shows one row per period.
+      // A class may meet in several periods across the rotation; rows are keyed by class name.
       const resolve = (value: string | undefined) => value ? (periods.has(value) ? value : byLabel.get(normalize(value))) : undefined;
       const matched = [...new Set([...(row.data.periodIds ?? []), row.data.periodId, row.data.periodLabel].map(resolve).filter((id): id is string => !!id))];
-      const label = matched.length ? undefined : row.data.periodLabel ?? row.data.periodId ?? row.data.periodIds?.find(Boolean);
-      for (const periodId of matched.length ? matched : [undefined]) {
-        const key = `${normalize(name)}|${periodId ?? ''}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({
-          name: match && normalize(match.name) === normalize(name) ? match.name : name,
-          teacher: row.data.teacher ?? match?.teacher,
-          room: row.data.room ?? match?.room,
-          periodId,
-          periodLabel: periodId ? undefined : label,
-          directoryId: match?.id,
-          days: (row.data.days ?? []).filter(Boolean),
-        });
-      }
+      const key = normalize(name);
+      const existing = rows.find(entry => normalize(entry.name) === key);
+      if (existing) { existing.periodIds = [...new Set([...existing.periodIds, ...matched])]; if (existing.periodIds.length) existing.periodLabel = undefined; continue; }
+      rows.push({
+        name: match && normalize(match.name) === normalize(name) ? match.name : name,
+        teacher: row.data.teacher ?? match?.teacher,
+        room: row.data.room ?? match?.room,
+        periodIds: matched,
+        periodLabel: matched.length ? undefined : row.data.periodLabel ?? row.data.periodId ?? row.data.periodIds?.find(Boolean),
+        directoryId: match?.id,
+        days: (row.data.days ?? []).filter(Boolean),
+      });
     }
     if (rows.length === 0) notes.push('No classes were found in the photo. Try a straight-on, well-lit shot of the whole timetable.');
     return { rows, model: this.config?.model ?? '', notes };

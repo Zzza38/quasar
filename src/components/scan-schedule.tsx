@@ -4,7 +4,10 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
 import { slugId } from '@/lib/format';
-import { Button, Callout, Chip, Field, Hint, Input, Modal, Select, Spacer } from './primitives';
+import { Button, Callout, Chip, Field, Hint, Input, Modal, Spacer } from './primitives';
+import { Checkbox } from './ui/checkbox';
+import { Label } from './ui/label';
+import { Toggle } from './ui/toggle';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 type Draft = ScanRow & { include: boolean };
@@ -43,7 +46,7 @@ export function applyScan(personal: PersonalSchedule, rows: Draft[]): PersonalSc
       existing = classSchema.parse({ id, name: row.name.trim(), ...(row.directoryId ? { directoryId: row.directoryId } : {}), ...(row.room?.trim() ? { room: row.room.trim() } : {}), ...(row.teacher?.trim() ? { teacher: row.teacher.trim() } : {}) });
       classes.push(existing);
     }
-    if (row.periodId) assignments[row.periodId] = existing.id;
+    for (const periodId of row.periodIds) assignments[periodId] = existing.id;
   }
   return { ...personal, classes, assignments };
 }
@@ -73,8 +76,9 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
     setNotes(result.notes);
   });
   const update = (index: number, patch: Partial<Draft>) => setRows(current => current?.map((row, i) => i === index ? { ...row, ...patch } : row) ?? null);
-  const ready = [...new Set((rows ?? []).filter(row => row.include && row.name.trim()).map(row => row.name.trim().toLowerCase()))];
-  const alreadyAssigned = (row: Draft) => row.periodId && personal.assignments[row.periodId] ? personal.classes.find(cls => cls.id === personal.assignments[row.periodId!])?.name : undefined;
+  const ready = rows?.filter(row => row.include && row.name.trim()) ?? [];
+  const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
+  const replaced = (row: Draft) => row.periodIds.flatMap(periodId => { const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]); return cls && cls.name.trim().toLowerCase() !== row.name.trim().toLowerCase() ? [`${cls.name} on ${label(periodId)}`] : []; });
 
   return <Modal open={open} onClose={onClose} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
@@ -95,26 +99,32 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
         {!rows && <Hint>{payload ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
         {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
         {rows && rows.length > 0 && <>
-          <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. A class that meets in several periods appears once per period. Fix anything that was misread and untick what you do not take.</Hint>
+          <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread, pick every period each class meets in, and untick what you do not take.</Hint>
           <ul className="grid gap-3" aria-label="Classes read from the photo">
             {rows.map((row, index) => {
-              const replaces = row.include ? alreadyAssigned(row) : undefined;
+              const replaces = row.include ? replaced(row) : [];
               return <li key={index} className={row.include ? 'grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]' : 'grid gap-2 rounded-2xl p-3 opacity-60 ring-1 ring-inset ring-foreground/[0.06]'}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={row.include} onChange={event => update(index, { include: event.target.checked })} /> Include</label>
+                  <div className="flex items-center gap-2"><Checkbox id={`scan-include-${index}`} checked={row.include} onCheckedChange={checked => update(index, { include: checked === true })} /><Label htmlFor={`scan-include-${index}`} className="text-sm font-semibold">Include</Label></div>
                   {row.directoryId && <Chip tone="accent" icon="school">From the school directory</Chip>}
-                  {!row.periodId && <Chip tone="warning" icon="alert">{row.periodLabel ? `Period “${row.periodLabel}” not matched` : 'No period matched'}</Chip>}
+                  {row.periodIds.length === 0 && <Chip tone="warning" icon="alert">{row.periodLabel ? `Could not match “${row.periodLabel}” to a period` : 'No period matched'}</Chip>}
                   {row.days.length > 0 && <Chip tone="neutral">{row.days.join(', ')}</Chip>}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1fr)]">
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)]">
                   <Field label="Class" htmlFor={`scan-name-${index}`}><Input id={`scan-name-${index}`} small maxLength={120} value={row.name} disabled={!row.include} onChange={event => update(index, { name: event.target.value })} /></Field>
                   <Field label="Teacher" htmlFor={`scan-teacher-${index}`}><Input id={`scan-teacher-${index}`} small maxLength={120} value={row.teacher ?? ''} disabled={!row.include} onChange={event => update(index, { teacher: event.target.value })} /></Field>
                   <Field label="Room" htmlFor={`scan-room-${index}`}><Input id={`scan-room-${index}`} small maxLength={120} value={row.room ?? ''} disabled={!row.include} onChange={event => update(index, { room: event.target.value })} /></Field>
-                  <Field label="Period" htmlFor={`scan-period-${index}`}><Select id={`scan-period-${index}`} small value={row.periodId ?? ''} disabled={!row.include} onChange={event => update(index, { periodId: event.target.value || undefined })}>
-                    <option value="">Not placed</option>{schedule.periods.map(period => <option key={period.id} value={period.id}>{period.label}</option>)}
-                  </Select></Field>
                 </div>
-                {replaces && <Hint tone="danger">Replaces {replaces} on this period.</Hint>}
+                <Field label="Periods" hint={row.periodIds.length === 0 ? 'Not placed yet. Tap every period this class meets in.' : undefined}>
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Periods for ${row.name || 'this class'}`}>
+                    {schedule.periods.map(period => {
+                      const on = row.periodIds.includes(period.id);
+                      return <Toggle key={period.id} variant="outline" size="sm" pressed={on} disabled={!row.include} className="min-w-[44px] rounded-full bg-card px-3 font-semibold data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                        onPressedChange={() => update(index, { periodIds: on ? row.periodIds.filter(id => id !== period.id) : schedule.periods.filter(entry => entry.id === period.id || row.periodIds.includes(entry.id)).map(entry => entry.id) })}>{period.label}</Toggle>;
+                    })}
+                  </div>
+                </Field>
+                {replaces.length > 0 && <Hint tone="danger">Replaces {replaces.join(', ')}.</Hint>}
               </li>;
             })}
           </ul>

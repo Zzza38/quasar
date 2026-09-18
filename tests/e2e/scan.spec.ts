@@ -22,7 +22,7 @@ test.beforeAll(async () => {
       const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
       requests.push({ model: body.model, image: parts[1].image_url!.url, prompt: parts[0].text! });
       const rows = [
-        { className: 'Algebra II', periodId: 'A', directoryId, days: ['Day 1', 'Day 3'] },
+        { className: 'Algebra II', periodIds: ['A', 'C'], directoryId, days: ['Day 1', 'Day 3'] },
         { className: 'World History', teacher: 'Mr. Adeyemi', room: '118', periodLabel: 'B' },
         { className: 'Study Hall', periodLabel: 'Flex' },
       ];
@@ -76,10 +76,16 @@ test('scans a timetable photo, lets the student review it, and places the classe
   await expect(rows.nth(0).getByLabel('Class')).toHaveValue('Algebra II');
   await expect(rows.nth(0).getByLabel('Teacher')).toHaveValue('Ms. Ortiz');
   await expect(rows.nth(0).getByLabel('Room')).toHaveValue('204');
-  await expect(rows.nth(0).getByLabel('Period')).toHaveValue('A');
+  const periods = (index: number) => rows.nth(index).getByRole('group', { name: /^Periods for/ }).getByRole('button');
+  await expect(periods(0).and(page.locator('[aria-pressed="true"]'))).toHaveText(['A', 'C']);
   await expect(rows.nth(0).getByText('From the school directory')).toBeVisible();
-  await expect(rows.nth(1).getByLabel('Period')).toHaveValue('B');
-  await expect(rows.nth(2).getByText('Period “Flex” not matched')).toBeVisible();
+  await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B']);
+  await expect(rows.nth(2).getByText('Could not match “Flex” to a period')).toBeVisible();
+  // Drop Algebra from C, and place History on D as well.
+  await periods(0).filter({ hasText: /^C$/ }).click();
+  await periods(1).filter({ hasText: /^D$/ }).click();
+  await expect(periods(0).and(page.locator('[aria-pressed="true"]'))).toHaveText(['A']);
+  await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B', 'D']);
   await page.screenshot({ path: testInfo.outputPath('scan-review.png'), fullPage: true });
 
   // Fix a misread room and leave study hall out.
@@ -93,5 +99,7 @@ test('scans a timetable photo, lets the student review it, and places the classe
   await expect(cards.filter({ hasText: 'Algebra II' })).toContainText('Room 204 · Ms. Ortiz');
   await expect(cards.filter({ hasText: 'World History' })).toContainText('Room 119 · Mr. Adeyemi');
   await expect(cards.filter({ hasText: 'World History' }).getByText('B', { exact: true })).toBeVisible();
+  await expect(cards.filter({ hasText: 'World History' }).getByText('D', { exact: true })).toBeVisible();
+  await expect(cards.filter({ hasText: 'Algebra II' }).getByText('C', { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('scan-placed.png'), fullPage: true });
 });

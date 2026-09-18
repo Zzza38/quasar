@@ -89,14 +89,14 @@ describe('timetable scanning', () => {
     const result = await f.scan.scan(f.student, image);
     expect(result.model).toBe('test-vision');
     expect(result.rows).toEqual([
-      { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', periodId: firstPeriod.id, periodLabel: undefined, directoryId: f.algebra.id, days: ['Mon', 'Wed'] },
-      { name: 'Chemistry', teacher: 'Dr. Vance', room: undefined, periodId: exampleSchedule.periods[1].id, periodLabel: undefined, directoryId: undefined, days: [] },
-      { name: 'History', teacher: undefined, room: undefined, periodId: undefined, periodLabel: 'Block Z', directoryId: undefined, days: [] },
+      { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', periodIds: [firstPeriod.id], periodLabel: undefined, directoryId: f.algebra.id, days: ['Mon', 'Wed'] },
+      { name: 'Chemistry', teacher: 'Dr. Vance', room: undefined, periodIds: [exampleSchedule.periods[1].id], periodLabel: undefined, directoryId: undefined, days: [] },
+      { name: 'History', teacher: undefined, room: undefined, periodIds: [], periodLabel: 'Block Z', directoryId: undefined, days: [] },
     ]);
     expect(result.notes).toEqual(['Skipped a line the scanner could not read.']);
   });
 
-  it('splits a class that meets in several periods into one row per period', async () => {
+  it('keeps one row per class with every period it meets in', async () => {
     const f = fixture();
     f.fetcher.mockResolvedValue(answer([
       { className: 'Band', periodIds: ['A', 'c', 'nope'], periodLabel: 'Various periods' },
@@ -105,8 +105,8 @@ describe('timetable scanning', () => {
       { className: 'Art', periodIds: ['Lunch'] },
     ]));
     const { rows } = await f.scan.scan(f.student, image);
-    expect(rows.map(row => [row.name, row.periodId, row.periodLabel])).toEqual([
-      ['Band', 'A', undefined], ['Band', 'C', undefined], ['Choir', undefined, 'Various periods'], ['Art', 'lunch', undefined],
+    expect(rows.map(row => [row.name, row.periodIds, row.periodLabel])).toEqual([
+      ['Band', ['A', 'C'], undefined], ['Choir', [], 'Various periods'], ['Art', ['lunch'], undefined],
     ]);
   });
 
