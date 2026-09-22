@@ -188,14 +188,15 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </Panel>}
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
-        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${pluralize(profile.shared.classes.filter(cls => sharedClass(cls.name)).length, 'class', 'classes')} in common with you` : undefined}>
+        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${profile.shared.classes.filter(cls => sharedClass(cls.name)).length} in common with you` : undefined}>
           {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
-          {profile.shared.classes.length > 0 && <ul className="grid gap-2 sm:grid-cols-2">{profile.shared.classes.map(cls => {
+          {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
             const color = classColor(cls.id, 'class', cls.color);
-            return <li key={cls.id} className="flex items-center gap-3 rounded-xl px-3 py-2 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
-              <span aria-hidden="true" className="size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
-              <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-bold">{cls.name}</strong><Hint className="truncate">{[cls.teacher, cls.room && `Room ${cls.room}`].filter(Boolean).join(' · ')}</Hint></span>
-              {sharedClass(cls.name) && <Chip tone="accent" icon="check">Together</Chip>}
+            const together = sharedClass(cls.name);
+            return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
+              <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
+              <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.teacher, cls.room && `Room ${cls.room}`].filter(Boolean).join(' · ')}</Hint></span>
+              {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
             </li>;
           })}</ul>}
         </Section>

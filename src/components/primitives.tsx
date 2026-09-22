@@ -277,7 +277,8 @@ export function Modal({ open, onClose, title, description, children, footer, wid
         </div>
         <DialogClose asChild><ShadButton variant="ghost" size="icon-sm" aria-label="Close" title="Close" className="rounded-full bg-muted text-muted-foreground hover:text-foreground"><Icon name="x" /></ShadButton></DialogClose>
       </DialogHeader>
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
+      {/* auto-rows-max: cards hide their overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
+      <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
       {footer && <DialogFooter className="mx-0 mb-0 flex-row flex-wrap items-center gap-2 border-t bg-muted/60 px-5 py-3.5 sm:justify-start sm:px-6">{footer}</DialogFooter>}
     </DialogContent>
   </Dialog>;
