@@ -30,6 +30,7 @@ export const FRIEND_REQUEST_LIMIT = 30;
 
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
+export type Classmate = { id: string; displayName: string; classes: string[] };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean };
 type MemberRow = { id: string; display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
 
@@ -278,10 +279,16 @@ export class CommunityService {
     return !!this.db.prepare('SELECT 1 FROM school_bans WHERE school_id=? AND user_id=?').get(schoolId, userId);
   }
   /** Summary counts for the workspace payload. */
-  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number } {
+  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[] } {
     const verification = this.verification(userId);
     const incoming = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='pending' AND requester_id<>? AND (user_low=? OR user_high=?)").get(userId, userId, userId) as { n: number };
-    const friends = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='accepted' AND (user_low=? OR user_high=?)").get(userId, userId) as { n: number };
-    return { verification, incomingRequests: incoming.n, friendCount: friends.n };
+    const classmates = this.classmates(userId);
+    return { verification, incomingRequests: incoming.n, friendCount: classmates.length, classmates };
+  }
+  /** Each accepted friend with the names of their classes, so the viewer's own timetable can say who they sit with. */
+  classmates(userId: string): Classmate[] {
+    const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
+      WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId) as { id: string; display_name: string }[];
+    return rows.map(row => ({ id: row.id, displayName: row.display_name, classes: this.personalOf(row.id).classes.map(cls => cls.name.trim().toLowerCase()) }));
   }
 }

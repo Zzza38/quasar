@@ -201,7 +201,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
           })}</ul>}
         </Section>
         <Section id="profile-day" title={`${name}’s day`} icon="calendar" description={day ? (day.closed ? `${formatDate(state.today, { weekday: 'long' })} · no school` : `${formatDate(state.today, { weekday: 'long' })} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}>
-          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} />}
+          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && sharedClass(period.class.name) ? 'Together' : null} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>Nothing scheduled today.</Hint>}
         </Section>
       </>}

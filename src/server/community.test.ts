@@ -63,7 +63,7 @@ describe('school verification', () => {
     expect(f.community.verification(f.bob).status).toBe('none');
     f.service.join(f.bob, { schoolId: f.school.id, choice: 'community' });
     expect(f.community.verification(f.bob).status).toBe('verified');
-    expect(f.service.workspace(f.alice).community).toEqual({ verification: { status: 'none', method: null }, incomingRequests: 0, friendCount: 0 });
+    expect(f.service.workspace(f.alice).community).toEqual({ verification: { status: 'none', method: null }, incomingRequests: 0, friendCount: 0, classmates: [] });
   });
 });
 

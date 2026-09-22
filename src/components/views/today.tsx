@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { errorMessage } from '@/client/api';
 import { nextClass, resolveDay } from '@/domain/schedule';
 import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatSeconds, formatTime, minutesUntil, relativeDate, formatDate } from '@/lib/format';
+import { classmatesFor, withLabel } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { sortByDue, taskItems } from '../app-state';
@@ -67,7 +68,7 @@ export function TodayView({ state }: { state: AppState }) {
           {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
         </div>}
         {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
-        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} />}
+        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} tag={(period) => withLabel(classmatesFor(context, period.class?.name))} />}
         {day && day.issues.length > 0 && <Hint tone="danger">{day.issues.length} period(s) could not be shown because of a time adjustment. Review them under Classes.</Hint>}
       </Section>
 
@@ -168,7 +169,7 @@ function Reveal({ open, children }: { open: boolean; children: ReactNode }) {
   </span>;
 }
 
-export function Timeline({ periods, now, compact, timeZone }: { periods: ReturnType<typeof resolveDay>['periods']; now: Date; compact?: boolean; timeZone?: string }) {
+export function Timeline({ periods, now, compact, timeZone, tag }: { periods: ReturnType<typeof resolveDay>['periods']; now: Date; compact?: boolean; timeZone?: string; tag?: (period: ReturnType<typeof resolveDay>['periods'][number]) => string | null }) {
   const nowMs = now.getTime();
   const nowLabel = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone }).format(now);
   // Where the "now" marker sits when the current moment falls between periods.
@@ -191,7 +192,7 @@ export function Timeline({ periods, now, compact, timeZone }: { periods: ReturnT
           <div className="flex min-w-0 items-start gap-3">
             <span className="w-1.5 min-h-[36px] shrink-0 self-stretch rounded-full" style={{ background: color.dot }} />
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2"><strong className="text-[15px] font-bold tracking-tight">{period.class?.name ?? period.label}</strong>{status === 'now' && <Chip tone="now">Now</Chip>}{period.kind === 'lunch' && !period.class && <Icon name="coffee" size={14} className="text-muted-foreground" />}</div>
+              <div className="flex flex-wrap items-center gap-2"><strong className="text-[15px] font-bold tracking-tight">{period.class?.name ?? period.label}</strong>{status === 'now' && <Chip tone="now">Now</Chip>}{tag?.(period) && <Chip tone="accent" icon="users">{tag(period)}</Chip>}{period.kind === 'lunch' && !period.class && <Icon name="coffee" size={14} className="text-muted-foreground" />}</div>
               <Hint className={cn(!detail && period.kind === 'class' && !period.class && 'italic')}>{detail || (period.kind === 'class' && !period.class ? 'No class assigned' : ' ')}</Hint>
             </div>
           </div>
