@@ -155,8 +155,14 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     if (!profile?.shared) return null;
     try { return resolveDay(scheduleForGrade(profile.school.schedule, profile.shared.personal.grade), state.today, profile.shared.personal); } catch { return null; }
   }, [profile, state.today]);
-  const myClasses = state.personal.classes;
-  const sharedClass = (name: string) => myClasses.some(cls => cls.name.trim().toLowerCase() === name.trim().toLowerCase());
+  const mine = state.personal;
+  /** True when I have a class with this name in this period. */
+  const togetherIn = (periodId: string, name: string) => {
+    const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
+    return !!own && own.name.trim().toLowerCase() === name.trim().toLowerCase();
+  };
+  /** True when we sit in this class of theirs in at least one shared period. */
+  const sharedClass = (cls: { id: string; name: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls.name));
   const name = profile?.displayName ?? 'Member';
   return <Modal open onClose={onClose} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(profile.joinedAt.slice(0, 10), { year: true })}`].filter(Boolean).join(' · ') : undefined}
     footer={profile ? <>
@@ -188,11 +194,11 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </Panel>}
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
-        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${profile.shared.classes.filter(cls => sharedClass(cls.name)).length} in common with you` : undefined}>
+        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${profile.shared.classes.filter(sharedClass).length} in common with you` : undefined}>
           {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
           {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
             const color = classColor(cls.id, 'class', cls.color);
-            const together = sharedClass(cls.name);
+            const together = sharedClass(cls);
             return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
               <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
               <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.teacher, cls.room && `Room ${cls.room}`].filter(Boolean).join(' · ')}</Hint></span>
@@ -201,7 +207,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
           })}</ul>}
         </Section>
         <Section id="profile-day" title={`${name}’s day`} icon="calendar" description={day ? (day.closed ? `${formatDate(state.today, { weekday: 'long' })} · no school` : `${formatDate(state.today, { weekday: 'long' })} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}>
-          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && sharedClass(period.class.name) ? 'Together' : null} />}
+          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class.name) ? 'Together' : null} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>Nothing scheduled today.</Hint>}
         </Section>
       </>}

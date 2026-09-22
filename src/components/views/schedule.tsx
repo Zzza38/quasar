@@ -61,7 +61,7 @@ export function ScheduleView({ state }: { state: AppState }) {
       </span>}>
       {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
       {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
-      {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => withLabel(classmatesFor(state.context, period.class?.name))} />}
+      {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => withLabel(classmatesFor(state.context, period))} />}
       {selected && selected.issues.length > 0 && <Hint tone="danger">{selected.issues.length} period(s) could not be placed on this date{selected.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' because a time shift moves them outside the day' : ''}. Edit the adjustment to fix this.</Hint>}
       <ImportedEvents state={state} date={date} />
     </Section>

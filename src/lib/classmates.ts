@@ -1,10 +1,12 @@
 import type { WorkspaceContext } from '@/components/app-state';
+import type { ResolvedPeriod } from '@/domain/schedule';
 
-/** Display names of friends who take a class with this name. Names are compared case-insensitively, the way the profile view does. */
-export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, className: string | undefined): string[] {
+/** Display names of friends who have a class with this name in this same period. Names are compared case-insensitively, the way the profile view does. */
+export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, period: Pick<ResolvedPeriod, 'periodId' | 'class'>): string[] {
+  const className = period.class?.name;
   if (!className) return [];
   const key = className.trim().toLowerCase();
-  return (context.community?.classmates ?? []).filter((friend) => friend.classes.includes(key)).map((friend) => friend.displayName);
+  return (context.community?.classmates ?? []).filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && cls.name === key)).map((friend) => friend.displayName);
 }
 
 /** "With Evan", "With Evan and Maya", "With Evan, Maya and 2 more". */

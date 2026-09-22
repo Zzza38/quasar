@@ -68,7 +68,7 @@ export function TodayView({ state }: { state: AppState }) {
           {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
         </div>}
         {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
-        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} tag={(period) => withLabel(classmatesFor(context, period.class?.name))} />}
+        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} tag={(period) => withLabel(classmatesFor(context, period))} />}
         {day && day.issues.length > 0 && <Hint tone="danger">{day.issues.length} period(s) could not be shown because of a time adjustment. Review them under Classes.</Hint>}
       </Section>
 
