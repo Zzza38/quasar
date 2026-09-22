@@ -5,13 +5,14 @@ import type { Entity } from '@/domain/sync';
 import { taskSchema, type Task } from '@/domain/task';
 
 export type WorkspaceContext = Omit<Workspace, 'entities'>;
-export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school';
+export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school' | 'people';
 export const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'classes', label: 'Classes' },
   { id: 'school', label: 'School' },
+  { id: 'people', label: 'People' },
 ];
 
 export interface TaskItem { id: string; task: Task; entity: Entity }

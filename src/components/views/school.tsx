@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon, type IconName } from '../icon';
 import { PrivateScheduleSheet } from '../overrides';
+import { ProposalsSection } from '../proposals';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Modal, Panel, Section, Segmented, Spacer, Textarea } from '../primitives';
 import { Label } from '../ui/label';
@@ -53,7 +54,7 @@ export function SchoolView({ state }: { state: AppState }) {
       <Section id="status-title" title="How this schedule is managed" icon="info">
         <ul className="grid gap-3">
           <FactRow icon={school.approved ? 'checkCircle' : 'info'} tone={school.approved ? 'success' : 'warning'}>{school.approved ? 'Support has checked this schedule against the school’s published one.' : 'This schedule was entered by students and has not been checked by support yet. Compare it with the school’s published schedule.'}</FactRow>
-          <FactRow icon={locked ? 'lock' : 'unlock'}>{school.supportLocked ? 'Support locked the shared schedule. Changes go through a correction request.' : school.memberLocked || school.memberCount >= 10 ? 'Shared editing locked when the school reached 10 members, so one person cannot change everyone’s schedule. Changes go through a correction request.' : `Any member can edit the shared schedule until the school reaches 10 members (${school.memberCount} now). Every edit is saved as a new revision that other members review.`}</FactRow>
+          <FactRow icon={locked ? 'lock' : 'unlock'}>{school.supportLocked ? 'Support locked the shared schedule. Verified members can still propose and vote on changes; support publishes the ones that pass.' : school.memberLocked || school.memberCount >= 10 ? 'Shared editing locked when the school reached 10 members, so one person cannot change everyone’s schedule. Verified members propose changes and vote on them below, or send a correction request.' : `Any member can edit the shared schedule until the school reaches 10 members (${school.memberCount} now). Every edit is saved as a new revision that other members review.`}</FactRow>
           <FactRow icon="users">Corrections never touch your classes or adjustments. When the shared schedule changes, you see what changed and anything of yours it affects.</FactRow>
         </ul>
       </Section>
@@ -85,6 +86,8 @@ export function SchoolView({ state }: { state: AppState }) {
       {showPreview && <Preview value={sharedSchedule} />}
       {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
     </Section>
+
+    {locked && <ProposalsSection state={state} />}
 
     <div className="grid items-start gap-5 lg:grid-cols-2">
       <Section id="school-directory-title" title="School class directory" icon="book" description="Find classes shared by schoolmates and add personal copies to your timetable.">

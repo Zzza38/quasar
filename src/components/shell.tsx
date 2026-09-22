@@ -17,7 +17,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupConte
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import type { SyncState, WorkspaceSession } from './use-workspace';
 
-const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school' };
+const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users' };
 const NAV_KEY = 'quasar.navigationCollapsed';
 
 /** The Quasar mark: a flat Q that takes the current text colour, with the sparkle in the theme's primary colour. */
@@ -94,7 +94,7 @@ export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName,
 
 /* ---------- Navigation ---------- */
 
-function TabBar({ view, taskCount }: { view: View; taskCount: number }) {
+function TabBar({ view, taskCount, requestCount }: { view: View; taskCount: number; requestCount: number }) {
   return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))' }} aria-label="Main">
     <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
       {VIEWS.map((entry) => {
@@ -104,6 +104,7 @@ function TabBar({ view, taskCount }: { view: View; taskCount: number }) {
           <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
           <span>{entry.label}</span>
           {entry.id === 'tasks' && taskCount > 0 && <span className="absolute left-[calc(50%+6px)] top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</span>}
+          {entry.id === 'people' && requestCount > 0 && <span className="absolute left-[calc(50%+6px)] top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card" aria-label={`${requestCount} friend requests`}>{requestCount > 99 ? '99+' : requestCount}</span>}
         </a>;
       })}
     </div>
@@ -128,6 +129,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
   const [account, setAccount] = useState(false);
   const [navOpen, setNavOpen] = useNavigationOpen();
   const { sync, online, snapshot } = session;
+  const requestCount = context.community?.incomingRequests ?? 0;
   const displayName = context.user.displayName || 'Your account';
   const initials = (context.user.displayName || context.user.email || 'Q').slice(0, 1).toUpperCase();
   const conflictsAnchor = () => { document.getElementById('conflicts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
@@ -167,6 +169,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
+                  {entry.id === 'people' && requestCount > 0 && <SidebarMenuBadge className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums" aria-label={`${requestCount} friend requests`}>{requestCount > 99 ? '99+' : requestCount}</SidebarMenuBadge>}
                   {entry.id === 'tasks' && taskCount > 0 && <SidebarMenuBadge className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</SidebarMenuBadge>}
                 </SidebarMenuItem>;
               })}
@@ -210,7 +213,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
         </div>
         {children}
       </div>
-      <TabBar view={view} taskCount={taskCount} />
+      <TabBar view={view} taskCount={taskCount} requestCount={requestCount} />
     </SidebarInset>
 
     <Sheet open={account} onOpenChange={setAccount}>
@@ -226,6 +229,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
           </div>
           <dl className="grid overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
             <div><dt className="text-muted-foreground">School</dt><dd className="text-right font-semibold">{context.school?.name ?? 'Not chosen yet'}</dd></div>
+            {context.school && <div><dt className="text-muted-foreground">Verification</dt><dd className="text-right font-semibold">{context.community?.verification.status === 'verified' ? 'Verified' : context.community?.verification.status === 'pending' ? 'Under review' : 'Not verified'}</dd></div>}
             <div><dt className="text-muted-foreground">Sync</dt><dd className="text-right font-semibold">{statusLabel(sync)}</dd></div>
             <div><dt className="text-muted-foreground">Offline copy</dt><dd className="text-right font-semibold">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</dd></div>
           </dl>

@@ -1,6 +1,6 @@
 # Quasar - Project plan
 
-Status: phase-1 backend and functional application flows implemented (2026-09-11). Visual design and structured schedule editors are handed to Fable; live Google OAuth configuration, deployment, and the real-school pilot remain launch work. See [README.md](README.md), [Fable handoff](docs/FABLE_HANDOFF.md), and [operations](docs/OPERATIONS.md). Later phase sequencing and acceptance gates remain proposals. The interview below is retained as product history.
+Status: phases 1 and 2 are implemented and deployed; phase 3 (school verification, member directory, friends, safety controls and schedule voting) was implemented on 2026-09-22 and is running on the tailnet dev server for review before production. The real-school pilot remains launch work. See [README.md](README.md), [Fable handoff](docs/FABLE_HANDOFF.md), and [operations](docs/OPERATIONS.md). Later phase sequencing and acceptance gates remain proposals. The interview below is retained as product history.
 
 Build a free web app for US high-school students that makes the next class and upcoming tasks immediately clear, with dependable schedule setup and offline editing. Start with the personal tracker, then expand into calendar integration and school community features.
 
@@ -132,12 +132,14 @@ The user requested phases and established the phase-1 boundaries below. Later ph
 
 ### Phase 3: school profiles and friends
 
-- Proposed placement for schedule-change voting. Define voter eligibility, threshold, and proposal handling; support approval remains required for support-locked schedules.
-- School-email verification and an alternative proof route.
-- Browse school profiles with the agreed name visibility rules; no complete directory hiding.
-- Friendship-based access to classes and schedules.
-- Define and implement verification permissions, reporting, blocking, and support removal before exposing the directory. These controls are proposed work, not yet agreed product details.
-- Exit gate: profile and schedule access matches explicit permissions, and friendship removal revokes shared access.
+Implemented 2026-09-22 with the following decisions, each a default the owner can change:
+
+- Verification is per (student, school). It happens automatically when the Google sign-in address is on a school email domain that support attached to the school, or after support approves a proof request sent from the People view. Verification is dormant while the student follows another school and returns on rejoining.
+- Members browse a directory of their school. Nobody can hide from it. Display name, grade, verification badge and join date are visible to every member; full names appear only when viewer and profile owner are both verified.
+- Classes and the personal timetable are shared only through an accepted friendship. Requests go to schoolmates only; a crossing request becomes a friendship. Removing a friend, blocking, or support removal revokes access at once because every read re-checks the friendship. At most 30 unanswered outgoing requests.
+- Blocking hides both people from each other and ends any friendship. Reports (private, at most 10 open per reporter) reach the support inbox, where the owner can dismiss them or remove the member from the school; removal drops verification and friendships, resolves open reports, and prevents rejoining.
+- Voting exists only for member-locked schools (10 or more members). Verified members propose one open change each (five open per school) and vote for or against; the proposer counts as a vote for. A proposal passes at max(3, 20% of verified members, capped at 25) votes for with more for than against, and is rejected by the mirror rule. Passing applies a new unapproved revision that members review as usual. On support-locked schools a passed proposal waits for the owner, who publishes it keeping approval and lock, or declines it. A proposal is superseded when the school revision changes underneath it.
+- Exit gate met: profile and schedule access matches explicit permissions, and friendship removal revokes shared access (covered by unit and browser tests).
 
 ### Phase 4: chat
 

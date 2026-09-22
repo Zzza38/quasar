@@ -1,6 +1,6 @@
 # Quasar
 
-Phases 1 and 2 of [PLAN.md](PLAN.md): a personal school schedule and task tracker. The UI is a phone-first app with five views (Today, Schedule, Tasks, Classes, School) behind hash routes, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
+Phases 1 to 3 of [PLAN.md](PLAN.md): a personal school schedule and task tracker with a school community. The UI is a phone-first app with six views (Today, Schedule, Tasks, Classes, School, People) behind hash routes, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS with [shadcn/ui](https://ui.shadcn.com) (Radix primitives, lucide icons), tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.
 
@@ -47,6 +47,8 @@ Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existin
 - Single-server container packaging, health endpoint, backup utility and deployment/pilot instructions.
 
 Shared-school editing and joining require a connection. Saved personal classes, tasks, assignments, custom schedules and overrides can be edited offline after a successful signed-in load. The service worker requires HTTPS except on localhost. Sync resumes when the app is open and connectivity returns; it does not require browser background-sync support.
+
+Phase 3 adds the People view: school verification (automatic by school email domain, or by support review of a proof), a member directory with verified-only full names, friend requests, friends' classes and today's timetable, blocking and reporting. Locked schools get schedule-change voting in the School view, and the support admin page gains verification requests, member reports, passed proposals awaiting publication, and per-school email domains. Chat remains deferred.
 
 Phase 2 adds private iCal subscriptions in Schedule, imported calendar items in Tasks and Schedule, task priorities and checklists, recurring tasks, and opt-in browser push reminders. The new controls use the existing cards, sheets, form fields and status indicators. Member directories, friends, chat and voting remain deferred; other students' names and schedules are not exposed.
 

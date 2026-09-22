@@ -10,15 +10,21 @@ import { formatDate, pluralize } from '@/lib/format';
 import { Icon, Spinner } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
 import { Brand, CenteredNotice } from './shell';
-import { Button, Callout, Chip, EmptyState, Hint, Input, Modal, PageHeader, Panel, Section, Spacer, StatTile, Toggle } from './primitives';
+import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Spacer, StatTile, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 type Request = RouterOutput['admin']['requests'][number];
+type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
+type Report = RouterOutput['admin']['reports'][number];
+type PendingProposal = RouterOutput['admin']['proposals'][number];
 
 export function Admin() {
   const [schools, setSchools] = useState<School[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
+  const [verifications, setVerifications] = useState<VerificationRequest[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [proposals, setProposals] = useState<PendingProposal[]>([]);
   const [allowed, setAllowed] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,8 +37,8 @@ export function Admin() {
     try {
       const session = await api.session.query(); setSignedIn(Boolean(session));
       if (!session?.isAdmin) { setAllowed(false); setSchools([]); setRequests([]); return; }
-      const [schoolList, requestList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query()]);
-      setSchools(schoolList); setRequests(requestList); setAllowed(true);
+      const [schoolList, requestList, verificationList, reportList, proposalList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query()]);
+      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setAllowed(true);
     } catch (err) { setError(errorMessage(err)); setAllowed(false); setSchools([]); setRequests([]); }
     finally { setLoading(false); }
   }, []);
@@ -51,6 +57,8 @@ export function Admin() {
 
   const visible = filter ? schools.filter((entry) => `${entry.name} ${entry.location}`.toLowerCase().includes(filter.toLowerCase())) : schools;
   const approved = schools.filter((entry) => entry.approved).length;
+  const act = async (action: () => Promise<unknown>) => { setError(''); try { await action(); await refresh(); } catch (err) { setError(errorMessage(err)); } };
+  const openCount = requests.length + verifications.length + reports.length + proposals.length;
   return <div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
@@ -59,9 +67,9 @@ export function Admin() {
       </div>
     </header>
     <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
-      <PageHeader title="Support" eyebrow="Owner tools" description="Review shared schedules, publish corrections and manage class directories." />
+      <PageHeader title="Support" eyebrow="Owner tools" description="Review shared schedules, publish corrections, verify members and handle reports." />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <StatTile icon="inbox" tone={requests.length ? 'now' : 'success'} value={requests.length} label="open requests" />
+        <StatTile icon="inbox" tone={openCount ? 'now' : 'success'} value={openCount} label="open items" />
         <StatTile icon="school" tone="accent" value={schools.length} label="schools" />
         <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
       </div>
@@ -72,6 +80,36 @@ export function Admin() {
           <div className="flex flex-wrap items-start justify-between gap-3"><strong className="text-sm font-bold">{request.schoolName}</strong><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.message}</p>
           <div className="flex flex-wrap gap-2"><Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button><Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
+        {verifications.length === 0 && <EmptyState icon="checkCircle" title="Nothing to verify" />}
+        {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button></div>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="reports-title" title="Member reports" icon="alert" description={reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, ends their friendships there and blocks rejoining.` : 'Students report members from a profile. Reports are private.'}>
+        {reports.length === 0 && <EmptyState icon="users" title="No open reports" />}
+        {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => <li key={report.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{report.reportedName}</strong> <Hint className="inline">({report.reportedEmail})</Hint><Hint>Reported by {report.reporterName}{report.schoolName ? ` · ${report.schoolName}` : ''}</Hint></span><Hint>{formatDate(report.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <p className="whitespace-pre-wrap text-sm">{report.reason}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
+            {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason for the audit log.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
+          </div>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
+        {proposals.length === 0 && <EmptyState icon="layers" title="Nothing waiting" />}
+        {proposals.length > 0 && <ul className="grid gap-2">{proposals.map((proposal) => <li key={proposal.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(proposal.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <Panel><ScheduleSummary schedule={proposal.schedule} /></Panel>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
         </li>)}</ul>}
       </Section>
 
@@ -98,15 +136,17 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
   const [draft, setDraft] = useState<Schedule>(() => structuredClone(school.schedule));
   const [approved, setApproved] = useState(school.approved);
   const [supportLocked, setSupportLocked] = useState(school.supportLocked);
+  const [domains, setDomains] = useState(school.emailDomains.join(', '));
+  const domainList = domains.split(/[,\s]+/).map((entry) => entry.trim().toLowerCase()).filter(Boolean);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const issues = describeIssues(draft);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(school.schedule) || approved !== school.approved || supportLocked !== school.supportLocked;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(school.schedule) || approved !== school.approved || supportLocked !== school.supportLocked || domainList.join(',') !== school.emailDomains.join(',');
   return <Modal open onClose={onClose} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm font-semibold text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
       setPending(true); setError(''); setSaved(false);
-      try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked }); setSaved(true); await onSaved(); }
+      try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked, emailDomains: domainList }); setSaved(true); await onSaved(); }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
     <Panel className="grid gap-3">
@@ -115,6 +155,7 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
         <Toggle label="Approved default schedule" checked={approved} onChange={setApproved} description="New members get this schedule by default." />
         <Toggle label="Lock shared edits to support" checked={supportLocked} onChange={setSupportLocked} description={school.memberLocked ? 'The 10-member editing lock is also in effect.' : 'Members can no longer publish revisions.'} />
       </div>
+      <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
     </Panel>
     <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}

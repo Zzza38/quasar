@@ -107,6 +107,56 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     CREATE INDEX IF NOT EXISTS school_classes_school ON school_classes(school_id, deleted);
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, datetime('now'));
   `);
+  // Phase-3 migration: school verification, profiles, friendships, safety controls and schedule voting.
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS school_verifications (
+        user_id TEXT NOT NULL REFERENCES users(id), school_id TEXT NOT NULL REFERENCES schools(id),
+        method TEXT NOT NULL, actor_id TEXT REFERENCES users(id), verified_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, school_id)
+      );
+      CREATE TABLE IF NOT EXISTS verification_requests (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), school_id TEXT NOT NULL REFERENCES schools(id),
+        proof TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT, decision TEXT, actor_id TEXT REFERENCES users(id)
+      );
+      CREATE INDEX IF NOT EXISTS verification_requests_open ON verification_requests(resolved_at, created_at);
+      CREATE TABLE IF NOT EXISTS friendships (
+        user_low TEXT NOT NULL REFERENCES users(id), user_high TEXT NOT NULL REFERENCES users(id),
+        requester_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
+        created_at TEXT NOT NULL, responded_at TEXT,
+        PRIMARY KEY(user_low, user_high)
+      );
+      CREATE INDEX IF NOT EXISTS friendships_high ON friendships(user_high, status);
+      CREATE TABLE IF NOT EXISTS blocks (
+        blocker_id TEXT NOT NULL REFERENCES users(id), blocked_id TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL, PRIMARY KEY(blocker_id, blocked_id)
+      );
+      CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY, reporter_id TEXT NOT NULL REFERENCES users(id), reported_id TEXT NOT NULL REFERENCES users(id),
+        school_id TEXT REFERENCES schools(id), reason TEXT NOT NULL, created_at TEXT NOT NULL,
+        resolved_at TEXT, actor_id TEXT REFERENCES users(id), outcome TEXT
+      );
+      CREATE INDEX IF NOT EXISTS reports_open ON reports(resolved_at, created_at);
+      CREATE TABLE IF NOT EXISTS school_bans (
+        school_id TEXT NOT NULL REFERENCES schools(id), user_id TEXT NOT NULL REFERENCES users(id),
+        actor_id TEXT NOT NULL REFERENCES users(id), reason TEXT NOT NULL, created_at TEXT NOT NULL,
+        PRIMARY KEY(school_id, user_id)
+      );
+      CREATE TABLE IF NOT EXISTS schedule_proposals (
+        id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id), proposer_id TEXT NOT NULL REFERENCES users(id),
+        base_version INTEGER NOT NULL, schedule TEXT NOT NULL, summary TEXT NOT NULL, status TEXT NOT NULL,
+        created_at TEXT NOT NULL, closed_at TEXT, actor_id TEXT REFERENCES users(id)
+      );
+      CREATE INDEX IF NOT EXISTS schedule_proposals_school ON schedule_proposals(school_id, status);
+      CREATE TABLE IF NOT EXISTS proposal_votes (
+        proposal_id TEXT NOT NULL REFERENCES schedule_proposals(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id),
+        vote TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(proposal_id, user_id)
+      );
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, datetime('now'));
+    `);
+    const schoolColumns = db.pragma('table_info(schools)') as {name: string}[];
+    if (!schoolColumns.some(column => column.name === 'email_domains')) db.exec("ALTER TABLE schools ADD COLUMN email_domains TEXT NOT NULL DEFAULT ''");
+  })();
   return db;
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };

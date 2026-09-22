@@ -5,6 +5,8 @@ import { Service, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpda
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
+import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
+import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 export type Context = { userId: string | null; service: Service };
 const t = initTRPC.context<Context>().create();
 const authenticated = t.procedure.use(({ ctx, next }) => {
@@ -23,6 +25,24 @@ export const appRouter = t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
     save: accountScoped.input(directorySaveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).save(ctx.userId, input)),
     remove: accountScoped.input(directoryRemoveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).remove(ctx.userId, input)),
+  }),
+  community: t.router({
+    verification: authenticated.query(({ ctx }) => new CommunityService(ctx.service).verification(ctx.userId)),
+    requestVerification: accountScoped.input(proofSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).requestVerification(ctx.userId, input)),
+    members: authenticated.input(z.object({ query: z.string().max(80).default('') })).query(({ ctx, input }) => new CommunityService(ctx.service).members(ctx.userId, input.query)),
+    friends: authenticated.query(({ ctx }) => new CommunityService(ctx.service).friends(ctx.userId)),
+    profile: authenticated.input(memberIdSchema).query(({ ctx, input }) => new CommunityService(ctx.service).profile(ctx.userId, input.userId)),
+    request: accountScoped.input(memberIdSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).request(ctx.userId, input.userId)),
+    respond: accountScoped.input(memberIdSchema.extend({ accept: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).respond(ctx.userId, input.userId, input.accept)),
+    remove: accountScoped.input(memberIdSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).remove(ctx.userId, input.userId)),
+    block: accountScoped.input(memberIdSchema.extend({ blocked: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).block(ctx.userId, input.userId, input.blocked)),
+    report: accountScoped.input(reportSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).report(ctx.userId, input)),
+  }),
+  proposals: t.router({
+    list: authenticated.query(({ ctx }) => new ProposalService(ctx.service).list(ctx.userId)),
+    create: accountScoped.input(proposalCreateSchema).mutation(({ ctx, input }) => new ProposalService(ctx.service).create(ctx.userId, input)),
+    vote: accountScoped.input(voteSchema).mutation(({ ctx, input }) => new ProposalService(ctx.service).vote(ctx.userId, input)),
+    withdraw: accountScoped.input(z.object({ proposalId: z.uuid() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).withdraw(ctx.userId, input.proposalId)),
   }),
   scan: t.router({
     status: authenticated.query(({ ctx }) => ({ enabled: new ScanService(ctx.service).enabled() })),
@@ -68,7 +88,14 @@ export const appRouter = t.router({
     schools: admin.query(({ctx}) => ctx.service.schools('', -1)),
     update: admin.input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
     requests: admin.query(({ctx}) => ctx.service.requests(ctx.userId)),
-    resolveRequest: admin.input(z.object({id:z.string().uuid()})).mutation(({ctx,input}) => ctx.service.resolveRequest(ctx.userId,input.id))
+    resolveRequest: admin.input(z.object({id:z.string().uuid()})).mutation(({ctx,input}) => ctx.service.resolveRequest(ctx.userId,input.id)),
+    verificationRequests: admin.query(({ ctx }) => new CommunityService(ctx.service).verificationRequests(ctx.userId)),
+    decideVerification: admin.input(z.object({ id: z.uuid(), approve: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).decideVerification(ctx.userId, input.id, input.approve)),
+    reports: admin.query(({ ctx }) => new CommunityService(ctx.service).reports(ctx.userId)),
+    resolveReport: admin.input(z.object({ id: z.uuid(), outcome: z.enum(['dismissed', 'removed']) })).mutation(({ ctx, input }) => new CommunityService(ctx.service).resolveReport(ctx.userId, input.id, input.outcome)),
+    removeMember: admin.input(z.object({ userId: z.uuid(), schoolId: z.uuid(), reason: z.string().trim().min(3).max(2000) })).mutation(({ ctx, input }) => new CommunityService(ctx.service).removeFromSchool(ctx.userId, input.userId, input.schoolId, input.reason)),
+    proposals: admin.query(({ ctx }) => new ProposalService(ctx.service).awaitingSupport(ctx.userId)),
+    decideProposal: admin.input(z.object({ id: z.uuid(), publish: z.boolean() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).decide(ctx.userId, input.id, input.publish)),
   })
 });
 export type AppRouter = typeof appRouter;

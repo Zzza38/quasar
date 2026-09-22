@@ -18,6 +18,7 @@ import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
+import { PeopleView } from './views/people';
 import { GradePicker } from './grade-picker';
 
 /* ---------- Hash routing keeps the public offline shell at "/" ---------- */
@@ -121,5 +122,6 @@ export function Tracker() {
     {route.view === 'tasks' && <TasksView state={state} />}
     {route.view === 'classes' && <ClassesView state={state} />}
     {route.view === 'school' && <SchoolView state={state} />}
+    {route.view === 'people' && <PeopleView state={state} />}
   </Shell>;
 }
