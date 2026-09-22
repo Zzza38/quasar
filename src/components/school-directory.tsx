@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { GRADES, gradeLabel, type Grade, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer } from './primitives';
@@ -84,7 +84,13 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
 
 function DirectoryEditor({ initial, pending, onSave, onCancel }: { initial: Details; pending: boolean; onSave: (details: Details) => Promise<void>; onCancel: () => void }) {
   const [draft, setDraft] = useState<Details>({ name: initial.name, teacher: initial.teacher, room: initial.room, grades: initial.grades });
-  return <Panel className="grid gap-3 bg-card p-4 ring-2 ring-primary/40">
+  const panel = useRef<HTMLDivElement>(null);
+  // The editor sits above the class list, so bring it into view (and focus it) when an entry is picked further down.
+  useEffect(() => {
+    panel.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    panel.current?.querySelector<HTMLInputElement>('#directory-name')?.focus({ preventScroll: true });
+  }, []);
+  return <Panel ref={panel} className="grid gap-3 scroll-mt-4 bg-card p-4 ring-2 ring-primary/40">
     <strong className="text-sm font-bold">Shared class details</strong>
     <Field label="Class name" htmlFor="directory-name"><Input id="directory-name" maxLength={120} value={draft.name} disabled={pending} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field>
     <div className="grid gap-3 sm:grid-cols-2">
