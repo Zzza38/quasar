@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { GRADES, gradeLabel, type Grade, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer } from './primitives';
+import { Checkbox } from './ui/checkbox';
 import { Toggle } from './ui/toggle';
 
 type Directory = RouterOutput['directory']['list'];
@@ -63,7 +64,7 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
         {entries.map(entry => {
           const added = personal?.classes.some(cls => isCopy(cls, entry));
           return <li key={entry.id} className={`flex flex-wrap items-center gap-3 rounded-2xl p-3 ring-1 ring-inset transition-colors ${selected.includes(entry.id) && !added ? 'bg-primary-soft/60 ring-primary/40' : 'bg-muted/60 ring-foreground/[0.04]'}`}>
-            {onAdd && <input type="checkbox" className="size-5 shrink-0 accent-primary" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onChange={event => setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
+            {onAdd && <Checkbox className="size-5 shrink-0" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onCheckedChange={checked => setSelected(checked === true ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
             <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm font-bold">{entry.name}</strong><Hint>{[entry.teacher, entry.room && `Room ${entry.room}`].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
             {directory.canEdit ? <div className="flex gap-1"><Button size="sm" disabled={!online || pending} onClick={() => setEditing(entry)}>Edit shared</Button><Button size="sm" variant="ghost" disabled={!online || pending} aria-label={`Remove ${entry.name} from directory`} onClick={() => {
               if (confirm(`Remove ${entry.name} from the shared directory? Existing personal copies stay saved.`)) void run(async () => { await api.directory.remove.mutate({ accountId: directory.accountId, schoolId, id: entry.id, expectedVersion: entry.version }); await refresh(); setSelected(ids => ids.filter(id => id !== entry.id)); });

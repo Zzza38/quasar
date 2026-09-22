@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
@@ -28,6 +28,11 @@ async function authenticate(context: BrowserContext, id: string) {
 
 const saved = (page: Page) => page.getByRole('status').filter({ hasText: /^Saved$/ }).first();
 const dialog = (page: Page) => page.getByRole('dialog');
+/** Pick an option from a shadcn/ui Select by its visible label. */
+async function choose(select: Locator, option: string) {
+  await select.click();
+  await select.page().getByRole('option', { name: option, exact: true }).click();
+}
 
 test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
@@ -97,7 +102,7 @@ test('explicit community choice, class and task persistence, offline reload and 
   await expect(page.getByRole('heading', { name: 'Which schedule should Quasar follow?' })).toBeVisible();
   const join = page.getByRole('button', { name: `Join ${fixture.school.name}` });
   await expect(join).toBeDisabled();
-  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
+  await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
   await page.getByRole('radio', { name: /Use the community schedule/ }).click();
   await join.click();
   // The wizard continues with the classes step; adding one here proves it lands in the synced personal schedule.
@@ -428,14 +433,14 @@ test('rich tasks persist and completing a recurring checklist creates one fresh 
   await dialog(page).getByLabel('Task', { exact: true }).fill('Weekly lab preparation');
   await dialog(page).getByLabel('Due date', { exact: true }).fill('2026-09-14');
   await dialog(page).getByLabel('Due time', { exact: true }).fill('15:00');
-  await dialog(page).getByLabel('Priority', { exact: true }).selectOption('high');
+  await choose(dialog(page).getByLabel('Priority', { exact: true }), 'High');
   await dialog(page).getByRole('button', { name: 'Add checklist item', exact: true }).click();
   await dialog(page).getByLabel('Checklist item 1', { exact: true }).fill('Read the safety notes');
   await dialog(page).getByLabel('Complete checklist item 1', { exact: true }).check();
   await dialog(page).getByRole('button', { name: 'Add checklist item', exact: true }).click();
   await dialog(page).getByLabel('Checklist item 2', { exact: true }).fill('Pack the notebook');
-  await dialog(page).getByLabel('Repeat', { exact: true }).selectOption('weekly');
-  await dialog(page).getByLabel('Reminder', { exact: true }).selectOption('30');
+  await choose(dialog(page).getByLabel('Repeat', { exact: true }), 'Weekly');
+  await choose(dialog(page).getByLabel('Reminder', { exact: true }), '30 minutes before');
   await dialog(page).getByRole('button', { name: 'Add task', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.reload();
@@ -443,9 +448,9 @@ test('rich tasks persist and completing a recurring checklist creates one fresh 
   await expect(row).toContainText('High priority');
   await expect(row).toContainText('1/2 checklist');
   await expect(row).toContainText('Repeats weekly');
-  await page.getByLabel('Priority', { exact: true }).selectOption('low');
+  await choose(page.getByLabel('Priority', { exact: true }), 'Low');
   await expect(page.getByRole('button', { name: 'Edit Weekly lab preparation', exact: true })).toBeHidden();
-  await page.getByLabel('Priority', { exact: true }).selectOption('high');
+  await choose(page.getByLabel('Priority', { exact: true }), 'High');
   // Completing replaces this checkbox with the fresh successor, which is intentionally unchecked.
   await page.getByLabel('Mark Weekly lab preparation complete', { exact: true }).click();
   await expect(page.getByRole('button', { name: /Completed · 1/ })).toBeVisible();
@@ -455,7 +460,7 @@ test('rich tasks persist and completing a recurring checklist creates one fresh 
   await expect(row).toContainText('0/2 checklist');
   await page.getByRole('button', { name: 'Edit Weekly lab preparation', exact: true }).click();
   await expect(dialog(page).getByLabel('Due date', { exact: true })).toHaveValue('2026-09-21');
-  await expect(dialog(page).getByLabel('Reminder', { exact: true })).toHaveValue('30');
+  await expect(dialog(page).getByLabel('Reminder', { exact: true })).toHaveText('30 minutes before');
   await expect(dialog(page).getByLabel('Complete checklist item 1', { exact: true })).not.toBeChecked();
   await page.keyboard.press('Escape');
   await page.reload();
@@ -849,7 +854,7 @@ test('school directory selection, personal edits, shared edits and period placem
     directoryId = directory.save(fixture.id, { schoolId: fixture.school.id, details: { name: 'Directory Biology', teacher: 'Dr Example', room: '204', grades: ['9'] } }).id;
   } finally { db.close(); }
   await page.goto('/#classes');
-  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
+  await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
   await expect(saved(page)).toBeVisible();
   await page.getByRole('button', { name: 'Browse school classes' }).click();
   await dialog(page).getByLabel('Search classes').fill('Dr Example');
@@ -889,7 +894,7 @@ test('existing students choose their grade and see lunch throughout the second r
   const fixture = seed(undefined, true, { ...defaultSchedule, gradeSchedules: { '9': ninthGrade, '10': exampleSchedule } });
   await authenticate(context, fixture.id);
   await page.goto('/#classes');
-  await page.getByLabel('Your grade', { exact: true }).selectOption('9');
+  await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
   await expect(saved(page)).toBeVisible();
   for (let day = 6; day <= 10; day++) {
     await expect(page.getByRole('group', { name: `Day ${day} time canvas`, exact: true }).getByRole('button', { name: `Day ${day}, 12:00–12:40 PM: Lunch`, exact: true })).toBeVisible();
@@ -898,8 +903,8 @@ test('existing students choose their grade and see lunch throughout the second r
   await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 12:00–12:40 PM: Lunch', exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Account', exact: true }).click();
-  await dialog(page).getByLabel('Your grade', { exact: true }).selectOption('10');
-  await expect(dialog(page).getByLabel('Your grade', { exact: true })).toHaveValue('10');
+  await choose(dialog(page).getByLabel('Your grade', { exact: true }), 'Grade 10');
+  await expect(dialog(page).getByLabel('Your grade', { exact: true })).toHaveText('Grade 10');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 10:15–10:45 AM: Lunch', exact: true })).toBeVisible();
 });
@@ -938,7 +943,7 @@ test('guided school creation asks one question at a time and never saves example
   await page.getByRole('button', { name: 'Next: today’s day' }).click();
 
   await expect(page.getByRole('heading', { name: 'Which rotation day is it?' })).toBeVisible();
-  await page.getByLabel('…the school is on').selectOption('b');
+  await choose(page.getByLabel('…the school is on'), 'B day');
   await page.getByRole('button', { name: 'Next: check it' }).click();
 
   await expect(page.getByRole('heading', { name: 'Does this look right?' })).toBeVisible();
@@ -948,7 +953,7 @@ test('guided school creation asks one question at a time and never saves example
   await expect(page.getByRole('heading', { name: 'Which schedule should Quasar follow?' })).toBeVisible();
   await expect(page.getByRole('radio', { name: /Use the community schedule/ })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByText('Choose your grade to continue.')).toBeVisible();
-  await page.getByLabel('Your grade', { exact: true }).selectOption('10');
+  await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 10');
   await page.getByRole('button', { name: `Join ${name}` }).click();
   await expect(page.getByRole('heading', { name: 'Add your classes' })).toBeVisible();
   await page.getByRole('button', { name: 'Skip for now' }).click();

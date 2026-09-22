@@ -5,7 +5,7 @@
  * Views import from here so the shadcn variant vocabulary stays in one place.
  */
 
-import { useId, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react';
+import { Children, Fragment, isValidElement, useId, type ButtonHTMLAttributes, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon, Spinner, type IconName } from './icon';
@@ -16,7 +16,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader } from './ui
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input as ShadInput } from './ui/input';
 import { Label } from './ui/label';
-import { NativeSelect } from './ui/native-select';
+import { Select as ShadSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import { Textarea as ShadTextarea } from './ui/textarea';
 import { Toggle as ShadToggle } from './ui/toggle';
@@ -113,8 +113,50 @@ export function Input({ className, small, ...rest }: ComponentProps<'input'> & {
   return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-sm md:text-[13px]', className)} {...rest} />;
 }
 
-export function Select({ className, small, children, ...rest }: Omit<ComponentProps<'select'>, 'size'> & { small?: boolean }) {
-  return <NativeSelect size={small ? 'sm' : 'default'} className={cn('w-full', className)} {...rest}>{children}</NativeSelect>;
+/**
+ * shadcn/ui Select with the native `<select>` authoring API: pass `<option>` children and read
+ * `event.target.value` in `onChange`. Options are rendered as SelectItems so the dropdown is the
+ * themed popover, never the OS-drawn list. An option with `value=""` that is `disabled` becomes the
+ * placeholder; an enabled `value=""` option is selectable ("All grades", "No class", …).
+ */
+type OptionProps = { value?: string | number | readonly string[]; disabled?: boolean; children?: ReactNode };
+type SelectChangeEvent = { target: { value: string }; currentTarget: { value: string } };
+type SelectProps = Omit<ComponentProps<'select'>, 'size' | 'value' | 'defaultValue' | 'onChange'> & {
+  small?: boolean;
+  value?: string;
+  onChange?: (event: SelectChangeEvent) => void | Promise<void>;
+};
+const EMPTY = '__empty__';
+
+function collectOptions(children: ReactNode, into: { value: string; disabled: boolean; label: ReactNode }[] = []) {
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return;
+    if (child.type === Fragment) { collectOptions((child as ReactElement<{ children?: ReactNode }>).props.children, into); return; }
+    if (child.type !== 'option') return;
+    const props = (child as ReactElement<OptionProps>).props;
+    const value = props.value === undefined ? textOf(props.children) : String(props.value);
+    into.push({ value, disabled: Boolean(props.disabled), label: props.children });
+  });
+  return into;
+}
+const textOf = (node: ReactNode): string => Array.isArray(node) ? node.map(textOf).join('') : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
+
+export function Select({ className, small, children, value, onChange, id, name, disabled, required, autoFocus, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledby, 'aria-describedby': ariaDescribedby, 'aria-invalid': ariaInvalid }: SelectProps) {
+  const options = collectOptions(children);
+  const placeholder = options.find((option) => option.value === '' && option.disabled);
+  const items = options.filter((option) => option !== placeholder);
+  const encode = (raw: string) => (raw === '' ? (placeholder && !items.some((item) => item.value === '') ? '' : EMPTY) : raw);
+  const decode = (raw: string) => (raw === EMPTY ? '' : raw);
+  const current = value === undefined ? undefined : encode(value);
+  return <ShadSelect value={current} name={name} disabled={disabled} required={required} onValueChange={(next) => { const decoded = decode(next); void onChange?.({ target: { value: decoded }, currentTarget: { value: decoded } }); }}>
+    <SelectTrigger id={id} size={small ? 'sm' : 'default'} autoFocus={autoFocus} aria-label={ariaLabel} aria-labelledby={ariaLabelledby} aria-describedby={ariaDescribedby} aria-invalid={ariaInvalid}
+      className={cn('w-full rounded-xl bg-card pl-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] dark:bg-input/20 data-[size=sm]:rounded-lg data-[size=sm]:pl-2.5 data-[size=sm]:text-[13px]', className)}>
+      <SelectValue placeholder={placeholder?.label} />
+    </SelectTrigger>
+    <SelectContent position="popper" align="start" className="max-h-[min(20rem,var(--radix-select-content-available-height))]">
+      {items.map((item) => <SelectItem key={item.value} value={encode(item.value)} disabled={item.disabled}>{item.label}</SelectItem>)}
+    </SelectContent>
+  </ShadSelect>;
 }
 
 export function Textarea({ className, ...rest }: ComponentProps<'textarea'>) {
