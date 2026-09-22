@@ -162,7 +162,7 @@ export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ d
         className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow,transform] focus-visible:ring-3 focus-visible:ring-ring/50',
           active ? 'bg-primary text-primary-foreground shadow-[0_6px_16px_-6px_color-mix(in_srgb,var(--primary)_70%,transparent)]' : 'text-muted-foreground hover:bg-muted', day.closed && !active && 'opacity-60')}>
         <span className={cn('text-[10.5px] font-bold uppercase tracking-wide', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>{formatDate(day.date, { weekday: 'short' }).slice(0, 3)}</span>
-        <span className={cn('grid size-8 place-items-center rounded-full text-[15px] font-extrabold tabular-nums', active ? 'bg-primary-foreground/15 text-primary-foreground' : isToday ? 'bg-primary-soft text-primary-soft-foreground ring-1 ring-primary/40' : 'text-foreground')}>{Number(day.date.slice(8))}</span>
+        <span className={cn('grid size-8 place-items-center rounded-full text-[15px] font-extrabold tabular-nums', active ? 'text-primary-foreground' : isToday ? 'bg-primary-soft text-primary-soft-foreground ring-1 ring-primary/40' : 'text-foreground')}>{Number(day.date.slice(8))}</span>
         <small className={cn('max-w-full truncate text-[10.5px] font-semibold', active ? 'text-primary-foreground/85' : 'text-muted-foreground')}>{day.caption}</small>
       </button>;
     })}
