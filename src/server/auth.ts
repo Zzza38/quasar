@@ -18,9 +18,10 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, account, profile }) {
       if (account?.provider === 'google' && profile?.sub && profile.email) {
         const db = getDb();
-        db.prepare(`INSERT INTO users(id,google_sub,email,created_at) VALUES(?,?,?,?)
-          ON CONFLICT(google_sub) DO UPDATE SET email=excluded.email`)
-          .run(randomUUID(), profile.sub, profile.email.toLowerCase(), new Date().toISOString());
+        const googleName = typeof profile.name === 'string' ? profile.name.trim().slice(0, 160) : '';
+        db.prepare(`INSERT INTO users(id,google_sub,email,google_name,created_at) VALUES(?,?,?,?,?)
+          ON CONFLICT(google_sub) DO UPDATE SET email=excluded.email, google_name=excluded.google_name`)
+          .run(randomUUID(), profile.sub, profile.email.toLowerCase(), googleName, new Date().toISOString());
         const user = db.prepare('SELECT id FROM users WHERE google_sub = ?').get(profile.sub) as { id: string };
         token.userId = user.id;
       }

@@ -157,6 +157,26 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     const schoolColumns = db.pragma('table_info(schools)') as {name: string}[];
     if (!schoolColumns.some(column => column.name === 'email_domains')) db.exec("ALTER TABLE schools ADD COLUMN email_domains TEXT NOT NULL DEFAULT ''");
   })();
+  // Onboarding migration: remember the Google profile name to prefill the names step, and let
+  // support requests come from students who have not joined a school yet.
+  db.transaction(() => {
+    const userColumns = db.pragma('table_info(users)') as {name: string}[];
+    if (!userColumns.some(column => column.name === 'google_name')) db.exec("ALTER TABLE users ADD COLUMN google_name TEXT NOT NULL DEFAULT ''");
+    const requestColumns = db.pragma('table_info(support_requests)') as {name: string; notnull: number}[];
+    if (requestColumns.find(column => column.name === 'school_id')?.notnull) {
+      db.exec(`
+        CREATE TABLE support_requests_next (
+          id TEXT PRIMARY KEY, school_id TEXT REFERENCES schools(id),
+          user_id TEXT NOT NULL REFERENCES users(id), message TEXT NOT NULL,
+          created_at TEXT NOT NULL, resolved_at TEXT
+        );
+        INSERT INTO support_requests_next SELECT id, school_id, user_id, message, created_at, resolved_at FROM support_requests;
+        DROP TABLE support_requests;
+        ALTER TABLE support_requests_next RENAME TO support_requests;
+      `);
+    }
+    db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, datetime('now'))");
+  })();
   return db;
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };

@@ -62,7 +62,8 @@ export const appRouter = t.router({
     join: authenticated.input(joinSchema).mutation(({ctx, input}) => ctx.service.join(ctx.userId, input)),
     update: authenticated.input(schoolUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input)),
     acknowledge: authenticated.input(z.object({version: z.number().int().positive()})).mutation(({ctx, input}) => ctx.service.acknowledge(ctx.userId, input.version)),
-    requestCorrection: authenticated.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.requestCorrection(ctx.userId, input.message))
+    requestCorrection: authenticated.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.requestCorrection(ctx.userId, input.message)),
+    feedback: authenticated.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.feedback(ctx.userId, input.message))
   }),
   workspace: authenticated.query(({ctx}) => ctx.service.workspace(ctx.userId)),
   sync: authenticated.input(mutationSchema.extend({accountId: z.string().uuid()})).mutation(({ctx, input}) => {

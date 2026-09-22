@@ -144,7 +144,7 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
   </div>;
 }
 
-function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
+export function Periods({ value, set, disabled, confirmRemoval = true }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean; confirmRemoval?: boolean }) {
   const update = (index: number, patch: Partial<SchoolPeriod>) => set({ periods: value.periods.map((period, position) => position === index ? { ...period, ...patch } : period) });
   const scheduled = scheduledPeriodIds(value);
   const usage = (id: string) => value.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === id)).length;
@@ -173,7 +173,7 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
         </Select>
         <div className="flex items-center gap-0.5">
           <IconButton size="sm" label={`Move period ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} />
-          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (usage(period.id) === 0 || confirm(`Remove ${period.label || 'this period'} from ${usage(period.id)} rotation day(s)?`)) remove(index); }} />
+          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (!confirmRemoval || usage(period.id) === 0 || confirm(`Remove ${period.label || 'this period'} from ${usage(period.id)} rotation day(s)?`)) remove(index); }} />
         </div>
       </div>)}
     </div>
@@ -184,7 +184,7 @@ function Periods({ value, set, disabled }: { value: Schedule; set: (patch: Parti
   </div>;
 }
 
-function Days({ value, set, disabled, personal }: { personal?: PersonalSchedule; value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
+export function Days({ value, set, disabled, personal }: { personal?: PersonalSchedule; value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   const updateDay = (id: string, patch: Partial<CycleDay>) => set({ cycleDays: value.cycleDays.map((day) => day.id === id ? { ...day, ...patch } : day) });
   const addDay = () => {

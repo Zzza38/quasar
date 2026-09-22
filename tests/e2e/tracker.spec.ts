@@ -100,7 +100,25 @@ test('explicit community choice, class and task persistence, offline reload and 
   await page.getByLabel('Your grade', { exact: true }).selectOption('9');
   await page.getByRole('radio', { name: /Use the community schedule/ }).click();
   await join.click();
+  // The wizard continues with the classes step; adding one here proves it lands in the synced personal schedule.
+  await expect(page.getByRole('heading', { name: 'Add your classes' })).toBeVisible();
+  await page.getByLabel('Class', { exact: true }).fill('Setup Chemistry');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Periods for Setup Chemistry' })).toBeVisible();
+  await page.getByRole('button', { name: 'Next: homework' }).click();
+  // The homework calendar step explains Schoology first and rejects links that are not real feeds.
+  await expect(page.getByRole('heading', { name: 'Get homework in automatically' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Schoology' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText(/Share Calendar/)).toBeVisible();
+  await page.getByLabel('iCal link').fill('http://localhost/not-a-feed');
+  await page.getByRole('button', { name: 'Connect calendar' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'HTTPS iCalendar feed' })).toBeVisible();
+  await page.getByRole('button', { name: 'Skip for now' }).click();
   await expect(page.getByRole('heading', { name: /Browser Student/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Finish setting up' })).toBeVisible();
+  await expect(page.getByText('Connect your homework calendar')).toBeVisible();
+  await page.getByRole('button', { name: 'Hide setup checklist' }).click();
+  await expect(page.getByRole('heading', { name: 'Finish setting up' })).toHaveCount(0);
 
   await page.getByRole('link', { name: 'Classes' }).click();
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
@@ -143,7 +161,7 @@ test('explicit community choice, class and task persistence, offline reload and 
     const rows = new Service(db).workspace(fixture.id).entities.filter((e) => e.kind === 'task' && !e.deleted);
     expect(rows).toHaveLength(2);
     expect(rows.find((e) => e.data.title === 'Read biology chapter')?.data.completed).toBe(true);
-    expect(new Service(db).workspace(fixture.id).entities.find((e) => e.kind === 'personal')?.data).toMatchObject({ classes: [{ id: 'Biology', name: 'Biology' }] });
+    expect(new Service(db).workspace(fixture.id).entities.find((e) => e.kind === 'personal')?.data).toMatchObject({ classes: expect.arrayContaining([expect.objectContaining({ id: 'Biology', name: 'Biology' }), expect.objectContaining({ name: 'Setup Chemistry' })]) });
   } finally { db.close(); }
 });
 
@@ -375,9 +393,14 @@ test('remaining screens render without horizontal overflow on desktop and mobile
   await page.getByLabel('School name').fill('Screenshot High');
   await page.getByLabel('City and state').fill('Austin, TX');
   await page.getByRole('button', { name: 'Set up the schedule' }).click();
-  await expect(page.getByRole('heading', { name: 'Screenshot High schedule' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'What are the periods called?' })).toBeVisible();
   await fits();
-  await page.screenshot({ path: testInfo.outputPath('onboarding-create.png'), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('onboarding-create-periods.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Next: bell times' }).click();
+  await expect(page.getByRole('heading', { name: 'Bell times on a normal day' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next: rotation days' })).toBeDisabled();
+  await fits();
+  await page.screenshot({ path: testInfo.outputPath('onboarding-create-times.png'), fullPage: true });
 
   const owner = seed('browser-owner@example.com'); await authenticate(context, owner.id);
   await page.goto('/admin');
@@ -880,3 +903,92 @@ test('existing students choose their grade and see lunch throughout the second r
   await page.keyboard.press('Escape');
   await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 10:15–10:45 AM: Lunch', exact: true })).toBeVisible();
 });
+
+test('guided school creation asks one question at a time and never saves example bell times', async ({ page, context }) => {
+  const fixture = seed(undefined, false); await authenticate(context, fixture.id);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Find your school' })).toBeVisible();
+  await page.getByRole('button', { name: 'Add a school' }).click();
+  const name = `Guided Academy ${randomUUID().slice(0, 6)}`;
+  await page.getByLabel('School name').fill(name);
+  await page.getByLabel('City and state').fill('Denver, CO');
+  await page.getByRole('radio', { name: /A \/ B days/ }).click();
+  await page.getByRole('button', { name: 'Set up the schedule' }).click();
+
+  // Periods: rename the first one, drop the last, keep lunch.
+  await expect(page.getByRole('heading', { name: 'What are the periods called?' })).toBeVisible();
+  await page.getByLabel('Period 1 name').fill('Block A');
+  await page.getByRole('button', { name: 'Remove period Period 7' }).click();
+  await page.getByRole('button', { name: 'Next: bell times' }).click();
+
+  // Times start blank, so Continue stays disabled until every slot is filled in.
+  await expect(page.getByRole('heading', { name: 'Bell times on a normal day' })).toBeVisible();
+  const next = page.getByRole('button', { name: 'Next: rotation days' });
+  await expect(next).toBeDisabled();
+  const times = [['7:30 am', '8:15 am'], ['8:20 am', '9:05 am'], ['9:10 am', '9:55 am'], ['10:00 am', '10:45 am'], ['10:50 am', '11:20 am'], ['11:25 am', '12:10 pm'], ['12:15 pm', '1:00 pm']];
+  for (const [index, [start, end]] of times.entries()) {
+    await page.getByLabel(`Slot ${index + 1} start`, { exact: true }).fill(start);
+    await page.getByLabel(`Slot ${index + 1} end`, { exact: true }).fill(end);
+  }
+  await expect(next).toBeEnabled();
+  await next.click();
+
+  await expect(page.getByRole('heading', { name: 'Do the days differ?' })).toBeVisible();
+  await page.getByRole('radio', { name: /Same order and times every day/ }).click();
+  await page.getByRole('button', { name: 'Next: today’s day' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Which rotation day is it?' })).toBeVisible();
+  await page.getByLabel('…the school is on').selectOption('b');
+  await page.getByRole('button', { name: 'Next: check it' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Does this look right?' })).toBeVisible();
+  await expect(page.getByText('2-day rotation')).toBeVisible();
+  await page.getByRole('button', { name: 'Create school' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Which schedule should Quasar follow?' })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /Use the community schedule/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByText('Choose your grade to continue.')).toBeVisible();
+  await page.getByLabel('Your grade', { exact: true }).selectOption('10');
+  await page.getByRole('button', { name: `Join ${name}` }).click();
+  await expect(page.getByRole('heading', { name: 'Add your classes' })).toBeVisible();
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await expect(page.getByRole('heading', { name: 'Get homework in automatically' })).toBeVisible();
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await expect(page.getByRole('heading', { name: /Browser Student/ })).toBeVisible();
+
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const school = new Service(db).workspace(fixture.id).school!;
+    expect(school.name).toBe(name);
+    expect(school.schedule.cycleDays.map((day) => day.slots.map((slot) => `${slot.periodId} ${slot.start}-${slot.end}`))).toEqual([
+      ['p1 07:30-08:15', 'p2 08:20-09:05', 'p3 09:10-09:55', 'p4 10:00-10:45', 'lunch 10:50-11:20', 'p5 11:25-12:10', 'p6 12:15-13:00'],
+      ['p1 07:30-08:15', 'p2 08:20-09:05', 'p3 09:10-09:55', 'p4 10:00-10:45', 'lunch 10:50-11:20', 'p5 11:25-12:10', 'p6 12:15-13:00'],
+    ]);
+    expect(school.schedule.periods[0]).toMatchObject({ id: 'p1', label: 'Block A' });
+    expect(school.schedule.anchorCycleDayId).toBe('b');
+  } finally { db.close(); }
+});
+
+test('help page answers questions and sends feedback to the support inbox before a school is chosen', async ({ page, context }) => {
+  const fixture = seed(undefined, false); await authenticate(context, fixture.id);
+  await page.goto('/help');
+  await expect(page.getByRole('heading', { name: 'Help' })).toBeVisible();
+  await page.getByText('My school is not in the list. What do I do?').click();
+  await expect(page.getByText(/Tap “Add a school” on the school step/)).toBeVisible();
+  await page.getByLabel('Your message').fill('I cannot tell which rotation day today is.');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Sent.' })).toBeVisible();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const requests = new Service(db, 'browser-owner@example.com').requests(seedOwnerId(db));
+    expect(requests.some((request) => request.message.includes('rotation day today') && request.schoolId === null)).toBe(true);
+  } finally { db.close(); }
+});
+
+function seedOwnerId(db: ReturnType<typeof openDatabase>): string {
+  const row = db.prepare('SELECT id FROM users WHERE email=?').get('browser-owner@example.com') as { id: string } | undefined;
+  if (row) return row.id;
+  const id = randomUUID();
+  db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, 'browser-owner@example.com', 'Owner', 'Owner Person', new Date().toISOString());
+  return id;
+}

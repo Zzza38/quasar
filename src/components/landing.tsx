@@ -46,7 +46,7 @@ const SYLLABUS: ReadonlyArray<{ lead: string; rest: string }> = [
 const STEPS: ReadonlyArray<{ title: string; body: string }> = [
   { title: 'Sign in with Google', body: 'No new password, nothing to install, no app store account.' },
   { title: 'Find or build your school', body: 'Already added? One tap. If not, enter the bell schedule once. Everyone after you gets it for free.' },
-  { title: 'Drop classes on periods', body: 'Browse the class directory, pick yours, drag them on. Today fills itself in from then on.' },
+  { title: 'Add your classes', body: 'Type them in, pick from schoolmates, or scan a photo of your timetable. Today fills itself in from then on.' },
 ];
 
 const TODAY_ROWS: ReadonlyArray<{ time: string; name: string; room: string; next?: boolean }> = [

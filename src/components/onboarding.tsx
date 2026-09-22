@@ -2,22 +2,33 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, errorMessage, type School } from '@/client/api';
-import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
-import { browserTimeZone, pluralize, todayIn } from '@/lib/format';
-import { buildTemplate, TEMPLATES, type TemplateKind } from '@/lib/templates';
+import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule, type ScheduleSlot } from '@/domain/schedule';
+import { addDays, browserTimeZone, formatDate, pluralize, timeZones, todayIn, weekdayOf } from '@/lib/format';
+import { applyTypicalDay, buildStarter, nextSchoolDay, starterDays, TEMPLATES, typicalDaySlots, type TemplateKind } from '@/lib/templates';
 import { cn } from '@/lib/utils';
 import type { WorkspaceContext } from './app-state';
 import { Icon } from './icon';
-import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from './schedule-editor';
+import { Days, describeIssues, Periods, Preview, ScheduleEditor, ScheduleSummary, SlotsEditor } from './schedule-editor';
+import { classesStep } from './setup-state';
 import { Brand } from './shell';
 import { Button, Callout, Chip, Eyebrow, Field, Hint, Input, Panel, Select, Spacer } from './primitives';
 import { Card, CardContent } from './ui/card';
 import { Label } from './ui/label';
 
 type Step = 'names' | 'school' | 'create' | 'choice';
-const STEP_TITLES = ['Your name', 'Your school', 'Your schedule'];
+const STEP_TITLES = ['Your name', 'Your school', 'Your schedule', 'Your classes', 'Your homework'];
+export const SETUP_STEPS = STEP_TITLES.length;
+export const STEP_CLASSES = 4;
+export const STEP_FEED = 5;
 
-function Frame({ step, total, title, description, children, wide, footer }: { step: number; total: number; title: ReactNode; description?: ReactNode; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
+/** Opens the help page in a new tab. Shown on every setup screen and in the account sheet. */
+export function HelpLink({ className }: { className?: string }) {
+  return <a href="/help" target="_blank" rel="noopener" className={cn('inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground', className)}>
+    <Icon name="info" size={15} />Help
+  </a>;
+}
+
+export function Frame({ step, total = SETUP_STEPS, title, description, children, wide, footer }: { step: number; total?: number; title: ReactNode; description?: ReactNode; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
   return <main className="welcome-bg grid min-h-dvh place-items-center items-start p-3 sm:items-center sm:px-4 sm:py-8">
     <Card className={cn('w-full rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
       <CardContent className="grid gap-6 sm:px-8">
@@ -37,14 +48,14 @@ function Frame({ step, total, title, description, children, wide, footer }: { st
         </div>
         <div className="grid gap-1.5"><Eyebrow>Step {step} of {total}</Eyebrow><h1 className="text-[28px]">{title}</h1>{description && <p className="text-sm text-muted-foreground">{description}</p>}</div>
         {children}
-        {footer && <div className="flex flex-wrap items-center gap-2 border-t pt-5">{footer}</div>}
+        {footer && <div className="flex flex-wrap items-center gap-2 border-t pt-5">{footer}<Spacer /><HelpLink /></div>}
       </CardContent>
     </Card>
   </main>;
 }
 
 /** Large selectable option, used as a radio inside a radiogroup. */
-function OptionCard({ selected, onSelect, title, description, className, icon }: { selected: boolean; onSelect: () => void; title: ReactNode; description: ReactNode; className?: string; icon?: 'layers' | 'edit' | 'check' | 'users' }) {
+export function OptionCard({ selected, onSelect, title, description, className, icon }: { selected: boolean; onSelect: () => void; title: ReactNode; description: ReactNode; className?: string; icon?: 'layers' | 'edit' | 'check' | 'users' }) {
   return <button type="button" role="radio" aria-checked={selected} onClick={onSelect}
     className={cn('flex gap-3 rounded-2xl bg-card px-4 py-3.5 text-left ring-1 ring-foreground/[0.08] transition-[background-color,box-shadow] outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50', selected && 'bg-primary-soft ring-2 ring-primary hover:bg-primary-soft', className)}>
     <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 transition-colors', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{selected && <Icon name="check" size={12} strokeWidth={3} />}</span>
@@ -63,41 +74,55 @@ export function Onboarding({ context, online, error, onRefresh, onSignOut, logou
   const signOut = <Button variant="ghost" size="sm" icon="logout" onClick={onSignOut} disabled={logoutPending || !online}>Sign out ({context.user.email})</Button>;
 
   if (!online) {
-    return <Frame step={needsNames ? 1 : 2} total={3} title="Connect to finish setup" description="Choosing a school and entering your names happen online. Your account is saved on this device for later." footer={signOut}>
+    return <Frame step={needsNames ? 1 : 2} title="Connect to finish setup" description="Choosing a school and entering your names happen online. Your account is saved on this device for later." footer={signOut}>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
       <div><Button variant="primary" onClick={() => void onRefresh()}>Retry connection</Button></div>
     </Frame>;
   }
 
   if (step === 'names') return <NamesStep user={context.user} error={error} onSaved={async () => { await onRefresh(); setStep('school'); }} footer={signOut} />;
-  if (step === 'create') return <CreateStep onBack={() => setStep('school')} onCreated={(school) => { setSelected(school); setStep('choice'); }} footer={signOut} />;
-  if (step === 'choice' && selected) return <ChoiceStep school={selected} onBack={() => setStep('school')} onJoined={onRefresh} footer={signOut} />;
+  if (step === 'create') return <CreateStep onBack={() => setStep('school')} onCreated={(school) => { setSelected(school); setStep('choice'); }} onUseExisting={(school) => { setSelected(school); setStep('choice'); }} footer={signOut} />;
+  if (step === 'choice' && selected) return <ChoiceStep school={selected} userId={context.user.id} onBack={() => setStep('school')} onJoined={onRefresh} footer={signOut} />;
   return <SchoolStep error={error} onSelect={(school) => { setSelected(school); setStep('choice'); }} onCreate={() => setStep('create')} footer={signOut} />;
 }
 
 /* ---------- Step 1: names ---------- */
 
 function NamesStep({ user, error, onSaved, footer }: { user: WorkspaceContext['user']; error: string; onSaved: () => Promise<void>; footer: ReactNode }) {
-  const [displayName, setDisplayName] = useState(user.displayName ?? '');
-  const [fullName, setFullName] = useState(user.fullName ?? '');
+  const suggested = user.suggestedNames;
+  const [displayName, setDisplayName] = useState(user.displayName || suggested.displayName);
+  const [fullName, setFullName] = useState(user.fullName || suggested.fullName);
   const [message, setMessage] = useState(error);
   const [pending, setPending] = useState(false);
-  return <Frame step={1} total={3} title="What should we call you?" description="Your display name is what other students see later. Your full name is only shown to verified schoolmates." footer={footer}>
+  const prefilled = !user.displayName && !!suggested.fullName;
+  return <Frame step={1} title={prefilled ? 'Is this you?' : 'What should we call you?'} description={prefilled ? 'We took these from your Google account. Change anything you like.' : 'Your display name is what other students see. Your full name is only shown to verified schoolmates.'} footer={footer}>
     <form className="grid gap-4" onSubmit={async (event) => {
       event.preventDefault(); setPending(true); setMessage('');
       try { await api.profile.save.mutate({ displayName: displayName.trim(), fullName: fullName.trim() }); await onSaved(); }
       catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
     }}>
-      <Field label="Display name" htmlFor="display-name"><Input id="display-name" required autoFocus autoComplete="nickname" maxLength={80} placeholder="Maya" value={displayName} className="h-11" onChange={(event) => setDisplayName(event.target.value)} /></Field>
-      <Field label="Full name" htmlFor="full-name"><Input id="full-name" required autoComplete="name" maxLength={160} placeholder="Maya Chen" value={fullName} className="h-11" onChange={(event) => setFullName(event.target.value)} /></Field>
+      <Field label="Display name" htmlFor="display-name" hint="What schoolmates see next to your name."><Input id="display-name" required autoFocus={!prefilled} autoComplete="nickname" maxLength={80} placeholder="Maya" value={displayName} className="h-11" onChange={(event) => setDisplayName(event.target.value)} /></Field>
+      <Field label="Full name" htmlFor="full-name" hint="Only shown to schoolmates support has verified."><Input id="full-name" required autoComplete="name" maxLength={160} placeholder="Maya Chen" value={fullName} className="h-11" onChange={(event) => setFullName(event.target.value)} /></Field>
       <Hint>Signed in as {user.email}.</Hint>
       {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
-      <div><Button type="submit" variant="primary" size="lg" busy={pending} disabled={!displayName.trim() || !fullName.trim()} iconRight="arrowRight">Continue</Button></div>
+      <div><Button type="submit" variant="primary" size="lg" busy={pending} disabled={!displayName.trim() || !fullName.trim()} iconRight="arrowRight" autoFocus={prefilled}>{prefilled ? 'Yes, continue' : 'Continue'}</Button></div>
     </form>
   </Frame>;
 }
 
 /* ---------- Step 2: find a school ---------- */
+
+function SchoolRow({ school, onSelect, action = 'Choose' }: { school: School; onSelect: () => void; action?: string }) {
+  return <button type="button" className="group/school flex w-full items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-foreground/[0.08] transition-[box-shadow,background-color] outline-none hover:bg-muted hover:ring-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50" onClick={onSelect} aria-label={`${action} ${school.name}`}>
+    <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
+    <div className="grid min-w-0 flex-1 gap-1">
+      <strong className="text-[15px] font-bold">{school.name}</strong>
+      <Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint>
+      <div className="flex flex-wrap gap-1.5">{school.approved ? <Chip tone="success" icon="check">Approved schedule</Chip> : <Chip tone="warning" icon="users">Community schedule</Chip>}{(school.supportLocked || school.memberLocked) && <Chip icon="lock">Locked</Chip>}</div>
+    </div>
+    <Icon name="chevronRight" size={18} className="text-muted-foreground transition-transform group-hover/school:translate-x-0.5" />
+  </button>;
+}
 
 function SchoolStep({ error, onSelect, onCreate, footer }: { error: string; onSelect: (school: School) => void; onCreate: () => void; footer: ReactNode }) {
   const [query, setQuery] = useState('');
@@ -110,54 +135,91 @@ function SchoolStep({ error, onSelect, onCreate, footer }: { error: string; onSe
     }, query ? 250 : 0);
     return () => { current = false; clearTimeout(timer); };
   }, [query]);
-  return <Frame step={2} total={3} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." footer={footer}>
+  return <Frame step={2} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." footer={footer}>
     <div className="relative">
       <Icon name="search" size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
       <Input aria-label="School name or location" placeholder="School name or town" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="h-12 rounded-2xl pl-11 text-[15px]" />
     </div>
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     {schools === null && !message && <Hint role="status">Loading schools…</Hint>}
-    {schools && schools.length === 0 && <Panel className="text-sm text-muted-foreground">{query ? `No schools match “${query}”.` : 'No schools have been added yet.'}</Panel>}
+    {schools && schools.length === 0 && <Panel className="text-sm text-muted-foreground">{query ? `No schools match “${query}”.` : 'No schools have been added yet. You would be the first.'}</Panel>}
     {schools && schools.length > 0 && <ul className="grid gap-2" aria-label="Schools">
-      {schools.map((school) => <li key={school.id}>
-        <button type="button" className="group/school flex w-full items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-foreground/[0.08] transition-[box-shadow,background-color] outline-none hover:bg-muted hover:ring-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => onSelect(school)}>
-          <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
-          <div className="grid min-w-0 flex-1 gap-1">
-            <strong className="text-[15px] font-bold">{school.name}</strong>
-            <Hint>{school.location} · {pluralize(school.memberCount, 'member')}</Hint>
-            <div className="flex flex-wrap gap-1.5">{school.approved ? <Chip tone="success" icon="check">Approved schedule</Chip> : <Chip tone="warning" icon="users">Community schedule</Chip>}{(school.supportLocked || school.memberLocked) && <Chip icon="lock">Locked</Chip>}</div>
-          </div>
-          <Icon name="chevronRight" size={18} className="text-muted-foreground transition-transform group-hover/school:translate-x-0.5" />
-        </button>
-      </li>)}
+      {schools.map((school) => <li key={school.id}><SchoolRow school={school} onSelect={() => onSelect(school)} /></li>)}
     </ul>}
-    <Panel className="flex flex-wrap items-center gap-3">
-      <div className="min-w-0 flex-1 basis-[240px] text-sm"><strong>Can’t find it?</strong><p className="text-muted-foreground">Add your school with its rotation and bell times. Others from your school can use it too.</p></div>
-      <Button icon="plus" onClick={onCreate}>Add a school</Button>
+    <Panel className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1 basis-[240px] text-sm"><strong>Can’t find it?</strong><p className="text-muted-foreground">Add your school once and everyone after you gets the bell schedule for free.</p></div>
+        <Button icon="plus" onClick={onCreate}>Add a school</Button>
+      </div>
+      <ul className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
+        <li className="flex items-start gap-1.5"><Icon name="clock" size={13} className="mt-0.5 shrink-0" />About ten minutes</li>
+        <li className="flex items-start gap-1.5"><Icon name="calendar" size={13} className="mt-0.5 shrink-0" />Have the bell schedule in front of you</li>
+        <li className="flex items-start gap-1.5"><Icon name="users" size={13} className="mt-0.5 shrink-0" />Schoolmates can fix mistakes later</li>
+      </ul>
     </Panel>
   </Frame>;
 }
 
-/* ---------- Step 2b: create a school ---------- */
+/* ---------- Step 2b: create a school, one question at a time ---------- */
 
-function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreated: (school: School) => void; footer: ReactNode }) {
+type CreatePhase = 'details' | 'duplicates' | 'periods' | 'times' | 'days' | 'start' | 'review';
+const PERIOD_STEPS: CreatePhase[] = ['details', 'periods', 'times', 'days', 'start', 'review'];
+
+function slotIssues(slots: ScheduleSlot[]): string[] {
+  const issues: string[] = [];
+  slots.forEach((slot, index) => {
+    if (!slot.start || !slot.end) issues.push(`Slot ${index + 1} needs a start and an end time.`);
+    else if (slot.start >= slot.end) issues.push(`Slot ${index + 1} must end after it starts.`);
+    else if (index > 0 && slots[index - 1].end && slots[index - 1].end > slot.start) issues.push(`Slot ${index + 1} overlaps the one before it.`);
+  });
+  if (slots.length === 0) issues.push('Add at least one period.');
+  return issues;
+}
+
+function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () => void; onCreated: (school: School) => void; onUseExisting: (school: School) => void; footer: ReactNode }) {
+  const timeZone = useMemo(browserTimeZone, []);
+  const today = useMemo(() => todayIn(timeZone), [timeZone]);
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
   const [template, setTemplate] = useState<TemplateKind>('rotation');
-  const [cycleLength, setCycleLength] = useState(10);
-  const [phase, setPhase] = useState<'details' | 'schedule'>('details');
-  const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [cycleLength, setCycleLength] = useState(8);
+  const [phase, setPhase] = useState<CreatePhase>('details');
+  const [duplicates, setDuplicates] = useState<School[]>([]);
+  const [draft, setDraft] = useState<Schedule>(() => buildStarter('rotation', { timeZone, today, cycleLength: 8 }));
+  const [typical, setTypical] = useState<ScheduleSlot[]>(() => typicalDaySlots(draft.periods));
+  const [varies, setVaries] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
-  const issues = schedule ? describeIssues(schedule) : [];
+  const multiDay = template !== 'same';
+  const asksStart = template === 'ab' || template === 'rotation';
+  const issues = describeIssues(draft);
+  const typicalProblems = slotIssues(typical);
+  const set = (patch: Partial<Schedule>) => setDraft((current) => ({ ...current, ...patch }));
+  const zones = useMemo(timeZones, []);
+
+  const visible = PERIOD_STEPS.filter((entry) => (entry !== 'days' || multiDay) && (entry !== 'start' || asksStart));
+  const position = Math.max(0, visible.indexOf(phase === 'duplicates' ? 'details' : phase));
+  const progress = <Hint>{phase === 'duplicates' ? 'Before you add it' : `Part ${position + 1} of ${visible.length}`}</Hint>;
+  const goto = (direction: -1 | 1) => setPhase(visible[Math.min(visible.length - 1, Math.max(0, position + direction))]);
+
+  const startDetails = async () => {
+    setChecking(true); setMessage('');
+    try {
+      const trimmed = name.trim();
+      const words = trimmed.split(/\s+/).filter((word) => word.length >= 4 && !/^(high|school|academy|middle|the|public|private|prep)$/i.test(word));
+      const [exact, loose] = await Promise.all([api.school.list.query({ query: trimmed }), words[0] ? api.school.list.query({ query: words[0] }) : Promise.resolve([] as School[])]);
+      const found = [...exact, ...loose.filter((school) => !exact.some((entry) => entry.id === school.id))].slice(0, 5);
+      const next = buildStarter(template, { timeZone, today, cycleLength, periods: draft.periods });
+      setDraft(next); setTypical((current) => typicalDaySlots(next.periods, current)); setVaries(null);
+      if (found.length) { setDuplicates(found); setPhase('duplicates'); } else setPhase('periods');
+    } catch (err) { setMessage(errorMessage(err)); } finally { setChecking(false); }
+  };
+
   if (phase === 'details') {
-    return <Frame step={2} total={3} title="Add your school" description="You only need the basics now; the bell schedule comes next." footer={footer}>
-      <form className="grid gap-4" onSubmit={(event) => {
-        event.preventDefault();
-        const timeZone = browserTimeZone();
-        setSchedule(buildTemplate(template, { timeZone, today: todayIn(timeZone), cycleLength }));
-        setPhase('schedule');
-      }}>
+    return <Frame step={2} title="Add your school" description="Just the basics first. The bell schedule comes next, one question at a time." footer={footer}>
+      {progress}
+      <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); void startDetails(); }}>
         <Field label="School name" htmlFor="school-name"><Input id="school-name" required autoFocus minLength={2} maxLength={160} placeholder="Lincoln High School" value={name} className="h-11" onChange={(event) => setName(event.target.value)} /></Field>
         <Field label="City and state" htmlFor="school-location"><Input id="school-location" required minLength={2} maxLength={200} placeholder="Boston, MA" value={location} className="h-11" onChange={(event) => setLocation(event.target.value)} /></Field>
         <div className="grid gap-2">
@@ -167,20 +229,115 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
           </div>
           {template === 'rotation' && <Field label="Days in the cycle" htmlFor="cycle-length" className="max-w-[160px]"><Input id="cycle-length" type="number" min={2} max={60} value={cycleLength} onChange={(event) => setCycleLength(Math.max(2, Math.min(60, Number(event.target.value) || 2)))} /></Field>}
         </div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={onBack}>Back</Button><Spacer /><Button type="submit" variant="primary" iconRight="arrowRight" disabled={name.trim().length < 2 || location.trim().length < 2}>Set up the schedule</Button></div>
+        {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
+        <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={onBack}>Back</Button><Spacer /><Button type="submit" variant="primary" iconRight="arrowRight" busy={checking} disabled={name.trim().length < 2 || location.trim().length < 2}>Set up the schedule</Button></div>
       </form>
     </Frame>;
   }
-  return <Frame step={2} total={3} wide title={`${name.trim()} schedule`} description="Enter periods, then the order and times for each rotation day. The preview shows real dates." footer={footer}>
-    {schedule && <ScheduleEditor value={schedule} onChange={setSchedule} initialSection="periods" />}
+
+  if (phase === 'duplicates') {
+    return <Frame step={2} title="Is it one of these?" description="A school with a similar name already exists. Joining it means you share one schedule and can fix it together." footer={footer}>
+      {progress}
+      <ul className="grid gap-2" aria-label="Similar schools">{duplicates.map((school) => <li key={school.id}><SchoolRow school={school} action="Join" onSelect={() => onUseExisting(school)} /></li>)}</ul>
+      <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={() => setPhase('details')}>Back</Button><Spacer /><Button variant="primary" iconRight="arrowRight" onClick={() => setPhase('periods')}>None of these, add {name.trim()}</Button></div>
+    </Frame>;
+  }
+
+  if (phase === 'periods') {
+    return <Frame step={2} wide title="What are the periods called?" description="List every block in a school day, including lunch. Use the names your school uses, like “Block A” or “Period 3”." footer={footer}>
+      {progress}
+      {/* Days are still empty here, so the editor is shown a stand-in with every period placed; only the period list is written back. */}
+      <Periods value={{ ...draft, cycleDays: draft.cycleDays.map((day) => ({ ...day, slots: typicalDaySlots(draft.periods, typical) })) }} set={(patch) => { if (patch.periods) set({ periods: patch.periods }); }} confirmRemoval={false} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" icon="arrowLeft" onClick={() => setPhase('details')}>Back</Button>
+        <Spacer />
+        <Button variant="primary" iconRight="arrowRight" disabled={draft.periods.length === 0 || draft.periods.some((period) => !period.label.trim())} onClick={() => { setTypical((current) => typicalDaySlots(draft.periods, current)); goto(1); }}>Next: bell times</Button>
+      </div>
+    </Frame>;
+  }
+
+  if (phase === 'times') {
+    return <Frame step={2} wide title={multiDay ? 'Bell times on a normal day' : 'Bell times'} description="Enter when each period starts and ends. Type times like 8:05 or 1:30 and tap AM/PM if needed. Nothing is filled in for you, so what you enter is what your school actually does." footer={footer}>
+      {progress}
+      <SlotsEditor slots={typical} periods={draft.periods} onChange={setTypical} emptyText="Add the periods in the order they happen." />
+      {typicalProblems.length > 0 && typical.some((slot) => slot.start && slot.end) && <Callout tone="warning" icon="alert"><ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{typicalProblems.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul></Callout>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" icon="arrowLeft" onClick={() => goto(-1)}>Back</Button>
+        <Spacer />
+        <Button variant="primary" iconRight="arrowRight" disabled={typicalProblems.length > 0} onClick={() => { if (!varies) setDraft((current) => applyTypicalDay(current, typical)); goto(1); }}>{multiDay ? 'Next: rotation days' : 'Next: check it'}</Button>
+      </div>
+    </Frame>;
+  }
+
+  if (phase === 'days') {
+    const dayLabels = starterDays(template, cycleLength).map((day) => day.label);
+    return <Frame step={2} wide={varies === true} title="Do the days differ?" description={`Your ${dayLabels.length} rotation days (${dayLabels.slice(0, 3).join(', ')}${dayLabels.length > 3 ? '…' : ''}) all start as a copy of the normal day.`} footer={footer}>
+      {progress}
+      <div className="grid gap-2" role="radiogroup" aria-label="Day differences">
+        <OptionCard icon="check" selected={varies === false} onSelect={() => { setVaries(false); setDraft((current) => applyTypicalDay(current, typical)); }} title="Same order and times every day" description="Each rotation day runs the same periods at the same times." />
+        <OptionCard icon="layers" selected={varies === true} onSelect={() => setVaries(true)} title="The order or the times change by day" description="For example, Day 2 starts with Period 3, or Wednesdays end early. You will drag periods around next." />
+      </div>
+      {varies && <Panel className="grid gap-3">
+        <Hint>Drag a period to move it. Tap a day’s name to change its times. Every day started as a copy of the normal day, so you only need to fix what differs.</Hint>
+        <Days value={draft} set={set} />
+      </Panel>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" icon="arrowLeft" onClick={() => goto(-1)}>Back</Button>
+        <Spacer />
+        <Button variant="primary" iconRight="arrowRight" disabled={varies === null} onClick={() => goto(1)}>{asksStart ? 'Next: today’s day' : 'Next: check it'}</Button>
+      </div>
+    </Frame>;
+  }
+
+  if (phase === 'start') {
+    const defaultDate = nextSchoolDay(today, draft.schoolWeekdays);
+    const isSchoolDay = draft.schoolWeekdays.includes(weekdayOf(draft.anchorDate));
+    return <Frame step={2} title="Which rotation day is it?" description="Quasar counts forward and backward from one date you are sure about. Today is fine, or the next school day." footer={footer}>
+      {progress}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="On this date" htmlFor="anchor-date" hint={draft.anchorDate === defaultDate ? (defaultDate === today ? 'Today.' : `The next school day after today.`) : undefined}><Input id="anchor-date" type="date" value={draft.anchorDate} min="1900-01-01" max="2199-12-31" className="h-11" onChange={(event) => { if (event.target.value) set({ anchorDate: event.target.value }); }} /></Field>
+        <Field label="…the school is on" htmlFor="anchor-day">
+          <Select id="anchor-day" value={draft.anchorCycleDayId} className="h-11" onChange={(event) => set({ anchorCycleDayId: event.target.value })}>
+            {draft.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
+          </Select>
+        </Field>
+      </div>
+      {!isSchoolDay && <Callout tone="warning" icon="alert">{formatDate(draft.anchorDate, { weekday: 'long' })} is not a school day. Pick a weekday the rotation runs on.</Callout>}
+      <Hint>Not sure? Ask a friend or check the school calendar. You can also correct this later from the School page.</Hint>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" icon="arrowLeft" onClick={() => goto(-1)}>Back</Button>
+        <Spacer />
+        <Button variant="primary" iconRight="arrowRight" disabled={!isSchoolDay} onClick={() => goto(1)}>Next: check it</Button>
+      </div>
+    </Frame>;
+  }
+
+  const weekAhead = [0, 1, 2, 3, 4].map((offset) => addDays(nextSchoolDay(today, draft.schoolWeekdays), offset));
+  return <Frame step={2} wide title="Does this look right?" description="Tap a date to see what Quasar thinks happens that day. If something is off, go back and fix it now, because schoolmates who join will inherit this schedule." footer={footer}>
+    {progress}
+    <Panel className="grid gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><strong className="font-bold">{name.trim()}</strong><Hint>{location.trim()}</Hint></div>
+        <ScheduleSummary schedule={draft} />
+      </div>
+      <Field label="School time zone" htmlFor="tz" hint="Taken from this device. Change it only if your school is somewhere else.">
+        <Select id="tz" small value={draft.timeZone} onChange={(event) => set({ timeZone: event.target.value })}>{!zones.includes(draft.timeZone) && <option value={draft.timeZone}>{draft.timeZone}</option>}{zones.map((zone) => <option key={zone} value={zone}>{zone.replaceAll('_', ' ')}</option>)}</Select>
+      </Field>
+    </Panel>
+    {issues.length > 0 && <Callout tone="warning" icon="alert" title={`${issues.length === 1 ? 'One thing' : `${issues.length} things`} to fix first`} role="alert"><ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{issues.slice(0, 8).map((issue) => <li key={issue}>{issue}</li>)}</ul></Callout>}
+    {issues.length === 0 && <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/[0.06]"><Preview value={draft} /></div>}
+    <details className="group rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+      <summary className="cursor-pointer text-sm font-semibold">Advanced settings <Hint className="inline">(school weekdays, exceptions, every tab)</Hint></summary>
+      <div className="pt-3"><ScheduleEditor value={draft} onChange={setDraft} initialSection="basics" /></div>
+    </details>
+    <Hint>Sanity check: {weekAhead.map((date) => formatDate(date, { weekday: 'short' })).join(', ')} come next. The preview above should show the right rotation day for each.</Hint>
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="ghost" icon="arrowLeft" onClick={() => setPhase('details')} disabled={pending}>Back</Button>
+      <Button variant="ghost" icon="arrowLeft" onClick={() => goto(-1)} disabled={pending}>Back</Button>
       <Spacer />
-      <Button variant="primary" busy={pending} disabled={!schedule || issues.length > 0} onClick={async () => {
-        if (!schedule) return;
+      <Button variant="primary" size="lg" busy={pending} disabled={issues.length > 0} onClick={async () => {
         setPending(true); setMessage('');
-        try { onCreated(await api.school.create.mutate({ name: name.trim(), location: location.trim(), schedule: scheduleSchema.parse(schedule) })); }
+        try { onCreated(await api.school.create.mutate({ name: name.trim(), location: location.trim(), schedule: scheduleSchema.parse(draft) })); }
         catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
       }}>Create school</Button>
     </div>
@@ -191,29 +348,32 @@ function CreateStep({ onBack, onCreated, footer }: { onBack: () => void; onCreat
 
 type Choice = 'approved' | 'community' | 'personal';
 
-function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBack: () => void; onJoined: () => Promise<void>; footer: ReactNode }) {
+function ChoiceStep({ school, userId, onBack, onJoined, footer }: { school: School; userId: string; onBack: () => void; onJoined: () => Promise<void>; footer: ReactNode }) {
   const [grade, setGrade] = useState<Grade | ''>('');
   const sharedSchedule = scheduleForGrade(school.schedule, grade || undefined);
   const shared: Choice = school.approved ? 'approved' : 'community';
-  const [choice, setChoice] = useState<Choice | null>(null);
+  const [choice, setChoice] = useState<Choice>(shared);
+  const [advanced, setAdvanced] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [custom, setCustom] = useState<Schedule>(() => structuredClone(school.schedule));
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
   const customIssues = useMemo(() => choice === 'personal' ? describeIssues(custom) : [], [choice, custom]);
+  const blocker = !grade ? 'Choose your grade to continue.' : customIssues.length > 0 ? 'Fix the private schedule issues above to continue.' : '';
   const join = async () => {
-    if (!choice || !grade) return;
+    if (!grade) return;
     setPending(true); setMessage('');
     try {
       await api.school.join.mutate({ schoolId: school.id, choice, grade, ...(choice === 'personal' ? { personalSchedule: scheduleSchema.parse(custom) } : {}) });
+      classesStep.begin(userId);
       await onJoined();
     } catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Frame step={3} total={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" footer={footer}>
+  return <Frame step={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" footer={footer}>
     <Field label="Your grade" htmlFor="onboarding-grade" hint="This chooses your bell schedule and lunch times. You can change it later in Account or School.">
-      <Select id="onboarding-grade" required value={grade} disabled={pending} onChange={(event) => {
+      <Select id="onboarding-grade" required autoFocus value={grade} disabled={pending} className="h-11" onChange={(event) => {
         const next = event.target.value as Grade | '';
-        setGrade(next); setChoice(null);
+        setGrade(next);
         setCustom(structuredClone(scheduleForGrade(school.schedule, next || undefined)));
       }}><option value="" disabled>Choose your grade…</option>{GRADES.map(entry => <option key={entry} value={entry}>{gradeLabel(entry)}</option>)}</Select>
     </Field>
@@ -228,15 +388,19 @@ function ChoiceStep({ school, onBack, onJoined, footer }: { school: School; onBa
     </Panel>
     <div className="grid gap-2" role="radiogroup" aria-label="Schedule choice">
       <OptionCard icon={school.approved ? 'check' : 'users'} selected={choice === shared} onSelect={() => setChoice(shared)} title={school.approved ? 'Use the approved school schedule' : 'Use the community schedule'}
-        description={school.approved ? 'Support has checked this schedule. Corrections from support reach you automatically.' : 'Entered by students and not yet checked by support. Compare it with your school’s published schedule. Corrections still reach you automatically.'} />
-      <OptionCard icon="edit" selected={choice === 'personal'} onSelect={() => setChoice('personal')} title="Build my own private schedule" description="Starts as a copy of the school schedule. Only you see it, and school corrections will not change it." />
+        description={school.approved ? 'Support has checked this schedule. Corrections from support reach you automatically.' : 'Entered by students and not yet checked by support. Compare it with your school’s published schedule after you join. Corrections still reach you automatically.'} />
+      {(advanced || choice === 'personal') ? <OptionCard icon="edit" selected={choice === 'personal'} onSelect={() => setChoice('personal')} title="Build my own private schedule" description="Starts as a copy of the school schedule. Only you see it, and school corrections will not change it." />
+        : <button type="button" className="w-fit text-left text-sm font-semibold text-muted-foreground hover:text-foreground hover:underline" onClick={() => setAdvanced(true)}>Advanced: build a private schedule instead</button>}
     </div>
     {choice === 'personal' && <div className="grid gap-3"><ScheduleEditor value={custom} onChange={setCustom} initialSection="days" /></div>}
     {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="ghost" icon="arrowLeft" onClick={onBack} disabled={pending}>Back</Button>
       <Spacer />
-      <Button variant="primary" size="lg" busy={pending} disabled={!grade || !choice || customIssues.length > 0} onClick={() => void join()}>Join {school.name}</Button>
+      <div className="grid justify-items-end gap-1">
+        <Button variant="primary" size="lg" busy={pending} disabled={!!blocker} onClick={() => void join()}>Join {school.name}</Button>
+        {blocker && <Hint role="status">{blocker}</Hint>}
+      </div>
     </div>
   </Frame>;
 }

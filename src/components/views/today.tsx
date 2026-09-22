@@ -10,6 +10,7 @@ import { sortByDue, taskItems } from '../app-state';
 import { Icon } from '../icon';
 import { Button, Chip, ColorDot, EmptyState, Eyebrow, Hint, Input, Section, StatTile } from '../primitives';
 import { buttonVariants } from '../ui/button';
+import { SetupChecklist } from '../setup-checklist';
 import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
 import { Progress } from '../ui/progress';
@@ -49,7 +50,9 @@ export function TodayView({ state }: { state: AppState }) {
       </div>
     </header>
 
-    <NowCard next={next} following={following} now={now} today={today} onSetup={() => state.navigate('classes')} hasSetup={hasSetup} noSchedule={schedule.cycleDays.every((entry) => entry.slots.length === 0)} />
+    <SetupChecklist state={state} />
+
+    <NowCard next={next} following={following} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => state.navigate('school', { fix: 'times' })} hasSetup={hasSetup} noSchedule={schedule.cycleDays.every((entry) => entry.slots.length === 0)} />
 
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
       <StatTile icon="tasks" tone={dueToday > 0 ? 'danger' : 'success'} value={dueToday} label={dueToday === 1 ? 'task due today' : 'tasks due today'} onClick={() => state.navigate('tasks')} />
@@ -58,7 +61,7 @@ export function TodayView({ state }: { state: AppState }) {
     </div>
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-      <Section title="Today" id="today-timeline" aria-labelledby="today-timeline" description={day && !day.closed ? `${day.periods.length} periods · ${day.periods.length ? formatRange(day.periods[0].start, day.periods[day.periods.length - 1].end) : ''}` : undefined} action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule')}>Full schedule</Button>}>
+      <Section title="Today" id="today-timeline" aria-labelledby="today-timeline" description={day && !day.closed ? `${day.periods.length} periods · ${day.periods.length ? formatRange(day.periods[0].start, day.periods[day.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{day && !day.closed && day.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => state.navigate('school', { fix: 'times' })} title="Fix the shared bell schedule">Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule')}>Full schedule</Button></div>}>
         {day?.closed && <div className="grid justify-items-start gap-2 py-3">
           <p className="text-sm text-muted-foreground">No periods today. Enjoy the day off.</p>
           {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
@@ -78,11 +81,12 @@ export function TodayView({ state }: { state: AppState }) {
   </div>;
 }
 
-function NowCard({ next, following, now, today, onSetup, hasSetup, noSchedule }: { next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; now: Date; today: string; onSetup: () => void; hasSetup: boolean; noSchedule: boolean }) {
+function NowCard({ next, following, now, today, onSetup, onFixSchedule, hasSetup, noSchedule }: { next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; hasSetup: boolean; noSchedule: boolean }) {
   if (!next) return <Card aria-label="Next class"><CardContent className="grid gap-2 py-2">
     <Eyebrow>Up next</Eyebrow>
     <h2 className="text-xl">{noSchedule ? 'Your schedule has no periods yet' : 'No upcoming periods'}</h2>
     <p className="text-sm text-muted-foreground">{noSchedule ? 'Add periods to the school schedule or build a private one.' : 'Nothing is scheduled for the next year.'}</p>
+    {noSchedule && <div><Button size="sm" onClick={onFixSchedule}>Open the school schedule</Button></div>}
   </CardContent></Card>;
   const current = next.status === 'current';
   const until = current ? minutesUntil(next.endAt, now) : minutesUntil(next.startAt, now);

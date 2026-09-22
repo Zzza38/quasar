@@ -8,6 +8,9 @@ import { todayIn } from '@/lib/format';
 import { VIEWS, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
 import { Onboarding } from './onboarding';
+import { ClassesStep } from './onboarding-classes';
+import { FeedStep } from './onboarding-feed';
+import { classesStep, feedStep } from './setup-state';
 import { Icon, Spinner } from './icon';
 import { CenteredNotice, Shell } from './shell';
 import { Welcome } from './landing';
@@ -70,6 +73,10 @@ export function Tracker() {
   const parsedPersonal = useMemo(() => personalScheduleSchema.safeParse(personalEntity?.data ?? emptyPersonalSchedule()), [personalEntity]);
   const personal: PersonalSchedule = parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule();
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
+  const [setupClasses, setSetupClasses] = useState(false);
+  const [setupFeed, setSetupFeed] = useState(false);
+  const userId = context?.user.id;
+  useEffect(() => { setSetupClasses(!!userId && classesStep.pending(userId)); setSetupFeed(!!userId && feedStep.pending(userId)); }, [userId, context?.school?.id]);
 
   if (session.authRequired) return <Welcome message={session.error || undefined} />;
   if (session.loading && !context) return <CenteredNotice title="Opening your schedule…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
@@ -87,6 +94,18 @@ export function Tracker() {
   const school = context.school;
   const schedule = effectiveSchedule(school.schedule, personal);
   const timeZone = schedule.timeZone;
+  // Right after joining, the wizard continues with the classes step until the student finishes or skips it.
+  if (setupClasses) {
+    return <ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
+      onSave={(value) => session.save('personal', 'personal', personalScheduleSchema.parse(value))}
+      onDone={() => { classesStep.finish(context.user.id); feedStep.begin(context.user.id); setSetupClasses(false); setSetupFeed(true); }}
+      footer={<Button variant="ghost" size="sm" icon="logout" onClick={session.requestLogout} disabled={session.logout.pending || !session.online}>Sign out ({context.user.email})</Button>} />;
+  }
+  if (setupFeed) {
+    return <FeedStep userId={context.user.id} online={session.online} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
+      onDone={() => { feedStep.finish(context.user.id); setSetupFeed(false); }}
+      footer={<Button variant="ghost" size="sm" icon="logout" onClick={session.requestLogout} disabled={session.logout.pending || !session.online}>Sign out ({context.user.email})</Button>} />;
+  }
   const state: AppState = {
     context: { ...context, school },
     snapshot,

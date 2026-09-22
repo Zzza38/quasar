@@ -16,6 +16,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger } from './ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import type { SyncState, WorkspaceSession } from './use-workspace';
+import { OPEN_ACCOUNT_EVENT } from './setup-checklist';
 
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users' };
 const NAV_KEY = 'quasar.navigationCollapsed';
@@ -127,6 +128,11 @@ function useNavigationOpen(): [boolean, (open: boolean) => void] {
 
 export function Shell({ session, context, view, taskCount, children, gradeSettings }: { session: WorkspaceSession; context: WorkspaceContext; view: View; taskCount: number; children: ReactNode; gradeSettings?: ReactNode }) {
   const [account, setAccount] = useState(false);
+  useEffect(() => {
+    const open = () => setAccount(true);
+    window.addEventListener(OPEN_ACCOUNT_EVENT, open);
+    return () => window.removeEventListener(OPEN_ACCOUNT_EVENT, open);
+  }, []);
   const [navOpen, setNavOpen] = useNavigationOpen();
   const { sync, online, snapshot } = session;
   const requestCount = context.community?.incomingRequests ?? 0;
@@ -153,7 +159,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
               <span data-slot="sidebar-open-icon" className="hidden group-hover/sidebar-open:flex group-focus-visible/sidebar-open:flex"><PanelLeft aria-hidden="true" className="size-5" /></span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-semibold text-popover-foreground shadow-float [&_svg]:hidden">Open sidebar</TooltipContent>
+          <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-semibold text-popover-foreground shadow-float">Open sidebar</TooltipContent>
         </Tooltip>}
       </SidebarHeader>
       <SidebarContent className="pt-2">
@@ -237,6 +243,7 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
           <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
           <div className="grid gap-3"><Eyebrow>Reminders</Eyebrow><NotificationSettings accountId={context.user.id} online={online} /></div>
           <div className="grid gap-2 border-t pt-5">
+            <Button icon="info" onClick={() => { window.open('/help', '_blank', 'noopener'); }}>Help and FAQ</Button>
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
             <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.syncing || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
             {!online && <Hint>Signing out removes this account’s saved data from this device, so it needs a connection to make sure everything is uploaded first.</Hint>}

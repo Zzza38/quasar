@@ -77,9 +77,9 @@ export function Admin() {
       <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
         {requests.length === 0 && <EmptyState icon="inbox" title="Inbox is empty" />}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><strong className="text-sm font-bold">{request.schoolName}</strong><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.message}</p>
-          <div className="flex flex-wrap gap-2"><Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button><Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
+          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
         </li>)}</ul>}
       </Section>
 

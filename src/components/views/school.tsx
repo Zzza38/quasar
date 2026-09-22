@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { pluralize } from '@/lib/format';
@@ -34,6 +34,13 @@ export function SchoolView({ state }: { state: AppState }) {
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  // "Wrong time?" on Today lands here: open the shared editor, or point at the correction form when editing is locked.
+  const fix = state.params.get('fix');
+  useEffect(() => {
+    if (fix !== 'times') return;
+    if (!locked && online) setEditing(true);
+    else document.getElementById('correction-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [fix, locked, online]);
 
   return <div className="grid gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">

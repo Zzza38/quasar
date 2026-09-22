@@ -8,9 +8,9 @@ import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/do
 import { listSubscriptions, listImportConflicts } from './calendar';
 import { CommunityService, emailDomainsSchema, parseEmailDomains } from './community';
 
-export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null };
+export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null; suggestedNames: { displayName: string; fullName: string } };
 export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[] };
-type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null };
+type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null };
 type SchoolRow = { id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string };
 const fail = (code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'BAD_REQUEST' | 'TOO_MANY_REQUESTS', message: string): never => { throw new TRPCError({ code, message }); };
 const now = () => new Date().toISOString();
@@ -21,6 +21,15 @@ export const adminUpdateSchema = schoolUpdateSchema.extend({ approved: z.boolean
 export const joinSchema = z.object({ schoolId: z.string().uuid(), choice: z.enum(['approved', 'community', 'personal']), personalSchedule: scheduleSchema.optional(), grade: gradeSchema.optional() });
 const entitySchema = z.object({ id: z.string().min(1).max(100), kind: z.enum(['task', 'personal']), version: z.number().int().positive(), data: z.record(z.string(), z.unknown()), deleted: z.boolean() });
 export const mutationSchema = z.object({ mutationId: z.string().uuid(), id: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), kind: z.enum(['task', 'personal']), base: entitySchema.nullable(), data: z.record(z.string(), z.unknown()).nullable() });
+/** Prefills the names step from the Google profile: first name as the display name, the whole name as the full name. */
+export function suggestNames(googleName: string, email: string): { displayName: string; fullName: string } {
+  const fullName = googleName.trim().replace(/\s+/g, ' ').slice(0, 160);
+  const first = fullName.split(' ')[0] ?? '';
+  const local = email.split('@')[0] ?? '';
+  const fromEmail = local.split(/[._-]/)[0] ?? '';
+  const displayName = (first || (fromEmail ? fromEmail[0].toUpperCase() + fromEmail.slice(1) : '')).slice(0, 80);
+  return { displayName, fullName };
+}
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
@@ -33,7 +42,7 @@ export class Service {
     if (!id) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
     const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined;
     if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
-    return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id };
+    return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id, suggestedNames: suggestNames(row.google_name ?? '', row.email) };
   }
   ready(id: string): User {
     const user = this.user(id);
@@ -206,15 +215,23 @@ export class Service {
   requestCorrection(id: string, message: string) {
     const user = this.ready(id);
     if (!user.schoolId) return fail('BAD_REQUEST', 'Join a school first.');
+    return this.sendSupportRequest(id, user.schoolId, message);
+  }
+  /** Feedback from any signed-in student, including ones still in setup. Lands in the same support inbox. */
+  feedback(id: string, message: string) {
+    const user = this.user(id);
+    return this.sendSupportRequest(id, user.schoolId, message);
+  }
+  private sendSupportRequest(id: string, schoolId: string | null, message: string) {
     const text = z.string().trim().min(10).max(5000).parse(message);
     const count = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(id) as {n: number};
     if (count.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
-    this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), user.schoolId, id, text, now());
+    this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), schoolId, id, text, now());
   }
   requests(id: string) {
     this.admin(id);
-    return this.db.prepare(`SELECT r.id,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName
-      FROM support_requests r JOIN schools s ON s.id=r.school_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; schoolId: string; message: string; createdAt: string; schoolName: string}[];
+    return this.db.prepare(`SELECT r.id,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string}[];
   }
   resolveRequest(id: string, requestId: string) {
     this.admin(id);

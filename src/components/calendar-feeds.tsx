@@ -1,17 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { browserTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
-import { Button, Callout, Chip, ErrorText, Field, Hint, Input, Modal, Panel, Section } from './primitives';
+import { Button, Callout, Chip, ErrorText, Hint, Modal, Panel, Section } from './primitives';
+import { FeedGuide, FeedSubscribeForm } from './feed-guide';
 
 export function CalendarFeeds({ state }: { state: AppState }) {
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
-  const [timeZone, setTimeZone] = useState(browserTimeZone);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const wantsAdd = state.params.get('feed') === 'add';
+  useEffect(() => { if (wantsAdd) { setAdding(true); document.getElementById('calendar-feeds-title')?.scrollIntoView({ block: 'start' }); } }, [wantsAdd]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState('');
   const subscriptions = state.context.subscriptions ?? [];
@@ -22,7 +22,7 @@ export function CalendarFeeds({ state }: { state: AppState }) {
     finally { setPending(null); }
   };
   const stamp = (value: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: state.timeZone }).format(new Date(value));
-  return <Section id="calendar-feeds-title" title="Connected calendars" icon="calendar" description="Subscribe to an iCal link and its events show up as tasks." action={<Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setTimeZone(browserTimeZone()); setAdding(true); }}>Add calendar</Button>}>
+  return <Section id="calendar-feeds-title" title="Connected calendars" icon="calendar" description="Subscribe to an iCal link and its events show up as tasks." action={<Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setAdding(true); }}>Add calendar</Button>}>
     {!state.online && <Hint>Connect to the internet to manage calendars. Saved events are still available offline.</Hint>}
     {(state.context.importConflicts ?? []).map((conflict) => {
       const local = state.snapshot.entities.find((entry) => entry.id === conflict.entityId)?.data;
@@ -40,7 +40,11 @@ export function CalendarFeeds({ state }: { state: AppState }) {
         </div>)}</dl>
       </Callout>;
     })}
-    {subscriptions.length === 0 && <Panel className="text-sm text-muted-foreground">No calendars yet. Google Classroom, Canvas and most school portals offer an iCal link under calendar settings.</Panel>}
+    {subscriptions.length === 0 && <Panel className="grid gap-2 text-sm text-muted-foreground">
+      <span>No calendars yet. Schoology, Google Classroom, Canvas and most school portals offer an iCal link under their calendar settings.</span>
+      <button type="button" className="w-fit text-left font-semibold text-primary hover:underline" aria-expanded={guideOpen} onClick={() => setGuideOpen((open) => !open)}>{guideOpen ? 'Hide instructions' : 'Show me where to find it'}</button>
+      {guideOpen && <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/[0.06]"><FeedGuide compact /></div>}
+    </Panel>}
     {subscriptions.length > 0 && <ul className="grid gap-2">{subscriptions.map((feed) => <li key={feed.id} className="grid gap-2 rounded-2xl bg-muted/70 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 gap-3">
@@ -61,14 +65,12 @@ export function CalendarFeeds({ state }: { state: AppState }) {
       {feed.lastError && <p className="text-sm text-destructive">{feed.lastError} Your saved items are unchanged. Try refreshing again.</p>}
     </li>)}</ul>}
     {!adding && <ErrorText>{error}</ErrorText>}
-    <Modal open={adding} onClose={() => { if (pending === null) { setAdding(false); setUrl(''); } }} title="Add calendar"
-      footer={<><Button variant="ghost" disabled={pending !== null} onClick={() => { setAdding(false); setUrl(''); }}>Cancel</Button><Button variant="primary" type="submit" form="calendar-feed-form" busy={pending === 'add'} disabled={!state.online || pending !== null || !name.trim() || !url.trim()}>Subscribe</Button></>}>
-      <form id="calendar-feed-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!state.online || pending !== null) return; void run('add', async () => { await api.calendar.subscribe.mutate({ accountId: state.context.user.id, name: name.trim(), url: url.trim(), timeZone: timeZone.trim() }); setUrl(''); setName(''); setAdding(false); }); }}>
-        <Field label="Calendar name" htmlFor="feed-name"><Input id="feed-name" autoFocus required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} placeholder="School homework" /></Field>
-        <Field label="iCal URL" htmlFor="feed-url" hint="Your subscription link is private and is not displayed after saving."><Input id="feed-url" type="text" inputMode="url" autoComplete="off" spellCheck={false} required maxLength={4000} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…/calendar.ics" /></Field>
-        <Field label="Calendar time zone" htmlFor="feed-zone" hint="Used for times when the feed does not specify a time zone."><Input id="feed-zone" required maxLength={100} value={timeZone} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></Field>
-        <ErrorText>{error}</ErrorText>
-      </form>
+    <Modal open={adding} wide onClose={() => { if (pending === null) setAdding(false); }} title="Add calendar" description="Copy the iCal link from your school portal, then paste it here."
+      footer={<><Button variant="ghost" disabled={pending !== null} onClick={() => setAdding(false)}>Cancel</Button></>}>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <Panel className="grid gap-2"><strong className="text-sm font-bold">Where to find the link</strong><FeedGuide compact /></Panel>
+        <FeedSubscribeForm accountId={state.context.user.id} online={state.online} autoFocus onSubscribed={async () => { await state.refresh(); setAdding(false); }} />
+      </div>
     </Modal>
   </Section>;
 }
