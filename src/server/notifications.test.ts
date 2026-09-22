@@ -85,8 +85,13 @@ describe('browser reminders', () => {
     expect(f.service.status('one', subscription().endpoint)).toEqual({ subscribed: false });
     expect(f.db.prepare('SELECT owner_id FROM push_subscriptions').get()).toEqual({ owner_id: 'two' });
   });
+  it('accepts the endpoints of every mainstream browser push provider', () => {
+    for (const endpoint of ['https://fcm.googleapis.com/fcm/send/abc', 'https://updates.push.services.mozilla.com/wpush/v2/abc', 'https://web.push.apple.com/abc', 'https://wns2-par02p.notify.windows.com/w/?token=abc']) {
+      expect(pushSubscriptionSchema.safeParse({ ...subscription(), endpoint }).success).toBe(true);
+    }
+  });
   it('blocks arbitrary endpoints and malformed encryption keys', () => {
-    for (const endpoint of ['http://fcm.googleapis.com/test', 'https://localhost/test', 'https://127.0.0.1/test', 'https://fcm.googleapis.com.evil.example/test', 'https://user@fcm.googleapis.com/test', 'https://fcm.googleapis.com:8080/test']) {
+    for (const endpoint of ['http://fcm.googleapis.com/test', 'https://localhost/test', 'https://127.0.0.1/test', 'https://fcm.googleapis.com.evil.example/test', 'https://notify.windows.com.evil.example/test', 'https://evilnotify.windows.com/test', 'https://user@fcm.googleapis.com/test', 'https://fcm.googleapis.com:8080/test']) {
       expect(pushSubscriptionSchema.safeParse({ ...subscription(), endpoint }).success).toBe(false);
     }
     expect(pushSubscriptionSchema.safeParse({ ...subscription(), keys: { auth: 'short', p256dh: 'short' } }).success).toBe(false);

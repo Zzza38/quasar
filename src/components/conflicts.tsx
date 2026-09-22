@@ -94,7 +94,7 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
         setError(''); setPending(conflict.mutation.mutationId);
         try { await resolve(conflict.mutation.mutationId, choice); } catch (err) { setError(errorMessage(err)); } finally { setPending(null); }
       };
-      return <Card key={conflict.mutation.mutationId} className="border-l-4 border-l-now" aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
+      return <Card key={conflict.mutation.mutationId} aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
         <CardContent className="grid gap-3">
           <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="alert" size={17} /></span><div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-bold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div></div>
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/[0.06]"><DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} /></div>
@@ -157,7 +157,7 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   const todayBefore = resolveDay(review.previous, today, personal);
   const todayAfter = resolveDay(review.current, today, personal);
   const todayChanged = JSON.stringify(todayBefore) !== JSON.stringify(todayAfter);
-  return <Card className="border-l-4 border-l-primary" aria-labelledby="review-title">
+  return <Card aria-labelledby="review-title">
     <CardContent className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div></div>

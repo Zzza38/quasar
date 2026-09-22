@@ -8,10 +8,13 @@ import type { Db } from './db';
 // Provider-owned HTTPS hosts only: browser subscriptions must never turn the
 // worker into a general URL fetcher. web-push does not follow redirects.
 const pushHosts = new Set(['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com']);
+// Microsoft Edge subscribes through regional Windows Notification Service hosts (wns2-xx.notify.windows.com).
+const pushHostSuffixes = ['.notify.windows.com'];
+const pushHost = (hostname: string) => pushHosts.has(hostname) || pushHostSuffixes.some(suffix => hostname.endsWith(suffix));
 export const pushEndpointSchema = z.string().max(4096).refine(value => {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.hash && pushHosts.has(url.hostname);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.hash && pushHost(url.hostname);
   } catch { return false; }
 }, 'This browser push provider is not supported');
 const key = (length: number) => z.string().max(128).regex(/^[A-Za-z0-9_-]+={0,2}$/).refine(value => Buffer.from(value, 'base64url').length === length, 'Invalid push key');

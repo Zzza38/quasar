@@ -18,6 +18,8 @@ async function handler(req: Request) {
   }
   return fetchRequestHandler({ endpoint: '/api/trpc', req, router: appRouter,
     createContext: async () => ({ userId: await getUserId(), service: new Service(getDb()) }),
+    // Procedure name and error code only: inputs may hold private schedule data.
+    onError: ({ path, error }) => { if (error.code !== 'UNAUTHORIZED') console.error(`tRPC ${path ?? 'unknown'} failed: ${error.code} ${error.message}`); },
     responseMeta: () => ({ headers: { 'Cache-Control': 'no-store' } })
   });
 }
