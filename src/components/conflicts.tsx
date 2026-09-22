@@ -30,8 +30,8 @@ export function DiffTable<T>({ left, right, leftTitle, rightTitle, fields, onlyC
       {right === null && <TableRow><TableCell colSpan={3}><em>{rightTitle}: deleted</em></TableCell></TableRow>}
       {rows.map((row) => <TableRow key={row.field.key}>
         <TableCell className="font-medium text-muted-foreground">{row.field.label}</TableCell>
-        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.a ?? <span className="text-muted-foreground/70">—</span>}</TableCell>
-        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.b ?? <span className="text-muted-foreground/70">—</span>}</TableCell>
+        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.a ?? <span className="text-muted-foreground/70">-</span>}</TableCell>
+        <TableCell className={cn('whitespace-normal [overflow-wrap:anywhere]', row.changed && 'bg-warning-soft')}>{row.b ?? <span className="text-muted-foreground/70">-</span>}</TableCell>
       </TableRow>)}
       {rows.length === 0 && <TableRow><TableCell colSpan={3} className="text-muted-foreground">No differences.</TableCell></TableRow>}
     </TableBody>

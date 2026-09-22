@@ -223,32 +223,36 @@ function summarizeException(exception: Exception, schedule: Schedule): string {
 }
 
 function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const sorted = [...value.exceptions].sort((left, right) => left.date.localeCompare(right.date));
-  const replace = (date: string, next: Exception | null) => set({ exceptions: next ? value.exceptions.map((entry) => entry.date === date ? next : entry) : value.exceptions.filter((entry) => entry.date !== date) });
+  // Rows are identified by their position in the stored array, not by date, so editing the date never remounts or collapses the row.
+  const [editing, setEditing] = useState<number | null>(null);
+  const sorted = value.exceptions.map((exception, index) => ({ exception, index })).sort((left, right) => left.exception.date.localeCompare(right.exception.date));
+  const replace = (index: number, next: Exception | null) => {
+    set({ exceptions: next ? value.exceptions.map((entry, position) => position === index ? next : entry) : value.exceptions.filter((_, position) => position !== index) });
+    if (!next) setEditing((current) => current === null || current === index ? null : current > index ? current - 1 : current);
+  };
   const add = () => {
     let date = todayIn(value.timeZone);
     while (value.exceptions.some((entry) => entry.date === date)) date = addDays(date, 1);
     set({ exceptions: [...value.exceptions, { date, kind: 'closure', advanceCycle: false }] });
-    setEditing(date);
+    setEditing(value.exceptions.length);
   };
   return <div className="grid gap-4">
     {sorted.length === 0 && <Hint>No exceptions yet.</Hint>}
     <div className="grid gap-2">
-      {sorted.map((exception) => {
-        const expanded = editing === exception.date;
-        return <div key={exception.date} className="overflow-hidden rounded-2xl bg-muted/60 ring-1 ring-inset ring-foreground/[0.04]">
+      {sorted.map(({ exception, index }) => {
+        const expanded = editing === index;
+        return <div key={index} className="overflow-hidden rounded-2xl bg-muted/60 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex items-center gap-3 p-3">
             <span aria-hidden="true" className={`grid size-9 shrink-0 place-items-center rounded-xl ${exception.kind === 'closure' ? 'bg-secondary text-secondary-foreground' : exception.kind === 'replacement' ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground'}`}><Icon name={exception.kind === 'closure' ? 'coffee' : exception.kind === 'replacement' ? 'clock' : 'refresh'} size={16} /></span>
             <div className="min-w-0 flex-1">
               <strong className="text-sm font-bold">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
               <Hint>{summarizeException(exception, value)}</Hint>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(expanded ? null : exception.date)} aria-expanded={expanded}>{expanded ? 'Done' : 'Edit'}</Button>
-            <IconButton size="sm" label={`Remove exception on ${exception.date}`} icon="trash" disabled={disabled} onClick={() => replace(exception.date, null)} />
+            <Button size="sm" variant="ghost" onClick={() => setEditing(expanded ? null : index)} aria-expanded={expanded}>{expanded ? 'Done' : 'Edit'}</Button>
+            <IconButton size="sm" label={`Remove exception on ${exception.date}`} icon="trash" disabled={disabled} onClick={() => replace(index, null)} />
           </div>
           {expanded && <div className="grid gap-3 border-t border-foreground/[0.05] bg-card p-3">
-            <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(exception.date, next)} />
+            <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(index, next)} />
           </div>}
         </div>;
       })}
@@ -265,10 +269,18 @@ export function ExceptionForm({ exception, schedule, onChange, disabled }: { exc
     if (kind === 'replacement') onChange({ date: exception.date, kind, advanceCycle: true, slots: [] });
     if (kind === 'reset') onChange({ date: exception.date, kind, advanceCycle: true, cycleDayId: schedule.cycleDays[0]?.id ?? '' });
   };
+  // The date is held as a draft while typing (keyboard entry passes through many intermediate dates) and committed on blur or Enter.
+  const [draftDate, setDraftDate] = useState<string | null>(null);
+  const shownDate = draftDate ?? exception.date;
+  const dateTaken = shownDate !== exception.date && schedule.exceptions.some((entry) => entry.date === shownDate);
+  const commitDate = () => {
+    if (draftDate && draftDate !== exception.date && !dateTaken && draftDate >= '1900-01-01' && draftDate <= '2199-12-31') onChange({ ...exception, date: draftDate });
+    setDraftDate(null);
+  };
   const normallyAdvances = schedule.advanceWeekdays.includes(new Date(`${exception.date}T12:00:00Z`).getUTCDay() === 0 ? 7 : new Date(`${exception.date}T12:00:00Z`).getUTCDay());
   return <>
     <div className="grid items-end gap-3 sm:grid-cols-[180px_1fr]">
-      <Field label="Date" htmlFor={`exception-date-${exception.date}`}><Input id={`exception-date-${exception.date}`} small type="date" value={exception.date} disabled={disabled} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value && !schedule.exceptions.some((entry) => entry.date === event.target.value)) onChange({ ...exception, date: event.target.value }); }} /></Field>
+      <Field label="Date" htmlFor={`exception-date-${exception.date}`} error={dateTaken ? 'Another exception already uses this date.' : undefined}><Input id={`exception-date-${exception.date}`} small type="date" value={shownDate} disabled={disabled} min="1900-01-01" max="2199-12-31" aria-invalid={dateTaken || undefined} onChange={(event) => setDraftDate(event.target.value || null)} onBlur={commitDate} onKeyDown={(event) => { if (event.key === 'Enter') commitDate(); }} /></Field>
       <Segmented label="Exception type" value={exception.kind} onChange={change} options={kinds} disabled={disabled} />
     </div>
     {exception.kind === 'reset' && <Field label="Rotation day on this date" htmlFor={`reset-${exception.date}`}>
@@ -295,7 +307,7 @@ export function Preview({ value }: { value: Schedule }) {
   const schedule = parsed.data;
   const days = Array.from({ length: 14 }, (_, index) => addDays(weekStart, index)).map((entry) => ({ date: entry, day: resolveDay(schedule, entry) }));
   const selected = resolveDay(schedule, date);
-  const strip = (offset: number) => days.slice(offset, offset + 7).map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '—' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}` }));
+  const strip = (offset: number) => days.slice(offset, offset + 7).map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '-' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}` }));
   return <div className="grid gap-4">
     <div className="flex items-center justify-between gap-2">
       <IconButton label="Previous two weeks" icon="chevronLeft" onClick={() => setWeekStart(addDays(weekStart, -14))} />

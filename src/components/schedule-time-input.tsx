@@ -26,6 +26,6 @@ export function ScheduleTimeInput({ label, value, onChange, disabled }: {
         const next = `${String((Number(value.slice(0, 2)) + 12) % 24).padStart(2, '0')}:${value.slice(3)}`;
         setDraft({ value: next, lastValid: next, text: displayScheduleTime(next) });
         onChange(next);
-      }}>{value ? afternoon ? 'PM' : 'AM' : '—'}</button>
+      }}>{value ? afternoon ? 'PM' : 'AM' : '-'}</button>
   </div>;
 }

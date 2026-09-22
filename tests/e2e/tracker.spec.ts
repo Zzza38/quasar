@@ -573,6 +573,32 @@ test('schedule times infer AM and PM while typing and allow manual overrides', a
   await expect(meridiem).toHaveText('PM');
 });
 
+test('exception stays open while its date is typed and rejects a duplicate date', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/#school');
+  await page.getByRole('button', { name: 'Edit shared schedule' }).click();
+  await dialog(page).getByRole('tab', { name: /Exceptions ·/ }).click();
+  await dialog(page).getByRole('button', { name: 'Add exception' }).click();
+  const date = dialog(page).getByLabel('Date', { exact: true });
+  await expect(date).toBeVisible();
+  // Keyboard entry passes through intermediate dates; the row must stay open and focused throughout.
+  await date.focus();
+  await date.pressSequentially('03152031');
+  await expect(date).toBeFocused();
+  await expect(date).toHaveValue('2031-03-15');
+  await dialog(page).getByRole('radio', { name: 'Restart rotation' }).click();
+  await expect(date).toHaveValue('2031-03-15');
+  await expect(dialog(page).getByRole('button', { name: 'Remove exception on 2031-03-15' })).toBeVisible();
+  await expect(dialog(page).getByLabel('Rotation day on this date')).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Add exception' }).click();
+  await expect(date).toHaveCount(1);
+  await date.fill('2031-03-15');
+  await expect(dialog(page).getByRole('alert').filter({ hasText: 'Another exception already uses this date.' })).toBeVisible();
+  await date.blur();
+  await expect(dialog(page).getByRole('button', { name: 'Remove exception on 2031-03-15' })).toHaveCount(1);
+  await expect(date).not.toHaveValue('2031-03-15');
+});
+
 test('time canvas fits desktop, groups weeks, and drags and resizes freely timed blocks', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 1440, height: 1000 });

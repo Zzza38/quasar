@@ -1,4 +1,4 @@
-# Quasar — Project plan
+# Quasar - Project plan
 
 Status: phase-1 backend and functional application flows implemented (2026-09-11). Visual design and structured schedule editors are handed to Fable; live Google OAuth configuration, deployment, and the real-school pilot remain launch work. See [README.md](README.md), [Fable handoff](docs/FABLE_HANDOFF.md), and [operations](docs/OPERATIONS.md). Later phase sequencing and acceptance gates remain proposals. The interview below is retained as product history.
 

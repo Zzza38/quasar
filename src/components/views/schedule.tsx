@@ -47,7 +47,7 @@ export function ScheduleView({ state }: { state: AppState }) {
         <strong className="text-sm font-bold tracking-tight">{formatDate(week[0].date)} – {formatDate(week[6].date, { year: true })}</strong>
         <IconButton label="Next week" icon="chevronRight" size="sm" onClick={() => setDate(addDays(date, 7))} />
       </div>
-      <WeekStrip selected={date} today={today} onSelect={setDate} days={week.map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '—' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}` }))} />
+      <WeekStrip selected={date} today={today} onSelect={setDate} days={week.map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '-' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}` }))} />
     </CardContent></Card>
 
     <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => setAdjustDate(date)}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}

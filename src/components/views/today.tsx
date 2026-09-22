@@ -54,7 +54,7 @@ export function TodayView({ state }: { state: AppState }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
       <StatTile icon="tasks" tone={dueToday > 0 ? 'danger' : 'success'} value={dueToday} label={dueToday === 1 ? 'task due today' : 'tasks due today'} onClick={() => state.navigate('tasks')} />
       <StatTile icon="clock" tone="accent" value={periodsLeft} label={periodsLeft === 1 ? 'period left today' : 'periods left today'} onClick={() => state.navigate('schedule')} />
-      <StatTile icon="layers" tone="now" className="max-sm:col-span-2" value={cycleIndex >= 0 ? `${cycleIndex + 1} of ${schedule.cycleDays.length}` : '—'} label={schedule.cycleDays.length > 1 ? 'rotation day' : 'daily schedule'} onClick={() => state.navigate('schedule')} />
+      <StatTile icon="layers" tone="now" className="max-sm:col-span-2" value={cycleIndex >= 0 ? `${cycleIndex + 1} of ${schedule.cycleDays.length}` : '-'} label={schedule.cycleDays.length > 1 ? 'rotation day' : 'daily schedule'} onClick={() => state.navigate('schedule')} />
     </div>
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -97,8 +97,7 @@ function NowCard({ next, following, now, today, onSetup, hasSetup, noSchedule }:
     <CardContent className="grid gap-5 px-5 py-1 sm:px-7 sm:py-3">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="grid min-w-0 gap-2">
-          <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white/80">
-            {current && <span aria-hidden="true" className="size-2 rounded-full bg-white shadow-[0_0_0_4px_rgb(255_255_255/0.25)]" />}
+          <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/80">
             {current ? 'Right now' : 'Up next'}
           </span>
           <h2 className="text-[34px] leading-[1.05] font-extrabold tracking-[-0.03em] text-white sm:text-[40px]">{name}</h2>
