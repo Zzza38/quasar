@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Manrope } from 'next/font/google';
-import { themeBootScript } from '@/lib/theme';
+import { ThemeSync, themeBootScript } from '@/lib/theme';
 import './globals.css';
 
 // Self-hosted at build time by next/font; the browser never contacts Google.
@@ -22,6 +22,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     {/* A raw inline script: next/script queues even beforeInteractive scripts until its runtime
         loads, which paints the light theme first. This runs synchronously before any styles apply. */}
     <head><script id="theme-boot" dangerouslySetInnerHTML={{ __html: themeBootScript }} /></head>
-    <body>{children}</body>
+    <body><ThemeSync />{children}</body>
   </html>;
 }

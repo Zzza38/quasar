@@ -48,25 +48,58 @@ function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
   return dark ? 'dark' : 'light';
 }
 
-export function useTheme() {
-  const [state, setState] = useState<{ appearance: Appearance; accent: AccentId }>({ appearance: 'system', accent: DEFAULT_ACCENT });
-  const [resolved, setResolved] = useState<'light' | 'dark'>('light');
-  useEffect(() => { setState(readStored()); }, []);
+const THEME_EVENT = 'quasar:theme';
+const DEFAULTS = { appearance: 'system' as Appearance, accent: DEFAULT_ACCENT };
+
+/** Re-reads the stored choice and paints it. Every path that can change the theme ends here. */
+function sync(): void {
+  const stored = readStored();
+  apply(stored.appearance, stored.accent);
+  window.dispatchEvent(new CustomEvent(THEME_EVENT));
+}
+
+/**
+ * Keeps the painted theme in step with the stored one for the whole life of the page, not
+ * just while a picker is mounted: the OS flipping to dark at sunset, a change made in another
+ * tab, or an installed app being resumed after a long time in the background.
+ */
+export function ThemeSync() {
   useEffect(() => {
-    setResolved(apply(state.appearance, state.accent));
-    if (state.appearance !== 'system') return;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => setResolved(apply('system', state.accent));
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, [state]);
+    const onStorage = (event: StorageEvent) => { if (event.key === null || event.key === APPEARANCE_KEY || event.key === ACCENT_KEY) sync(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') sync(); };
+    media.addEventListener('change', sync);
+    window.addEventListener('storage', onStorage);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', sync);
+    sync();
+    return () => {
+      media.removeEventListener('change', sync);
+      window.removeEventListener('storage', onStorage);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', sync);
+    };
+  }, []);
+  return null;
+}
+
+export function useTheme() {
+  // Null until the stored choice has been read, so the first paint never applies the defaults over it.
+  const [state, setState] = useState<{ appearance: Appearance; accent: AccentId } | null>(null);
+  const [resolved, setResolved] = useState<'light' | 'dark'>('light');
+  useEffect(() => {
+    const load = () => { const stored = readStored(); setState(stored); setResolved(apply(stored.appearance, stored.accent)); };
+    load();
+    window.addEventListener(THEME_EVENT, load);
+    return () => window.removeEventListener(THEME_EVENT, load);
+  }, []);
   const setAppearance = useCallback((appearance: Appearance) => {
     try { localStorage.setItem(APPEARANCE_KEY, appearance); } catch { /* Private mode; the choice lasts for this page. */ }
-    setState((current) => ({ ...current, appearance }));
+    sync();
   }, []);
   const setAccent = useCallback((accent: AccentId) => {
     try { localStorage.setItem(ACCENT_KEY, accent); } catch { /* Private mode; the choice lasts for this page. */ }
-    setState((current) => ({ ...current, accent }));
+    sync();
   }, []);
-  return { ...state, resolved, setAppearance, setAccent };
+  return { ...(state ?? DEFAULTS), resolved, setAppearance, setAccent };
 }
