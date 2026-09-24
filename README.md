@@ -64,13 +64,17 @@ Task reminders use the saved reminder time zone and due time, or 9:00 AM when on
 
 ### Background worker
 
-Run `npm run worker` alongside the web process with the same `.env.local`, database path and VAPID keys. It periodically refreshes calendars and delivers due reminders. Keep one supervised worker running in production. Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` as described in `.env.example`; never commit private keys. Without VAPID keys, calendar refreshing still works and browser notification enrollment remains unavailable. Manual calendar refresh is available in the app.
+Run `npm run worker` alongside the web process with the same `.env.local`, database path and VAPID keys. It periodically refreshes calendars and delivers due reminders. When a new support item arrives (a correction request, feedback, a verification request, a report or a proposal awaiting support), the owner's enrolled browsers get a generic "A new support request is waiting" push that opens `/admin` and carries no request text, names or emails. Keep one supervised worker running in production. Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` as described in `.env.example`; never commit private keys. Without VAPID keys, calendar refreshing still works and browser notification enrollment remains unavailable. Manual calendar refresh is available in the app.
 
 The current private installation has its worker and VAPID keys configured. Local automated checks do not establish delivery to a real device; enable browser reminders in Account and test a task reminder.
 
 ## Timetable photo scanning
 
 Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them once to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory, and the student confirms or edits every row before anything is saved. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY` and `SCAN_MODEL_REASONING` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-5.6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
+
+## Continuous integration
+
+Every push to `master` and every pull request runs `.github/workflows/ci.yml`: typecheck, the unit suite and the production build, then the Playwright suite against that build in Chromium. Failed browser runs upload `test-results/` (traces and screenshots) as an artifact.
 
 ## Project guide
 
