@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
-import { classColor, formatDate, slugId, todayIn } from '@/lib/format';
+import { classColor, formatDate, formatRoom, slugId, todayIn } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { ChangedWhileEditing, type FieldSpec } from '../conflicts';
@@ -56,7 +56,7 @@ export function ClassesView({ state }: { state: AppState }) {
   const run = async (next: PersonalSchedule) => { setError(''); try { await state.savePersonal(next); } catch (err) { setError(errorMessage(err)); } };
   const current = editing && editing !== 'new' ? personal.classes.find((entry) => entry.id === editing) ?? null : null;
 
-  return <div className="grid gap-5 animate-in fade-in-0 duration-300">
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'} · drag them onto school periods below.` : undefined}
       actions={<>{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan timetable</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></>} />
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
@@ -75,23 +75,27 @@ export function ClassesView({ state }: { state: AppState }) {
         const color = classColor(cls.id, 'class', cls.color);
         // Same surface as <Card>, rendered as a list item so the colour bar sits on the item itself.
         return <li key={cls.id} className="relative grid grid-cols-[minmax(0,1fr)] content-start gap-3 rounded-2xl border-t-4 bg-card px-4 pt-3.5 pb-4 text-sm text-card-foreground shadow-card ring-1 ring-foreground/[0.06] transition-shadow hover:shadow-float has-[[data-color-picker-open=true]]:border-t-transparent! dark:ring-foreground/[0.09]" style={{ borderTopColor: color.dot }}>
-          <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })} />
+          <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })}>{(colorButton) => <>
           <div className="flex items-start gap-3">
             <span aria-hidden="true" className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25)]" style={{ background: `linear-gradient(135deg, ${color.dot}, color-mix(in srgb, ${color.dot} 75%, #0b1020))` }}>{cls.name.trim().slice(0, 1).toUpperCase()}</span>
             <div className="grid min-w-0 flex-1 gap-1">
               <strong className="line-clamp-3 text-[16px] leading-snug font-bold tracking-tight break-words" title={cls.name}>{cls.name}</strong>
               <span className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
                 {(cls.room || cls.teacher) && <Icon name="pin" size={12} strokeWidth={2.2} className="mt-0.5 shrink-0" />}
-                {cls.room || cls.teacher ? <span className="min-w-0 break-words">{[cls.room && `Room ${cls.room}`, cls.teacher].filter(Boolean).join(' · ')}</span> : <span className="italic">No room or teacher yet</span>}
+                {cls.room || cls.teacher ? <span className="min-w-0 break-words">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</span> : <span className="italic">No room or teacher yet</span>}
               </span>
             </div>
-            <Button size="sm" variant="ghost" icon="edit" className="shrink-0" aria-label={`Edit ${cls.name}`} onClick={() => setEditing(cls.id)}>Edit</Button>
+            <div className="flex shrink-0 items-center">
+              {colorButton}
+              <Button size="sm" variant="ghost" icon="edit" className="shrink-0" aria-label={`Edit ${cls.name}`} onClick={() => setEditing(cls.id)}>Edit</Button>
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {periods.length === 0 && <Chip tone="warning" icon="alert">Not matched to a period</Chip>}
-            {periods.map((period) => <Chip key={period.id} tone="accent">{period.label}{!scheduled.has(period.id) ? ' · Unscheduled' : ''}</Chip>)}
+            {periods.length === 0 && <Chip tone="warning" icon="alert">Not on your timetable yet</Chip>}
+            {periods.map((period) => <Chip key={period.id} tone="accent">{period.label}{!scheduled.has(period.id) ? ' · No times set' : ''}</Chip>)}
             {days.size > 0 && schedule.cycleDays.length > 1 && <Chip tone="outline">{days.size === schedule.cycleDays.length ? 'Every day' : `${days.size} of ${schedule.cycleDays.length} days`}</Chip>}
           </div>
+          </>}</ClassColorPicker>
         </li>;
       })}
     </ul>}
@@ -137,27 +141,32 @@ export function ClassesView({ state }: { state: AppState }) {
 }
 
 function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete }: { open: boolean; onClose: () => void; initial: StudentClass | null; current?: StudentClass | null; usedIds: string[]; onSave: (value: StudentClass) => Promise<void>; onDelete?: () => Promise<void> }) {
-  const [draft, setDraft] = useState<StudentClass>(initial ?? { id: '', name: '', room: '', teacher: '' });
+  const [original, setOriginal] = useState<StudentClass>(initial ?? { id: '', name: '', room: '', teacher: '' });
+  const [draft, setDraft] = useState<StudentClass>(original);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const serialized = JSON.stringify(current);
   const [acknowledged, setAcknowledged] = useState(serialized);
   const changed = current !== undefined && serialized !== acknowledged;
   const isNew = current === undefined;
+  // Decided once per opening (the sheet is keyed by the class): a class removed while the form is open keeps the draft and shows ChangedWhileEditing.
+  const [missingAtOpen] = useState(open && initial === null && !isNew);
+  const removed = current === null;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
-  if (open && initial === null && !isNew) return <Modal open onClose={onClose} title="Class not found"><p className="text-sm text-muted-foreground">This class was removed on another device.</p></Modal>;
+  if (open && missingAtOpen) return <Modal open onClose={onClose} title="Class not found"><p className="text-sm text-muted-foreground">This class was removed on another device.</p></Modal>;
   const submit = () => run(async () => {
     const id = draft.id || slugId(draft.name, usedIds, 'class');
     const value = classSchema.parse({ id, ...(draft.directoryId ? { directoryId: draft.directoryId } : {}), name: draft.name.trim(), ...(draft.color ? { color: draft.color } : {}), ...(draft.room?.trim() ? { room: draft.room.trim() } : {}), ...(draft.teacher?.trim() ? { teacher: draft.teacher.trim() } : {}) });
     await onSave(value);
   });
   const previewColor = draft.color ?? classColor(draft.id || slugId(draft.name, usedIds, 'class')).dot;
-  return <Modal open={open} onClose={onClose} title={isNew ? 'Add a class' : 'Edit class'}
-    footer={<>{onDelete && <Button variant="danger" disabled={pending || changed} onClick={() => { if (confirm(`Remove ${draft.name || 'this class'}? Its period assignments are cleared. Tasks keep their notes.`)) void run(onDelete); }}>Remove</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="class-form" type="submit" busy={pending} disabled={changed || !draft.name.trim()}>{isNew ? 'Add class' : 'Save'}</Button></>}>
+  return <Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'Add a class' : 'Edit class'}
+    footer={<>{onDelete && !removed && <Button variant="danger" disabled={pending || changed} onClick={() => { if (confirm(`Remove ${draft.name || 'this class'}? Its period assignments are cleared. Tasks keep their notes.`)) void run(onDelete); }}>Remove</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="class-form" type="submit" busy={pending} disabled={changed || !draft.name.trim()}>{isNew || removed ? 'Add class' : 'Save'}</Button></>}>
     <form id="class-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void submit(); }}>
       <div className="flex items-center gap-3">
         <span aria-hidden="true" className="grid size-12 shrink-0 place-items-center rounded-2xl text-lg font-extrabold text-white transition-colors" style={{ background: `linear-gradient(135deg, ${previewColor}, color-mix(in srgb, ${previewColor} 75%, #0b1020))` }}>{draft.name.trim().slice(0, 1).toUpperCase() || '?'}</span>
-        <Field label="Class name" htmlFor="class-name" className="flex-1"><Input id="class-name" autoFocus required maxLength={120} placeholder="Algebra II" value={draft.name} className="h-11 text-[16px] font-semibold" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+        <Field label="Class name" htmlFor="class-name" className="flex-1"><Input id="class-name" autoFocus={isNew} required maxLength={120} placeholder="Algebra II" value={draft.name} className="h-11 text-[16px] font-semibold" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Room (optional)" htmlFor="class-room"><Input id="class-room" maxLength={120} placeholder="204" value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} /></Field>
@@ -169,7 +178,7 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
           <div><Button size="sm" disabled={pending || !draft.color} onClick={() => setDraft({ ...draft, color: undefined })}>Use automatic color</Button></div>
         </div>
       </Field>
-      {changed && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={classFields} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setAcknowledged(serialized); } else onClose(); }} />}
+      {changed && !pending && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={classFields} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setOriginal(current); setAcknowledged(serialized); } else onClose(); }} />}
       {error && <Callout tone="danger" role="alert">{error}</Callout>}
     </form>
   </Modal>;

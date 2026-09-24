@@ -4,10 +4,12 @@
 
 /* Appearance is a data attribute on <html>, applied by src/lib/theme.ts before first paint. */
 @custom-variant dark (&:where([data-appearance="dark"], [data-appearance="dark"] *));
+/* Screens with no hover at all (phones, iPads without a trackpad): hover-revealed controls stay faintly visible. */
+@custom-variant no-hover (@media (hover: none));
 
 /* ---------- Design tokens (shadcn/ui vocabulary) ----------
-   Light/dark come from data-appearance; the brand colour comes from data-accent.
-   `--primary` is the brand colour; `--accent` keeps shadcn's meaning (hover/selection tint). */
+   Light/dark come from data-appearance; the brand color comes from data-accent.
+   `--primary` is the brand color; `--accent` keeps shadcn's meaning (hover/selection tint). */
 :root {
   color-scheme: light;
   --radius: 0.875rem;
@@ -26,6 +28,8 @@
   --destructive: #dc2626;
   --border: #e3e6ee;
   --input: #cfd5df;
+  /* Boundary of controls whose edge is the only cue (inputs, selects, checkboxes, switch track): 3:1+ on card, page and muted. */
+  --control-border: #767f92;
   --success: #15803d;
   --success-soft: #e6f6ec;
   --warning: #92400e;
@@ -41,12 +45,13 @@
   --sidebar-accent-foreground: #121520;
   --sidebar-border: #e6e8ef;
   --sidebar-ring: var(--ring);
-  --nav-h: 72px;
+  /* The dock pads itself by the home-indicator inset, so the space it covers grows with it. */
+  --nav-h: calc(72px + env(safe-area-inset-bottom, 0px));
   --shadow-card: 0 1px 2px rgb(18 22 36 / 0.04), 0 2px 8px -2px rgb(18 22 36 / 0.06);
   --shadow-float: 0 12px 40px -12px rgb(18 22 36 / 0.22), 0 2px 8px -2px rgb(18 22 36 / 0.08);
   --shadow-pop: 0 24px 80px -24px rgb(18 22 36 / 0.35), 0 4px 16px -4px rgb(18 22 36 / 0.12);
   /* ocean (default) */
-  --primary: #0e7490; --primary-foreground: #ffffff; --primary-soft: #dff3f8; --primary-soft-foreground: #155e75; --ring: #67e8f9;
+  --primary: #0e7490; --primary-foreground: #ffffff; --primary-soft: #dff3f8; --primary-soft-foreground: #155e75; --ring: var(--primary);
 }
 :root[data-appearance="dark"] {
   color-scheme: dark;
@@ -65,6 +70,7 @@
   --destructive: #f87171;
   --border: #242934;
   --input: #343a47;
+  --control-border: #6b7486;
   --success: #4ade80;
   --success-soft: #0f2a1b;
   --warning: #fde68a;
@@ -83,18 +89,18 @@
   --primary: #2dd4e0; --primary-foreground: #06161a; --primary-soft: #0f3a44; --primary-soft-foreground: #a5f3fc; --ring: #06b6d4;
 }
 
-/* Accent palettes. Each has a light and a dark set. */
-:root[data-accent="indigo"] { --primary: #4f46e5; --primary-soft: #eceefe; --primary-soft-foreground: #3730a3; --ring: #a5b4fc; }
+/* Accent palettes. Each has a light and a dark set. Light rings use --primary so focus reaches 3:1 on white. */
+:root[data-accent="indigo"] { --primary: #4f46e5; --primary-soft: #eceefe; --primary-soft-foreground: #3730a3; --ring: var(--primary); }
 :root[data-accent="indigo"][data-appearance="dark"] { --primary: #7b74ff; --primary-foreground: #0b0d12; --primary-soft: #252650; --primary-soft-foreground: #c9c6ff; --ring: #6366f1; }
-:root[data-accent="grape"] { --primary: #7e22ce; --primary-soft: #f3e8ff; --primary-soft-foreground: #6b21a8; --ring: #d8b4fe; }
+:root[data-accent="grape"] { --primary: #7e22ce; --primary-soft: #f3e8ff; --primary-soft-foreground: #6b21a8; --ring: var(--primary); }
 :root[data-accent="grape"][data-appearance="dark"] { --primary: #c084fc; --primary-foreground: #0b0d12; --primary-soft: #3b1f55; --primary-soft-foreground: #e9d5ff; --ring: #a855f7; }
-:root[data-accent="forest"] { --primary: #15803d; --primary-soft: #e3f5e9; --primary-soft-foreground: #166534; --ring: #86efac; --success: #0f766e; }
+:root[data-accent="forest"] { --primary: #15803d; --primary-soft: #e3f5e9; --primary-soft-foreground: #166534; --ring: var(--primary); --success: #0f766e; }
 :root[data-accent="forest"][data-appearance="dark"] { --primary: #4ade80; --primary-foreground: #0b0d12; --primary-soft: #14351f; --primary-soft-foreground: #bbf7d0; --ring: #22c55e; --success: #2dd4bf; }
-:root[data-accent="sunset"] { --primary: #c2410c; --primary-soft: #ffeadd; --primary-soft-foreground: #9a3412; --ring: #fdba74; --now: #db2777; --now-soft: #fce7f3; --now-foreground: #9d174d; }
+:root[data-accent="sunset"] { --primary: #c2410c; --primary-soft: #ffeadd; --primary-soft-foreground: #9a3412; --ring: var(--primary); --now: #db2777; --now-soft: #fce7f3; --now-foreground: #9d174d; }
 :root[data-accent="sunset"][data-appearance="dark"] { --primary: #fb923c; --primary-foreground: #0b0d12; --primary-soft: #3f2210; --primary-soft-foreground: #fed7aa; --ring: #f97316; --now: #f472b6; --now-soft: #4a1630; --now-foreground: #fbcfe8; }
-:root[data-accent="rose"] { --primary: #be185d; --primary-soft: #fde7f1; --primary-soft-foreground: #9d174d; --ring: #f9a8d4; }
+:root[data-accent="rose"] { --primary: #be185d; --primary-soft: #fde7f1; --primary-soft-foreground: #9d174d; --ring: var(--primary); }
 :root[data-accent="rose"][data-appearance="dark"] { --primary: #f472b6; --primary-foreground: #0b0d12; --primary-soft: #4a1630; --primary-soft-foreground: #fbcfe8; --ring: #ec4899; }
-:root[data-accent="graphite"] { --primary: #334155; --primary-soft: #e8ecf2; --primary-soft-foreground: #1e293b; --ring: #94a3b8; }
+:root[data-accent="graphite"] { --primary: #334155; --primary-soft: #e8ecf2; --primary-soft-foreground: #1e293b; --ring: var(--primary); }
 :root[data-accent="graphite"][data-appearance="dark"] { --primary: #cbd5e1; --primary-foreground: #0b0d12; --primary-soft: #2a3342; --primary-soft-foreground: #f1f5f9; --ring: #94a3b8; }
 
 @theme inline {
@@ -120,6 +126,7 @@
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-control-border: var(--control-border);
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -154,7 +161,7 @@
 }
 
 @layer base {
-  * { @apply border-border outline-ring/50; }
+  * { @apply border-border outline-ring; }
   html { -webkit-text-size-adjust: 100%; }
   body { @apply bg-background text-foreground font-sans antialiased; font-feature-settings: "cv11", "ss01", "tnum" 0; text-rendering: optimizeLegibility; }
   h1, h2, h3, h4 { @apply font-heading font-bold tracking-tight leading-tight; overflow-wrap: anywhere; }
@@ -209,9 +216,12 @@
 .timetable-content { display: grid; gap: 14px; min-width: 0; }
 @media (max-width: 900px) {
   .timetable-workspace { grid-template-columns: minmax(0, 1fr); }
-  .timetable-palette { position: static; max-height: 160px; }
-  .timetable-palette-items { display: flex; flex-wrap: wrap; }
+  /* Tall enough for a student's whole class list; the long school-editor list scrolls, and the fade in the
+     bottom padding shows there is more (with no overflow the fade only covers empty padding). */
+  .timetable-palette { position: static; max-height: min(45dvh, 360px); }
+  .timetable-palette-items { display: flex; flex-wrap: wrap; padding-bottom: 20px; mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); }
 }
+@media (pointer: coarse) { .timetable-palette-items > button { min-height: 2.75rem; } }
 /* Positioned so absolutely placed descendants (e.g. sr-only labels) stay inside the scroll area. */
 .time-canvas-scroll { position: relative; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--card); }
 .time-canvas { display: grid; grid-template-columns: 64px repeat(var(--days), minmax(0, 1fr)); }
@@ -252,7 +262,21 @@
 .time-block-compact .time-block-clear { top: 1px; }
 .time-block-compact .time-resize::after { opacity: 0; }
 .time-block-compact:hover .time-resize::after, .time-block-compact:focus-within .time-resize::after { opacity: .5; }
+/* Touch: bigger hit areas, same visuals. The clear hit area is a transparent ::before; the resize handles
+   grow outward only so they never cover the block body, and compact blocks drop them (Edit times covers those). */
+@media (pointer: coarse) {
+  .time-block-clear::before { content: ''; position: absolute; inset: -6px; }
+  .time-resize { height: 16px; }
+  .time-resize-start { top: -14px; }
+  .time-resize-end { bottom: -14px; }
+  .time-resize::after { position: absolute; left: 50%; margin-left: -12px; }
+  .time-resize-start::after { bottom: 0; }
+  .time-resize-end::after { top: 0; }
+  .time-block-compact .time-resize { display: none; }
+}
 .time-block-detail { display: none; position: absolute; left: 0; top: calc(100% + 6px); width: max-content; max-width: 260px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-float); font-size: 12px; pointer-events: none; }
 .time-block-detail span { display: block; margin-top: 3px; color: var(--muted-foreground); }
 .time-block:hover, .time-block:focus-within { z-index: 4; }
-.time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail { display: block; }
+.time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail, .time-block-open .time-block-detail { display: block; }
+/* A tapped (selected) block shows its detail card too: touch screens cannot hover, and iPad Safari does not focus a tapped button. */
+.time-block-open { z-index: 4; }

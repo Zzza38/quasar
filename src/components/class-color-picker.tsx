@@ -1,14 +1,18 @@
 'use client';
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { StudentClass } from '@/domain/schedule';
 import { classColor } from '@/lib/format';
 import { errorMessage } from '@/client/api';
-import { Button, Hint } from './primitives';
+import { Button, Hint, IconButton } from './primitives';
 import { ColorPicker } from './ui/color-picker';
 
-/** An absolute extension of the card surface; opening never changes layout. */
-export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass; disabled: boolean; onSave: (color: string | undefined) => Promise<void> }) {
+/**
+ * An absolute extension of the card surface; opening never changes layout.
+ * With `children`, the caller places the visible palette trigger (passed in) in its own layout; the
+ * colored top strip then stays as a mouse-only hover shortcut.
+ */
+export function ClassColorPicker({ cls, disabled, onSave, children }: { cls: StudentClass; disabled: boolean; onSave: (color: string | undefined) => Promise<void>; children?: (trigger: ReactNode) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(classColor(cls.id, 'class', cls.color).dot);
   const [pending, setPending] = useState(false);
@@ -18,10 +22,15 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   const [ready, setReady] = useState(false);
   const [surfaceVisible, setSurfaceVisible] = useState(false);
   const id = useId();
+  const triggerId = useId();
+  const external = children !== undefined;
+  const focusOnReady = useRef(false);
   const root = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const paletteTrigger = () => external ? document.getElementById(triggerId) : null;
+  const focusTrigger = () => (paletteTrigger() ?? trigger.current)?.focus();
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelHoverOpen = () => { if (hoverTimer.current !== null) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } };
   useEffect(() => cancelHoverOpen, []);
@@ -57,29 +66,40 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
   }, []);
   useEffect(() => {
     if (!open) return;
-    const outside = (event: globalThis.PointerEvent) => { if (!root.current?.contains(event.target as Node)) { setReady(false); setOpen(false); } };
+    const outside = (event: globalThis.PointerEvent) => { if (!root.current?.contains(event.target as Node) && !document.getElementById(triggerId)?.contains(event.target as Node)) { setReady(false); setOpen(false); } };
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
-  }, [open]);
+  }, [open, triggerId]);
+  // Opened from the palette button, which sits outside the panel: move focus into the panel once it is interactive.
+  useEffect(() => {
+    if (!open || !ready || !focusOnReady.current) return;
+    focusOnReady.current = false;
+    content.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]')?.focus();
+  }, [open, ready]);
   const changeOpen = (next: boolean) => {
     if (next && pending) return;
     if (next && !open) { setDraft(classColor(cls.id, 'class', cls.color).dot); setError(''); }
     if (next !== open) setReady(false);
+    if (!next) focusOnReady.current = false;
     if (next) setSurfaceVisible(true);
     setOpen(next);
   };
   const save = async (color: string | undefined) => {
     setPending(true); setError('');
-    try { await onSave(color); setReady(false); setOpen(false); trigger.current?.focus(); }
+    try { await onSave(color); setReady(false); setOpen(false); focusTrigger(); }
     catch (err) { setError(errorMessage(err)); }
     finally { setPending(false); }
   };
 
-  return <div ref={root} data-color-picker-open={surfaceVisible} className="absolute -top-1 inset-x-0" style={{ zIndex: surfaceVisible ? 40 : 1 }}
+  const palette = external ? <IconButton id={triggerId} size="sm" icon="palette" label={`Change color for ${cls.name}`} disabled={disabled} aria-expanded={open} aria-controls={id} className="shrink-0"
+    onClick={() => { cancelHoverOpen(); if (!open) focusOnReady.current = true; changeOpen(!open); }} /> : null;
+
+  return <><div ref={root} data-color-picker-open={surfaceVisible} className="absolute -top-1 inset-x-0" style={{ zIndex: surfaceVisible ? 40 : 1 }}
     onPointerLeave={(event) => { cancelHoverOpen(); if (event.pointerType === 'mouse') changeOpen(false); }}
-    onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) changeOpen(false); }}
-    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); trigger.current?.focus(); } }}>
-    <button ref={trigger} type="button" disabled={disabled} aria-label={`Change color for ${cls.name}`} aria-expanded={open} aria-controls={id}
+    onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !paletteTrigger()?.contains(event.relatedTarget)) changeOpen(false); }}
+    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); focusTrigger(); } }}>
+    <button ref={trigger} type="button" disabled={disabled} data-slot="class-color-strip"
+      {...external ? { 'aria-hidden': true, tabIndex: -1 } : { 'aria-label': `Change color for ${cls.name}`, 'aria-expanded': open, 'aria-controls': id }}
       className="absolute inset-x-0 top-0 h-4 rounded-t-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       onClick={() => { cancelHoverOpen(); changeOpen(!open); }}
       // Hovering opens only after the mouse has rested on the strip for a quarter second, so passing over cards stays quiet.
@@ -98,7 +118,7 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
         className="grid gap-3 p-3" style={{ visibility: open && ready ? 'visible' : 'hidden' }}>
       <div className="flex items-center justify-between gap-2">
         <strong className="text-xs">Class color</strong>
-        <Button size="sm" variant="ghost" icon="x" aria-label="Close color picker" disabled={pending} onClick={() => { changeOpen(false); trigger.current?.focus(); }} />
+        <Button size="sm" variant="ghost" icon="x" aria-label="Close color picker" disabled={pending} onClick={() => { changeOpen(false); focusTrigger(); }} />
       </div>
       <ColorPicker value={draft} onValueChange={setDraft} disabled={disabled || pending} label={`Custom color for ${cls.name}`} />
       <div className="flex flex-wrap items-center justify-between gap-1">
@@ -108,5 +128,5 @@ export function ClassColorPicker({ cls, disabled, onSave }: { cls: StudentClass;
       {error && <Hint tone="danger" role="alert">{error}</Hint>}
       </div>
     </div>
-  </div>;
+  </div>{children?.(palette)}</>;
 }

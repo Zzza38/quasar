@@ -5,7 +5,7 @@
  * Views import from here so the shadcn variant vocabulary stays in one place.
  */
 
-import { useId, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react';
+import { Children, Fragment, isValidElement, useId, type ButtonHTMLAttributes, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon, Spinner, type IconName } from './icon';
@@ -16,7 +16,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader } from './ui
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input as ShadInput } from './ui/input';
 import { Label } from './ui/label';
-import { NativeSelect } from './ui/native-select';
+import { Select as ShadSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import { Textarea as ShadTextarea } from './ui/textarea';
 import { Toggle as ShadToggle } from './ui/toggle';
@@ -36,7 +36,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   link: '',
 };
 
-export function Button({ variant = 'secondary', size = 'md', icon, iconRight, busy, children, type = 'button', disabled, className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; icon?: IconName; iconRight?: IconName; busy?: boolean }) {
+export function Button({ variant = 'secondary', size = 'md', icon, iconRight, busy, children, type = 'button', disabled, className, ...rest }: ComponentProps<'button'> & { variant?: Variant; size?: Size; icon?: IconName; iconRight?: IconName; busy?: boolean }) {
   const iconOnly = children === undefined || children === null || children === false;
   const shadSize = iconOnly ? (size === 'sm' ? 'icon-sm' : size === 'lg' ? 'icon-lg' : 'icon') : size === 'sm' ? 'sm' : size === 'lg' ? 'lg' : 'default';
   return <ShadButton type={type} variant={VARIANTS[variant]} size={shadSize} disabled={disabled || busy} aria-busy={busy || undefined} className={cn(VARIANT_CLASSES[variant], className)} {...rest}>
@@ -94,7 +94,7 @@ export function StatTile({ label, value, icon, tone = 'neutral', onClick, classN
       <span className="truncate text-xs font-medium text-muted-foreground">{label}</span>
     </span>
   </>;
-  const classes = cn('flex items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]', onClick && 'transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-float outline-none focus-visible:ring-3 focus-visible:ring-ring/50', className);
+  const classes = cn('flex items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]', onClick && 'transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-float outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', className);
   return onClick ? <button type="button" className={classes} onClick={onClick}>{body}</button> : <div className={classes}>{body}</div>;
 }
 
@@ -110,11 +110,53 @@ export function Field({ label, hint, error, children, className, htmlFor }: { la
 }
 
 export function Input({ className, small, ...rest }: ComponentProps<'input'> & { small?: boolean }) {
-  return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-sm md:text-[13px]', className)} {...rest} />;
+  return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-base md:text-[13px]', className)} {...rest} />;
 }
 
-export function Select({ className, small, children, ...rest }: Omit<ComponentProps<'select'>, 'size'> & { small?: boolean }) {
-  return <NativeSelect size={small ? 'sm' : 'default'} className={cn('w-full', className)} {...rest}>{children}</NativeSelect>;
+/**
+ * shadcn/ui Select with the native `<select>` authoring API: pass `<option>` children and read
+ * `event.target.value` in `onChange`. Options are rendered as SelectItems so the dropdown is the
+ * themed popover, never the OS-drawn list. An option with `value=""` that is `disabled` becomes the
+ * placeholder; an enabled `value=""` option is selectable ("All grades", "No class", …).
+ */
+type OptionProps = { value?: string | number | readonly string[]; disabled?: boolean; children?: ReactNode };
+type SelectChangeEvent = { target: { value: string }; currentTarget: { value: string } };
+type SelectProps = Omit<ComponentProps<'select'>, 'size' | 'value' | 'defaultValue' | 'onChange'> & {
+  small?: boolean;
+  value?: string;
+  onChange?: (event: SelectChangeEvent) => void | Promise<void>;
+};
+const EMPTY = '__empty__';
+
+function collectOptions(children: ReactNode, into: { value: string; disabled: boolean; label: ReactNode }[] = []) {
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return;
+    if (child.type === Fragment) { collectOptions((child as ReactElement<{ children?: ReactNode }>).props.children, into); return; }
+    if (child.type !== 'option') return;
+    const props = (child as ReactElement<OptionProps>).props;
+    const value = props.value === undefined ? textOf(props.children) : String(props.value);
+    into.push({ value, disabled: Boolean(props.disabled), label: props.children });
+  });
+  return into;
+}
+const textOf = (node: ReactNode): string => Array.isArray(node) ? node.map(textOf).join('') : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
+
+export function Select({ className, small, children, value, onChange, id, name, disabled, required, autoFocus, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledby, 'aria-describedby': ariaDescribedby, 'aria-invalid': ariaInvalid }: SelectProps) {
+  const options = collectOptions(children);
+  const placeholder = options.find((option) => option.value === '' && option.disabled);
+  const items = options.filter((option) => option !== placeholder);
+  const encode = (raw: string) => (raw === '' ? (placeholder && !items.some((item) => item.value === '') ? '' : EMPTY) : raw);
+  const decode = (raw: string) => (raw === EMPTY ? '' : raw);
+  const current = value === undefined ? undefined : encode(value);
+  return <ShadSelect value={current} name={name} disabled={disabled} required={required} onValueChange={(next) => { const decoded = decode(next); void onChange?.({ target: { value: decoded }, currentTarget: { value: decoded } }); }}>
+    <SelectTrigger id={id} size={small ? 'sm' : 'default'} autoFocus={autoFocus} aria-label={ariaLabel} aria-labelledby={ariaLabelledby} aria-describedby={ariaDescribedby} aria-invalid={ariaInvalid}
+      className={cn('w-full rounded-xl bg-card pl-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] dark:bg-input/20 data-[size=sm]:rounded-lg data-[size=sm]:pl-2.5 data-[size=sm]:text-[13px]', className)}>
+      <SelectValue placeholder={placeholder?.label} />
+    </SelectTrigger>
+    <SelectContent position="popper" align="start" className="max-h-[min(20rem,var(--radix-select-content-available-height))]">
+      {items.map((item) => <SelectItem key={item.value} value={encode(item.value)} disabled={item.disabled}>{item.label}</SelectItem>)}
+    </SelectContent>
+  </ShadSelect>;
 }
 
 export function Textarea({ className, ...rest }: ComponentProps<'textarea'>) {
@@ -153,17 +195,18 @@ export function WeekdayPicker({ value, onChange, label, disabled }: { value: num
 }
 
 /** Seven-day (or any) row of selectable dates with a small caption per day. */
-export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ date: string; caption: string; closed?: boolean; label: string }>; selected: string; today: string; onSelect: (date: string) => void }) {
+export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ date: string; caption: string; closed?: boolean; label: string; dot?: boolean }>; selected: string; today: string; onSelect: (date: string) => void }) {
   return <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
     {days.map((day) => {
       const active = day.date === selected;
       const isToday = day.date === today;
       return <button key={day.date} type="button" aria-pressed={active} aria-label={day.label} onClick={() => onSelect(day.date)}
-        className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow,transform] focus-visible:ring-3 focus-visible:ring-ring/50',
+        className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow,transform] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           active ? 'bg-primary text-primary-foreground shadow-[0_6px_16px_-6px_color-mix(in_srgb,var(--primary)_70%,transparent)]' : 'text-muted-foreground hover:bg-muted', day.closed && !active && 'opacity-60')}>
         <span className={cn('text-[10.5px] font-bold uppercase tracking-wide', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>{formatDate(day.date, { weekday: 'short' }).slice(0, 3)}</span>
         <span className={cn('grid size-8 place-items-center rounded-full text-[15px] font-extrabold tabular-nums', active ? 'text-primary-foreground' : isToday ? 'bg-primary-soft text-primary-soft-foreground ring-1 ring-primary/40' : 'text-foreground')}>{Number(day.date.slice(8))}</span>
         <small className={cn('max-w-full truncate text-[10.5px] font-semibold', active ? 'text-primary-foreground/85' : 'text-muted-foreground')}>{day.caption}</small>
+        <span aria-hidden="true" className={cn('size-1 rounded-full', day.dot ? (active ? 'bg-primary-foreground' : 'bg-primary') : 'bg-transparent')} />
       </button>;
     })}
   </div>;
@@ -239,7 +282,7 @@ export function Section({ title, id, description, action, children, className, c
           {description && <CardDescription className="text-[13px]">{description}</CardDescription>}
         </div>
       </div>
-      {action && <CardAction className="flex flex-wrap gap-2 max-sm:w-full max-sm:justify-end">{action}</CardAction>}
+      {action && <CardAction className="flex flex-wrap gap-2 max-sm:ml-auto">{action}</CardAction>}
     </CardHeader>
     <CardContent className={cn('grid gap-3', contentClassName)}>{children}</CardContent>
   </Card>;
@@ -263,9 +306,18 @@ export function Panel({ className, ...rest }: ComponentProps<'div'>) {
 
 /* ---------- Modal (Dialog) ---------- */
 
-export function Modal({ open, onClose, title, description, children, footer, wide, fullWidth }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; fullWidth?: boolean }) {
-  return <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-    <DialogContent showCloseButton={false}
+/**
+ * Overlay taps, Escape and the header X all arrive as onOpenChange(false), so one guard covers them.
+ * `busy` keeps the dialog open while a save is in flight; `dirty` asks before discarding a draft.
+ */
+export function Modal({ open, onClose, title, description, children, footer, wide, fullWidth, dirty, busy }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; fullWidth?: boolean; dirty?: boolean; busy?: boolean }) {
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty && !window.confirm('Discard your changes?')) return;
+    onClose();
+  };
+  return <Dialog open={open} onOpenChange={(next) => { if (!next) requestClose(); }}>
+    <DialogContent showCloseButton={false} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
       className={cn('flex max-h-[min(88dvh,940px)] flex-col gap-0 overflow-hidden rounded-3xl bg-card p-0 text-foreground shadow-pop ring-foreground/[0.08]',
         // Phones: rise from the bottom edge like a sheet.
         'max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-h-[92dvh] max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:data-open:slide-in-from-bottom-6 max-sm:data-open:zoom-in-100 max-sm:data-closed:zoom-out-100 max-sm:data-closed:slide-out-to-bottom-6',
@@ -275,11 +327,11 @@ export function Modal({ open, onClose, title, description, children, footer, wid
           <DialogTitle className="text-[18px] font-bold leading-snug tracking-tight">{title}</DialogTitle>
           {description ? <DialogDescription className="text-[13px]">{description}</DialogDescription> : <DialogDescription className="sr-only">Dialog</DialogDescription>}
         </div>
-        <DialogClose asChild><ShadButton variant="ghost" size="icon-sm" aria-label="Close" title="Close" className="rounded-full bg-muted text-muted-foreground hover:text-foreground"><Icon name="x" /></ShadButton></DialogClose>
+        <DialogClose asChild><ShadButton variant="ghost" size="icon-sm" aria-label="Close" title="Close" disabled={busy} className="rounded-full bg-muted text-muted-foreground hover:text-foreground"><Icon name="x" /></ShadButton></DialogClose>
       </DialogHeader>
       {/* auto-rows-max: cards hide their overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
-      <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
-      {footer && <DialogFooter className="mx-0 mb-0 flex-row flex-wrap items-center gap-2 border-t bg-muted/60 px-5 py-3.5 sm:justify-start sm:px-6">{footer}</DialogFooter>}
+      <div className={cn('grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto px-5 py-5 sm:px-6', !footer && 'max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]')}>{children}</div>
+      {footer && <DialogFooter className="mx-0 mb-0 flex-row flex-wrap items-center gap-2 border-t bg-muted/60 px-5 py-3.5 max-sm:pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:justify-start sm:px-6">{footer}</DialogFooter>}
     </DialogContent>
   </Dialog>;
 }

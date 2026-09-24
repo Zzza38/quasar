@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
+import { formatRoom } from '@/lib/format';
 import { GRADES, gradeLabel, type Grade, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer } from './primitives';
+import { Checkbox } from './ui/checkbox';
 import { Toggle } from './ui/toggle';
 
 type Directory = RouterOutput['directory']['list'];
@@ -35,7 +37,7 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
   };
   const entries = (directory?.classes ?? []).filter(entry => (!grade || entry.grades.includes(grade)) && `${entry.name} ${entry.teacher ?? ''} ${entry.room ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()));
   const selectedEntries = (directory?.classes ?? []).filter(entry => selected.includes(entry.id) && !personal?.classes.some(cls => isCopy(cls, entry)));
-  return <Modal open onClose={onClose} wide title="School class directory" description="Search your school’s classes, select yours, then place them into periods in your class timetable."
+  return <Modal open onClose={onClose} dirty={selectedEntries.length > 0} busy={pending} wide title="School class directory" description="Search your school’s classes, select yours, then place them into periods in your class timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{onAdd && <Button variant="primary" busy={pending} disabled={!online || selectedEntries.length === 0 || editing !== null} onClick={() => void run(async () => {
       await onAdd(selectedEntries.map(({ id, name, room, teacher }) => ({ id, directoryId: id, name, room, teacher }))); onClose();
     })}>Add selected classes{selectedEntries.length ? ` (${selectedEntries.length})` : ''}</Button>}</>}>
@@ -63,8 +65,8 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
         {entries.map(entry => {
           const added = personal?.classes.some(cls => isCopy(cls, entry));
           return <li key={entry.id} className={`flex flex-wrap items-center gap-3 rounded-2xl p-3 ring-1 ring-inset transition-colors ${selected.includes(entry.id) && !added ? 'bg-primary-soft/60 ring-primary/40' : 'bg-muted/60 ring-foreground/[0.04]'}`}>
-            {onAdd && <input type="checkbox" className="size-5 shrink-0 accent-primary" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onChange={event => setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
-            <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm font-bold">{entry.name}</strong><Hint>{[entry.teacher, entry.room && `Room ${entry.room}`].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
+            {onAdd && <Checkbox className="size-5 shrink-0" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onCheckedChange={checked => setSelected(checked === true ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
+            <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm font-bold">{entry.name}</strong><Hint>{[entry.room && formatRoom(entry.room), entry.teacher].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
             {directory.canEdit ? <div className="flex gap-1"><Button size="sm" disabled={!online || pending} onClick={() => setEditing(entry)}>Edit shared</Button><Button size="sm" variant="ghost" disabled={!online || pending} aria-label={`Remove ${entry.name} from directory`} onClick={() => {
               if (confirm(`Remove ${entry.name} from the shared directory? Existing personal copies stay saved.`)) void run(async () => { await api.directory.remove.mutate({ accountId: directory.accountId, schoolId, id: entry.id, expectedVersion: entry.version }); await refresh(); setSelected(ids => ids.filter(id => id !== entry.id)); });
             }}>Remove</Button></div> : <Button size="sm" disabled={!online || pending} onClick={() => void run(async () => {
@@ -83,7 +85,13 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
 
 function DirectoryEditor({ initial, pending, onSave, onCancel }: { initial: Details; pending: boolean; onSave: (details: Details) => Promise<void>; onCancel: () => void }) {
   const [draft, setDraft] = useState<Details>({ name: initial.name, teacher: initial.teacher, room: initial.room, grades: initial.grades });
-  return <Panel className="grid gap-3 bg-card p-4 ring-2 ring-primary/40">
+  const panel = useRef<HTMLDivElement>(null);
+  // The editor sits above the class list, so bring it into view (and focus it) when an entry is picked further down.
+  useEffect(() => {
+    panel.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    panel.current?.querySelector<HTMLInputElement>('#directory-name')?.focus({ preventScroll: true });
+  }, []);
+  return <Panel ref={panel} className="grid gap-3 scroll-mt-4 bg-card p-4 ring-2 ring-primary/40">
     <strong className="text-sm font-bold">Shared class details</strong>
     <Field label="Class name" htmlFor="directory-name"><Input id="directory-name" maxLength={120} value={draft.name} disabled={pending} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field>
     <div className="grid gap-3 sm:grid-cols-2">

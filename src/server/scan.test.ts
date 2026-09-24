@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { DirectoryService } from './directory';
-import { ScanService, scanConfig, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
+import { ScanService, scanConfig, scanInputSchema, MAX_SCAN_IMAGES, SCAN_DAILY_LIMIT, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
 import { exampleSchedule } from '@/domain/example';
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 const config = { url: 'https://vision.example/v1', key: 'secret', model: 'test-vision' };
 const image = { mediaType: 'image/jpeg' as const, image: Buffer.from('photo').toString('base64') };
+const photo = (text: string, mediaType: 'image/jpeg' | 'image/png' = 'image/jpeg') => ({ mediaType, image: Buffer.from(text).toString('base64') });
 const answer = (rows: unknown[]) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }), { status: 200 });
 
 function fixture(fetcher: Mock<ScanFetch> = vi.fn<ScanFetch>().mockResolvedValue(answer([]))) {
@@ -67,6 +68,42 @@ describe('timetable scanning', () => {
     expect(parts[0].text).toContain(`id "${firstPeriod.id}"`);
     expect(parts[0].text).toContain(`id "${f.algebra.id}"`);
     expect(parts[0].text).not.toContain(f.senior.id);
+    expect(parts).toHaveLength(2);
+  });
+
+  it('sends every photo of a multi-photo scan as its own high-detail image part, in order', async () => {
+    const f = fixture();
+    const images = [photo('left half'), photo('right half', 'image/png'), photo('back')];
+    await f.scan.scan(f.student, { images });
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+    const parts = JSON.parse(f.fetcher.mock.calls[0][1].body as string).messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }>;
+    expect(parts.map(part => part.type)).toEqual(['text', 'image_url', 'image_url', 'image_url']);
+    expect(parts.slice(1).map(part => part.image_url)).toEqual(images.map(entry => ({ url: `data:${entry.mediaType};base64,${entry.image}`, detail: 'high' })));
+    expect(parts[0].text).toContain('3 attached photos');
+    expect(parts[0].text).toContain('parts of one timetable');
+    expect(parts[0].text).toContain('merge them into one list of classes');
+    const audit = f.db.prepare("SELECT detail FROM audit_log WHERE action='schedule.scan'").all() as Array<{ detail: string }>;
+    expect(audit.map(row => JSON.parse(row.detail))).toEqual([{ model: 'test-vision', images: 3 }]);
+  });
+
+  it('accepts the legacy single-photo shape and rejects more than three photos or none', async () => {
+    expect(scanInputSchema.parse({ ...image, accountId: 'ignored' })).toEqual({ images: [image] });
+    expect(scanInputSchema.parse({ images: [image] })).toEqual({ images: [image] });
+    const tooMany = scanInputSchema.safeParse({ images: Array.from({ length: MAX_SCAN_IMAGES + 1 }, (_, i) => photo(`page ${i}`)) });
+    expect(tooMany.success).toBe(false);
+    expect(tooMany.error?.issues[0].message).toBe('You can add up to three photos.');
+    expect(scanInputSchema.safeParse({ images: [] }).success).toBe(false);
+    expect(scanInputSchema.safeParse({ images: [{ ...image, image: 'x'.repeat(1_500_001) }] }).error?.issues[0].message).toContain('too large');
+    expect(scanInputSchema.safeParse(null).success).toBe(false);
+
+    const f = fixture();
+    await expect(f.scan.scan(f.student, { images: Array.from({ length: MAX_SCAN_IMAGES + 1 }, () => image) })).rejects.toThrow();
+    expect(f.fetcher).not.toHaveBeenCalled();
+    await f.scan.scan(f.student, image);
+    const parts = JSON.parse(f.fetcher.mock.calls[0][1].body as string).messages[1].content as Array<{ type: string; text?: string }>;
+    expect(parts.map(part => part.type)).toEqual(['text', 'image_url']);
+    expect(parts[0].text).toContain('Read the attached timetable photo');
+    expect(parts[0].text).not.toContain('merge');
   });
 
   it('passes the configured reasoning effort through', async () => {
@@ -118,15 +155,29 @@ describe('timetable scanning', () => {
     const prose = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'I cannot help with that.' } }] }))));
     await expect(prose.scan.scan(prose.student, image)).rejects.toThrow('unexpected format');
     const failing = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('quota', { status: 402 })));
-    await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('HTTP 402');
+    await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('having trouble');
     const offline = fixture(vi.fn<ScanFetch>().mockRejectedValue(new TypeError('fetch failed')));
     await expect(offline.scan.scan(offline.student, image)).rejects.toThrow('Could not reach');
   });
 
   it('rate limits each account and counts attempts even when the model fails', async () => {
     const f = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('boom', { status: 500 })));
-    for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await expect(f.scan.scan(f.student, image)).rejects.toThrow('HTTP 500');
-    await expect(f.scan.scan(f.student, image)).rejects.toThrow('per hour');
+    for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await expect(f.scan.scan(f.student, image)).rejects.toThrow('having trouble');
+    await expect(f.scan.scan(f.student, image)).rejects.toThrow(`You can scan up to ${SCAN_HOURLY_LIMIT} timetables per hour. Try again later.`);
     expect(f.fetcher).toHaveBeenCalledTimes(SCAN_HOURLY_LIMIT);
+  });
+
+  it('counts a multi-photo scan once against the quota, and enforces the daily limit', async () => {
+    const f = fixture(vi.fn<ScanFetch>().mockImplementation(async () => answer([])));
+    const scans = { images: [photo('left'), photo('right')] };
+    for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await f.scan.scan(f.student, scans);
+    await expect(f.scan.scan(f.student, scans)).rejects.toThrow(`You can scan up to ${SCAN_HOURLY_LIMIT} timetables per hour.`);
+    expect(f.fetcher).toHaveBeenCalledTimes(SCAN_HOURLY_LIMIT);
+    // Age the hour's scans and top up the day so only the daily limit applies.
+    const earlier = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    f.db.prepare("UPDATE audit_log SET created_at=? WHERE action='schedule.scan'").run(earlier);
+    const insert = f.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)');
+    for (let i = SCAN_HOURLY_LIMIT; i < SCAN_DAILY_LIMIT; i++) insert.run(f.student, 'schedule.scan', f.school.id, '{}', earlier);
+    await expect(f.scan.scan(f.student, scans)).rejects.toThrow(`You can scan up to ${SCAN_DAILY_LIMIT} timetables per day. Try again tomorrow.`);
   });
 });

@@ -60,6 +60,8 @@ Complete replacement of the presentation layer. The domain (`src/domain`), serve
 
 - 2026-09-18 (visual revamp): every signed-in screen, onboarding, dialogs and admin were restyled on the same shadcn foundation. Typography is Manrope, self-hosted through `next/font/google` (`src/app/layout.tsx`) and exposed as `--font-sans`. Tokens gained layered shadows (`--shadow-card`, `--shadow-float`, `--shadow-pop`), a larger radius scale, a page backdrop (`.app-canvas`), frosted bars (`.glass`) and a `hero-card` treatment. Shell: gradient brand mark, filled active nav item, floating bottom dock on phones, gradient initial avatars, grouped account sheet. Today: a hero now/next card with a display-size countdown and period progress, three stat tiles (tasks due, periods left, rotation day), a timeline with a live "Now" marker, and task rows with due/priority/class chips. Schedule: pill week strip, day header chips, rotation days as a card grid with next-occurrence buttons. Tasks: coloured group headers, pill filters, sectioned edit form. Classes: class cards with gradient initials and single-line room/teacher text, restyled drag-and-drop canvas. School: crest header and icon-led fact rows. Dialogs open as bottom sheets under 640px. New composites in `src/components/primitives.tsx`: `PageHeader`, `StatTile`, `Section` icon/eyebrow. Every ARIA name and CSS hook the browser tests rely on was preserved; all 24 Chromium scenarios and 181 unit tests pass.
 
+- 2026-09-24 (audit and Messages): a six-lens review (visual, phone ergonomics, accessibility, copy, interaction states, task flow) over an 80-screenshot sweep produced 87 findings; 75 survived two verifiers and were fixed across every screen. Highlights: visible focus rings and 3:1 control borders, 44 px touch targets, dialogs that ask before discarding a dirty draft, undo for task completion, a sync pill that no longer flashes on background polls, safe-area insets and iOS keyboard handling. Nav badges now read their counts through hidden spans referenced by `aria-describedby`. `scripts/ui-sweep.ts` regenerates the sweep. The same day added the Messages screens from [docs/CHAT.md](docs/CHAT.md): a Messages icon with an unread badge in the phone top bar and a seventh sidebar item on desktop (the six-tab dock is unchanged), the chat list with open and closed rows, a full-height thread with day separators, message actions, pending and failed bubbles and a composer that stays above the keyboard, report, delete and block dialogs, a Message notifications switch in Account, Message buttons in People, and chat reports, pauses and Paused members in the admin page.
+
 ## Routes and screens
 
 | Route | Screen |
@@ -71,6 +73,8 @@ Complete replacement of the presentation layer. The domain (`src/domain`), serve
 | `/#tasks` (`?edit=<id>`) | Task groups, quick add, edit sheet |
 | `/#classes` | Classes, period assignments, adjustments, private schedule |
 | `/#school` | School status, shared schedule, correction requests |
+| `/#messages` | Chat list: recent and closed chats, friends to start a chat with; on desktop the list and thread side by side |
+| `/#messages?with=<id>` | Thread with one friend: message log, composer, mute, report and block; the phone dock is hidden |
 | `/admin` | Owner-only inbox and school review |
 
 Device conflicts and school-correction reviews render above whichever view is open. The status pill shows saving / syncing / waiting / failed / needs a choice / offline / saved and is clickable when a retry or a choice is possible.

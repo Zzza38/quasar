@@ -1,5 +1,5 @@
-import { initTRPC, TRPCError } from '@trpc/server';
-import { z } from 'zod';
+import { initTRPC, StandardSchemaV1Error, TRPCError } from '@trpc/server';
+import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
 import { Service, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
@@ -7,8 +7,20 @@ import { DirectoryService, directorySaveSchema, directoryRemoveSchema } from './
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
+import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatReportSchema, pauseChatSchema } from './chat';
 export type Context = { userId: string | null; service: Service };
-const t = initTRPC.context<Context>().create();
+/** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
+export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
+/** Zod's built-in wording ("Invalid input", "Too small: …") is not written for students; custom refine messages are. */
+const DEFAULT_ISSUE = /^(Invalid\b|Too (small|big)\b|Unrecognized key)/;
+const t = initTRPC.context<Context>().create({
+  errorFormatter({ shape, error }) {
+    if (!(error.cause instanceof ZodError || error.cause instanceof StandardSchemaV1Error)) return shape;
+    const first = (error.cause as { issues?: readonly { message?: unknown }[] }).issues?.[0]?.message;
+    const message = typeof first === 'string' && first.trim() && !DEFAULT_ISSUE.test(first) ? first : INVALID_INPUT_MESSAGE;
+    return { ...shape, message };
+  },
+});
 const authenticated = t.procedure.use(({ ctx, next }) => {
   const user = ctx.service.user(ctx.userId);
   return next({ ctx: { ...ctx, userId: user.id } });
@@ -18,6 +30,9 @@ const accountScoped = authenticated.input(z.object({ accountId: z.uuid() })).use
   if (input.accountId !== ctx.userId) throw new TRPCError({ code: 'UNAUTHORIZED', message: 'The signed-in account changed. Sign in to the original account to manage its data.' });
   return next({ ctx });
 });
+/** Owner mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
+const adminScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
+const chat = (service: Service) => new ChatService(service);
 export const appRouter = t.router({
   session: t.procedure.query(({ ctx }) => ctx.userId ? { user: ctx.service.user(ctx.userId), isAdmin: ctx.service.isAdmin(ctx.userId) } : null),
   profile: t.router({save: authenticated.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
@@ -37,6 +52,17 @@ export const appRouter = t.router({
     remove: accountScoped.input(memberIdSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).remove(ctx.userId, input.userId)),
     block: accountScoped.input(memberIdSchema.extend({ blocked: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).block(ctx.userId, input.userId, input.blocked)),
     report: accountScoped.input(reportSchema).mutation(({ ctx, input }) => new CommunityService(ctx.service).report(ctx.userId, input)),
+  }),
+  // Every chat procedure is account-scoped, queries included (docs/CHAT.md §2).
+  chat: t.router({
+    inbox: accountScoped.query(({ ctx }) => chat(ctx.service).inbox(ctx.userId)),
+    thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
+    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body)),
+    delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
+    read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
+    mute: accountScoped.input(chatMuteSchema).mutation(({ ctx, input }) => chat(ctx.service).mute(ctx.userId, input.userId, input.muted)),
+    report: accountScoped.input(chatReportSchema).mutation(({ ctx, input }) => chat(ctx.service).report(ctx.userId, input.userId, input)),
+    setPush: accountScoped.input(z.object({ enabled: z.boolean() })).mutation(({ ctx, input }) => chat(ctx.service).setPush(ctx.userId, input.enabled)),
   }),
   proposals: t.router({
     list: authenticated.query(({ ctx }) => new ProposalService(ctx.service).list(ctx.userId)),
@@ -97,6 +123,12 @@ export const appRouter = t.router({
     removeMember: admin.input(z.object({ userId: z.uuid(), schoolId: z.uuid(), reason: z.string().trim().min(3).max(2000) })).mutation(({ ctx, input }) => new CommunityService(ctx.service).removeFromSchool(ctx.userId, input.userId, input.schoolId, input.reason)),
     proposals: admin.query(({ ctx }) => new ProposalService(ctx.service).awaitingSupport(ctx.userId)),
     decideProposal: admin.input(z.object({ id: z.uuid(), publish: z.boolean() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).decide(ctx.userId, input.id, input.publish)),
+    // No admin procedure reads chat_messages.body. Chat text reaches the owner only through showEvidence, which is audited.
+    showEvidence: adminScoped.input(z.object({ reportId: z.uuid() })).mutation(({ ctx, input }) => chat(ctx.service).showEvidence(ctx.userId, input.reportId)),
+    redactMessage: adminScoped.input(z.object({ reportId: z.uuid(), seq: z.number().int().positive() })).mutation(({ ctx, input }) => { chat(ctx.service).redactMessage(ctx.userId, input.reportId, input.seq); }),
+    pauseChat: adminScoped.input(pauseChatSchema).mutation(({ ctx, input }) => { chat(ctx.service).pauseChat(ctx.userId, input); }),
+    liftChatPause: adminScoped.input(chatUserSchema).mutation(({ ctx, input }) => { chat(ctx.service).liftChatPause(ctx.userId, input.userId); }),
+    chatPauses: admin.query(({ ctx }) => chat(ctx.service).chatPauses(ctx.userId)),
   })
 });
 export type AppRouter = typeof appRouter;

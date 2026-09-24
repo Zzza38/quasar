@@ -1,6 +1,6 @@
 # Quasar - Project plan
 
-Status: phases 1 and 2 are implemented and deployed; phase 3 (school verification, member directory, friends, safety controls and schedule voting) was implemented on 2026-09-22 and is running on the tailnet dev server for review before production. The real-school pilot remains launch work. See [README.md](README.md), [Fable handoff](docs/FABLE_HANDOFF.md), and [operations](docs/OPERATIONS.md). Later phase sequencing and acceptance gates remain proposals. The interview below is retained as product history.
+Status: phases 1 and 2 are implemented and deployed. Phase 3 (school verification, member directory, friends, safety controls and schedule voting) was implemented on 2026-09-22. Phase 4 (friends-only chat with audited moderation, see [docs/CHAT.md](docs/CHAT.md)) was implemented on 2026-09-24. Phases 3 and 4 are running on the tailnet dev server for review before production. The real-school pilot remains launch work. See [README.md](README.md), [Fable handoff](docs/FABLE_HANDOFF.md), and [operations](docs/OPERATIONS.md). Later sequencing and acceptance gates remain proposals. The interview below is retained as product history.
 
 Build a free web app for US high-school students that makes the next class and upcoming tasks immediately clear, with dependable schedule setup and offline editing. Start with the personal tracker, then expand into calendar integration and school community features.
 
@@ -143,9 +143,25 @@ Implemented 2026-09-22 with the following decisions, each a default the owner ca
 
 ### Phase 4: chat
 
-- Add chat after the personal tracker and community foundations are working.
-- Decide whether chat is between friends, class groups, or school groups; define messaging permissions and moderation before implementation.
-- Exit gate: messaging scope and abuse-handling behavior are specified and verified.
+Implemented 2026-09-24 from the spec in [docs/CHAT.md](docs/CHAT.md), with the following decisions, each a default the owner can change (the numbers live in the `CHAT` object in `src/domain/chat.ts`):
+
+- Chat is one to one, between accepted friends only. A pair can chat only while they have an accepted friendship and no block in either direction. The friend request is the consent step, so strangers cannot start a chat and there is no message-request flow.
+- There are no class groups, school rooms or friend groups. Class membership is self-declared, so a class room would let anyone reach minors.
+- Verification is shown, not required. Every thread shows "Verified" or "Not verified" for the other person, and full names follow the phase-3 both-verified rule.
+- Chats follow the friendship, not the school. Unfriending, blocking or support removal closes the chat for both people at once, because every call re-checks access.
+- Chat is online only. Messages, drafts and unsent messages live in memory for the open tab and never reach IndexedDB, the offline queue, localStorage or the service-worker cache. The only chat data on the device is the unread count, its timestamp and the push setting.
+- Messages are text only, up to 1,000 characters after normalization. Only `https://` links are clickable, the full URL is always shown, and the server never fetches a URL. There is no presence, typing indicator or read receipt.
+- On phones Messages is an icon in the top bar, so the six-tab dock is unchanged. On desktop it is a seventh sidebar item.
+- Delivery is polling over tRPC: an open thread every 4 s, the chat list every 10 s, the badge with the 15 s workspace poll. There is no SSE or WebSocket.
+- Pushes are generic ("You have new messages."), sent only for messages still unread after 60 s, at most one per 10 minutes and 20 a day, never between 22:00 and 07:00 in the school's time zone. A student can mute one chat or turn off Message notifications for the account.
+- Limits: 20 messages a minute, 500 a day, 20 new conversations a day. Sends are idempotent by client ID, so retries never duplicate or use up quota.
+- Deleting a message hides it from both people at once. The text is kept 30 days so it can still be reported.
+- A closed chat leaves a report-only row for 30 days. It looks the same after an unfriend, a block or a removal, so it cannot reveal a block. Reporting needs only past membership of the chat.
+- A report freezes up to 30 messages from that one chat (or 15 before and 14 after a reported message) with a category. `danger` reports sort first and show the reporter 911 and 988. The owner sees chat text only by pressing Show messages on a report, and every view is written to the audit log. No admin procedure reads live messages.
+- Support tools, lightest first: hide one reported message, a messaging pause (1, 7 or 30 days or until lifted), and the existing removal from school. A paused student can still read, mute, block and report, and is told exactly what happened.
+- Display names that mention Quasar, support, admin, moderator, staff or official are rejected when new or changed.
+- Retention: messages are deleted after 180 days, the text of deleted messages is erased after 30 days, report snapshots are cleared 180 days after the report is resolved, and threads idle for 180 days are deleted.
+- Exit gate met: messaging scope and abuse-handling behavior are specified in docs/CHAT.md and verified by `src/server/chat.test.ts` (scope, idempotent sends, body rules without echo, rate limits, revocation, closed rows, unread counts, cursors, reports, the admin procedure allowlist, pauses, account binding, retention, reserved names, migration), the `deliverChat` cases in `src/server/notifications.test.ts`, the worker order in `src/server/jobs.test.ts`, and the five browser scenarios in `tests/e2e/chat.spec.ts`.
 
 ## Product interview
 

@@ -1,6 +1,6 @@
 # Quasar
 
-Phases 1 to 3 of [PLAN.md](PLAN.md): a personal school schedule and task tracker with a school community. The UI is a phone-first app with six views (Today, Schedule, Tasks, Classes, School, People) behind hash routes, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
+Phases 1 to 4 of [PLAN.md](PLAN.md): a personal school schedule and task tracker with a school community and friends-only chat. The UI is a phone-first app with seven views (Today, Schedule, Tasks, Classes, School, People, Messages) behind hash routes, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS with [shadcn/ui](https://ui.shadcn.com) (Radix primitives, lucide icons), tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.
 
@@ -48,7 +48,9 @@ Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existin
 
 Shared-school editing and joining require a connection. Saved personal classes, tasks, assignments, custom schedules and overrides can be edited offline after a successful signed-in load. The service worker requires HTTPS except on localhost. Sync resumes when the app is open and connectivity returns; it does not require browser background-sync support.
 
-Phase 3 adds the People view: school verification (automatic by school email domain, or by support review of a proof), a member directory with verified-only full names, friend requests, friends' classes and today's timetable, blocking and reporting. Locked schools get schedule-change voting in the School view, and the support admin page gains verification requests, member reports, passed proposals awaiting publication, and per-school email domains. Chat remains deferred.
+Phase 3 adds the People view: school verification (automatic by school email domain, or by support review of a proof), a member directory with verified-only full names, friend requests, friends' classes and today's timetable, blocking and reporting. Locked schools get schedule-change voting in the School view, and the support admin page gains verification requests, member reports, passed proposals awaiting publication, and per-school email domains.
+
+Phase 4 adds Messages: one-to-one chat between accepted friends, specified in [docs/CHAT.md](docs/CHAT.md). On phones it opens from an icon in the top bar; on desktop it is a sidebar item. Chat is online only and polls for new messages; nothing about it is stored on the device except the unread count. Removing a friend or blocking closes the chat for both people at once and leaves a report-only row for 30 days. Reports freeze up to 30 messages from that chat, and the owner sees them only by opening the report, which is logged. The admin page gains Show messages, Hide message, timed messaging pauses and a Paused members section. Chat pushes say only "You have new messages.", wait 60 s, are capped at one per 10 minutes and 20 a day, and stay quiet from 22:00 to 07:00. Turn them off under Account → Notifications → Message notifications. The background worker also deletes old chat data on the schedule in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Phase 2 adds private iCal subscriptions in Schedule, imported calendar items in Tasks and Schedule, task priorities and checklists, recurring tasks, and opt-in browser push reminders. The new controls use the existing cards, sheets, form fields and status indicators. Member directories, friends, chat and voting remain deferred; other students' names and schedules are not exposed.
 
@@ -62,13 +64,17 @@ Task reminders use the saved reminder time zone and due time, or 9:00 AM when on
 
 ### Background worker
 
-Run `npm run worker` alongside the web process with the same `.env.local`, database path and VAPID keys. It periodically refreshes calendars and delivers due reminders. Keep one supervised worker running in production. Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` as described in `.env.example`; never commit private keys. Without VAPID keys, calendar refreshing still works and browser notification enrollment remains unavailable. Manual calendar refresh is available in the app.
+Run `npm run worker` alongside the web process with the same `.env.local`, database path and VAPID keys. It periodically refreshes calendars and delivers due reminders. When a new support item arrives (a correction request, feedback, a verification request, a report or a proposal awaiting support), the owner's enrolled browsers get a generic "A new support request is waiting" push that opens `/admin` and carries no request text, names or emails. Keep one supervised worker running in production. Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` as described in `.env.example`; never commit private keys. Without VAPID keys, calendar refreshing still works and browser notification enrollment remains unavailable. Manual calendar refresh is available in the app.
 
 The current private installation has its worker and VAPID keys configured. Local automated checks do not establish delivery to a real device; enable browser reminders in Account and test a task reminder.
 
 ## Timetable photo scanning
 
-Students can add classes from a photo of a printed or on-screen timetable (Classes → Scan timetable). The browser downsizes the photo, the server sends it once to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory, and the student confirms or edits every row before anything is saved. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY` and `SCAN_MODEL_REASONING` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Each account may scan 10 photos per hour and 30 per day, recorded in `audit_log` as `schedule.scan`.
+Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them once to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory, and the student confirms or edits every row before anything is saved. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY` and `SCAN_MODEL_REASONING` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-5.6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
+
+## Continuous integration
+
+Every push to `master` and every pull request runs `.github/workflows/ci.yml`: typecheck, the unit suite and the production build, then the Playwright suite against that build in Chromium. Failed browser runs upload `test-results/` (traces and screenshots) as an artifact.
 
 ## Project guide
 

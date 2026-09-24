@@ -62,6 +62,33 @@ export function relativeDate(date: string, today: string, options: { weekday?: '
   return formatDate(date, options);
 }
 
+/**
+ * The local date ("YYYY-MM-DD") and 24-hour time ("HH:MM") of an instant in a time zone. Pass the
+ * pieces to formatDate / formatTime / relativeDate; never round-trip them through `new Date(date)`.
+ */
+export function instantParts(iso: string, timeZone: string): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(iso));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? '00';
+  return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
+}
+
+/**
+ * Chat list time: "now", "5m", "4:12 PM" earlier today, "Yesterday", "Mon" within the last 6 days,
+ * otherwise "Sep 3". Days are counted in the student's time zone.
+ */
+export function chatTime(iso: string, timeZone: string, now: Date): string {
+  const elapsed = now.getTime() - new Date(iso).getTime();
+  if (elapsed < 60_000) return 'now'; // Includes small clock differences that put the message in the future.
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  const { date, time } = instantParts(iso, timeZone);
+  const days = daysBetween(date, todayIn(timeZone, now));
+  if (days <= 0) return formatTime(time);
+  if (days === 1) return 'Yesterday';
+  if (days <= 6) return WEEKDAYS[weekdayOf(date) - 1].short;
+  return formatDate(date);
+}
+
 export function minutesUntil(instant: string, now: Date): number {
   return Math.round((new Date(instant).getTime() - now.getTime()) / 60_000);
 }
@@ -98,11 +125,36 @@ const PALETTE = [
 ];
 export function classColor(id: string | undefined, kind: 'class' | 'lunch' | 'other' = 'class', color?: string): { dot: string; soft: string } {
   if (color && /^#[0-9a-fA-F]{6}$/.test(color)) return { dot: color, soft: `color-mix(in srgb, ${color} 14%, transparent)` };
-  if (kind === 'lunch') return { dot: '#a16207', soft: 'rgb(161 98 7 / .12)' };
+  // Neutral stone, outside PALETTE, so lunch never matches the amber and orange classes beside it.
+  if (kind === 'lunch') return { dot: '#78716c', soft: 'rgb(120 113 108 / .14)' };
   if (!id) return { dot: 'var(--muted-foreground)', soft: 'var(--secondary)' };
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return PALETTE[hash % PALETTE.length];
+}
+
+const ROOM_WORD = /^(room|rm\.?)\s/i;
+const ROOM_CODE = /^[A-Z]{0,2}[-\s]?\d+(?:[-.]\d+)?[A-Z]?$/i;
+/**
+ * "Room 204" for bare numbers and codes (204, B12, 204A, S-110); anything that already names the
+ * room ("Lab 3", "Art Room", "Gym", "Room 12") is shown as typed.
+ */
+export function formatRoom(room: string): string {
+  const value = room.trim();
+  if (!value || ROOM_WORD.test(value)) return value;
+  return ROOM_CODE.test(value) ? `Room ${value}` : value;
+}
+
+/** "Eastern Time" for "America/New_York"; the ID itself if the runtime cannot name the zone. */
+export function formatTimeZone(id: string): string {
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: id, timeZoneName: 'longGeneric' })
+      .formatToParts(new Date())
+      .find((part) => part.type === 'timeZoneName')?.value;
+    return name || id;
+  } catch {
+    return id;
+  }
 }
 
 const ID_PATTERN = /[^A-Za-z0-9_-]+/g;

@@ -6,7 +6,7 @@ import { errorMessage } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
 import { scheduleForGrade, gradeLabel, detectOverrideConflicts, personalScheduleSchema, resolveDay, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import { taskSchema } from '@/domain/task';
-import { formatDate, formatDateTime, formatRange, WEEKDAYS } from '@/lib/format';
+import { formatDate, formatDateTime, formatRange, formatTimeZone, WEEKDAYS } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
 import { Button, Callout, Chip, Hint } from './primitives';
@@ -51,8 +51,8 @@ export function taskFields(classes: Array<{ id: string; name: string }>): FieldS
     { key: 'priority', label: 'Priority', render: (task) => { const priority = parse(task)?.priority ?? 'normal'; return priority.charAt(0).toUpperCase() + priority.slice(1); } },
     { key: 'subtasks', label: 'Checklist', render: (task) => parse(task)?.subtasks?.map((item) => `${item.completed ? 'Done' : 'Open'}: ${item.title}`).join('; ') || null },
     { key: 'recurrence', label: 'Repeat', render: (task) => { const recurrence = parse(task)?.recurrence; if (!recurrence) return null; const unit = { daily: 'day', weekly: 'week', monthly: 'month' }[recurrence.frequency]; return `Every ${recurrence.interval} ${unit}${recurrence.interval === 1 ? '' : 's'}${recurrence.until ? ` through ${formatDate(recurrence.until)}` : ''}`; } },
-    { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminder.minutesBefore === 0 ? 'At due time' : `${reminder.minutesBefore} minutes before`} · ${reminder.timeZone.replaceAll('_', ' ')}` : null; } },
-    { key: 'imported', label: 'Calendar source', render: (task) => { const imported = parse(task)?.imported; return imported ? `${imported.sourceRemoved ? 'Removed from source' : 'Subscribed'} · ${formatDateTime(imported.startDate, imported.startTime)}${imported.endDate ? ` – ${formatDateTime(imported.endDate, imported.endTime)}` : ''} · ${imported.allDay ? 'All day' : imported.timeZone.replaceAll('_', ' ')}` : null; } },
+    { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminder.minutesBefore === 0 ? 'At due time' : `${reminder.minutesBefore} minutes before`} · ${formatTimeZone(reminder.timeZone)}` : null; } },
+    { key: 'imported', label: 'Calendar source', render: (task) => { const imported = parse(task)?.imported; return imported ? `${imported.sourceRemoved ? 'Removed from source' : 'Subscribed'} · ${formatDateTime(imported.startDate, imported.startTime)}${imported.endDate ? ` – ${formatDateTime(imported.endDate, imported.endTime)}` : ''} · ${imported.allDay ? 'All day' : formatTimeZone(imported.timeZone)}` : null; } },
   ];
 }
 
@@ -94,7 +94,7 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
         setError(''); setPending(conflict.mutation.mutationId);
         try { await resolve(conflict.mutation.mutationId, choice); } catch (err) { setError(errorMessage(err)); } finally { setPending(null); }
       };
-      return <Card key={conflict.mutation.mutationId} className="border-l-4 border-l-now" aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
+      return <Card key={conflict.mutation.mutationId} aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
         <CardContent className="grid gap-3">
           <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="alert" size={17} /></span><div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-bold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div></div>
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/[0.06]"><DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} /></div>
@@ -113,9 +113,18 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
 
 const weekdayNames = (values: number[]) => values.map((value) => WEEKDAYS.find((day) => day.value === value)?.short ?? value).join(', ') || 'none';
 
+/** Zone names for a change line; adds the city when both zones share a generic name ("Eastern Time (Detroit)"). */
+function zoneNames(previous: string, current: string): [string, string] {
+  const before = formatTimeZone(previous);
+  const after = formatTimeZone(current);
+  if (before !== after) return [before, after];
+  const city = (id: string) => id.split('/').pop()!.replaceAll('_', ' ');
+  return [`${before} (${city(previous)})`, `${after} (${city(current)})`];
+}
+
 export function describeScheduleChanges(previous: Schedule, current: Schedule): string[] {
   const changes: string[] = [];
-  if (previous.timeZone !== current.timeZone) changes.push(`Time zone changed from ${previous.timeZone} to ${current.timeZone}.`);
+  if (previous.timeZone !== current.timeZone) { const [before, after] = zoneNames(previous.timeZone, current.timeZone); changes.push(`Time zone changed from ${before} to ${after}.`); }
   if (JSON.stringify(previous.schoolWeekdays) !== JSON.stringify(current.schoolWeekdays)) changes.push(`School days are now ${weekdayNames(current.schoolWeekdays)} (was ${weekdayNames(previous.schoolWeekdays)}).`);
   if (JSON.stringify(previous.advanceWeekdays) !== JSON.stringify(current.advanceWeekdays)) changes.push(`Rotation advance days are now ${weekdayNames(current.advanceWeekdays)} (was ${weekdayNames(previous.advanceWeekdays)}).`);
   if (previous.anchorDate !== current.anchorDate || previous.anchorCycleDayId !== current.anchorCycleDayId) {
@@ -144,8 +153,19 @@ export function describeScheduleChanges(previous: Schedule, current: Schedule): 
     else if (JSON.stringify(old) !== JSON.stringify(exception)) changes.push(`${formatDate(exception.date, { weekday: 'short', year: true })}: exception changed (${summary}).`);
   }
   for (const exception of previous.exceptions) if (!current.exceptions.some((entry) => entry.date === exception.date)) changes.push(`${formatDate(exception.date, { weekday: 'short', year: true })}: exception removed.`);
-  if (changes.length === 0 && JSON.stringify(previous) !== JSON.stringify(current)) changes.push('Minor changes that do not affect any dates.');
+  // Other grades' variants ride along on a grade that falls back to the base schedule; they are not a change to this one.
+  const own = ({ gradeSchedules: _variants, ...schedule }: Schedule) => JSON.stringify(schedule);
+  if (changes.length === 0 && own(previous) !== own(current)) changes.push('Minor changes that do not affect any dates.');
   return changes;
+}
+
+/** Bulleted change lines, collapsed to the first six. */
+export function ChangeList({ changes, limit = 6 }: { changes: string[]; limit?: number }) {
+  const [showAll, setShowAll] = useState(false);
+  return <>
+    <ul className="grid list-disc gap-1 pl-5 text-sm">{(showAll ? changes : changes.slice(0, limit)).map((change) => <li key={change}>{change}</li>)}</ul>
+    {changes.length > limit && <button type="button" className="w-fit text-left text-sm text-primary hover:underline" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${changes.length} changes`}</button>}
+  </>;
 }
 
 export function SchoolReview({ review, personal, online, onAcknowledge, onOpenClasses, today }: { review: NonNullable<Workspace['review']>; personal: PersonalSchedule; online: boolean; onAcknowledge: () => Promise<void>; onOpenClasses: () => void; today: string }) {
@@ -153,18 +173,16 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   const changes = describeScheduleChanges(scheduleForGrade(review.previous, personal.grade), scheduleForGrade(review.current, personal.grade));
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const todayBefore = resolveDay(review.previous, today, personal);
   const todayAfter = resolveDay(review.current, today, personal);
   const todayChanged = JSON.stringify(todayBefore) !== JSON.stringify(todayAfter);
-  return <Card className="border-l-4 border-l-primary" aria-labelledby="review-title">
+  return <Card aria-labelledby="review-title">
     <CardContent className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div></div>
+        <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched.{changes.length > 0 ? ' Here is what changed.' : ''}</p></div></div>
         {todayChanged ? <Chip tone="now" icon="alert">Today looks different</Chip> : <Chip tone="success" icon="check">Today is unaffected</Chip>}
       </div>
-      <ul className="grid list-disc gap-1 pl-5 text-sm">{(showAll ? changes : changes.slice(0, 6)).map((change) => <li key={change}>{change}</li>)}</ul>
-      {changes.length > 6 && <button type="button" className="w-fit text-left text-sm text-primary hover:underline" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${changes.length} changes`}</button>}
+      {changes.length > 0 ? <ChangeList changes={changes} /> : <Hint>Nothing changed in {personal.grade ? `the Grade ${personal.grade}` : 'your'} bell schedule. Support updated another grade or a school setting.</Hint>}
       {conflicts.length > 0 && <Callout tone="warning" icon="alert" title="Some of your personal settings refer to what changed" actions={<Button size="sm" variant="secondary" onClick={onOpenClasses}>Review my classes and adjustments</Button>}>
         <ul className="mt-1 grid list-disc gap-1 pl-4 text-[13.5px]">{conflicts.map((conflict) => <li key={conflict.id}>{conflict.message}</li>)}</ul>
       </Callout>}

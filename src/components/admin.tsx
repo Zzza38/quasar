@@ -1,16 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { GoogleLogo } from './google-logo';
 import { SchoolDirectory } from './school-directory';
 import { api, errorMessage, type RouterOutput, type School } from '@/client/api';
 import { scheduleSchema, type Schedule } from '@/domain/schedule';
-import { formatDate, pluralize } from '@/lib/format';
+import { REPORT_CATEGORIES } from '@/domain/chat';
+import { browserTimeZone, formatDate, formatTime, instantParts, pluralize } from '@/lib/format';
 import { Icon, Spinner } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
 import { Brand, CenteredNotice } from './shell';
-import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Spacer, StatTile, Toggle } from './primitives';
+import { Button, Callout, Chip, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer, StatTile, Textarea, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
@@ -18,6 +19,15 @@ type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
 type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
+type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
+type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
+type PauseTarget = { userId: string; name: string };
+
+/** Admin has no AppState, so instants are shown in the browser's time zone. */
+function formatInstant(iso: string): string {
+  const { date, time } = instantParts(iso, browserTimeZone());
+  return `${formatDate(date, { weekday: 'short' })}, ${formatTime(time)}`;
+}
 
 export function Admin() {
   const [schools, setSchools] = useState<School[]>([]);
@@ -25,6 +35,15 @@ export function Admin() {
   const [verifications, setVerifications] = useState<VerificationRequest[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [proposals, setProposals] = useState<PendingProposal[]>([]);
+  const [pauses, setPauses] = useState<ChatPauseRow[]>([]);
+  // adminScoped mutations carry the signed-in account, so a switch in another tab can't write under the wrong one.
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const accountRef = useRef<string | null>(null);
+  // Report snapshots stay in memory only, and only while their card is open.
+  const [evidence, setEvidence] = useState<Record<string, EvidenceItem[]>>({});
+  const [opening, setOpening] = useState<string | null>(null);
+  const [hiding, setHiding] = useState<string | null>(null);
+  const [pauseTarget, setPauseTarget] = useState<PauseTarget | null>(null);
   const [allowed, setAllowed] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -36,10 +55,16 @@ export function Admin() {
     setLoading(true); setError('');
     try {
       const session = await api.session.query(); setSignedIn(Boolean(session));
-      if (!session?.isAdmin) { setAllowed(false); setSchools([]); setRequests([]); return; }
-      const [schoolList, requestList, verificationList, reportList, proposalList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query()]);
-      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setAllowed(true);
-    } catch (err) { setError(errorMessage(err)); setAllowed(false); setSchools([]); setRequests([]); }
+      const nextAccount = session?.user.id ?? null;
+      if (accountRef.current !== nextAccount) setEvidence({});
+      accountRef.current = nextAccount; setAccountId(nextAccount);
+      if (!session?.isAdmin) { setAllowed(false); setSchools([]); setRequests([]); setReports([]); setPauses([]); setEvidence({}); return; }
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query()]);
+      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setAllowed(true);
+      // Drop snapshots of reports that are no longer open.
+      const open = new Set(reportList.map((report) => report.id));
+      setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
+    } catch (err) { setError(errorMessage(err)); setAllowed(false); setSchools([]); setRequests([]); setReports([]); setPauses([]); setEvidence({}); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -59,11 +84,29 @@ export function Admin() {
   const approved = schools.filter((entry) => entry.approved).length;
   const act = async (action: () => Promise<unknown>) => { setError(''); try { await action(); await refresh(); } catch (err) { setError(errorMessage(err)); } };
   const openCount = requests.length + verifications.length + reports.length + proposals.length;
+  const showEvidence = async (reportId: string) => {
+    if (!accountId) return;
+    setError(''); setOpening(reportId);
+    try { const result = await api.admin.showEvidence.mutate({ accountId, reportId }); setEvidence((current) => ({ ...current, [reportId]: result.items })); }
+    catch (err) { setError(errorMessage(err)); }
+    finally { setOpening(null); }
+  };
+  const closeEvidence = (reportId: string) => setEvidence((current) => { const next = { ...current }; delete next[reportId]; return next; });
+  const hideMessage = async (reportId: string, seq: number) => {
+    if (!accountId || !window.confirm('Hide this message from both students?')) return;
+    setError(''); setHiding(`${reportId}:${seq}`);
+    try {
+      await api.admin.redactMessage.mutate({ accountId, reportId, seq });
+      // The server marked the snapshot item too; mirror it here instead of reading the snapshot again.
+      setEvidence((current) => current[reportId] ? { ...current, [reportId]: current[reportId].map((item) => item.seq === seq ? { ...item, deletedBy: 'support' as const } : item) } : current);
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setHiding(null); }
+  };
   return <div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
-        <div className="flex items-center gap-3"><Brand /><Chip tone="accent" icon="inbox">Support</Chip></div>
-        <div className="flex items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} onClick={() => void refresh()}>Refresh</Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
+        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip></div>
+        <div className="flex shrink-0 items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => void refresh()}><span className="max-sm:sr-only">Refresh</span></Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
       </div>
     </header>
     <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
@@ -74,46 +117,7 @@ export function Admin() {
         <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
       </div>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
-      <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
-        {requests.length === 0 && <EmptyState icon="inbox" title="Inbox is empty" />}
-        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
-          <p className="whitespace-pre-wrap text-sm">{request.message}</p>
-          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
-        </li>)}</ul>}
-      </Section>
-
-      <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
-        {verifications.length === 0 && <EmptyState icon="checkCircle" title="Nothing to verify" />}
-        {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
-          <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button></div>
-        </li>)}</ul>}
-      </Section>
-
-      <Section id="reports-title" title="Member reports" icon="alert" description={reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, ends their friendships there and blocks rejoining.` : 'Students report members from a profile. Reports are private.'}>
-        {reports.length === 0 && <EmptyState icon="users" title="No open reports" />}
-        {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => <li key={report.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{report.reportedName}</strong> <Hint className="inline">({report.reportedEmail})</Hint><Hint>Reported by {report.reporterName}{report.schoolName ? ` · ${report.schoolName}` : ''}</Hint></span><Hint>{formatDate(report.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
-          <p className="whitespace-pre-wrap text-sm">{report.reason}</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
-            {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason for the audit log.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
-          </div>
-        </li>)}</ul>}
-      </Section>
-
-      <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
-        {proposals.length === 0 && <EmptyState icon="layers" title="Nothing waiting" />}
-        {proposals.length > 0 && <ul className="grid gap-2">{proposals.map((proposal) => <li key={proposal.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(proposal.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
-          <Panel><ScheduleSummary schedule={proposal.schedule} /></Panel>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
-        </li>)}</ul>}
-      </Section>
-
-      <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
+      <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}
         {visible.length > 0 && <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/[0.06]"><Table>
           <TableHeader className="bg-muted/70"><TableRow><TableHead>School</TableHead><TableHead>Members</TableHead><TableHead>Status</TableHead><TableHead>Rev.</TableHead><TableHead><span className="sr-only">Actions</span></TableHead></TableRow></TableHeader>
@@ -126,9 +130,81 @@ export function Admin() {
           </TableRow>)}</TableBody>
         </Table></div>}
       </Section>
+
+      <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
+        {requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
+        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <p className="whitespace-pre-wrap text-sm">{request.message}</p>
+          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
+        {verifications.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing to verify</Hint>}
+        {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button></div>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, ends their friendships there and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
+        {reports.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open reports</Hint>}
+        {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => {
+          const items = evidence[report.id];
+          return <li key={report.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+            {report.isChat && <div className="flex flex-wrap gap-1.5"><Chip tone="accent" icon="message">Chat</Chip>{report.category && <Chip tone={report.category === 'danger' ? 'danger' : 'neutral'} icon={report.category === 'danger' ? 'alert' : undefined}>{REPORT_CATEGORIES[report.category].short}</Chip>}</div>}
+            <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{report.reportedName}</strong> <Hint className="inline">({report.reportedEmail})</Hint><Hint>Reported by {report.reporterName}{report.schoolName ? ` · ${report.schoolName}` : ''}</Hint></span><Hint>{formatDate(report.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+            <p className="whitespace-pre-wrap break-words text-sm">{report.reason}</p>
+            {report.isChat && <Hint>{pluralize(report.history.reports, 'report')} · {pluralize(report.history.removals, 'removal')} · {pluralize(report.history.pauses, 'pause')}</Hint>}
+            {report.pause && <Hint className="flex items-center gap-1.5"><Icon name="lock" size={14} />{report.pause.until ? `Messaging paused until ${formatInstant(report.pause.until)}` : 'Messaging paused until lifted'}</Hint>}
+            {items && <ol aria-label="Reported messages" className="grid gap-2">{items.map((item) => {
+              const key = `${report.id}:${item.seq}`;
+              return <li key={item.seq} className={`grid gap-1.5 rounded-xl bg-card p-3 ring-1 ring-inset ${item.anchor ? 'ring-destructive/40' : 'ring-foreground/[0.06]'}`}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[13px] font-semibold">{item.senderName} · <span className="font-normal text-muted-foreground">{formatInstant(item.createdAt)}</span></span>
+                  {item.anchor && <Chip tone="danger">Reported message</Chip>}
+                  {item.deletedBy === 'sender' && <Chip tone="outline">Deleted by sender</Chip>}
+                  {item.deletedBy === 'support' && <Chip tone="warning">Hidden by support</Chip>}
+                </div>
+                {/* Plain text only: no links, no markup. */}
+                <p className="whitespace-pre-wrap break-words text-sm">{item.body}</p>
+                {item.deletedBy !== 'support' && <div><Button size="sm" variant="ghost" busy={hiding === key} disabled={hiding !== null && hiding !== key} onClick={() => void hideMessage(report.id, item.seq)}>Hide message</Button></div>}
+              </li>;
+            })}</ol>}
+            <div className="flex flex-wrap gap-2">
+              {report.isChat && report.evidenceCount > 0 && (items
+                ? <Button size="sm" variant="soft" icon="x" onClick={() => closeEvidence(report.id)}>Close messages</Button>
+                : <Button size="sm" variant="soft" icon="message" busy={opening === report.id} disabled={!accountId} onClick={() => void showEvidence(report.id)}>Show messages ({report.evidenceCount})</Button>)}
+              <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
+              <Button size="sm" icon="lock" disabled={!accountId} onClick={() => setPauseTarget({ userId: report.reportedId, name: report.reportedName })}>Pause messaging</Button>
+              {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason for the audit log.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
+            </div>
+          </li>;
+        })}</ul>}
+      </Section>
+
+      <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages.">
+        {pauses.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is paused.</Hint>}
+        {pauses.length > 0 && <ul className="grid gap-2">{pauses.map((pause) => <li key={pause.userId} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="min-w-0"><p className="text-sm"><strong className="font-bold">{pause.displayName}</strong> · until {pause.until ? formatInstant(pause.until) : 'lifted'}</p><Hint>{pause.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {pause.reason}</Hint></div>
+          <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift pause for ${pause.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: pause.userId })); }}>Lift pause</Button>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
+        {proposals.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
+        {proposals.length > 0 && <ul className="grid gap-2">{proposals.map((proposal) => <li key={proposal.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(proposal.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <Panel><ScheduleSummary schedule={proposal.schedule} /></Panel>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
+        </li>)}</ul>}
+      </Section>
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
     {school && <ReviewSheet key={school.id} school={school} onClose={() => setSelected(null)} onSaved={refresh} />}
+    {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={refresh} />}
   </div>;
 }
 
@@ -143,7 +219,7 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
   const [saved, setSaved] = useState(false);
   const issues = describeIssues(draft);
   const dirty = JSON.stringify(draft) !== JSON.stringify(school.schedule) || approved !== school.approved || supportLocked !== school.supportLocked || domainList.join(',') !== school.emailDomains.join(',');
-  return <Modal open onClose={onClose} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
+  return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm font-semibold text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
       setPending(true); setError(''); setSaved(false);
       try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked, emailDomains: domainList }); setSaved(true); await onSaved(); }
@@ -159,5 +235,40 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
     </Panel>
     <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+  </Modal>;
+}
+
+const PAUSE_LENGTHS = { '1': 1, '7': 7, '30': 30, lifted: null } as const;
+type PauseLength = keyof typeof PAUSE_LENGTHS;
+
+function PauseSheet({ target, accountId, onClose, onPaused }: { target: PauseTarget; accountId: string; onClose: () => void; onPaused: () => Promise<void> }) {
+  const [length, setLength] = useState<PauseLength>('7');
+  const [reason, setReason] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const trimmed = reason.trim();
+  const submit = async () => {
+    setPending(true); setError('');
+    try {
+      await api.admin.pauseChat.mutate({ accountId, userId: target.userId, days: PAUSE_LENGTHS[length], reason: trimmed });
+      onClose(); await onPaused();
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setPending(false); }
+  };
+  return <Modal open onClose={onClose} dirty={reason.length > 0} busy={pending} title={`Pause ${target.name}’s messaging`}
+    description="They can still read their chats, mute, block and report, but they cannot send messages. Their open reports close as paused, and the pause is written to the audit log."
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={trimmed.length < 3} onClick={() => void submit()}>Pause messaging</Button></>}>
+    <div className="grid gap-4">
+      <Field label="Pause length" htmlFor="pause-length">
+        <Select id="pause-length" aria-label="Pause length" value={length} onChange={(event) => setLength(event.target.value as PauseLength)} disabled={pending}>
+          <option value="1">1 day</option>
+          <option value="7">7 days</option>
+          <option value="30">30 days</option>
+          <option value="lifted">Until lifted</option>
+        </Select>
+      </Field>
+      <Field label="Reason for the audit log" htmlFor="pause-reason" hint="At least 3 characters."><Textarea id="pause-reason" required minLength={3} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} disabled={pending} /></Field>
+      {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+    </div>
   </Modal>;
 }

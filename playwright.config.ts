@@ -6,6 +6,8 @@ process.env.E2E_DATABASE_PATH ||= join(mkdtempSync(join(tmpdir(),'quasar-browser
 process.env.E2E_AUTH_SECRET ||= 'test-only-secret-which-is-never-used-in-production-123456789';
 export default defineConfig({
   testDir: './tests/e2e', workers: 1, fullyParallel: false, timeout: 60_000,
+  // Sync round-trips (save, session check, upload, refresh) can exceed 5 s on a busy host; the app shows saving states meanwhile.
+  expect: { timeout: 15_000 },
   use: {
     baseURL: 'http://localhost:3100', trace: 'retain-on-failure',
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? {executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE} : {},

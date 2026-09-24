@@ -28,10 +28,10 @@ export function HelpLink({ className }: { className?: string }) {
   </a>;
 }
 
-export function Frame({ step, total = SETUP_STEPS, title, description, children, wide, footer }: { step: number; total?: number; title: ReactNode; description?: ReactNode; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
+export function Frame({ step, total = SETUP_STEPS, title, description, children, wide, footer, notice }: { step: number; total?: number; title: ReactNode; description?: ReactNode; children: ReactNode; wide?: boolean; footer?: ReactNode; notice?: ReactNode }) {
   return <main className="welcome-bg grid min-h-dvh place-items-center items-start p-3 sm:items-center sm:px-4 sm:py-8">
-    <Card className={cn('w-full rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
-      <CardContent className="grid gap-6 sm:px-8">
+    <Card className={cn('w-full min-w-0 rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
+      <CardContent className="grid grid-cols-[minmax(0,1fr)] gap-6 sm:px-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Brand />
           <ol className="flex items-center gap-1.5" aria-label={`Step ${step} of ${total}`}>
@@ -47,18 +47,27 @@ export function Frame({ step, total = SETUP_STEPS, title, description, children,
           </ol>
         </div>
         <div className="grid gap-1.5"><Eyebrow>Step {step} of {total}</Eyebrow><h1 className="text-[28px]">{title}</h1>{description && <p className="text-sm text-muted-foreground">{description}</p>}</div>
+        {notice}
         {children}
-        {footer && <div className="flex flex-wrap items-center gap-2 border-t pt-5">{footer}<Spacer /><HelpLink /></div>}
+        {footer && <div className="flex min-w-0 flex-wrap items-center gap-2 border-t pt-5">{footer}<Spacer /><HelpLink /></div>}
       </CardContent>
     </Card>
   </main>;
 }
 
+/** Setup footer sign-out. The email sits in its own wrapping hint so a long school address never widens the card. */
+export function SignOutButton({ email, onClick, disabled }: { email?: string; onClick: () => void; disabled?: boolean }) {
+  return <>
+    <Button variant="ghost" size="sm" icon="logout" onClick={onClick} disabled={disabled}>Sign out</Button>
+    {email && <Hint className="min-w-0 break-all">{email}</Hint>}
+  </>;
+}
+
 /** Large selectable option, used as a radio inside a radiogroup. */
 export function OptionCard({ selected, onSelect, title, description, className, icon }: { selected: boolean; onSelect: () => void; title: ReactNode; description: ReactNode; className?: string; icon?: 'layers' | 'edit' | 'check' | 'users' }) {
   return <button type="button" role="radio" aria-checked={selected} onClick={onSelect}
-    className={cn('flex gap-3 rounded-2xl bg-card px-4 py-3.5 text-left ring-1 ring-foreground/[0.08] transition-[background-color,box-shadow] outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50', selected && 'bg-primary-soft ring-2 ring-primary hover:bg-primary-soft', className)}>
-    <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 transition-colors', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{selected && <Icon name="check" size={12} strokeWidth={3} />}</span>
+    className={cn('flex gap-3 rounded-2xl bg-card px-4 py-3.5 text-left ring-1 ring-foreground/[0.08] transition-[background-color,box-shadow] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', selected && 'bg-primary-soft ring-2 ring-primary hover:bg-primary-soft', className)}>
+    <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 transition-colors', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-control-border')}>{selected && <Icon name="check" size={12} strokeWidth={3} />}</span>
     <span className="grid gap-1">
       <strong className="flex items-center gap-2 text-sm font-bold">{icon && <Icon name={icon} size={14} className="text-muted-foreground" />}{title}</strong>
       <Hint className={cn(selected && 'text-primary-soft-foreground/80')}>{description}</Hint>
@@ -71,41 +80,40 @@ export function Onboarding({ context, online, error, onRefresh, onSignOut, logou
   const [step, setStep] = useState<Step>(needsNames ? 'names' : 'school');
   const [selected, setSelected] = useState<School | null>(null);
   useEffect(() => { if (!needsNames && step === 'names') setStep('school'); }, [needsNames, step]);
-  const signOut = <Button variant="ghost" size="sm" icon="logout" onClick={onSignOut} disabled={logoutPending || !online}>Sign out ({context.user.email})</Button>;
+  // The names step already says which account is signed in, so the footer only repeats the email elsewhere.
+  const signOut = <SignOutButton email={step === 'names' ? undefined : context.user.email} onClick={onSignOut} disabled={logoutPending || !online} />;
+  // Steps stay mounted while offline so a half-built schedule survives a dropped connection; only their submit buttons wait.
+  const notice = online ? null : <Callout tone="warning" icon="alert" role="status" title="You’re offline" actions={<Button size="sm" onClick={() => void onRefresh()}>Retry connection</Button>}>Your answers are kept here. Reconnect to continue setup.</Callout>;
+  const shared = { online, notice, footer: signOut };
 
-  if (!online) {
-    return <Frame step={needsNames ? 1 : 2} title="Connect to finish setup" description="Choosing a school and entering your names happen online. Your account is saved on this device for later." footer={signOut}>
-      {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
-      <div><Button variant="primary" onClick={() => void onRefresh()}>Retry connection</Button></div>
-    </Frame>;
-  }
-
-  if (step === 'names') return <NamesStep user={context.user} error={error} onSaved={async () => { await onRefresh(); setStep('school'); }} footer={signOut} />;
-  if (step === 'create') return <CreateStep onBack={() => setStep('school')} onCreated={(school) => { setSelected(school); setStep('choice'); }} onUseExisting={(school) => { setSelected(school); setStep('choice'); }} footer={signOut} />;
-  if (step === 'choice' && selected) return <ChoiceStep school={selected} userId={context.user.id} onBack={() => setStep('school')} onJoined={onRefresh} footer={signOut} />;
-  return <SchoolStep error={error} onSelect={(school) => { setSelected(school); setStep('choice'); }} onCreate={() => setStep('create')} footer={signOut} />;
+  if (step === 'names') return <NamesStep {...shared} user={context.user} error={error} onSaved={async () => { await onRefresh(); setStep('school'); }} />;
+  if (step === 'create') return <CreateStep {...shared} onBack={() => setStep('school')} onCreated={(school) => { setSelected(school); setStep('choice'); }} onUseExisting={(school) => { setSelected(school); setStep('choice'); }} />;
+  if (step === 'choice' && selected) return <ChoiceStep {...shared} school={selected} userId={context.user.id} onBack={() => setStep('school')} onJoined={onRefresh} />;
+  return <SchoolStep {...shared} error={error} onSelect={(school) => { setSelected(school); setStep('choice'); }} onCreate={() => setStep('create')} />;
 }
+
+type StepProps = { online: boolean; notice: ReactNode; footer: ReactNode };
 
 /* ---------- Step 1: names ---------- */
 
-function NamesStep({ user, error, onSaved, footer }: { user: WorkspaceContext['user']; error: string; onSaved: () => Promise<void>; footer: ReactNode }) {
+function NamesStep({ user, error, onSaved, online, notice, footer }: StepProps & { user: WorkspaceContext['user']; error: string; onSaved: () => Promise<void> }) {
   const suggested = user.suggestedNames;
   const [displayName, setDisplayName] = useState(user.displayName || suggested.displayName);
   const [fullName, setFullName] = useState(user.fullName || suggested.fullName);
   const [message, setMessage] = useState(error);
   const [pending, setPending] = useState(false);
   const prefilled = !user.displayName && !!suggested.fullName;
-  return <Frame step={1} title={prefilled ? 'Is this you?' : 'What should we call you?'} description={prefilled ? 'We took these from your Google account. Change anything you like.' : 'Your display name is what other students see. Your full name is only shown to verified schoolmates.'} footer={footer}>
+  return <Frame step={1} title={prefilled ? 'Is this you?' : 'What should we call you?'} description={prefilled ? 'We took these from your Google account. Change anything you like.' : 'Pick a name schoolmates will see, and add your full name for verified schoolmates.'} notice={notice} footer={footer}>
     <form className="grid gap-4" onSubmit={async (event) => {
       event.preventDefault(); setPending(true); setMessage('');
       try { await api.profile.save.mutate({ displayName: displayName.trim(), fullName: fullName.trim() }); await onSaved(); }
       catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
     }}>
-      <Field label="Display name" htmlFor="display-name" hint="What schoolmates see next to your name."><Input id="display-name" required autoFocus={!prefilled} autoComplete="nickname" maxLength={80} placeholder="Maya" value={displayName} className="h-11" onChange={(event) => setDisplayName(event.target.value)} /></Field>
-      <Field label="Full name" htmlFor="full-name" hint="Only shown to schoolmates support has verified."><Input id="full-name" required autoComplete="name" maxLength={160} placeholder="Maya Chen" value={fullName} className="h-11" onChange={(event) => setFullName(event.target.value)} /></Field>
-      <Hint>Signed in as {user.email}.</Hint>
+      <Field label="Display name" htmlFor="display-name" hint="The name schoolmates see in class lists and on your profile."><Input id="display-name" required autoFocus={!prefilled} autoComplete="nickname" maxLength={80} placeholder="Maya" value={displayName} className="h-11" onChange={(event) => setDisplayName(event.target.value)} /></Field>
+      <Field label="Full name" htmlFor="full-name" hint="Only verified schoolmates see this, and only once you are verified too."><Input id="full-name" required autoComplete="name" maxLength={160} placeholder="Maya Chen" value={fullName} className="h-11" onChange={(event) => setFullName(event.target.value)} /></Field>
+      <Hint className="break-all">Signed in as {user.email}.</Hint>
       {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
-      <div><Button type="submit" variant="primary" size="lg" busy={pending} disabled={!displayName.trim() || !fullName.trim()} iconRight="arrowRight" autoFocus={prefilled}>{prefilled ? 'Yes, continue' : 'Continue'}</Button></div>
+      <div><Button type="submit" variant="primary" size="lg" busy={pending} disabled={!online || !displayName.trim() || !fullName.trim()} iconRight="arrowRight" autoFocus={prefilled}>{prefilled ? 'Yes, continue' : 'Continue'}</Button></div>
     </form>
   </Frame>;
 }
@@ -113,7 +121,7 @@ function NamesStep({ user, error, onSaved, footer }: { user: WorkspaceContext['u
 /* ---------- Step 2: find a school ---------- */
 
 function SchoolRow({ school, onSelect, action = 'Choose' }: { school: School; onSelect: () => void; action?: string }) {
-  return <button type="button" className="group/school flex w-full items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-foreground/[0.08] transition-[box-shadow,background-color] outline-none hover:bg-muted hover:ring-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50" onClick={onSelect} aria-label={`${action} ${school.name}`}>
+  return <button type="button" className="group/school flex w-full items-center gap-3 rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-foreground/[0.08] transition-[box-shadow,background-color] outline-none hover:bg-muted hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={onSelect} aria-label={`${action} ${school.name}`}>
     <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
     <div className="grid min-w-0 flex-1 gap-1">
       <strong className="text-[15px] font-bold">{school.name}</strong>
@@ -124,18 +132,19 @@ function SchoolRow({ school, onSelect, action = 'Choose' }: { school: School; on
   </button>;
 }
 
-function SchoolStep({ error, onSelect, onCreate, footer }: { error: string; onSelect: (school: School) => void; onCreate: () => void; footer: ReactNode }) {
+function SchoolStep({ error, onSelect, onCreate, online, notice, footer }: StepProps & { error: string; onSelect: (school: School) => void; onCreate: () => void }) {
   const [query, setQuery] = useState('');
   const [schools, setSchools] = useState<School[] | null>(null);
   const [message, setMessage] = useState(error);
   useEffect(() => {
+    if (!online) return;
     let current = true;
     const timer = setTimeout(() => {
       api.school.list.query({ query: query.trim() }).then((result) => { if (current) { setSchools(result); setMessage(''); } }).catch((err) => { if (current) setMessage(errorMessage(err)); });
     }, query ? 250 : 0);
     return () => { current = false; clearTimeout(timer); };
-  }, [query]);
-  return <Frame step={2} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." footer={footer}>
+  }, [query, online]);
+  return <Frame step={2} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." notice={notice} footer={footer}>
     <div className="relative">
       <Icon name="search" size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
       <Input aria-label="School name or location" placeholder="School name or town" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="h-12 rounded-2xl pl-11 text-[15px]" />
@@ -176,7 +185,7 @@ function slotIssues(slots: ScheduleSlot[]): string[] {
   return issues;
 }
 
-function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () => void; onCreated: (school: School) => void; onUseExisting: (school: School) => void; footer: ReactNode }) {
+function CreateStep({ onBack, onCreated, onUseExisting, online, notice, footer }: StepProps & { onBack: () => void; onCreated: (school: School) => void; onUseExisting: (school: School) => void }) {
   const timeZone = useMemo(browserTimeZone, []);
   const today = useMemo(() => todayIn(timeZone), [timeZone]);
   const [name, setName] = useState('');
@@ -217,7 +226,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
   };
 
   if (phase === 'details') {
-    return <Frame step={2} title="Add your school" description="Just the basics first. The bell schedule comes next, one question at a time." footer={footer}>
+    return <Frame step={2} title="Add your school" description="Just the basics first. The bell schedule comes next, one question at a time." notice={notice} footer={footer}>
       {progress}
       <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); void startDetails(); }}>
         <Field label="School name" htmlFor="school-name"><Input id="school-name" required autoFocus minLength={2} maxLength={160} placeholder="Lincoln High School" value={name} className="h-11" onChange={(event) => setName(event.target.value)} /></Field>
@@ -230,13 +239,13 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
           {template === 'rotation' && <Field label="Days in the cycle" htmlFor="cycle-length" className="max-w-[160px]"><Input id="cycle-length" type="number" min={2} max={60} value={cycleLength} onChange={(event) => setCycleLength(Math.max(2, Math.min(60, Number(event.target.value) || 2)))} /></Field>}
         </div>
         {message && <Callout tone="danger" icon="alert" role="alert">{message}</Callout>}
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={onBack}>Back</Button><Spacer /><Button type="submit" variant="primary" iconRight="arrowRight" busy={checking} disabled={name.trim().length < 2 || location.trim().length < 2}>Set up the schedule</Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={onBack}>Back</Button><Spacer /><Button type="submit" variant="primary" iconRight="arrowRight" busy={checking} disabled={!online || name.trim().length < 2 || location.trim().length < 2}>Set up the schedule</Button></div>
       </form>
     </Frame>;
   }
 
   if (phase === 'duplicates') {
-    return <Frame step={2} title="Is it one of these?" description="A school with a similar name already exists. Joining it means you share one schedule and can fix it together." footer={footer}>
+    return <Frame step={2} title="Is it one of these?" description="A school with a similar name already exists. Joining it means you share one schedule and can fix it together." notice={notice} footer={footer}>
       {progress}
       <ul className="grid gap-2" aria-label="Similar schools">{duplicates.map((school) => <li key={school.id}><SchoolRow school={school} action="Join" onSelect={() => onUseExisting(school)} /></li>)}</ul>
       <div className="flex flex-wrap gap-2"><Button variant="ghost" icon="arrowLeft" onClick={() => setPhase('details')}>Back</Button><Spacer /><Button variant="primary" iconRight="arrowRight" onClick={() => setPhase('periods')}>None of these, add {name.trim()}</Button></div>
@@ -244,7 +253,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
   }
 
   if (phase === 'periods') {
-    return <Frame step={2} wide title="What are the periods called?" description="List every block in a school day, including lunch. Use the names your school uses, like “Block A” or “Period 3”." footer={footer}>
+    return <Frame step={2} wide title="What are the periods called?" description="List every block in a school day, including lunch. Use the names your school uses, like “Block A” or “Period 3”." notice={notice} footer={footer}>
       {progress}
       {/* Days are still empty here, so the editor is shown a stand-in with every period placed; only the period list is written back. */}
       <Periods value={{ ...draft, cycleDays: draft.cycleDays.map((day) => ({ ...day, slots: typicalDaySlots(draft.periods, typical) })) }} set={(patch) => { if (patch.periods) set({ periods: patch.periods }); }} confirmRemoval={false} />
@@ -257,7 +266,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
   }
 
   if (phase === 'times') {
-    return <Frame step={2} wide title={multiDay ? 'Bell times on a normal day' : 'Bell times'} description="Enter when each period starts and ends. Type times like 8:05 or 1:30 and tap AM/PM if needed. Nothing is filled in for you, so what you enter is what your school actually does." footer={footer}>
+    return <Frame step={2} wide title={multiDay ? 'Bell times on a normal day' : 'Bell times'} description="Enter when each period starts and ends. Type times like 8:05 or 1:30 and tap AM/PM if needed. Nothing is filled in for you, so what you enter is what your school actually does." notice={notice} footer={footer}>
       {progress}
       <SlotsEditor slots={typical} periods={draft.periods} onChange={setTypical} emptyText="Add the periods in the order they happen." />
       {typicalProblems.length > 0 && typical.some((slot) => slot.start && slot.end) && <Callout tone="warning" icon="alert"><ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{typicalProblems.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul></Callout>}
@@ -271,7 +280,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
 
   if (phase === 'days') {
     const dayLabels = starterDays(template, cycleLength).map((day) => day.label);
-    return <Frame step={2} wide={varies === true} title="Do the days differ?" description={`Your ${dayLabels.length} rotation days (${dayLabels.slice(0, 3).join(', ')}${dayLabels.length > 3 ? '…' : ''}) all start as a copy of the normal day.`} footer={footer}>
+    return <Frame step={2} wide={varies === true} title="Do the days differ?" description={`Your ${dayLabels.length} rotation days (${dayLabels.slice(0, 3).join(', ')}${dayLabels.length > 3 ? '…' : ''}) all start as a copy of the normal day.`} notice={notice} footer={footer}>
       {progress}
       <div className="grid gap-2" role="radiogroup" aria-label="Day differences">
         <OptionCard icon="check" selected={varies === false} onSelect={() => { setVaries(false); setDraft((current) => applyTypicalDay(current, typical)); }} title="Same order and times every day" description="Each rotation day runs the same periods at the same times." />
@@ -292,7 +301,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
   if (phase === 'start') {
     const defaultDate = nextSchoolDay(today, draft.schoolWeekdays);
     const isSchoolDay = draft.schoolWeekdays.includes(weekdayOf(draft.anchorDate));
-    return <Frame step={2} title="Which rotation day is it?" description="Quasar counts forward and backward from one date you are sure about. Today is fine, or the next school day." footer={footer}>
+    return <Frame step={2} title="Which rotation day is it?" description="Quasar counts forward and backward from one date you are sure about. Today is fine, or the next school day." notice={notice} footer={footer}>
       {progress}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="On this date" htmlFor="anchor-date" hint={draft.anchorDate === defaultDate ? (defaultDate === today ? 'Today.' : `The next school day after today.`) : undefined}><Input id="anchor-date" type="date" value={draft.anchorDate} min="1900-01-01" max="2199-12-31" className="h-11" onChange={(event) => { if (event.target.value) set({ anchorDate: event.target.value }); }} /></Field>
@@ -313,7 +322,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
   }
 
   const weekAhead = [0, 1, 2, 3, 4].map((offset) => addDays(nextSchoolDay(today, draft.schoolWeekdays), offset));
-  return <Frame step={2} wide title="Does this look right?" description="Tap a date to see what Quasar thinks happens that day. If something is off, go back and fix it now, because schoolmates who join will inherit this schedule." footer={footer}>
+  return <Frame step={2} wide title="Does this look right?" description="Tap a date to see what Quasar thinks happens that day. If something is off, go back and fix it now, because schoolmates who join will inherit this schedule." notice={notice} footer={footer}>
     {progress}
     <Panel className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -327,7 +336,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
     {issues.length > 0 && <Callout tone="warning" icon="alert" title={`${issues.length === 1 ? 'One thing' : `${issues.length} things`} to fix first`} role="alert"><ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{issues.slice(0, 8).map((issue) => <li key={issue}>{issue}</li>)}</ul></Callout>}
     {issues.length === 0 && <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/[0.06]"><Preview value={draft} /></div>}
     <details className="group rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
-      <summary className="cursor-pointer text-sm font-semibold">Advanced settings <Hint className="inline">(school weekdays, exceptions, every tab)</Hint></summary>
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-semibold marker:hidden [&::-webkit-details-marker]:hidden"><span className="min-w-0 flex-1">Advanced settings <Hint className="inline">(school weekdays, exceptions, every tab)</Hint></span><Icon name="chevronDown" size={16} className="shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
       <div className="pt-3"><ScheduleEditor value={draft} onChange={setDraft} initialSection="basics" /></div>
     </details>
     <Hint>Sanity check: {weekAhead.map((date) => formatDate(date, { weekday: 'short' })).join(', ')} come next. The preview above should show the right rotation day for each.</Hint>
@@ -335,7 +344,7 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="ghost" icon="arrowLeft" onClick={() => goto(-1)} disabled={pending}>Back</Button>
       <Spacer />
-      <Button variant="primary" size="lg" busy={pending} disabled={issues.length > 0} onClick={async () => {
+      <Button variant="primary" size="lg" busy={pending} disabled={!online || issues.length > 0} onClick={async () => {
         setPending(true); setMessage('');
         try { onCreated(await api.school.create.mutate({ name: name.trim(), location: location.trim(), schedule: scheduleSchema.parse(draft) })); }
         catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
@@ -348,20 +357,24 @@ function CreateStep({ onBack, onCreated, onUseExisting, footer }: { onBack: () =
 
 type Choice = 'approved' | 'community' | 'personal';
 
-function ChoiceStep({ school, userId, onBack, onJoined, footer }: { school: School; userId: string; onBack: () => void; onJoined: () => Promise<void>; footer: ReactNode }) {
+function ChoiceStep({ school, userId, onBack, onJoined, online, notice, footer }: StepProps & { school: School; userId: string; onBack: () => void; onJoined: () => Promise<void> }) {
   const [grade, setGrade] = useState<Grade | ''>('');
   const sharedSchedule = scheduleForGrade(school.schedule, grade || undefined);
   const shared: Choice = school.approved ? 'approved' : 'community';
   const [choice, setChoice] = useState<Choice>(shared);
   const [advanced, setAdvanced] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const [custom, setCustom] = useState<Schedule>(() => structuredClone(school.schedule));
+  // Private-schedule edits are kept per grade, so changing the grade never throws them away.
+  const [drafts, setDrafts] = useState<Partial<Record<Grade | '', Schedule>>>({});
+  const base = useMemo(() => structuredClone(scheduleForGrade(school.schedule, grade || undefined)), [school.schedule, grade]);
+  const custom = drafts[grade] ?? base;
+  const setCustom = (value: Schedule) => setDrafts((current) => ({ ...current, [grade]: value }));
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
   const customIssues = useMemo(() => choice === 'personal' ? describeIssues(custom) : [], [choice, custom]);
-  const blocker = !grade ? 'Choose your grade to continue.' : customIssues.length > 0 ? 'Fix the private schedule issues above to continue.' : '';
+  const blocker = !grade ? 'Choose your grade to continue.' : customIssues.length > 0 ? 'Fix the private schedule issues above to continue.' : !online ? 'Reconnect to join.' : '';
   const join = async () => {
-    if (!grade) return;
+    if (!grade || !online) return;
     setPending(true); setMessage('');
     try {
       await api.school.join.mutate({ schoolId: school.id, choice, grade, ...(choice === 'personal' ? { personalSchedule: scheduleSchema.parse(custom) } : {}) });
@@ -369,12 +382,13 @@ function ChoiceStep({ school, userId, onBack, onJoined, footer }: { school: Scho
       await onJoined();
     } catch (err) { setMessage(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Frame step={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" footer={footer}>
+  return <Frame step={3} wide={choice === 'personal'} title="Which schedule should Quasar follow?" notice={notice} footer={footer}>
     <Field label="Your grade" htmlFor="onboarding-grade" hint="This chooses your bell schedule and lunch times. You can change it later in Account or School.">
       <Select id="onboarding-grade" required autoFocus value={grade} disabled={pending} className="h-11" onChange={(event) => {
         const next = event.target.value as Grade | '';
+        // Edits made before a grade was picked belong to the grade picked first.
+        if (grade === '' && next) setDrafts((current) => current[''] && !current[next] ? { ...current, [next]: current[''] } : current);
         setGrade(next);
-        setCustom(structuredClone(scheduleForGrade(school.schedule, next || undefined)));
       }}><option value="" disabled>Choose your grade…</option>{GRADES.map(entry => <option key={entry} value={entry}>{gradeLabel(entry)}</option>)}</Select>
     </Field>
     <Panel className="grid gap-3">

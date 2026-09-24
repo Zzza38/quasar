@@ -334,7 +334,7 @@ export function detectOverrideConflicts(previous: Schedule, current: Schedule, p
     }
     else if (!currentlyScheduled.has(periodId) && (previouslyScheduled.has(periodId) || !current.periods.some(period => period.id === periodId))) {
       const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
-      add("period-unscheduled", periodId, `${cls ? `“${cls.name}” (${newPeriod.label})` : `“${newPeriod.label}”`} is Unscheduled. The period still exists, but has no scheduled times. Your assignment and personal adjustments are still saved.`);
+      add("period-unscheduled", periodId, `${cls ? `“${cls.name}” (${newPeriod.label})` : `“${newPeriod.label}”`} has no times set. The period still exists, but is not on any day. Your assignment and personal adjustments are still saved.`);
     }
     else if (oldPeriod && !equal(oldPeriod, newPeriod)) add("period-changed", periodId, `The school changed period ${newPeriod.label}. Review your saved class assignment or override.`);
   }
