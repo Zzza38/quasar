@@ -88,8 +88,9 @@ function removedText(message: ChatMessage): string {
   return 'Message deleted';
 }
 
-/** Message text as React text nodes; only https links (full URL shown) are clickable. */
-function MessageText({ text, mine }: { text: string; mine: boolean }) {
+/** Message text as React text nodes, slurs censored at display time too (messages stored before the filter existed); only https links (full URL shown) are clickable. */
+function MessageText({ text: raw, mine }: { text: string; mine: boolean }) {
+  const text = censorSlurs(raw);
   if (!CHAT.linkify) return <>{text}</>;
   return <>{linkParts(text).map((part, index) => part.href
     ? <a key={index} href={part.href} target="_blank" rel="noopener noreferrer nofollow ugc" className={cn('underline underline-offset-2', mine ? 'text-primary-foreground decoration-primary-foreground/60' : 'text-primary decoration-primary/50')}>{part.text}</a>
@@ -215,14 +216,15 @@ function previewText(row: OpenRow): string {
   const last = row.lastMessage;
   if (!last) return 'No messages yet';
   if (last.preview === null) return last.deletedBy === 'support' ? 'Hidden by support' : 'Message deleted';
-  return last.fromMe ? `You: ${last.preview}` : last.preview;
+  const preview = censorSlurs(last.preview);
+  return last.fromMe ? `You: ${preview}` : preview;
 }
 
 function globalPreview(summary: GlobalSummary): string {
   const last = summary.lastMessage;
   if (!last) return 'Everyone on Quasar can post here';
   if (last.preview === null) return last.deletedBy === 'owner' ? 'Removed by the owner' : 'Message deleted';
-  return `${last.fromMe ? 'You' : last.senderName}: ${last.preview}`;
+  return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
 }
 
 /** The global room's row. It is always present and sits above the one-to-one chats. */
