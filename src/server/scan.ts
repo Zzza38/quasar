@@ -5,9 +5,11 @@ import { DirectoryService, type DirectoryClass } from './directory';
 import type { Service } from './service';
 
 /**
- * Schedule scanning sends a photo of a printed timetable to an OpenAI-compatible
- * vision model (OpenAI, DeepSeek, OpenRouter, Ollama, ...) and returns rows the
- * student confirms before anything is saved. The provider is chosen by env only.
+ * Schedule scanning sends one to three photos of a printed timetable (for example
+ * both halves of a wide timetable, or the front and back) to an OpenAI-compatible
+ * vision model (OpenAI, DeepSeek, OpenRouter, Ollama, ...) in a single request, and
+ * returns one merged list of rows the student confirms before anything is saved.
+ * The provider is chosen by env only. The quota counts scans, not photos.
  */
 export const SCAN_REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type ScanReasoning = typeof SCAN_REASONING[number];
@@ -23,14 +25,33 @@ export function scanConfig(env: Record<string, string | undefined> = process.env
 }
 
 export const SCAN_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+/** Per photo. Three photos stay under the tRPC route's 5,000,000 byte body limit. */
 export const MAX_SCAN_BASE64 = 1_500_000;
+export const MAX_SCAN_IMAGES = 3;
 export const SCAN_HOURLY_LIMIT = 10;
 export const SCAN_DAILY_LIMIT = 30;
-export const scanInputSchema = z.object({
+export const scanImageSchema = z.object({
   mediaType: z.enum(SCAN_MEDIA_TYPES),
   image: z.string().regex(/^[A-Za-z0-9+/]+=*$/, 'Send the photo as base64.').max(MAX_SCAN_BASE64, 'The photo is too large. Retake it or choose a smaller image.'),
 });
-export type ScanInput = z.infer<typeof scanInputSchema>;
+export type ScanImage = z.infer<typeof scanImageSchema>;
+const scanImagesSchema = z.object({
+  images: z.array(scanImageSchema).min(1, 'Add a photo of your timetable.').max(MAX_SCAN_IMAGES, 'You can add up to three photos.'),
+});
+/**
+ * Accepts { images: [...] } and the legacy single-photo shape { mediaType, image },
+ * so a browser still running an older bundle can scan. A preprocess (not a union)
+ * keeps the specific photo messages as the first issue the client sees.
+ */
+export const scanInputSchema = z.preprocess(
+  (value: z.input<typeof scanImagesSchema> | z.input<typeof scanImageSchema>) => {
+    if (!value || typeof value !== 'object' || 'images' in value || !('image' in value)) return value;
+    return { images: [{ mediaType: value.mediaType, image: value.image }] };
+  },
+  scanImagesSchema,
+);
+export type ScanInput = z.input<typeof scanInputSchema>;
+export type ScanRequest = z.output<typeof scanInputSchema>;
 
 const text = (max: number) => z.string().trim().max(max).nullish().transform(value => value?.replace(/\s+/g, ' ') || undefined);
 const rowSchema = z.object({
@@ -75,22 +96,22 @@ export class ScanService {
     const schedule = effectiveSchedule(school.schedule, personal);
     const directory = new DirectoryService(this.service).list(accountId, school.id).classes.filter(entry => !personal.grade || entry.grades.includes(personal.grade));
 
-    this.reserve(accountId, school.id);
+    this.reserve(accountId, school.id, input.images.length);
     const body = await this.request(input, schedule, directory);
-    return this.interpret(body, schedule, directory);
+    return this.interpret(body, schedule, directory, input.images.length);
   }
 
-  /** Per-account quota, recorded before the paid request so a slow model cannot be spammed. */
-  private reserve(accountId: string, schoolId: string) {
+  /** Per-account quota, one unit per scan whatever its photo count, recorded before the paid request so a slow model cannot be spammed. */
+  private reserve(accountId: string, schoolId: string, images: number) {
     this.service.db.transaction(() => {
       const count = (since: number) => (this.service.db.prepare("SELECT count(*) n FROM audit_log WHERE actor_id=? AND action='schedule.scan' AND created_at > ?").get(accountId, new Date(Date.now() - since).toISOString()) as { n: number }).n;
-      if (count(3_600_000) >= SCAN_HOURLY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_HOURLY_LIMIT} photos per hour. Try again later.` });
-      if (count(86_400_000) >= SCAN_DAILY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_DAILY_LIMIT} photos per day. Try again tomorrow.` });
-      this.service.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(accountId, 'schedule.scan', schoolId, JSON.stringify({ model: this.config!.model }), new Date().toISOString());
+      if (count(3_600_000) >= SCAN_HOURLY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_HOURLY_LIMIT} timetables per hour. Try again later.` });
+      if (count(86_400_000) >= SCAN_DAILY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_DAILY_LIMIT} timetables per day. Try again tomorrow.` });
+      this.service.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(accountId, 'schedule.scan', schoolId, JSON.stringify({ model: this.config!.model, images }), new Date().toISOString());
     })();
   }
 
-  private async request(input: ScanInput, schedule: Schedule, directory: DirectoryClass[]): Promise<string> {
+  private async request(input: ScanRequest, schedule: Schedule, directory: DirectoryClass[]): Promise<string> {
     const config = this.config!;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 90_000);
@@ -107,8 +128,9 @@ export class ScanService {
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: [
-              { type: 'text', text: userPrompt(schedule, directory) },
-              { type: 'image_url', image_url: { url: `data:${input.mediaType};base64,${input.image}`, detail: 'high' } },
+              { type: 'text', text: userPrompt(schedule, directory, input.images.length) },
+              // One part per photo, in the order the student added them.
+              ...input.images.map(photo => ({ type: 'image_url', image_url: { url: `data:${photo.mediaType};base64,${photo.image}`, detail: 'high' } })),
             ] },
           ],
         }),
@@ -132,7 +154,7 @@ export class ScanService {
   }
 
   /** Validates the model's answer against the real schedule so nothing unverified reaches the client. */
-  interpret(body: string, schedule: Schedule, directory: DirectoryClass[]): ScanResult {
+  interpret(body: string, schedule: Schedule, directory: DirectoryClass[], images = 1): ScanResult {
     const parsed = responseSchema.safeParse(parseJson(body));
     if (!parsed.success) throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service answered in an unexpected format. Try again.' });
     const periods = new Map(schedule.periods.map(period => [period.id, period]));
@@ -162,7 +184,9 @@ export class ScanService {
         days: (row.data.days ?? []).filter(Boolean),
       });
     }
-    if (rows.length === 0) notes.push('No classes were found in the photo. Try a straight-on, well-lit shot of the whole timetable.');
+    if (rows.length === 0) notes.push(images > 1
+      ? 'No classes were found in the photos. Try straight-on, well-lit shots that together show the whole timetable.'
+      : 'No classes were found in the photo. Try a straight-on, well-lit shot of the whole timetable.');
     return { rows, model: this.config?.model ?? '', notes };
   }
 }
@@ -185,9 +209,10 @@ Rules:
 - "directoryId" must be the ID of a listed directory class only when the name (and teacher or room, if printed) clearly match. Otherwise null.
 - Copy names exactly as printed. Do not invent teachers or rooms that are not visible.
 - Skip lunch, homeroom, advisory, free periods and headings unless they are clearly a class the student attends.
-- If the image is not a timetable, return {"rows": []}.`;
+- Several photos may be parts of one timetable (both halves, or front and back). Merge them into one list; a class seen in more than one photo is still one row.
+- If no photo is a timetable, return {"rows": []}.`;
 
-function userPrompt(schedule: Schedule, directory: DirectoryClass[]): string {
+function userPrompt(schedule: Schedule, directory: DirectoryClass[], images: number): string {
   const times = new Map<string, Set<string>>();
   for (const day of schedule.cycleDays) for (const slot of day.slots) {
     if (!times.has(slot.periodId)) times.set(slot.periodId, new Set());
@@ -198,5 +223,7 @@ function userPrompt(schedule: Schedule, directory: DirectoryClass[]): string {
     ? directory.map(entry => `- id "${entry.id}": ${entry.name}${entry.teacher ? `, teacher ${entry.teacher}` : ''}${entry.room ? `, room ${entry.room}` : ''}`).join('\n')
     : '(none listed)';
   const days = schedule.cycleDays.map(day => day.label).join(', ');
-  return `School periods (use these IDs for "periodIds"):\n${periods}\n\nRotation days: ${days || 'single schedule'}\n\nSchool class directory (use these IDs for "directoryId"):\n${classes}\n\nRead the attached timetable photo and return the JSON.`;
+  return `School periods (use these IDs for "periodIds"):\n${periods}\n\nRotation days: ${days || 'single schedule'}\n\nSchool class directory (use these IDs for "directoryId"):\n${classes}\n\n${images > 1
+    ? `Read the ${images} attached photos. They may be parts of one timetable, for example both halves of a wide timetable or its front and back, so merge them into one list of classes: list each class once with every period and day it has across all photos. Return the JSON.`
+    : 'Read the attached timetable photo and return the JSON.'}`;
 }

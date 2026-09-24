@@ -10,7 +10,7 @@ import { exampleSchedule } from '../../src/domain/example';
 /** Stands in for any OpenAI-compatible vision provider; the config points SCAN_API_URL here. */
 const MOCK_PORT = Number(new URL(process.env.SCAN_API_URL ?? 'http://127.0.0.1:3199/v1').port);
 let mock: Server;
-const requests: Array<{ model: string; image: string; prompt: string }> = [];
+const requests: Array<{ model: string; images: string[]; prompt: string }> = [];
 let directoryId = '';
 
 test.beforeAll(async () => {
@@ -20,7 +20,8 @@ test.beforeAll(async () => {
     req.on('end', () => {
       const body = JSON.parse(raw);
       const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
-      requests.push({ model: body.model, image: parts[1].image_url!.url, prompt: parts[0].text! });
+      // Record every photo part so the test can check a multi-photo scan arrives as one request.
+      requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
       const rows = [
         { className: 'Algebra II', periodIds: ['A', 'C'], directoryId, days: ['Day 1', 'Day 3'] },
         { className: 'World History', teacher: 'Mr. Adeyemi', room: '118', periodLabel: 'B' },
@@ -54,7 +55,7 @@ async function authenticate(context: BrowserContext, id: string) {
 }
 
 
-test('scans a timetable photo, lets the student review it, and places the classes', async ({ page, context }, testInfo) => {
+test('scans a two-photo timetable, lets the student review it, and places the classes', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/#classes');
   // A real PNG for the browser's image decoder: a screenshot of the page itself.
@@ -63,15 +64,36 @@ test('scans a timetable photo, lets the student review it, and places the classe
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Scan your timetable' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Read schedule' })).toBeDisabled();
-  await dialog.getByLabel('Choose a timetable photo').setInputFiles({ name: 'timetable.png', mimeType: 'image/png', buffer: PNG });
-  await expect(dialog.getByRole('img', { name: 'Your timetable photo' })).toBeVisible();
+  await expect(dialog.getByText('Take up to three photos of a printed or on-screen schedule')).toBeVisible();
+  const input = dialog.getByLabel('Choose a timetable photo');
+  const file = (name: string) => ({ name, mimeType: 'image/png', buffer: PNG });
+  // Both halves of a wide timetable in one pick.
+  await input.setInputFiles([file('left-half.png'), file('right-half.png')]);
+  const thumbnails = dialog.getByRole('img', { name: /^Your timetable photo/ });
+  await expect(thumbnails).toHaveCount(2);
+  await expect(dialog.getByRole('img', { name: 'Your timetable photo', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('img', { name: 'Your timetable photo 2', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Add another photo' })).toBeVisible();
+
+  // Picking more than fit keeps the first one that fits and says why.
+  await input.setInputFiles([file('back.png'), file('extra.png')]);
+  await expect(thumbnails).toHaveCount(3);
+  await expect(dialog.getByText('You can add up to three photos.')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Add another photo' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Remove photo 3' }).click();
+  await expect(thumbnails).toHaveCount(2);
+  await expect(dialog.getByText('You can add up to three photos.')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Remove photo 1' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Remove photo 2' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Read schedule' }).click();
 
   await expect(dialog.getByText('3 classes were found.')).toBeVisible();
   expect(requests).toHaveLength(1);
   expect(requests[0].model).toBe('mock-vision');
-  expect(requests[0].image).toMatch(/^data:image\/jpeg;base64,/);
+  expect(requests[0].images).toHaveLength(2);
+  for (const url of requests[0].images) expect(url).toMatch(/^data:image\/jpeg;base64,/);
   expect(requests[0].prompt).toContain(directoryId);
+  expect(requests[0].prompt).toContain('merge them into one list of classes');
   const rows = dialog.getByRole('list', { name: 'Classes read from the photo' }).getByRole('listitem');
   await expect(rows.nth(0).getByLabel('Class')).toHaveValue('Algebra II');
   await expect(rows.nth(0).getByLabel('Teacher')).toHaveValue('Ms. Ortiz');

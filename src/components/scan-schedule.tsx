@@ -4,17 +4,20 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
 import { slugId } from '@/lib/format';
-import { Button, Callout, Chip, Field, Hint, Input, Modal, Spacer } from './primitives';
+import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Spacer } from './primitives';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Toggle } from './ui/toggle';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 type Draft = ScanRow & { include: boolean };
+type Photo = { image: string; mediaType: 'image/jpeg'; preview: string };
 const MAX_EDGE = 1600;
+/** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
+const MAX_PHOTOS = 3;
 
 /** Downscales the photo in the browser so uploads stay small and the model gets a clean JPEG. */
-export async function prepareImage(file: File): Promise<{ image: string; mediaType: 'image/jpeg'; preview: string }> {
+export async function prepareImage(file: File): Promise<Photo> {
   const bitmap = await createImageBitmap(file).catch(() => { throw new Error('That file is not an image the browser can read.'); });
   try {
     const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
@@ -55,23 +58,33 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
   open: boolean; onClose: () => void; accountId: string; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [payload, setPayload] = useState<{ image: string; mediaType: 'image/jpeg' } | null>(null);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [limited, setLimited] = useState(false);
   const [rows, setRows] = useState<Draft[] | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (!open) { setPreview(null); setPayload(null); setRows(null); setNotes([]); setError(''); } }, [open]);
+  useEffect(() => { if (!open) { setPhotos([]); setLimited(false); setRows(null); setNotes([]); setError(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (!file) return;
-    void run(async () => { const prepared = await prepareImage(file); setPreview(prepared.preview); setPayload(prepared); setRows(null); setNotes([]); });
+    if (files.length === 0) return;
+    const accepted = files.slice(0, Math.max(0, MAX_PHOTOS - photos.length));
+    setLimited(accepted.length < files.length);
+    if (accepted.length === 0) return;
+    void run(async () => {
+      const prepared: Photo[] = [];
+      try { for (const file of accepted) prepared.push(await prepareImage(file)); } finally {
+        // Keep whatever was readable; a new set of photos needs a fresh read, so any earlier result is dropped.
+        if (prepared.length) { setPhotos(current => [...current, ...prepared].slice(0, MAX_PHOTOS)); setRows(null); setNotes([]); }
+      }
+    });
   };
+  const remove = (index: number) => { setPhotos(current => current.filter((_, i) => i !== index)); setLimited(false); setRows(null); setNotes([]); setError(''); };
   const scan = () => run(async () => {
-    if (!payload) return;
-    const result = await api.scan.schedule.mutate({ accountId, ...payload });
+    if (photos.length === 0) return;
+    const result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })) });
     setRows(result.rows.map(row => ({ ...row, include: true })));
     setNotes(result.notes);
   });
@@ -80,23 +93,30 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
   const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
   const replaced = (row: Draft) => row.periodIds.flatMap(periodId => { const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]); return cls && cls.name.trim().toLowerCase() !== row.name.trim().toLowerCase() ? [`${cls.name} on ${label(periodId)}`] : []; });
 
-  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
+  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Scan your timetable" description="Take up to three photos of a printed or on-screen schedule, for example both halves of a wide timetable. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
       {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || ready.length === 0} onClick={() => void run(async () => { await onSave(applyScan(personal, rows)); onClose(); })}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
-        : <Button variant="primary" icon="sparkle" busy={pending} disabled={!payload} onClick={() => void scan()}>Read schedule</Button>}</>}>
-    <input ref={fileRef} type="file" accept="image/*" capture="environment" className="sr-only" aria-label="Choose a timetable photo" onChange={choose} />
+        : <Button variant="primary" icon="sparkle" busy={pending} disabled={photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
+    <input ref={fileRef} type="file" accept="image/*" capture="environment" className="sr-only" multiple aria-label="Choose a timetable photo" onChange={choose} />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
     <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
       <div className="grid content-start gap-2">
-        {preview
-          ? <img src={preview} alt="Your timetable photo" className="w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]" />
-          : <div className="grid aspect-[3/4] place-items-center rounded-2xl border border-dashed border-foreground/15 bg-muted/50 p-4 text-center text-xs text-muted-foreground">Straight-on, well lit, whole timetable in frame.</div>}
-        <Button icon="camera" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>{preview ? 'Choose another photo' : 'Take or choose a photo'}</Button>
-        <Hint>The photo is sent to the scanning service once and is not stored.</Hint>
+        {photos.length > 0
+          ? <ul className={photos.length === 1 ? 'grid gap-2' : 'grid grid-cols-2 gap-2'} aria-label="Timetable photos">
+            {photos.map((photo, index) => <li key={index} className="relative">
+              <img src={photo.preview} alt={index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
+                className={photos.length === 1 ? 'w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]' : 'aspect-[3/4] w-full rounded-xl bg-muted object-cover ring-1 ring-foreground/[0.06]'} />
+              <IconButton label={`Remove photo ${index + 1}`} icon="x" size="sm" variant="secondary" disabled={pending} className="absolute right-1.5 top-1.5 rounded-full" onClick={() => remove(index)} />
+            </li>)}
+          </ul>
+          : <div className="grid aspect-[3/4] place-items-center rounded-2xl border border-dashed border-foreground/15 bg-muted/50 p-4 text-center text-xs text-muted-foreground">Straight-on, well lit, whole timetable in frame. A wide timetable can take up to three photos.</div>}
+        {limited && <Callout tone="warning" icon="alert" role="status">You can add up to three photos.</Callout>}
+        {photos.length < MAX_PHOTOS && <Button icon="camera" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>{photos.length === 0 ? 'Take or choose a photo' : 'Add another photo'}</Button>}
+        <Hint>Photos are sent to the scanning service once and are not stored.</Hint>
       </div>
       <div className="grid content-start gap-3">
-        {!rows && <Hint>{payload ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
+        {!rows && <Hint>{photos.length > 0 ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
         {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
         {rows && rows.length > 0 && <>
           <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread, pick every period each class meets in, and untick what you do not take.</Hint>
