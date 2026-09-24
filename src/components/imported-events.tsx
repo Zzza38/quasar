@@ -49,7 +49,7 @@ export function ImportedEvents({ state, date }: { state: AppState; date: string 
       const source = item.task.imported!;
       const feed = state.context.subscriptions?.find((entry) => entry.id === source.subscriptionId);
       return <li key={item.id} className={cn('flex items-start gap-3 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]', item.task.completed && 'opacity-60')}>
-        <Checkbox className="mt-0.5 size-[22px] rounded-full border-2 border-input shadow-none [&_svg]:size-3.5" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onCheckedChange={(checked) => {
+        <Checkbox className="mt-0.5 size-[22px] rounded-full border-2 border-control-border shadow-none [&_svg]:size-3.5" checked={item.task.completed} disabled={pending.includes(item.id)} aria-label={`${item.task.completed ? 'Mark incomplete' : 'Complete'}: ${item.task.title}`} onCheckedChange={(checked) => {
           const completed = checked === true;
           setError(''); setPending((value) => [...value, item.id]);
           void state.saveTask(item.id, { ...item.task, completed }).catch((err) => setError(errorMessage(err))).finally(() => setPending((value) => value.filter((id) => id !== item.id)));

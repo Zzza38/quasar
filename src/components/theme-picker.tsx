@@ -16,8 +16,8 @@ export function ThemePicker() {
       ]} />
     </div>
     <div className="grid gap-1.5">
-      <Label className="text-[13px] font-semibold text-foreground/80">Accent colour</Label>
-      <div className="flex flex-wrap gap-2.5" role="radiogroup" aria-label="Accent colour">
+      <Label className="text-[13px] font-semibold text-foreground/80">Accent color</Label>
+      <div className="flex flex-wrap gap-2.5" role="radiogroup" aria-label="Accent color">
         {ACCENTS.map((accent) => {
           const selected = theme.accent === accent.id;
           return <button key={accent.id} type="button" role="radio" aria-checked={selected} aria-label={accent.label} title={accent.label} style={{ background: accent.swatch }} onClick={() => theme.setAccent(accent.id)}

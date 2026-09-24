@@ -528,7 +528,7 @@ test('edits one high-school grade and copies its schedule to other grades', asyn
   await grades.getByRole('radio', { name: 'Grade 11', exact: true }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
-  await grades.getByRole('radio', { name: 'Grade 9 *', exact: true }).click();
+  await grades.getByRole('radio', { name: 'Grade 9 (edited)', exact: true }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
   await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
@@ -691,12 +691,14 @@ test.describe('class color bar', () => {
     const picker = page.getByRole('dialog', { name: 'Color for Spanish 2H' });
     const card = page.getByRole('listitem').filter({ has: bar });
     const surface = card.locator('[data-slot="class-color-expansion"]');
+    // The colored top strip is the mouse hover shortcut; the palette button is the visible trigger.
+    const strip = card.locator('[data-slot="class-color-strip"]');
     await expect(surface).toHaveCSS('visibility', 'hidden');
     await card.screenshot({ path: testInfo.outputPath('color-edge-idle.png') });
     const before = (await card.boundingBox())!;
     // Slow the actual CSS transition so the intermediate state is observable.
     await page.addStyleTag({ content: '[data-slot="class-color-expansion"] { transition-duration: 1s; }' });
-    await bar.hover();
+    await strip.hover();
     await expect(picker).toBeVisible();
     const controls = card.locator('[data-slot="class-color-controls"]');
     await expect(controls).toHaveCSS('visibility', 'hidden');
@@ -719,7 +721,7 @@ test.describe('class color bar', () => {
     await expect(controls).toHaveCSS('visibility', 'hidden');
     await expect(surface).toHaveCSS('visibility', 'hidden');
     await card.screenshot({ path: testInfo.outputPath('color-edge-collapsed.png') });
-    await bar.hover();
+    await strip.hover();
     await expect(controls).toHaveCSS('visibility', 'visible');
     await spectrum.click({ position: { x: 70, y: 35 } });
     const selected = await hex.inputValue();
@@ -728,7 +730,7 @@ test.describe('class color bar', () => {
     const beforeHue = await hex.inputValue();
     await picker.getByRole('slider', { name: 'Hue' }).press('Shift+ArrowRight');
     await expect(hex).not.toHaveValue(beforeHue);
-    await picker.getByRole('button', { name: 'Use #be185d' }).click();
+    await picker.getByRole('button', { name: 'Use Pink' }).click();
     await picker.getByRole('button', { name: 'Save color' }).click();
     await expect(picker).toBeHidden();
     await expect(card).toHaveCSS('border-top-color', 'rgb(190, 24, 93)');
@@ -872,14 +874,14 @@ test('school directory selection, personal edits, shared edits and period placem
   await expect(saved(page)).toBeVisible();
   await page.getByRole('button', { name: 'Browse school classes' }).click();
   await expect(dialog(page).getByRole('checkbox', { name: 'Select Directory Biology' })).toBeDisabled();
-  await expect(dialog(page).getByText('Dr Example · Room 204')).toBeVisible();
+  await expect(dialog(page).getByText('Room 204 · Dr Example')).toBeVisible();
   await dialog(page).getByRole('button', { name: 'Edit shared' }).click();
   await dialog(page).getByLabel('Room', { exact: true }).fill('305');
   await dialog(page).getByRole('button', { name: 'Save shared class' }).click();
   await expect(dialog(page).getByText('Shared class saved.')).toBeVisible();
   await dialog(page).getByRole('button', { name: 'Done', exact: true }).click();
   await page.reload();
-  await expect(page.getByText('Room My room · Dr Example', { exact: true })).toBeVisible();
+  await expect(page.getByText('My room · Dr Example', { exact: true })).toBeVisible();
   const check = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(check, 'browser-owner@example.com');

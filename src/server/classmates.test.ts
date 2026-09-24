@@ -31,20 +31,21 @@ describe('classmates on the timetable', () => {
     const summary = community.summary(me);
     expect(summary.classmates).toEqual([{ id: evan, displayName: 'Evan', classes: [{ periodId: 'A', name: 'pre-ap computer science' }, { periodId: 'B', name: 'biology' }] }]);
     const cs = { id: 'x', name: 'Pre-AP Computer Science ' };
-    expect(classmatesFor({ community: summary }, { periodId: 'A', class: cs })).toEqual(['Evan']);
+    expect(classmatesFor({ community: summary }, { periodId: 'A', class: cs })).toEqual([{ id: evan, displayName: 'Evan' }]);
     // Same class name in a different period is not a shared class.
     expect(classmatesFor({ community: summary }, { periodId: 'B', class: cs })).toEqual([]);
     expect(classmatesFor({ community: summary }, { periodId: 'A', class: { id: 'y', name: 'Chemistry' } })).toEqual([]);
     expect(classmatesFor({ community: summary }, { periodId: 'A' })).toEqual([]);
     community.respond(maya, me, true);
     // Maya takes the same class but in period B, so only Evan shares period A with me.
-    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'A', class: cs })).toEqual(['Evan']);
-    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: cs })).toEqual(['Maya']);
+    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'A', class: cs })).toEqual([{ id: evan, displayName: 'Evan' }]);
+    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: cs })).toEqual([{ id: maya, displayName: 'Maya' }]);
   });
   it('phrases the label naturally', () => {
     expect(withLabel([])).toBeNull();
     expect(withLabel(['Evan'])).toBe('With Evan');
     expect(withLabel(['Evan', 'Maya'])).toBe('With Evan and Maya');
     expect(withLabel(['Evan', 'Maya', 'Sam', 'Lee'])).toBe('With Evan, Maya and 2 more');
+    expect(withLabel([{ displayName: 'Evan' }, { displayName: 'Maya' }])).toBe('With Evan and Maya');
   });
 });

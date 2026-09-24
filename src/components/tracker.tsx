@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/client/api';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
 import { VIEWS, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
-import { Onboarding } from './onboarding';
+import { Onboarding, SignOutButton } from './onboarding';
 import { ClassesStep } from './onboarding-classes';
 import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
@@ -26,26 +26,51 @@ import { GradePicker } from './grade-picker';
 
 /* ---------- Hash routing keeps the public offline shell at "/" ---------- */
 
-function parseHash(hash: string): { view: View; params: URLSearchParams } {
+function splitHash(hash: string): [name: string, query: string] {
   const [name, query = ''] = hash.replace(/^#\/?/, '').split('?');
+  return [name, query];
+}
+
+function parseHash(hash: string): { view: View; params: URLSearchParams } {
+  const [name, query] = splitHash(hash);
   const view = VIEWS.find((entry) => entry.id === name)?.id ?? 'today';
   return { view, params: new URLSearchParams(query) };
 }
 
 function useHashRoute() {
   const [route, setRoute] = useState(() => parseHash(typeof window === 'undefined' ? '' : window.location.hash));
+  const shownView = useRef(route.view);
   useEffect(() => {
-    const update = () => setRoute(parseHash(window.location.hash));
+    const update = () => {
+      // In-page anchors (#main, #conflicts) are not routes: only an empty hash or a known view changes the screen.
+      const [name] = splitHash(window.location.hash);
+      if (name && !VIEWS.some((entry) => entry.id === name)) return;
+      setRoute(parseHash(window.location.hash));
+    };
     update();
     window.addEventListener('hashchange', update);
     return () => window.removeEventListener('hashchange', update);
   }, []);
-  const navigate = useCallback((view: View, params?: Record<string, string>) => {
+  // Every way of changing view (tab bar, sidebar, links, back/forward, navigate) opens the new view at the top.
+  // Scrolling after it renders avoids clamping to the old page's height; param-only changes keep their position.
+  useLayoutEffect(() => {
+    if (shownView.current === route.view) return;
+    shownView.current = route.view;
+    window.scrollTo({ top: 0 });
+  }, [route.view]);
+  const navigate = useCallback((view: View, params?: Record<string, string>, options?: { replace?: boolean }) => {
     const query = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : '';
     const next = `#${view}${query}`;
+    if (options?.replace) {
+      // Stripping a one-shot param must not leave it in history, or Back would re-trigger it.
+      // replaceState fires no hashchange, so the route is set directly.
+      window.history.replaceState(null, '', next);
+      setRoute(parseHash(next));
+      return;
+    }
     if (window.location.hash === next) setRoute(parseHash(next));
     else window.location.hash = next;
-    window.scrollTo({ top: 0 });
+    if (view === shownView.current) window.scrollTo({ top: 0 });
   }, []);
   return { ...route, navigate };
 }
@@ -99,12 +124,12 @@ export function Tracker() {
     return <ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
       onSave={(value) => session.save('personal', 'personal', personalScheduleSchema.parse(value))}
       onDone={() => { classesStep.finish(context.user.id); feedStep.begin(context.user.id); setSetupClasses(false); setSetupFeed(true); }}
-      footer={<Button variant="ghost" size="sm" icon="logout" onClick={session.requestLogout} disabled={session.logout.pending || !session.online}>Sign out ({context.user.email})</Button>} />;
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />;
   }
   if (setupFeed) {
     return <FeedStep userId={context.user.id} online={session.online} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
       onDone={() => { feedStep.finish(context.user.id); setSetupFeed(false); }}
-      footer={<Button variant="ghost" size="sm" icon="logout" onClick={session.requestLogout} disabled={session.logout.pending || !session.online}>Sign out ({context.user.email})</Button>} />;
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />;
   }
   const state: AppState = {
     context: { ...context, school },
@@ -129,7 +154,7 @@ export function Tracker() {
       <p className="min-w-0 flex-1 basis-[220px] text-sm font-medium">Choose your grade to see the right school schedule and lunch times.</p>
       <div className="min-w-[220px]"><GradePicker personal={personal} save={state.savePersonal} /></div>
     </div>}
-    <div className="grid gap-4 mb-4 empty:hidden" id="conflicts">
+    <div className="mb-4 grid gap-4 outline-none empty:hidden" id="conflicts">
       {!parsedPersonal.success && <Callout tone="danger" icon="alert" role="alert" title="Your saved personal schedule needs review" actions={<Button size="sm" onClick={() => void session.synchronize()} disabled={!session.online}>Retry sync</Button>}>It could not be read on this device. Retry sync before making more changes so nothing is overwritten.</Callout>}
       <DeviceConflicts snapshot={snapshot} schedule={schedule} classes={personal.classes} resolve={session.resolve} />
       {context.review && <SchoolReview key={context.review.version} review={context.review} personal={personal} online={session.online} today={state.today}

@@ -118,14 +118,14 @@ describe('timetable scanning', () => {
     const prose = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'I cannot help with that.' } }] }))));
     await expect(prose.scan.scan(prose.student, image)).rejects.toThrow('unexpected format');
     const failing = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('quota', { status: 402 })));
-    await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('HTTP 402');
+    await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('having trouble');
     const offline = fixture(vi.fn<ScanFetch>().mockRejectedValue(new TypeError('fetch failed')));
     await expect(offline.scan.scan(offline.student, image)).rejects.toThrow('Could not reach');
   });
 
   it('rate limits each account and counts attempts even when the model fails', async () => {
     const f = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('boom', { status: 500 })));
-    for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await expect(f.scan.scan(f.student, image)).rejects.toThrow('HTTP 500');
+    for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await expect(f.scan.scan(f.student, image)).rejects.toThrow('having trouble');
     await expect(f.scan.scan(f.student, image)).rejects.toThrow('per hour');
     expect(f.fetcher).toHaveBeenCalledTimes(SCAN_HOURLY_LIMIT);
   });

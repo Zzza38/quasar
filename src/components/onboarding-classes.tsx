@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
-import { classColor, slugId } from '@/lib/format';
+import { classColor, formatRoom, slugId } from '@/lib/format';
 import { Frame, STEP_CLASSES } from './onboarding';
 import { Icon } from './icon';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Panel, Spacer } from './primitives';
@@ -85,7 +85,7 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
         return <li key={cls.id} className="grid gap-2 rounded-2xl bg-card p-3 ring-1 ring-foreground/[0.06]">
           <div className="flex flex-wrap items-center gap-3">
             <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl text-[14px] font-extrabold text-white" style={{ background: `linear-gradient(135deg, ${color.dot}, color-mix(in srgb, ${color.dot} 75%, #0b1020))` }}>{cls.name.trim().slice(0, 1).toUpperCase()}</span>
-            <div className="min-w-0 flex-1"><strong className="block truncate text-[15px] font-bold">{cls.name}</strong><Hint>{[cls.teacher, cls.room && `Room ${cls.room}`].filter(Boolean).join(' · ') || 'No room or teacher yet'}</Hint></div>
+            <div className="min-w-0 flex-1"><strong className="block truncate text-[15px] font-bold">{cls.name}</strong><Hint>{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ') || 'No room or teacher yet'}</Hint></div>
             {mine.length === 0 ? <Chip tone="warning" icon="alert">Tap its periods</Chip> : <Chip tone="success" icon="check">{mine.length === 1 ? mine[0].label : `${mine.length} periods`}</Chip>}
             <IconButton size="sm" icon="trash" label={`Remove ${cls.name}`} disabled={pending || disabled} onClick={() => void run({ ...personal, classes: personal.classes.filter((entry) => entry.id !== cls.id), assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([, classId]) => classId !== cls.id)) })} />
           </div>

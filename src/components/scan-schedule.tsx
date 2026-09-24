@@ -80,7 +80,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
   const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
   const replaced = (row: Draft) => row.periodIds.flatMap(periodId => { const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]); return cls && cls.name.trim().toLowerCase() !== row.name.trim().toLowerCase() ? [`${cls.name} on ${label(periodId)}`] : []; });
 
-  return <Modal open={open} onClose={onClose} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
+  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Scan your timetable" description="Take a photo of a printed or on-screen schedule. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
       {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || ready.length === 0} onClick={() => void run(async () => { await onSave(applyScan(personal, rows)); onClose(); })}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
         : <Button variant="primary" icon="sparkle" busy={pending} disabled={!payload} onClick={() => void scan()}>Read schedule</Button>}</>}>

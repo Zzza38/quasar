@@ -1,7 +1,7 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "quasar-public-shell-v4";
-const SHELL_PATHS = new Set(["/", "/admin"]);
+const CACHE = "quasar-public-shell-v5";
+const SHELL_PATHS = new Set(["/", "/admin", "/help"]);
 
 function publicShell(response, expectedPath) {
   if (!response.ok || response.redirected) return false;

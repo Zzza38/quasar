@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { api, errorMessage, isUnauthorized } from '@/client/api';
+import { Icon } from './icon';
 import { Brand } from './shell';
 import { AppearanceToggle } from './theme-picker';
 import { Button, Callout, Hint, Textarea } from './primitives';
@@ -10,7 +11,7 @@ import { Card, CardContent } from './ui/card';
 const FAQ: ReadonlyArray<{ q: string; a: string }> = [
   { q: 'My school is not in the list. What do I do?', a: 'Tap “Add a school” on the school step. You will enter the periods, the bell times for a normal day, and how the rotation works, one question at a time. Have the school’s published bell schedule in front of you; it takes about ten minutes. Everyone from your school who joins after you gets it instantly.' },
   { q: 'Which rotation day is it? I do not know what to pick.', a: 'Quasar only needs one date you are sure about, such as “Tuesday the 22nd is Day 3”. It counts forward and backward from there, skipping weekends and days off. If you are not sure, ask a friend or check the school calendar. You can correct it later from the School page, and every schoolmate’s app updates.' },
-  { q: 'A bell time is wrong. How do I fix it?', a: 'On Today, tap “Wrong time?” next to the day’s timeline, or open the School page and choose “Edit shared schedule”. Your fix reaches everyone at your school. If editing is locked, use “Request a correction” on the same page instead.' },
+  { q: 'A bell time is wrong. How do I fix it?', a: 'On Today, tap “Wrong time?” next to the day’s timeline, or open the School page and choose “Edit shared schedule”. Your fix reaches everyone at your school. If editing is locked, choose “Propose a change” on the same page and verified schoolmates vote on it. To reach support directly, use “Request a correction”.' },
   { q: 'What is the difference between the school schedule and a private one?', a: 'The school schedule is shared: when a schoolmate fixes a bell time or adds a day off, you get it automatically. A private schedule is a copy only you can see and edit. Most people should use the school schedule and add personal adjustments from the Classes page.' },
   { q: 'How do I add my classes?', a: 'Open Classes. Type a class in, pick from what schoolmates already added, or scan a photo of your printed timetable. Then drag each class onto the period it meets in, or tap a period in the list. Once a class has a period, Today shows it with a countdown.' },
   { q: 'Today shows “No class assigned” for a period.', a: 'That period has no class on it yet. Open Classes and drag the right class onto that period. Periods you do not have, like a free block, can stay empty.' },
@@ -19,7 +20,7 @@ const FAQ: ReadonlyArray<{ q: string; a: string }> = [
   { q: 'Does it work without internet?', a: 'Yes, once you have opened Quasar online on this device. Tasks and adjustments you make offline are saved and upload themselves when you reconnect. Choosing a school and editing the shared schedule need a connection.' },
   { q: 'How do I put it on my home screen?', a: 'iPhone: open Quasar in Safari, tap the Share button, then “Add to Home Screen”. Android: open the Chrome menu and tap “Add to Home screen” or “Install app”. Laptop: click the install icon at the right end of the address bar.' },
   { q: 'Reminders are not arriving.', a: 'Open Account from your avatar and check that “Task reminders” is on for this browser. On iPhone, reminders only work from the home-screen version of Quasar. Reminders are sent only for tasks that have a due date and a reminder set.' },
-  { q: 'Who can see my name?', a: 'Your display name is visible to people at your school. Your full name is only shown to schoolmates that support has verified. Nothing is sold and there are no ads or trackers.' },
+  { q: 'Who can see my name?', a: 'Your display name is visible to people at your school. Your full name is shown only when you and the person viewing are both verified. Nothing is sold and there are no ads or trackers.' },
   { q: 'How do I sign out or delete my data?', a: 'Open Account from your avatar and choose “Sign out”. Signing out removes your data from this device. To delete your account entirely, send a message below.' },
 ];
 
@@ -37,14 +38,17 @@ export function Help() {
   return <main className="welcome-bg min-h-dvh px-3 py-6 sm:px-4 sm:py-10">
     <div className="mx-auto grid w-full max-w-[760px] gap-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <a href="/" className="no-underline hover:no-underline"><Brand /></a>
-        <div className="flex items-center gap-2"><AppearanceToggle /><a href="/" className="text-sm font-semibold text-primary hover:underline">Back to Quasar</a></div>
+        <Brand href="/" />
+        <div className="flex items-center gap-2"><AppearanceToggle /><a href="/" className="text-sm font-semibold text-primary hover:underline" onClick={(event) => {
+          // Help opens in the same tab from Account; going back keeps the view the student came from.
+          if (window.history.length > 1 && document.referrer.startsWith(window.location.origin)) { event.preventDefault(); window.history.back(); }
+        }}>Back to Quasar</a></div>
       </header>
       <Card className="rounded-3xl shadow-float"><CardContent className="grid gap-5 sm:px-8">
         <div className="grid gap-1.5"><h1 className="text-[28px]">Help</h1><p className="text-sm text-muted-foreground">Short answers to the questions people ask most. If yours is not here, send a message at the bottom.</p></div>
         <div className="grid gap-2">
           {FAQ.map((entry) => <details key={entry.q} className="group rounded-2xl bg-muted/60 ring-1 ring-inset ring-foreground/[0.04] open:bg-card open:ring-primary/30">
-            <summary className="cursor-pointer list-none px-4 py-3 text-[15px] font-bold marker:hidden [&::-webkit-details-marker]:hidden">{entry.q}</summary>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[15px] font-bold marker:hidden [&::-webkit-details-marker]:hidden"><span>{entry.q}</span><Icon name="chevronDown" size={16} className="shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
             <p className="px-4 pb-4 text-sm leading-relaxed text-muted-foreground">{entry.a}</p>
           </details>)}
         </div>

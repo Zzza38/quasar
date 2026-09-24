@@ -98,11 +98,36 @@ const PALETTE = [
 ];
 export function classColor(id: string | undefined, kind: 'class' | 'lunch' | 'other' = 'class', color?: string): { dot: string; soft: string } {
   if (color && /^#[0-9a-fA-F]{6}$/.test(color)) return { dot: color, soft: `color-mix(in srgb, ${color} 14%, transparent)` };
-  if (kind === 'lunch') return { dot: '#a16207', soft: 'rgb(161 98 7 / .12)' };
+  // Neutral stone, outside PALETTE, so lunch never matches the amber and orange classes beside it.
+  if (kind === 'lunch') return { dot: '#78716c', soft: 'rgb(120 113 108 / .14)' };
   if (!id) return { dot: 'var(--muted-foreground)', soft: 'var(--secondary)' };
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return PALETTE[hash % PALETTE.length];
+}
+
+const ROOM_WORD = /^(room|rm\.?)\s/i;
+const ROOM_CODE = /^[A-Z]{0,2}[-\s]?\d+(?:[-.]\d+)?[A-Z]?$/i;
+/**
+ * "Room 204" for bare numbers and codes (204, B12, 204A, S-110); anything that already names the
+ * room ("Lab 3", "Art Room", "Gym", "Room 12") is shown as typed.
+ */
+export function formatRoom(room: string): string {
+  const value = room.trim();
+  if (!value || ROOM_WORD.test(value)) return value;
+  return ROOM_CODE.test(value) ? `Room ${value}` : value;
+}
+
+/** "Eastern Time" for "America/New_York"; the ID itself if the runtime cannot name the zone. */
+export function formatTimeZone(id: string): string {
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: id, timeZoneName: 'longGeneric' })
+      .formatToParts(new Date())
+      .find((part) => part.type === 'timeZoneName')?.value;
+    return name || id;
+  } catch {
+    return id;
+  }
 }
 
 const ID_PATTERN = /[^A-Za-z0-9_-]+/g;

@@ -12,6 +12,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  // cover lets env(safe-area-inset-*) report real values on notched phones; resizes-content
+  // shrinks the layout (and dvh) above the Android keyboard so bottom sheets stay reachable.
+  viewportFit: 'cover',
+  interactiveWidget: 'resizes-content',
   themeColor: [{ media: '(prefers-color-scheme: light)', color: '#f5f6fa' }, { media: '(prefers-color-scheme: dark)', color: '#0b0d12' }],
 };
 

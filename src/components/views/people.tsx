@@ -1,13 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
-import { gradeLabel, resolveDay, scheduleForGrade } from '@/domain/schedule';
-import { classColor, formatDate, formatRange, pluralize } from '@/lib/format';
+import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { addDays, classColor, formatDate, formatRange, formatRoom, pluralize, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
-import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
+import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
+import { Skeleton } from '../ui/skeleton';
 import { Timeline } from './today';
 
 type Member = RouterOutput['community']['members']['members'][number];
@@ -20,16 +21,24 @@ function MemberAvatar({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' 
 }
 
 function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: string) => void; children?: React.ReactNode }) {
-  return <li className="flex flex-wrap items-center gap-3 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
-    <button type="button" className="flex min-w-0 flex-1 basis-[200px] items-center gap-3 text-left" onClick={() => onOpen(member.id)} aria-label={`Open ${member.displayName}’s profile`}>
+  const detailId = useId();
+  const detail = [member.fullName, member.grade ? gradeLabel(member.grade) : null, member.friendState === 'friends' ? 'Friend' : member.friendState === 'requested' ? 'Request sent' : member.friendState === 'incoming' ? 'Wants to be friends' : null].filter(Boolean).join(' · ') || 'Member';
+  // The short label keeps the button name stable; the details (verified, full name, grade, friend state) are its description.
+  return <li className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+    <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(member.id)} aria-label={`Open ${member.displayName}’s profile`} aria-describedby={detailId}>
       <MemberAvatar name={member.displayName} />
       <span className="grid min-w-0">
-        <strong className="flex items-center gap-1.5 truncate text-sm font-bold">{member.displayName}{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" aria-label="Verified member" />}</strong>
-        <Hint className="truncate">{[member.fullName, member.grade ? gradeLabel(member.grade) : null, member.friendState === 'friends' ? 'Friend' : member.friendState === 'requested' ? 'Request sent' : member.friendState === 'incoming' ? 'Wants to be friends' : null].filter(Boolean).join(' · ') || 'Member'}</Hint>
+        <strong className="flex min-w-0 items-center gap-1.5 text-sm font-bold"><span className="truncate">{member.displayName}</span>{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong>
+        <Hint className="truncate"><span id={detailId}>{member.verified && <span className="sr-only">Verified · </span>}{detail}</span></Hint>
       </span>
     </button>
-    {children}
+    {children && <div className="flex shrink-0 items-center gap-1.5">{children}</div>}
   </li>;
+}
+
+/** Placeholder rows while a list loads. */
+function LoadingRows({ count = 2 }: { count?: number }) {
+  return <div role="status" aria-label="Loading" className="grid gap-2">{Array.from({ length: count }, (_, index) => <Skeleton key={index} className="h-16 rounded-2xl" />)}</div>;
 }
 
 export function PeopleView({ state }: { state: AppState }) {
@@ -45,28 +54,66 @@ export function PeopleView({ state }: { state: AppState }) {
   const [profileId, setProfileId] = useState<string | null>(state.params.get('member'));
   const [proofOpen, setProofOpen] = useState(false);
 
+  // A link such as #people?member=<id> opens that profile, also when People is already on screen.
+  useEffect(() => { const member = state.params.get('member'); if (member) setProfileId(member); }, [state.params]);
+  const closeProfile = () => {
+    setProfileId(null);
+    if (state.params.has('member')) state.navigate('people', undefined, { replace: true });
+  };
+
+  // Each list's load error, kept apart so one list loading cannot hide the other's failure. A failed list
+  // also stops showing placeholders. `error` holds action errors only.
+  const [failed, setFailed] = useState({ friends: '', members: '' });
+  const loadFriends = useCallback(async () => {
+    try { setFriends(await api.community.friends.query()); setFailed(current => ({ ...current, friends: '' })); }
+    catch (err) { setFailed(current => ({ ...current, friends: errorMessage(err) })); throw err; }
+  }, []);
+  // Each search takes a ticket; a response is dropped once a newer search has started or the text changed.
+  const searchTicket = useRef(0);
+  const loadMembers = useCallback(async (text: string) => {
+    const ticket = ++searchTicket.current;
+    try {
+      const result = await api.community.members.query({ query: text.trim() });
+      if (ticket === searchTicket.current) { setMembers(result.members); setFailed(current => ({ ...current, members: '' })); }
+    } catch (err) {
+      if (ticket !== searchTicket.current) return; // A newer search replaced this one.
+      setFailed(current => ({ ...current, members: errorMessage(err) })); throw err;
+    }
+  }, []);
+  const queryRef = useRef(query);
+  useEffect(() => { queryRef.current = query; }, [query]);
+
+  useEffect(() => {
+    if (!online) return;
+    loadFriends().catch(() => undefined); // Shown through `failed`.
+  }, [online, loadFriends]);
+  useEffect(() => {
+    if (!online) return;
+    const timer = setTimeout(() => { loadMembers(query).catch(() => undefined); }, query.trim() ? 250 : 0);
+    return () => { clearTimeout(timer); searchTicket.current += 1; };
+  }, [online, query, loadMembers]);
+
+  /** Reloads both lists after an action changes a friendship. */
   const refresh = useCallback(async () => {
     if (!online) return;
-    try {
-      const [friendList, memberList] = await Promise.all([api.community.friends.query(), api.community.members.query({ query })]);
-      setFriends(friendList); setMembers(memberList.members);
-    } catch (err) { setError(errorMessage(err)); }
-  }, [online, query]);
-  useEffect(() => { void refresh(); }, [refresh]);
+    await Promise.allSettled([loadFriends(), loadMembers(queryRef.current)]); // Failures show through `failed`.
+  }, [online, loadFriends, loadMembers]);
   const run = async (action: () => Promise<void>, done?: string) => {
     setPending(true); setError(''); setNotice('');
     try { await action(); await refresh(); await state.refresh(); if (done) setNotice(done); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  const friendIds = useMemo(() => new Set((friends?.friends ?? []).map(member => member.id)), [friends]);
-  const directory = (members ?? []).filter(member => !friendIds.has(member.id));
+  // Friends and both request lists have their own sections, so Schoolmates lists only everyone else.
+  const directory = (members ?? []).filter(member => member.friendState === 'none');
+  const friendsLoading = online && friends === null && !failed.friends;
+  const membersLoading = online && members === null && !failed.members;
 
-  return <div className="grid gap-5 animate-in fade-in-0 duration-300">
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="grid gap-1">
       <h1>People</h1>
       <p className="text-sm text-muted-foreground">{context.school.name} · {pluralize(context.school.memberCount, 'member')} · {pluralize(context.community?.friendCount ?? 0, 'friend')}</p>
     </header>
     {!online && <Callout tone="neutral" icon="cloudOff">Connect to browse schoolmates and manage friends.</Callout>}
-    {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+    {(error || failed.friends || failed.members) && <Callout tone="danger" icon="alert" role="alert">{error || failed.friends || failed.members}</Callout>}
     {notice && <Callout tone="success" icon="check" role="status">{notice}</Callout>}
 
     <div className="grid items-start gap-5 lg:grid-cols-2">
@@ -84,12 +131,11 @@ export function PeopleView({ state }: { state: AppState }) {
       </Section>
 
       <Section id="requests-title" title="Friend requests" icon="users" description="Friends can see your classes and timetable. You can remove a friend at any time, which ends their access immediately.">
-        {(friends?.incoming.length ?? 0) === 0 && (friends?.outgoing.length ?? 0) === 0 && <Hint>No requests waiting.</Hint>}
+        {friendsLoading && <LoadingRows count={1} />}
+        {friends && friends.incoming.length === 0 && friends.outgoing.length === 0 && <Hint>No requests waiting.</Hint>}
         {!!friends?.incoming.length && <ul className="grid gap-2" aria-label="Incoming friend requests">{friends.incoming.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-          <div className="flex gap-1.5">
-            <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: true }).then(() => undefined), `You and ${member.displayName} are now friends.`)}>Accept</Button>
-            <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: false }).then(() => undefined))}>Decline</Button>
-          </div>
+          <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: true }).then(() => undefined), `You and ${member.displayName} are now friends.`)}>Accept</Button>
+          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: false }).then(() => undefined))}>Decline</Button>
         </MemberRow>)}</ul>}
         {!!friends?.outgoing.length && <ul className="grid gap-2" aria-label="Sent friend requests">{friends.outgoing.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
           <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.remove.mutate({ accountId, userId: member.id }).then(() => undefined))}>Cancel request</Button>
@@ -98,26 +144,26 @@ export function PeopleView({ state }: { state: AppState }) {
     </div>
 
     <Section id="friends-title" title="Friends" icon="star" description={friends ? pluralize(friends.friends.length, 'friend') : undefined}>
+      {friendsLoading && <LoadingRows />}
       {friends && friends.friends.length === 0 && <EmptyState icon="users" title="No friends yet">Find schoolmates below and send a request. Once they accept, you can compare classes and see each other’s day.</EmptyState>}
       {!!friends?.friends.length && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Friends">{friends.friends.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
         <Button size="sm" iconRight="arrowRight" onClick={() => setProfileId(member.id)}>See day</Button>
       </MemberRow>)}</ul>}
     </Section>
 
-    <Section id="members-title" title="Schoolmates" icon="search" description="Everyone who joined this school on Quasar. Names shown in full only when you are both verified."
-      action={<div className="relative"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Search schoolmates" placeholder="Search by name" value={query} onChange={event => setQuery(event.target.value)} /></div>}>
-      {members && directory.length === 0 && <Hint>{query ? 'No schoolmates match that name.' : 'Nobody else has joined yet. Invite your schoolmates.'}</Hint>}
+    <Section id="members-title" title="Schoolmates" icon="search" description="Everyone at this school on Quasar. Full names show only when you are both verified."
+      action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Search schoolmates" placeholder="Search by name" value={query} onChange={event => setQuery(event.target.value)} /></div>}>
+      {membersLoading && <LoadingRows count={3} />}
+      {members && directory.length === 0 && <Hint>{query.trim() ? 'No other schoolmates match that name.' : members.length ? 'Everyone here is already a friend or has a pending request.' : 'Nobody else has joined yet. Invite your schoolmates.'}</Hint>}
       {directory.length > 0 && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Schoolmates">{directory.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-        {member.friendState === 'none' && <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => void run(() => api.community.request.mutate({ accountId, userId: member.id }).then(() => undefined), `Request sent to ${member.displayName}.`)}>Add friend</Button>}
-        {member.friendState === 'incoming' && <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: true }).then(() => undefined))}>Accept</Button>}
-        {member.friendState === 'requested' && <Chip icon="clock">Requested</Chip>}
+        <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => void run(() => api.community.request.mutate({ accountId, userId: member.id }).then(() => undefined), `Request sent to ${member.displayName}.`)}>Add friend</Button>
       </MemberRow>)}</ul>}
-      {!!friends?.blocked.length && <details className="text-sm"><summary className="cursor-pointer font-semibold text-muted-foreground">Blocked ({friends.blocked.length})</summary>
+      {!!friends?.blocked.length && <details className="group text-sm"><summary className="inline-flex cursor-pointer list-none items-center gap-1 font-semibold text-muted-foreground marker:hidden [&::-webkit-details-marker]:hidden">Blocked ({friends.blocked.length})<Icon name="chevronDown" size={14} className="transition-transform group-open:rotate-180" /></summary>
         <ul className="mt-2 grid gap-2">{friends.blocked.map(member => <li key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2"><span>{member.displayName}</span><Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.block.mutate({ accountId, userId: member.id, blocked: false }).then(() => undefined), `${member.displayName} is unblocked.`)}>Unblock</Button></li>)}</ul>
       </details>}
     </Section>
 
-    {profileId && <ProfileSheet key={profileId} userId={profileId} state={state} onClose={() => setProfileId(null)} onChanged={refresh} />}
+    {profileId && <ProfileSheet key={profileId} userId={profileId} state={state} onClose={closeProfile} onChanged={refresh} />}
     {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async () => { setProofOpen(false); await state.refresh(); setNotice('Sent to support.'); }} />}
   </div>;
 }
@@ -126,7 +172,7 @@ function ProofSheet({ accountId, onClose, onSent }: { accountId: string; onClose
   const [proof, setProof] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  return <Modal open onClose={onClose} title="Verify your school" description="Support checks your proof by hand. Do not include passwords or full ID numbers."
+  return <Modal open onClose={onClose} busy={pending} dirty={proof.trim().length > 0} title="Verify your school" description="Support checks your proof by hand. Do not include passwords or full ID numbers."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={proof.trim().length < 10} onClick={async () => {
       setPending(true); setError('');
       try { const result = await api.community.requestVerification.mutate({ accountId, proof: proof.trim() }); await onSent(); if (result.status === 'verified') return; }
@@ -137,6 +183,30 @@ function ProofSheet({ accountId, onClose, onSent }: { accountId: string; onClose
   </Modal>;
 }
 
+/** How many days ahead to look for a friend's next school day. */
+const LOOKAHEAD_DAYS = 14;
+
+function periodsOn(schedule: Schedule, date: string, personal: PersonalSchedule) {
+  try { const day = resolveDay(schedule, date, personal); return day.closed ? [] : day.periods; } catch { return []; }
+}
+
+/** Today while it still has periods ahead, else the next day with classes (up to two weeks out), else today. */
+function nextSchoolDay(schedule: Schedule, personal: PersonalSchedule, today: string, now: Date): string {
+  const todays = periodsOn(schedule, today, personal);
+  if (todays.length && now.getTime() < new Date(todays[todays.length - 1]!.endAt).getTime()) return today;
+  for (let offset = 1; offset <= LOOKAHEAD_DAYS; offset += 1) {
+    const date = addDays(today, offset);
+    if (periodsOn(schedule, date, personal).length) return date;
+  }
+  return today;
+}
+
+/** "today", "tomorrow" or "on Monday, Sep 21", for use mid-sentence. */
+function dayPhrase(date: string, today: string): string {
+  const label = relativeDate(date, today, { weekday: 'long' });
+  return label === 'Today' || label === 'Tomorrow' ? label.toLowerCase() : `on ${label}`;
+}
+
 function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; state: AppState; onClose: () => void; onChanged: () => Promise<void> }) {
   const accountId = state.context.user.id;
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -145,16 +215,23 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const [reporting, setReporting] = useState(false);
   const [reason, setReason] = useState('');
   const [notice, setNotice] = useState('');
+  /** Where the last action's result shows: at the top, or next to the Manage buttons that started it. */
+  const [resultAt, setResultAt] = useState<'top' | 'manage'>('top');
+  const [pickedDate, setPickedDate] = useState<string | null>(null);
   const load = useCallback(async () => { try { setProfile(await api.community.profile.query({ userId })); } catch (err) { setError(errorMessage(err)); } }, [userId]);
   useEffect(() => { void load(); }, [load]);
-  const run = async (action: () => Promise<unknown>, done?: string) => {
-    setPending(true); setError(''); setNotice('');
+  const run = async (action: () => Promise<unknown>, done?: string, at: 'top' | 'manage' = 'top') => {
+    setPending(true); setError(''); setNotice(''); setResultAt(at);
     try { await action(); await load(); await onChanged(); await state.refresh(); if (done) setNotice(done); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
+  const theirSchedule = useMemo(() => profile?.shared ? scheduleForGrade(profile.school.schedule, profile.shared.personal.grade) : null, [profile]);
+  const defaultDate = useMemo(() => theirSchedule && profile?.shared ? nextSchoolDay(theirSchedule, profile.shared.personal, state.today, state.now) : state.today,
+    [theirSchedule, profile?.shared, state.today, state.now]);
+  const date = pickedDate ?? defaultDate;
   const day = useMemo(() => {
-    if (!profile?.shared) return null;
-    try { return resolveDay(scheduleForGrade(profile.school.schedule, profile.shared.personal.grade), state.today, profile.shared.personal); } catch { return null; }
-  }, [profile, state.today]);
+    if (!theirSchedule || !profile?.shared) return null;
+    try { return resolveDay(theirSchedule, date, profile.shared.personal); } catch { return null; }
+  }, [theirSchedule, profile, date]);
   const mine = state.personal;
   /** True when I have a class with this name in this period. */
   const togetherIn = (periodId: string, name: string) => {
@@ -164,19 +241,20 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   /** True when we sit in this class of theirs in at least one shared period. */
   const sharedClass = (cls: { id: string; name: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls.name));
   const name = profile?.displayName ?? 'Member';
-  return <Modal open onClose={onClose} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(profile.joinedAt.slice(0, 10), { year: true })}`].filter(Boolean).join(' · ') : undefined}
-    footer={profile ? <>
-      <Button variant="ghost" onClick={onClose} disabled={pending}>Close</Button>
-      <Spacer />
-      {!reporting && <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => setReporting(true)}>Report</Button>}
-      <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => { if (profile.blocked || confirm(`Block ${name}? You will not see each other in the directory, and any friendship ends.`)) void run(() => api.community.block.mutate({ accountId, userId, blocked: !profile.blocked }), profile.blocked ? 'Unblocked.' : 'Blocked.'); }}>{profile.blocked ? 'Unblock' : 'Block'}</Button>
-      {profile.friendState === 'none' && !profile.blocked && profile.sameSchool && <Button variant="primary" icon="plus" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.request.mutate({ accountId, userId }), 'Request sent.')}>Add friend</Button>}
-      {profile.friendState === 'requested' && <Button busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.remove.mutate({ accountId, userId }), 'Request cancelled.')}>Cancel request</Button>}
-      {profile.friendState === 'incoming' && <Button variant="primary" icon="check" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId, accept: true }), `You and ${name} are now friends.`)}>Accept request</Button>}
-      {profile.friendState === 'friends' && <Button variant="danger" busy={pending} disabled={!state.online} onClick={() => { if (confirm(`Remove ${name} as a friend? They will no longer see your classes, and you will not see theirs.`)) void run(() => api.community.remove.mutate({ accountId, userId }), 'Friend removed.'); }}>Remove friend</Button>}
-    </> : undefined}>
+  const dayLabel = relativeDate(date, state.today, { weekday: 'long' });
+  const result = <>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {notice && <Callout tone="success" icon="check" role="status">{notice}</Callout>}
+  </>;
+  // The footer holds only the next step in the friendship; nothing destructive sits in the thumb spot.
+  const nextStep = !profile ? null
+    : profile.friendState === 'none' && !profile.blocked && profile.sameSchool ? <Button variant="primary" icon="plus" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.request.mutate({ accountId, userId }), 'Request sent.')}>Add friend</Button>
+    : profile.friendState === 'requested' ? <Button busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.remove.mutate({ accountId, userId }), 'Request cancelled.')}>Cancel request</Button>
+    : profile.friendState === 'incoming' ? <Button variant="primary" icon="check" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId, accept: true }), `You and ${name} are now friends.`)}>Accept request</Button>
+    : null;
+  return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(profile.joinedAt.slice(0, 10), { year: true })}`].filter(Boolean).join(' · ') : undefined}
+    footer={nextStep ? <><Spacer />{nextStep}</> : undefined}>
+    {(!profile || resultAt === 'top') && result}
     {!profile && !error && <Hint role="status">Loading profile…</Hint>}
     {profile && <>
       <div className="flex flex-wrap items-center gap-3">
@@ -187,11 +265,6 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
           <Chip icon="users">{pluralize(profile.friendCount, 'friend')}</Chip>
         </div>
       </div>
-      {reporting && <Panel className="grid gap-3 bg-card ring-2 ring-destructive/30">
-        <strong className="text-sm font-bold">Report {name} to support</strong>
-        <Field label="What happened?" htmlFor="report-reason" hint="Support reads every report. Reports are private."><Textarea id="report-reason" minLength={10} maxLength={2000} rows={4} value={reason} onChange={event => setReason(event.target.value)} /></Field>
-        <div className="flex gap-2"><Button size="sm" variant="danger" busy={pending} disabled={reason.trim().length < 10} onClick={() => void run(async () => { await api.community.report.mutate({ accountId, userId, reason: reason.trim() }); setReporting(false); setReason(''); }, 'Report sent to support.')}>Send report</Button><Button size="sm" variant="ghost" disabled={pending} onClick={() => setReporting(false)}>Cancel</Button></div>
-      </Panel>}
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
         <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${profile.shared.classes.filter(sharedClass).length} in common with you` : undefined}>
@@ -201,16 +274,35 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
             const together = sharedClass(cls);
             return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
               <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
-              <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.teacher, cls.room && `Room ${cls.room}`].filter(Boolean).join(' · ')}</Hint></span>
+              <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint></span>
               {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
             </li>;
           })}</ul>}
         </Section>
-        <Section id="profile-day" title={`${name}’s day`} icon="calendar" description={day ? (day.closed ? `${formatDate(state.today, { weekday: 'long' })} · no school` : `${formatDate(state.today, { weekday: 'long' })} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}>
+        <Section id="profile-day" title={`${name}’s day`} icon="calendar"
+          description={day ? (day.closed ? `${dayLabel} · no school` : `${dayLabel} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}
+          action={day ? <div className="flex items-center gap-1">
+            <IconButton label="Previous day" icon="chevronLeft" size="sm" disabled={date <= state.today} onClick={() => setPickedDate(addDays(date, -1))} />
+            <IconButton label="Next day" icon="chevronRight" size="sm" onClick={() => setPickedDate(addDays(date, 1))} />
+          </div> : undefined}>
           {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class.name) ? 'Together' : null} />}
-          {day && (day.closed || day.periods.length === 0) && <Hint>Nothing scheduled today.</Hint>}
+          {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
       </>}
+      <div role="group" aria-label="Manage" className="grid gap-3 border-t pt-4">
+        <Eyebrow>Manage</Eyebrow>
+        <div className="flex flex-wrap items-center gap-2">
+          {!reporting && <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => { setReporting(true); setNotice(''); }}>Report</Button>}
+          <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => { if (profile.blocked || confirm(`Block ${name}? You will not see each other in the directory, and any friendship ends.`)) void run(() => api.community.block.mutate({ accountId, userId, blocked: !profile.blocked }), profile.blocked ? 'Unblocked.' : 'Blocked.', 'manage'); }}>{profile.blocked ? 'Unblock' : 'Block'}</Button>
+          {profile.friendState === 'friends' && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={!state.online || pending} onClick={() => { if (confirm(`Remove ${name} as a friend? They will no longer see your classes, and you will not see theirs.`)) void run(() => api.community.remove.mutate({ accountId, userId }), 'Friend removed.', 'manage'); }}>Remove friend</Button>}
+        </div>
+        {reporting && <Panel className="grid gap-3 bg-card ring-2 ring-destructive/30">
+          <strong className="text-sm font-bold">Report {name} to support</strong>
+          <Field label="What happened?" htmlFor="report-reason" hint="Support reads every report. Reports are private."><Textarea id="report-reason" autoFocus minLength={10} maxLength={2000} rows={4} value={reason} onChange={event => setReason(event.target.value)} /></Field>
+          <div className="flex gap-2"><Button size="sm" variant="danger" busy={pending} disabled={reason.trim().length < 10} onClick={() => void run(async () => { await api.community.report.mutate({ accountId, userId, reason: reason.trim() }); setReporting(false); setReason(''); }, 'Report sent to support.', 'manage')}>Send report</Button><Button size="sm" variant="ghost" disabled={pending} onClick={() => { setReporting(false); setReason(''); }}>Cancel</Button></div>
+        </Panel>}
+        {resultAt === 'manage' && result}
+      </div>
     </>}
   </Modal>;
 }

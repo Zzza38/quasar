@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { removeStaleWorkers, serviceWorkerEnabled } from '@/client/service-worker-support';
 import { signOut } from 'next-auth/react';
-import { api, errorMessage, isUnauthorized, type Workspace } from '@/client/api';
+import { api, errorMessage, isTransportFailure, isUnauthorized, type Workspace } from '@/client/api';
 import { clearOfflineAccount, getLastAccountId, openWorkspace, type OfflineWorkspace, type WorkspaceSnapshot } from '@/client/offline';
 import type { EntityKind } from '@/domain/sync';
 import type { WorkspaceContext } from './app-state';
@@ -20,8 +20,15 @@ function contextOf(workspace: Workspace): WorkspaceContext {
   return context;
 }
 
-function transportFailure(error: unknown) {
-  return !navigator.onLine || (error instanceof Error && /failed to fetch|fetch failed|networkerror|network request|load failed/i.test(error.message));
+/** A proxy's HTML error page, parsed as JSON by the tRPC client; the store keeps only the message text. */
+const UNPARSABLE_RESPONSE = /not valid JSON|Unexpected token|Unexpected end of JSON/i;
+
+/**
+ * The store records the raw message of any failed upload, including a dropped connection.
+ * Those are not sync failures: the queue is intact and retries once the connection is back.
+ */
+function storedTransportError(message: string, transportErrors: ReadonlySet<string>) {
+  return transportErrors.has(message) || UNPARSABLE_RESPONSE.test(message) || isTransportFailure(new Error(message));
 }
 
 async function workerStatus(worker: ServiceWorker, prepare: boolean): Promise<boolean> {
@@ -41,7 +48,7 @@ export type SyncState =
   | { kind: 'conflict'; count: number }
   | { kind: 'failed'; message: string }
   | { kind: 'pending'; count: number }
-  | { kind: 'offline'; ready: boolean | null }
+  | { kind: 'offline'; ready: boolean | null; pending: number }
   | { kind: 'saved' };
 
 export interface WorkspaceSession {
@@ -58,6 +65,8 @@ export interface WorkspaceSession {
   logout: { asking: boolean; pending: boolean };
   initialize: () => Promise<void>;
   synchronize: () => Promise<void>;
+  /** False when this browser or build cannot keep an offline copy, so retrying setup cannot help. */
+  offlineSupported: boolean;
   prepareOffline: () => Promise<void>;
   save: (kind: EntityKind, id: string, data: Record<string, unknown> | null) => Promise<void>;
   resolve: (mutationId: string, choice: 'local' | 'remote') => Promise<void>;
@@ -83,7 +92,12 @@ export function useWorkspace(): WorkspaceSession {
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const generationRef = useRef(0);
   const syncLock = useRef(false);
+  /** Resolves when the running synchronize() has fully finished; null when none is running. */
+  const flushRef = useRef<Promise<void> | null>(null);
+  const [transportErrors, setTransportErrors] = useState<ReadonlySet<string>>(() => new Set());
   const logoutRef = useRef(false);
+  // Set by "Discard and sign out" so a sync already running stops before it uploads anything else.
+  const discardRef = useRef(false);
 
   const prepareOffline = useCallback(async (prepare = true) => {
     setOfflineReady(null);
@@ -130,11 +144,22 @@ export function useWorkspace(): WorkspaceSession {
     await update();
   }, [detach, requireSignIn]);
 
-  const synchronize = useCallback(async (duringLogout = false) => {
+  /**
+   * `background` is the idle poll: it only shows "Syncing…" when there is work to upload, so a
+   * quiet check never flickers the status pill. User-started syncs (save, resolve, Retry) always show it.
+   */
+  const synchronize = useCallback(async ({ background = false, duringLogout = false }: { background?: boolean; duringLogout?: boolean } = {}) => {
     const store = workspaceRef.current;
     if (!store || syncLock.current || !navigator.onLine || (logoutRef.current && !duringLogout)) return;
-    syncLock.current = true; setSyncing(true);
+    syncLock.current = true;
+    let finished!: () => void;
+    flushRef.current = new Promise<void>((resolve) => { finished = resolve; });
     try {
+      if (!background) setSyncing(true);
+      else {
+        const queued = await store.read();
+        if (queued.pending > queued.conflicts.length) setSyncing(true);
+      }
       const session = await api.session.query();
       if (!session) { requireSignIn('Sign in again to continue. Your waiting changes are saved on this device.'); return; }
       if (session.user.id !== store.accountId) { requireSignIn('The signed-in account changed. Sign in again to open the correct account. Your waiting changes are preserved.'); return; }
@@ -151,6 +176,7 @@ export function useWorkspace(): WorkspaceSession {
           requireSignIn('Sign in to the original account before syncing these changes.');
           throw new Error('The signed-in account changed.');
         }
+        if (discardRef.current) throw new Error('Sign-out discarded these changes.');
         return api.sync.mutate({ ...mutation, accountId: store.accountId });
       });
       // Completing a recurring task also creates its successor on the server.
@@ -166,10 +192,14 @@ export function useWorkspace(): WorkspaceSession {
     } catch (err) {
       if (isUnauthorized(err)) requireSignIn('Sign in again to sync. Your waiting changes are saved on this device.');
       else if (workspaceRef.current === store) {
-        if (transportFailure(err)) { setOnline(false); setError(''); }
-        else setError(errorMessage(err));
+        if (isTransportFailure(err)) {
+          setOnline(false); setError('');
+          // The store saved this message as its last error; remember it is a dropped connection, not a failure.
+          const message = err instanceof Error ? err.message : '';
+          if (message) setTransportErrors((known) => known.has(message) ? known : new Set(known).add(message));
+        } else setError(errorMessage(err));
       }
-    } finally { syncLock.current = false; setSyncing(false); }
+    } finally { syncLock.current = false; flushRef.current = null; setSyncing(false); finished(); }
   }, [requireSignIn]);
 
   const initialize = useCallback(async () => {
@@ -208,7 +238,7 @@ export function useWorkspace(): WorkspaceSession {
     } catch (err) {
       if (generation !== generationRef.current) return;
       if (isUnauthorized(err)) { requireSignIn('Sign in again to continue. Your waiting changes are preserved.'); return; }
-      if (transportFailure(err)) {
+      if (isTransportFailure(err)) {
         try {
           const accountId = authenticatedId ?? await getLastAccountId();
           if (generation !== generationRef.current) return;
@@ -232,7 +262,7 @@ export function useWorkspace(): WorkspaceSession {
     const onOnline = () => { setOnline(true); void initialize(); };
     const onOffline = () => setOnline(false);
     window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline);
-    const timer = setInterval(() => { void synchronize(); }, 15_000);
+    const timer = setInterval(() => { void synchronize({ background: true }); }, 15_000);
     return () => {
       generationRef.current += 1; detach(); clearInterval(timer);
       window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline);
@@ -264,13 +294,19 @@ export function useWorkspace(): WorkspaceSession {
   const finishLogout = useCallback(async (discard: boolean) => {
     if (logoutRef.current) return;
     if (!navigator.onLine) { setError('Connect to the internet to sign out. Your saved data and waiting changes are preserved.'); return; }
-    if (syncLock.current || writing) { setError('Wait for the current save to finish, then sign out.'); return; }
+    if (writing) { setError('Wait for the current save to finish, then sign out.'); return; }
+    // Blocks new syncs; one already running (often the background poll) is awaited below.
     logoutRef.current = true;
+    discardRef.current = discard;
     generationRef.current += 1;
     setLoading(false);
     setLogoutPending(true); setError('');
     try {
       const store = workspaceRef.current;
+      if (flushRef.current) await flushRef.current;
+      // The running sync may have ended in requireSignIn and detached the store; never report a
+      // sign-out that skipped clearing this account's device cache.
+      if (store && workspaceRef.current !== store) throw new Error('Your session changed. Sign in again, then sign out.');
       // Confirm that the server is reachable before doing anything that could
       // remove this device's private data. A browser's online flag is not enough.
       const session = await api.session.query();
@@ -278,7 +314,7 @@ export function useWorkspace(): WorkspaceSession {
         const before = await store.read();
         if (before.pending) {
           if (!session || session.user.id !== store.accountId) throw new Error('Sign in to the original account to sync these changes, or explicitly discard them before signing out.');
-          await synchronize(true);
+          await synchronize({ duringLogout: true });
           const state = await store.read();
           if (state.pending) throw new Error('Some changes are still waiting. Connect and resolve conflicts before signing out, or choose to discard them.');
         }
@@ -303,8 +339,8 @@ export function useWorkspace(): WorkspaceSession {
       setContext(null); setSnapshot(null); setAuthRequired(true); setAskingLogout(false);
       window.location.assign('/');
     } catch (err) {
-      setError(transportFailure(err) ? 'Could not finish signing out. Reconnect and try again. Your saved data and waiting changes are preserved.' : errorMessage(err));
-    } finally { logoutRef.current = false; setLogoutPending(false); }
+      setError(isTransportFailure(err) ? 'Could not finish signing out. Reconnect and try again. Your saved data and waiting changes are preserved.' : errorMessage(err));
+    } finally { logoutRef.current = false; discardRef.current = false; setLogoutPending(false); }
   }, [detach, synchronize, writing]);
 
   const requestLogout = useCallback(() => {
@@ -312,17 +348,21 @@ export function useWorkspace(): WorkspaceSession {
     else void finishLogout(false);
   }, [finishLogout, snapshot?.pending]);
 
+  // Red states outrank the transient spinner so they stay put (and announced once) while a retry runs.
+  // Offline outranks a stored error: a dropped connection mid-upload is not a failed sync.
+  const failure = snapshot?.lastError && !storedTransportError(snapshot.lastError, transportErrors) ? snapshot.lastError : null;
   const sync: SyncState = writing ? { kind: 'saving' }
-    : syncing ? { kind: 'syncing' }
     : snapshot?.conflicts.length ? { kind: 'conflict', count: snapshot.conflicts.length }
-    : snapshot?.lastError ? { kind: 'failed', message: snapshot.lastError }
+    : !online ? { kind: 'offline', ready: offlineReady, pending: snapshot?.pending ?? 0 }
+    : failure ? { kind: 'failed', message: errorMessage(new Error(failure)) }
+    : syncing ? { kind: 'syncing' }
     : snapshot?.pending ? { kind: 'pending', count: snapshot.pending }
-    : !online ? { kind: 'offline', ready: offlineReady }
     : { kind: 'saved' };
 
   return {
     context, snapshot, loading, authRequired, online, syncing, writing, offlineReady, error, sync,
     logout: { asking: askingLogout, pending: logoutPending },
+    offlineSupported: serviceWorkerEnabled && typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
     initialize, synchronize: () => synchronize(), prepareOffline: () => prepareOffline(), save, resolve,
     requestLogout, finishLogout, cancelLogout: () => setAskingLogout(false), dismissError: () => setError(''),
   };

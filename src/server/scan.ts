@@ -116,7 +116,8 @@ export class ScanService {
       if (!response.ok) {
         const detail = (await response.text().catch(() => '')).slice(0, 300);
         if (response.status === 429) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'The scanning service is busy. Try again in a minute.' });
-        throw new TRPCError({ code: 'BAD_GATEWAY', message: `The scanning service returned HTTP ${response.status}.${detail ? ` ${detail}` : ''}` });
+        console.error(`[scan] upstream returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+        throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service is having trouble right now. Try again in a few minutes, or add your classes by hand.' });
       }
       const payload = await response.json().catch(() => null) as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }> } | null;
       const content = payload?.choices?.[0]?.message?.content;

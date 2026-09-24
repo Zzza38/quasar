@@ -46,6 +46,7 @@ export interface AppState {
   saveTask: (id: string, task: Task | null) => Promise<void>;
   savePersonal: (personal: PersonalSchedule) => Promise<void>;
   refresh: () => Promise<void>;
-  navigate: (view: View, params?: Record<string, string>) => void;
+  /** `replace` swaps the current history entry (for stripping one-shot params) and keeps the scroll position. */
+  navigate: (view: View, params?: Record<string, string>, options?: { replace?: boolean }) => void;
   params: URLSearchParams;
 }

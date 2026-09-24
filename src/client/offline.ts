@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { mergeMutation, type Entity, type EntityKind, type Mutation, type SyncResult } from "../domain/sync";
 import { personalScheduleSchema } from "../domain/schedule";
 import { taskSchema } from "../domain/task";
+import { errorMessage, isTransportFailure } from "./api";
 
 interface QueuedMutation {
   mutation: Mutation;
@@ -306,7 +307,8 @@ export class OfflineWorkspace {
       }
     } catch (error) {
       if (!this.closed) await this.update((state) => {
-        state.lastError = error instanceof Error ? error.message : "Sync failed. Your changes are saved on this device.";
+        // A dropped connection is not a sync failure: the queue is intact and retries once the connection is back.
+        state.lastError = isTransportFailure(error) ? null : errorMessage(error);
       }).catch(() => undefined);
       throw error;
     } finally {

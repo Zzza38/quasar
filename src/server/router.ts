@@ -1,5 +1,5 @@
-import { initTRPC, TRPCError } from '@trpc/server';
-import { z } from 'zod';
+import { initTRPC, StandardSchemaV1Error, TRPCError } from '@trpc/server';
+import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
 import { Service, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
@@ -8,7 +8,18 @@ import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 export type Context = { userId: string | null; service: Service };
-const t = initTRPC.context<Context>().create();
+/** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
+export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
+/** Zod's built-in wording ("Invalid input", "Too small: …") is not written for students; custom refine messages are. */
+const DEFAULT_ISSUE = /^(Invalid\b|Too (small|big)\b|Unrecognized key)/;
+const t = initTRPC.context<Context>().create({
+  errorFormatter({ shape, error }) {
+    if (!(error.cause instanceof ZodError || error.cause instanceof StandardSchemaV1Error)) return shape;
+    const first = (error.cause as { issues?: readonly { message?: unknown }[] }).issues?.[0]?.message;
+    const message = typeof first === 'string' && first.trim() && !DEFAULT_ISSUE.test(first) ? first : INVALID_INPUT_MESSAGE;
+    return { ...shape, message };
+  },
+});
 const authenticated = t.procedure.use(({ ctx, next }) => {
   const user = ctx.service.user(ctx.userId);
   return next({ ctx: { ...ctx, userId: user.id } });

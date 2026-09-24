@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { browserTimeZone } from '@/lib/format';
+import { browserTimeZone, formatTimeZone } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
 import { Button, Callout, ErrorText, Field, Hint, Input } from './primitives';
@@ -93,7 +93,7 @@ export function FeedSubscribeForm({ accountId, online, id = 'calendar-feed-form'
       <Field label="Call it" htmlFor={`${id}-name`}><Input id={`${id}-name`} required maxLength={100} value={name} disabled={pending} onChange={(event) => setName(event.target.value)} placeholder="School homework" /></Field>
       {showZone
         ? <Field label="Calendar time zone" htmlFor={`${id}-zone`} hint="Used when the feed does not say."><Input id={`${id}-zone`} required maxLength={100} value={timeZone} disabled={pending} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></Field>
-        : <div className="grid content-end"><Hint>Time zone: {timeZone.replaceAll('_', ' ')} <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setShowZone(true)}>Change</button></Hint></div>}
+        : <div className="grid content-end"><Hint>Time zone: {formatTimeZone(timeZone)} <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setShowZone(true)}>Change</button></Hint></div>}
     </div>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {!online && <ErrorText>Connect to the internet to subscribe.</ErrorText>}

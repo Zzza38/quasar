@@ -38,7 +38,7 @@ function worker() {
         match: async (key: string | { url: string }) => cache.get(address(key))?.clone(),
         put: async (key: string | { url: string }, value: Response) => { cache.set(address(key), value.clone()); },
       }),
-      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "unrelated-cache"],
+      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "quasar-public-shell-v5", "unrelated-cache"],
       delete: async (name: string) => { deletedCaches.push(name); return true; },
     },
     self: {
@@ -75,18 +75,20 @@ describe("public offline service worker", () => {
   it("cleans up pre-rebrand and outdated shells while preserving current and unrelated caches", async () => {
     const sw = worker();
     await sw.dispatch("activate");
-    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3"]);
+    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4"]);
   });
 
   it("prepares the shell and bundles for the first offline reload", async () => {
     const sw = worker();
     await sw.dispatch("install");
     expect(sw.requests).toContainEqual({ path: "/", credentials: "omit" });
+    expect(sw.requests).toContainEqual({ path: "/help", credentials: "omit" });
     expect(sw.cache.has(address("/_next/static/app.js"))).toBe(true);
     expect(sw.cache.has(address("/_next/static/app.css"))).toBe(true);
     sw.offline();
     expect(await (await sw.navigate("/"))?.text()).toContain("Public shell");
     expect(await (await sw.navigate("/admin"))?.text()).toContain("Public shell");
+    expect(await (await sw.navigate("/help"))?.text()).toContain("Public shell");
   });
 
   it("serves fresh bundles from the network and falls back to the cache offline", async () => {
