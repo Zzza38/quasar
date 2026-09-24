@@ -23,7 +23,7 @@ export const pushSubscriptionSchema = z.object({ endpoint: pushEndpointSchema, k
 type Subscription = z.infer<typeof pushSubscriptionSchema>;
 type Vapid = { publicKey: string; privateKey: string; subject: string };
 type SendPush = (subscription: Subscription, payload: string, options: webpush.RequestOptions) => Promise<unknown>;
-type Options = { vapid?: Vapid | null; sendPush?: SendPush };
+type Options = { vapid?: Vapid | null; sendPush?: SendPush; ownerEmail?: string };
 type Identity = [ownerId: string, entityId: string, reminderAt: string, subscriptionId: string];
 type SubscriptionRow = { subscription_id: string; endpoint: string; p256dh: string; auth: string };
 
@@ -34,8 +34,8 @@ const PUSH_OPTIONS = { TTL: 3600, urgency: 'normal', timeout: 15_000 } as const;
 
 /**
  * Claims one delivery (owner, entity, instant, browser). A row is granted only when it is new, or when an
- * earlier attempt failed or was abandoned past the lease and has fewer than five attempts. Reminders and
- * chat pushes both use this exact statement.
+ * earlier attempt failed or was abandoned past the lease and has fewer than five attempts. Reminders, chat
+ * pushes and support pushes all use this exact statement.
  */
 const CLAIM_SQL = `INSERT INTO notification_deliveries(owner_id,entity_id,reminder_at,subscription_id,status,attempts,last_error,updated_at)
         VALUES(?,?,?,?,'processing',1,NULL,?) ON CONFLICT(owner_id,entity_id,reminder_at,subscription_id)
@@ -50,6 +50,36 @@ const DELIVERY_WHERE = 'owner_id=? AND entity_id=? AND reminder_at=? AND subscri
 export const CHAT_DELIVERY_ENTITY = 'chat:messages';
 /** Generic on purpose: no names and no text, so nothing leaks onto a lock screen. The service worker shows fixed text. */
 export const CHAT_PUSH_PAYLOAD = JSON.stringify({ kind: 'chat', tag: 'quasar-chat' });
+
+/**
+ * Owner support pushes. Each support item gets its own entity id, `support:<table>:<id>`, whose colons keep it
+ * apart from task ids (deliverDue) and from 'chat:messages' (deliverChat's caps), and reminder_at holds the
+ * time the item arrived.
+ */
+type SupportSource = 'support_requests' | 'verification_requests' | 'reports' | 'schedule_proposals';
+export const supportDeliveryEntity = (source: SupportSource, id: string) => `support:${source}:${id}`;
+/** Fixed and generic: no request text, names or emails ever leave the server. The service worker shows fixed text. */
+export const SUPPORT_PUSH_PAYLOAD = JSON.stringify({ kind: 'support', tag: 'quasar-support', url: '/admin' });
+const SUPPORT_RETENTION_MS = 7 * DAY;
+/**
+ * Open support items (correction requests and feedback, verification proofs, profile and chat reports, and
+ * passed proposals waiting on support) that arrived between @oldest and @newest, skipping the owner's own
+ * submissions. A proposal arrives when the vote that passes it is cast (votes close once it leaves 'open').
+ */
+const SUPPORT_CANDIDATES_SQL = `SELECT source, id, arrived FROM (
+    SELECT 'support_requests' AS source, id, created_at AS arrived FROM support_requests WHERE resolved_at IS NULL AND user_id<>@owner
+    UNION ALL SELECT 'verification_requests', id, created_at FROM verification_requests WHERE resolved_at IS NULL AND user_id<>@owner
+    UNION ALL SELECT 'reports', id, created_at FROM reports WHERE resolved_at IS NULL AND reporter_id<>@owner
+    UNION ALL SELECT 'schedule_proposals', p.id, coalesce((SELECT max(v.created_at) FROM proposal_votes v WHERE v.proposal_id=p.id), p.created_at)
+      FROM schedule_proposals p WHERE p.status='awaiting-support' AND p.proposer_id<>@owner
+  ) WHERE arrived>=@oldest AND arrived<=@newest ORDER BY arrived, source, id`;
+/** Rechecked right before each send, so an item resolved meanwhile is never pushed. */
+const SUPPORT_OPEN_SQL: Record<SupportSource, string> = {
+  support_requests: 'SELECT 1 FROM support_requests WHERE id=? AND resolved_at IS NULL',
+  verification_requests: 'SELECT 1 FROM verification_requests WHERE id=? AND resolved_at IS NULL',
+  reports: 'SELECT 1 FROM reports WHERE id=? AND resolved_at IS NULL',
+  schedule_proposals: "SELECT 1 FROM schedule_proposals WHERE id=? AND status='awaiting-support'",
+};
 
 const verifiedSql = (column: string) => `EXISTS (SELECT 1 FROM users vu JOIN school_verifications vv ON vv.user_id=vu.id AND vv.school_id=vu.school_id WHERE vu.id=${column})`;
 /**
@@ -98,10 +128,13 @@ export function reminderInstant(task: Task): string | null {
 export class NotificationService {
   private readonly vapid: Vapid | null;
   private readonly sendPush: SendPush;
+  private readonly ownerEmail: string;
   constructor(private readonly db: Db, options: Options = {}) {
     const { VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey, VAPID_SUBJECT: subject } = process.env;
     this.vapid = options.vapid === undefined ? (publicKey && privateKey && subject ? { publicKey, privateKey, subject } : null) : options.vapid;
     this.sendPush = options.sendPush ?? webpush.sendNotification;
+    // Same rule as Service.isAdmin: the account whose email equals OWNER_EMAIL, compared case-insensitively.
+    this.ownerEmail = (options.ownerEmail ?? process.env.OWNER_EMAIL ?? '').trim().toLowerCase();
   }
   config() { return { enabled: !!this.vapid, publicKey: this.vapid?.publicKey ?? null }; }
   status(ownerId: string, endpoint: string) {
@@ -212,6 +245,52 @@ export class NotificationService {
         }
       }
     }
+    return result;
+  }
+
+  /**
+   * Generic pushes to the owner's enrolled browsers for new support items: one per item and browser, only for
+   * items that arrived in the last 24 hours (so a first deploy never floods the owner with old items), and
+   * never for an item resolved before its push goes out. Delivery rows are kept for 7 days.
+   */
+  async deliverSupport(now = new Date()): Promise<{ sent: number; failed: number }> {
+    const result = { sent: 0, failed: 0 };
+    if (!this.vapid || !this.ownerEmail) return result;
+    const nowIso = now.toISOString();
+    const at = (offsetMs: number) => new Date(now.getTime() - offsetMs).toISOString();
+    const leaseCutoff = at(LEASE_MS);
+    // Compared in JavaScript, exactly like Service.isAdmin; only accounts with a browser enrolled matter.
+    const owners = (this.db.prepare('SELECT DISTINCT u.id, u.email FROM users u JOIN push_subscriptions p ON p.owner_id=u.id ORDER BY u.id').all() as { id: string; email: string }[])
+      .filter(user => user.email.toLowerCase() === this.ownerEmail);
+    for (const owner of owners) {
+      const items = this.db.prepare(SUPPORT_CANDIDATES_SQL).all({ owner: owner.id, oldest: at(DAY), newest: nowIso }) as { source: SupportSource; id: string; arrived: string }[];
+      if (!items.length) continue;
+      const subscriptions = this.db.prepare('SELECT id AS subscription_id,endpoint,p256dh,auth FROM push_subscriptions WHERE owner_id=? ORDER BY created_at,id').all(owner.id) as SubscriptionRow[];
+      for (const item of items) {
+        for (const row of subscriptions) {
+          const identity: Identity = [owner.id, supportDeliveryEntity(item.source, item.id), item.arrived, row.subscription_id];
+          let claimed: number;
+          // A browser removed by an earlier 404/410 in this run fails the foreign key: skip it.
+          try { claimed = this.db.prepare(CLAIM_SQL).run(...identity, nowIso, leaseCutoff).changes; } catch { continue; }
+          if (!claimed) continue;
+          try {
+            // Recheck after earlier asynchronous sends: a resolution or a removed browser wins.
+            if (!this.db.prepare(SUPPORT_OPEN_SQL[item.source]).get(item.id) || !this.db.prepare('SELECT id FROM push_subscriptions WHERE id=? AND owner_id=?').get(row.subscription_id, owner.id)) {
+              this.db.prepare(`DELETE FROM notification_deliveries WHERE ${DELIVERY_WHERE}`).run(...identity);
+              continue;
+            }
+            await this.push(row, SUPPORT_PUSH_PAYLOAD);
+            this.markSent(identity, nowIso);
+            result.sent++;
+          } catch (error) {
+            this.markFailed(identity, error, nowIso);
+            result.failed++;
+          }
+        }
+      }
+    }
+    // Items older than 24 h are never claimed again, so their rows only need to outlive that window.
+    this.db.prepare("DELETE FROM notification_deliveries WHERE entity_id LIKE 'support:%' AND reminder_at<?").run(at(SUPPORT_RETENTION_MS));
     return result;
   }
 

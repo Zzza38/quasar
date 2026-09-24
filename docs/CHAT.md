@@ -591,7 +591,7 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
 
 ### Push notifications (inside the existing single worker cycle)
 
-`jobs.ts` stays **one sequential loop**: `calendar.refreshDue` → `notifications.deliverDue` → `notifications.deliverChat` → `chat.prune`. Each step is wrapped in its own `try`, and the last two report `onError('chat')`. The `Jobs` type gains `notifications.deliverChat` and `chat.prune`, and `startJobs`' default wires in `new NotificationService(db)` and `{ prune: now => pruneChat(db, now) }`. There is no second loop and no `stop()` change.
+`jobs.ts` stays **one sequential loop**: `calendar.refreshDue` → `notifications.deliverDue` → `notifications.deliverChat` → `notifications.deliverSupport` → `chat.prune`. Each step is wrapped in its own `try`, and the last two report `onError('chat')`. The `Jobs` type gains `notifications.deliverChat` and `chat.prune`, and `startJobs`' default wires in `new NotificationService(db)` and `{ prune: now => pruneChat(db, now) }`. There is no second loop and no `stop()` change.
 
 `NotificationService.deliverChat(now = new Date())` reuses VAPID, `sendPush`, `push_subscriptions`, the claim SQL and the 404/410 cleanup. It returns `{ sent, failed }` and does nothing when VAPID is off. For each recipient R with at least one subscription and `users.chat_push = 1`:
 

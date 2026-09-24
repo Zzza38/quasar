@@ -4,7 +4,7 @@ import { appRouter } from './router';
 import { Service } from './service';
 import { generateVAPIDKeys } from 'web-push';
 import { openDatabase, type Db } from './db';
-import { CHAT_DELIVERY_ENTITY, CHAT_PUSH_PAYLOAD, NotificationService, chatQuietHours, pushSubscriptionSchema, reminderInstant } from './notifications';
+import { CHAT_DELIVERY_ENTITY, CHAT_PUSH_PAYLOAD, NotificationService, SUPPORT_PUSH_PAYLOAD, chatQuietHours, pushSubscriptionSchema, reminderInstant, supportDeliveryEntity } from './notifications';
 import { CommunityService } from './community';
 import { ChatService } from './chat';
 import { exampleSchedule } from '@/domain/example';
@@ -317,5 +317,200 @@ describe('chat pushes', () => {
     expect(await f.notifications.deliverDue(f.at(20 * MINUTE))).toEqual({ sent: 1, failed: 0 });
     expect(JSON.parse(f.sendPush.mock.calls[1][1])).toMatchObject({ title: 'Quasar reminder', url: '/#tasks' });
     expect(f.deliveries().filter(row => row.entity_id === CHAT_DELIVERY_ENTITY)).toEqual(rows);
+  });
+});
+
+/* ---------- Owner support pushes ---------- */
+
+const DAY = 24 * 60 * MINUTE;
+const REQUEST = 'ZX-SECRET-42 our lunch period moved to 11:40';
+
+function supportFixture(sendPush = vi.fn().mockResolvedValue({})) {
+  const db = openDatabase(':memory:'); databases.push(db);
+  const service = new Service(db, 'owner@example.com');
+  const user = (name: string, email = `${randomUUID()}@example.com`) => {
+    const id = randomUUID();
+    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, email, name, `${name} Privatename`, new Date().toISOString());
+    return id;
+  };
+  // Mixed case on purpose: the owner is matched case-insensitively, as Service.isAdmin does.
+  const owner = user('Owner', 'Owner@Example.com'), alice = user('Alice'), bob = user('Bob'), cara = user('Cara');
+  const school = service.createSchool(alice, { name: 'Community High', location: 'Boston, MA', schedule: exampleSchedule });
+  for (const id of [owner, alice, bob, cara]) service.join(id, { schoolId: school.id, choice: 'community' });
+  const community = new CommunityService(service);
+  const notifications = new NotificationService(db, { vapid, sendPush, ownerEmail: 'owner@example.com' });
+  const subscribe = (id: string, token: string) => notifications.subscribe(id, subscription(token));
+  subscribe(owner, 'owner-laptop'); subscribe(owner, 'owner-phone'); subscribe(alice, 'alice-phone');
+  const deliveries = () => db.prepare("SELECT * FROM notification_deliveries WHERE entity_id LIKE 'support:%' ORDER BY entity_id, subscription_id").all() as { owner_id: string; entity_id: string; reminder_at: string; status: string; last_error: string | null }[];
+  const latest = (table: string) => db.prepare(`SELECT id, created_at FROM ${table} ORDER BY rowid DESC LIMIT 1`).get() as { id: string; created_at: string };
+  const correction = () => { service.requestCorrection(alice, REQUEST); return latest('support_requests'); };
+  const endpoints = () => sendPush.mock.calls.map(call => call[0].endpoint as string);
+  return { db, service, community, notifications, subscribe, deliveries, latest, correction, endpoints, sendPush, owner, alice, bob, cara, school };
+}
+
+describe('owner support pushes', () => {
+  it('pushes a new correction request once to each owner browser, and never to a student', async () => {
+    const f = supportFixture();
+    const request = f.correction();
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 2, failed: 0 });
+    expect(f.endpoints().sort()).toEqual([subscription('owner-laptop').endpoint, subscription('owner-phone').endpoint]);
+    for (const [, payload, options] of f.sendPush.mock.calls) {
+      expect(payload).toBe('{"kind":"support","tag":"quasar-support","url":"/admin"}');
+      expect(payload).toBe(SUPPORT_PUSH_PAYLOAD);
+      for (const secret of ['ZX-SECRET-42', 'lunch', 'Alice', 'Privatename', '@example.com', 'Community High']) expect(payload).not.toContain(secret);
+      expect(options).toMatchObject({ TTL: 3600, urgency: 'normal', timeout: 15_000, vapidDetails: vapid });
+    }
+    expect(f.deliveries()).toHaveLength(2);
+    expect(f.deliveries()).toMatchObject([1, 2].map(() => ({ owner_id: f.owner, entity_id: `support:support_requests:${request.id}`, reminder_at: request.created_at, status: 'sent' })));
+    expect(supportDeliveryEntity('support_requests', request.id)).toBe(`support:support_requests:${request.id}`);
+    expect(JSON.stringify(f.db.prepare('SELECT * FROM notification_deliveries').all())).not.toContain('ZX-SECRET-42');
+  });
+
+  it('never pushes the same item twice, across runs and a fresh service instance', async () => {
+    const f = supportFixture();
+    f.correction();
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 2, failed: 0 });
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    const restarted = new NotificationService(f.db, { vapid, sendPush: f.sendPush, ownerEmail: 'OWNER@example.com ' });
+    expect(await restarted.deliverSupport(new Date(Date.now() + 10 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    // Only the next new item is pushed.
+    f.service.feedback(f.bob, 'The dark theme is hard to read on my phone.');
+    expect(await restarted.deliverSupport()).toEqual({ sent: 2, failed: 0 });
+    expect(f.sendPush).toHaveBeenCalledTimes(4);
+  });
+
+  it('claims each item once when two workers overlap', async () => {
+    const f = supportFixture();
+    f.correction();
+    const other = new NotificationService(f.db, { vapid, sendPush: f.sendPush, ownerEmail: 'owner@example.com' });
+    const results = await Promise.all([f.notifications.deliverSupport(), other.deliverSupport()]);
+    expect(f.sendPush).toHaveBeenCalledTimes(2);
+    expect(results.reduce((total, result) => total + result.sent, 0)).toBe(2);
+  });
+
+  it('never pushes a resolved item, including one resolved while the first browser is being pushed', async () => {
+    const f = supportFixture();
+    const request = f.correction();
+    f.service.resolveRequest(f.owner, request.id);
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    expect(f.deliveries()).toHaveLength(0);
+
+    const during = supportFixture();
+    const pending = during.correction();
+    during.sendPush.mockImplementationOnce(async () => { during.service.resolveRequest(during.owner, pending.id); });
+    expect(await during.notifications.deliverSupport()).toEqual({ sent: 1, failed: 0 });
+    expect(during.endpoints()).toHaveLength(1);
+    expect(during.endpoints()[0]).toMatch(/owner-(laptop|phone)$/);
+    expect(during.deliveries()).toMatchObject([{ status: 'sent' }]);
+  });
+
+  it('never pushes items that arrived more than 24 hours ago', async () => {
+    const f = supportFixture();
+    const request = f.correction();
+    expect(await f.notifications.deliverSupport(new Date(Date.parse(request.created_at) + DAY + 1))).toEqual({ sent: 0, failed: 0 });
+    f.db.prepare('UPDATE support_requests SET created_at=? WHERE id=?').run(new Date(Date.now() - DAY - MINUTE).toISOString(), request.id);
+    f.community.requestVerification(f.alice, { proof: 'Student ID 12345, homeroom 204' });
+    f.db.prepare('UPDATE verification_requests SET created_at=?').run(new Date(Date.now() - 3 * DAY).toISOString());
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    expect(f.deliveries()).toHaveLength(0);
+  });
+
+  it('pushes for all four sources: support requests, verification proofs, reports and proposals awaiting support', async () => {
+    const f = supportFixture();
+    f.service.feedback(f.bob, REQUEST);
+    f.community.requestVerification(f.alice, { proof: 'ZX-SECRET-42 student ID 12345' });
+    f.community.report(f.cara, { userId: f.bob, reason: 'ZX-SECRET-42 rude profile text' });
+    f.community.request(f.alice, f.bob); f.community.respond(f.bob, f.alice, true);
+    const chat = new ChatService(f.service);
+    chat.send(f.bob, f.alice, randomUUID(), REQUEST);
+    chat.report(f.alice, f.bob, { category: 'spam', note: 'ZX-SECRET-42', block: false });
+    // A passed proposal on a support-locked school (inserted directly: a real vote needs ten verified members).
+    // It arrives with the vote that passed it, however long ago it was proposed.
+    const proposal = randomUUID(), days = (count: number) => new Date(Date.now() - count * DAY).toISOString();
+    f.db.prepare("INSERT INTO schedule_proposals(id,school_id,proposer_id,base_version,schedule,summary,status,created_at) VALUES(?,?,?,1,'{}',?,'awaiting-support',?)").run(proposal, f.school.id, f.cara, REQUEST, days(3));
+    f.db.prepare("INSERT INTO proposal_votes(proposal_id,user_id,vote,created_at) VALUES(?,?,'for',?),(?,?,'for',?)").run(proposal, f.cara, days(3), proposal, f.bob, new Date().toISOString());
+    // A proposal still being voted on is not a support item.
+    f.db.prepare("INSERT INTO schedule_proposals(id,school_id,proposer_id,base_version,schedule,summary,status,created_at) VALUES(?,?,?,1,'{}',?,'open',?)").run(randomUUID(), f.school.id, f.bob, REQUEST, new Date().toISOString());
+
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 10, failed: 0 });
+    const entities = [...new Set(f.deliveries().map(row => row.entity_id.split(':').slice(0, 2).join(':')))];
+    expect(entities.sort()).toEqual(['support:reports', 'support:schedule_proposals', 'support:support_requests', 'support:verification_requests']);
+    expect(f.deliveries().filter(row => row.entity_id.startsWith('support:reports:'))).toHaveLength(4);
+    expect(f.deliveries().some(row => row.entity_id === supportDeliveryEntity('schedule_proposals', proposal))).toBe(true);
+    expect(new Set(f.sendPush.mock.calls.map(call => call[1]))).toEqual(new Set([SUPPORT_PUSH_PAYLOAD]));
+    expect(f.endpoints().every(endpoint => endpoint.includes('owner-'))).toBe(true);
+
+    // Handling each one on the admin page stops further pushes for it; a declined proposal is resolved too.
+    f.db.prepare("UPDATE schedule_proposals SET status='declined' WHERE id=?").run(proposal);
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+  });
+
+  it('skips the owner\'s own submissions, and does nothing without keys, an owner email or an owner browser', async () => {
+    const f = supportFixture();
+    f.service.feedback(f.owner, 'Testing the feedback form from the owner account.');
+    f.community.report(f.owner, { userId: f.bob, reason: 'Owner testing the report flow.' });
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+
+    f.correction();
+    expect(await new NotificationService(f.db, { vapid: null, sendPush: f.sendPush, ownerEmail: 'owner@example.com' }).deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    expect(await new NotificationService(f.db, { vapid, sendPush: f.sendPush, ownerEmail: '' }).deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    expect(await new NotificationService(f.db, { vapid, sendPush: f.sendPush, ownerEmail: 'someone-else@example.com' }).deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    f.notifications.unsubscribe(f.owner, subscription('owner-laptop')); f.notifications.unsubscribe(f.owner, subscription('owner-phone'));
+    expect(await f.notifications.deliverSupport()).toEqual({ sent: 0, failed: 0 });
+    expect(f.sendPush).not.toHaveBeenCalled();
+    expect(f.deliveries()).toHaveLength(0);
+  });
+
+  it('records failures with a code only, retries after the lease, and deletes a gone browser', async () => {
+    const send = vi.fn().mockRejectedValueOnce(Object.assign(new Error(`provider said ${REQUEST}`), { statusCode: 500 })).mockResolvedValue({});
+    const f = supportFixture(send);
+    f.correction();
+    const start = Date.now();
+    expect(await f.notifications.deliverSupport(new Date(start))).toEqual({ sent: 1, failed: 1 });
+    expect(f.deliveries().map(row => [row.status, row.last_error]).sort()).toEqual([['failed', 'Push provider HTTP 500'], ['sent', null]]);
+    expect(await f.notifications.deliverSupport(new Date(start + MINUTE))).toEqual({ sent: 0, failed: 0 });
+    expect(await f.notifications.deliverSupport(new Date(start + 5 * MINUTE + 1))).toEqual({ sent: 1, failed: 0 });
+
+    const gone = supportFixture(vi.fn().mockRejectedValue({ statusCode: 410 }));
+    gone.correction();
+    expect(await gone.notifications.deliverSupport()).toEqual({ sent: 0, failed: 2 });
+    expect(gone.db.prepare('SELECT owner_id FROM push_subscriptions').all()).toEqual([{ owner_id: gone.alice }]);
+    expect(gone.deliveries()).toHaveLength(0);
+  });
+
+  it('deletes support delivery rows after 7 days and leaves other rows alone', async () => {
+    const f = supportFixture();
+    const request = f.correction();
+    await f.notifications.deliverSupport();
+    const reminder: Task = { ...task, dueDate: '2026-09-15', dueTime: '12:30' };
+    f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,'homework','task',1,?,0)`).run(f.owner, JSON.stringify(reminder));
+    await f.notifications.deliverDue(new Date('2026-09-15T16:20:00Z'));
+    const arrived = Date.parse(request.created_at);
+    await f.notifications.deliverSupport(new Date(arrived + 7 * DAY - 1));
+    expect(f.deliveries()).toHaveLength(2);
+    await f.notifications.deliverSupport(new Date(arrived + 7 * DAY + 1));
+    expect(f.deliveries()).toHaveLength(0);
+    expect(f.db.prepare('SELECT entity_id FROM notification_deliveries').all()).toEqual([{ entity_id: 'homework' }, { entity_id: 'homework' }]);
+  });
+
+  it('deliverDue and deliverChat ignore support rows', async () => {
+    const f = supportFixture();
+    f.community.request(f.alice, f.owner); f.community.respond(f.owner, f.alice, true);
+    const chat = new ChatService(f.service, () => noon);
+    chat.send(f.alice, f.owner, randomUUID(), SECRET);
+    // A support push one minute before the chat push, well inside chat's 10-minute cap.
+    const request = f.correction();
+    f.db.prepare('UPDATE support_requests SET created_at=? WHERE id=?').run(noon.toISOString(), request.id);
+    expect(await f.notifications.deliverSupport(new Date(noon.getTime() + MINUTE))).toEqual({ sent: 2, failed: 0 });
+    const rows = f.deliveries();
+    expect(await f.notifications.deliverChat(new Date(noon.getTime() + 2 * MINUTE))).toEqual({ sent: 2, failed: 0 });
+    expect(f.sendPush.mock.calls.slice(2).map(call => call[1])).toEqual([CHAT_PUSH_PAYLOAD, CHAT_PUSH_PAYLOAD]);
+    const reminder: Task = { ...task, dueDate: '2026-09-15', dueTime: '12:30' };
+    f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,'homework','task',1,?,0)`).run(f.owner, JSON.stringify(reminder));
+    expect(await f.notifications.deliverDue(new Date(noon.getTime() + 20 * MINUTE))).toEqual({ sent: 2, failed: 0 });
+    expect(JSON.parse(f.sendPush.mock.calls[4][1])).toMatchObject({ title: 'Quasar reminder', url: '/#tasks' });
+    expect(f.deliveries()).toEqual(rows);
+    // And support pushes ignore chat and reminder rows: nothing new to push.
+    expect(await f.notifications.deliverSupport(new Date(noon.getTime() + 21 * MINUTE))).toEqual({ sent: 0, failed: 0 });
   });
 });

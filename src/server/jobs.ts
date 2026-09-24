@@ -3,17 +3,17 @@ import { pruneChat } from './chat';
 import { NotificationService } from './notifications';
 import type { Db } from './db';
 
-type Job = 'calendar' | 'notifications' | 'chat';
+type Job = 'calendar' | 'notifications' | 'chat' | 'support';
 type Jobs = {
   calendar: Pick<CalendarService, 'refreshDue'>;
-  notifications: Pick<NotificationService, 'deliverDue' | 'deliverChat'>;
+  notifications: Pick<NotificationService, 'deliverDue' | 'deliverChat' | 'deliverSupport'>;
   chat: { prune: (now: Date) => void };
 };
 type Options = { intervalMs?: number; onError?: (job: Job) => void };
 
 /**
  * Single sequential loop: a slow cycle cannot overlap the following cycle. One cycle runs
- * calendar refresh → task reminders → chat pushes → chat retention, each step isolated so a
+ * calendar refresh → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
@@ -30,6 +30,8 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     try { await jobs.notifications.deliverDue(); } catch { options.onError?.('notifications'); }
     if (stopped) return;
     try { await jobs.notifications.deliverChat(); } catch { options.onError?.('chat'); }
+    if (stopped) return;
+    try { await jobs.notifications.deliverSupport(); } catch { options.onError?.('support'); }
     if (stopped) return;
     try { jobs.chat.prune(new Date()); } catch { options.onError?.('chat'); }
     if (!stopped) timer = setTimeout(() => { pending = cycle(); }, interval);

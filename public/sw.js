@@ -103,14 +103,17 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-// Notification payloads carry no names, task content or message text: the shown text comes from this
+// Notification payloads carry no names, task content, message or request text: the shown text comes from this
 // fixed table keyed by payload.kind. Anything unknown, including reminder payloads, shows the reminder text.
-const REMINDER_NOTICE = { title: "Quasar reminder", body: "You have a task reminder. Open Quasar to view it.", url: "/#tasks" };
+// A fixed `tag` ignores the payload's; otherwise the payload tag is used, or `fallbackTag` without one.
+const REMINDER_NOTICE = { title: "Quasar reminder", body: "You have a task reminder. Open Quasar to view it.", url: "/#tasks", fallbackTag: "quasar-reminder" };
 const NOTICES = {
-  chat: { title: "Quasar", body: "You have new messages. Open Quasar to read them.", url: "/#messages", tag: "quasar-chat" },
+  chat: { title: "Quasar", body: "You have new messages. Open Quasar to read them.", url: "/#messages", tag: "quasar-chat", renotify: true },
+  // Sent to the owner's browsers only, when a new support item arrives.
+  support: { title: "Quasar support", body: "A new support request is waiting. Open the support page to review it.", url: "/admin", fallbackTag: "quasar-support", renotify: true },
 };
 // Navigation stays on this origin and on these views only.
-const OPEN_URLS = new Set(["/#tasks", "/#messages"]);
+const OPEN_URLS = new Set(["/#tasks", "/#messages", "/admin"]);
 
 self.addEventListener("push", (event) => {
   let payload = {};
@@ -120,10 +123,9 @@ self.addEventListener("push", (event) => {
   const shown = self.registration.showNotification(notice.title, {
     body: notice.body,
     icon: "/icon.svg", badge: "/icon.svg",
-    // A chat push replacing an older one still alerts (the server sends at most one per 10 minutes).
-    ...(notice.tag
-      ? { tag: notice.tag, renotify: true }
-      : { tag: payload && typeof payload.tag === "string" ? payload.tag.slice(0, 200) : "quasar-reminder" }),
+    tag: notice.tag || (payload && typeof payload.tag === "string" && payload.tag ? payload.tag.slice(0, 200) : notice.fallbackTag),
+    // A chat or support push replacing an older one still alerts (chat pushes are capped at one per 10 minutes).
+    ...(notice.renotify ? { renotify: true } : {}),
     data: { url: notice.url },
   });
   // Open tabs refresh the Messages badge (and any visible chat) at once instead of waiting for their next poll.

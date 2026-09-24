@@ -180,6 +180,24 @@ describe("push notifications", () => {
       { client: ORIGIN + "/#messages?with=abc", message: { type: "CHAT_ACTIVITY" } },
     ]);
   });
+  it("shows fixed support text with no request content, opens the support page, and posts no chat activity", async () => {
+    const sw = worker();
+    sw.openTabs("/#today");
+    await sw.push({ kind: "support", tag: "quasar-support", url: "/admin" });
+    await sw.push({ kind: "support", title: "Report about Bob", body: "ZX-SECRET-42", url: "https://evil.example" });
+    expect(sw.notifications).toHaveLength(2);
+    for (const shown of sw.notifications) {
+      expect(shown.title).toBe("Quasar support");
+      expect(shown.options.body).toBe("A new support request is waiting. Open the support page to review it.");
+      expect(shown.options.tag).toBe("quasar-support");
+      expect(shown.options.renotify).toBe(true);
+      expect(shown.options.data).toEqual({ url: "/admin" });
+    }
+    expect(JSON.stringify(sw.notifications)).not.toMatch(/Bob|ZX-SECRET-42|evil/);
+    expect(sw.posted).toEqual([]);
+    await sw.click(sw.notifications[0].options.data.url);
+    expect(sw.navigated).toEqual([ORIGIN + "/admin"]);
+  });
   it("falls back to the reminder text for unknown kinds and never posts chat activity for reminders", async () => {
     const sw = worker();
     sw.openTabs("/#today");
@@ -196,10 +214,12 @@ describe("push notifications", () => {
     const sw = worker();
     await sw.click("/#messages");
     await sw.click("/#tasks");
+    await sw.click("/admin");
     await sw.click("/#messages?with=abc");
+    await sw.click("/admin/../api/trpc");
     await sw.click("javascript:alert(1)");
     await sw.click(undefined);
-    expect(sw.opened).toEqual([ORIGIN + "/#messages", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks"]);
+    expect(sw.opened).toEqual([ORIGIN + "/#messages", ORIGIN + "/#tasks", ORIGIN + "/admin", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks"]);
     const open = worker();
     open.openTabs("/#today");
     await open.click("/#messages");
