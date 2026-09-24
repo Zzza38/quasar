@@ -12,7 +12,7 @@ import { Onboarding, SignOutButton } from './onboarding';
 import { ClassesStep } from './onboarding-classes';
 import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
-import { Icon, Spinner } from './icon';
+import { Icon } from './icon';
 import { CenteredNotice, Shell } from './shell';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
@@ -159,7 +159,8 @@ export function Tracker() {
   }, []);
 
   if (session.authRequired) return <Welcome message={session.error || undefined} />;
-  if (session.loading && !context) return <CenteredNotice title="Opening your schedule…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
+  // No loader: the page stays blank until the device cache or the server answers, so nothing flashes before the app paints.
+  if (session.loading && !context) return <div className="welcome-bg min-h-dvh" aria-busy="true" />;
   if (!context || !snapshot) {
     return <CenteredNotice title="Connect to get started" action={<Button variant="primary" onClick={() => void session.initialize()} busy={session.loading}>Retry connection</Button>}>
       {session.error || 'Connect to the internet and sign in once to set up Quasar on this device.'}
