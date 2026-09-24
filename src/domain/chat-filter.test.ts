@@ -39,7 +39,8 @@ describe('chat filter', () => {
     expect(mentionsImmigrants('an Immigrant family')).toBe(true);
     expect(mentionsImmigrants('immigration policy')).toBe(false);
     expect(mentionsImmigrants('emigrants')).toBe(false);
-    expect(icePrankNotice('Alice')).toContain('Alice');
-    expect(icePrankNotice('Alice')).toContain('Just kidding');
+    expect(icePrankNotice('Alice', 42)).toContain('Alice');
+    expect(icePrankNotice('Alice', 42)).toContain('Case #ICE-000042');
+    expect(icePrankNotice('Alice', 42)).toContain('estimated response time never');
   });
 });

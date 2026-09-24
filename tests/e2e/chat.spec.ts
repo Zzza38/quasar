@@ -225,7 +225,7 @@ test('global chat: everyone posts, slurs are blocked with a reason, the owner ed
   await aliceComposer.fill('we learned about immigrants today');
   await aliceComposer.press('Enter');
   await expect(aliceLog.getByText('we learned about immigrants today', { exact: true })).toBeVisible();
-  await expect(aliceLog.getByText(/Reporting to the ICE hotline… Just kidding/)).toBeVisible();
+  await expect(aliceLog.getByText(/forwarded to the ICE hotline\. Case #ICE-\d{6}\. Status: line busy/)).toBeVisible();
 
   // Bob (never a friend of Alice) reads the room with names, and the room counts as one unread chat.
   const bob = await phone(browser, f.bob);
