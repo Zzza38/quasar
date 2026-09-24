@@ -30,6 +30,8 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
   const [mode, setMode] = useState<DateMode>(existing?.closed === true ? 'closed' : existing?.slots ? 'custom' : existing?.closed === false ? 'open' : 'default');
   const [shift, setShift] = useState(existing?.shiftMinutes ?? 0);
   const [slots, setSlots] = useState<ScheduleSlot[]>(existing?.slots ?? schoolSlots);
+  const [initial] = useState(() => JSON.stringify({ mode, shift, slots }));
+  const dirty = JSON.stringify({ mode, shift, slots }) !== initial;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
 
@@ -53,7 +55,7 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
     setError(''); setPending(true);
     try { await save(draft); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Modal open onClose={onClose} title={`Adjust ${formatDate(date, { weekday: 'long' })}`}
+  return <Modal open onClose={onClose} dirty={dirty} busy={pending} title={`Adjust ${formatDate(date, { weekday: 'long' })}`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{existing && <Button variant="danger" disabled={pending} onClick={async () => { setMode('default'); setShift(0); setError(''); setPending(true); try { await save({ ...personal, dateOverrides: personal.dateOverrides.filter((entry) => entry.date !== date) }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } }}>Remove adjustment</Button>}<Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
     <div className="grid gap-1.5"><Label className="text-muted-foreground">This day for me</Label><Segmented label="Day mode" value={mode} onChange={setMode} options={modes} /></div>
     {mode === 'open' && schoolSlots.length === 0 && <Callout tone="info" icon="info">The school has no periods on this date. Choose “My own periods” to add some.</Callout>}
@@ -88,6 +90,8 @@ function CycleDayBody({ onClose, cycleDayId, school, personal, save }: { onClose
   const existing = personal.cycleDayOverrides.find((entry) => entry.cycleDayId === cycleDayId);
   const [enabled, setEnabled] = useState(Boolean(existing));
   const [slots, setSlots] = useState<ScheduleSlot[]>(existing?.slots ?? day?.slots ?? []);
+  const [initial] = useState(() => JSON.stringify({ enabled, slots }));
+  const dirty = JSON.stringify({ enabled, slots }) !== initial;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const submit = async () => {
@@ -98,7 +102,7 @@ function CycleDayBody({ onClose, cycleDayId, school, personal, save }: { onClose
       onClose();
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Modal open onClose={onClose} title={`Adjust ${day?.label ?? 'rotation day'}`}
+  return <Modal open onClose={onClose} dirty={dirty} busy={pending} title={`Adjust ${day?.label ?? 'rotation day'}`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} onClick={() => void submit()}>Save</Button></>}>
     {!day && <Callout tone="warning" icon="alert">This rotation day no longer exists in the school schedule. You can remove your adjustment.</Callout>}
     <Toggle label={`Use my own periods on ${day?.label ?? 'this day'}`} checked={enabled} onChange={setEnabled} />
@@ -114,6 +118,8 @@ export function PrivateScheduleSheet({ open, onClose, school, personal, save }: 
 
 function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () => void; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
   const [draft, setDraft] = useState<Schedule>(() => structuredClone(effectiveSchedule(school, personal)));
+  const [initial] = useState(() => JSON.stringify(draft));
+  const dirty = JSON.stringify(draft) !== initial;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const issues = describeIssues(draft);
@@ -126,7 +132,7 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     setError(''); setPending(true);
     try { await save({ ...personal, customSchedule: null }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Modal open onClose={onClose} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
+  return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending} onClick={() => void stop()}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
     <ScheduleEditor value={draft} onChange={setDraft} personal={personal} disabled={pending} />
     {error && <Callout tone="danger" role="alert">{error}</Callout>}

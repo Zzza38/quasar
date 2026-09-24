@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
+import { classKey } from '@/domain/class-match';
+import type { ReportCategory } from '@/domain/chat';
+import { countUnreadChats, type ChatPause } from './chat';
 import type { Service, User } from './service';
 
 /**
@@ -30,8 +33,11 @@ export const FRIEND_REQUEST_LIMIT = 30;
 
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
-export type Classmate = { id: string; displayName: string; classes: string[] };
+/** One friend's timetable by period. Two people share a class when the same directory class, or the same words in any order (see classKey), sits in the same period. */
+export type Classmate = { id: string; displayName: string; classes: { periodId: string; name: string; key: string; directoryId?: string }[] };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean };
+export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
+  isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
 type MemberRow = { id: string; display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
 
 export function emailDomain(email: string): string { return email.toLowerCase().split('@')[1] ?? ''; }
@@ -153,8 +159,11 @@ export class CommunityService {
     const summary = this.summarize(viewerId, this.isVerified(viewerId, viewer.schoolId), row);
     const school = this.service.school(row.school_id);
     const shared = friends ? this.personalOf(otherId) : null;
+    // True when the pair's thread holds at least one message; the report panel then offers to include them.
+    const [low, high] = pair(viewerId, otherId);
+    const hasChat = !!this.db.prepare('SELECT 1 FROM chat_threads WHERE user_low=? AND user_high=? AND last_message_at IS NOT NULL').get(low, high);
     return {
-      ...summary, sameSchool, school: { id: school.id, name: school.name, schedule: school.schedule },
+      ...summary, sameSchool, hasChat, school: { id: school.id, name: school.name, schedule: school.schedule },
       friendCount: (this.db.prepare("SELECT count(*) n FROM friendships WHERE status='accepted' AND (user_low=? OR user_high=?)").get(otherId, otherId) as { n: number }).n,
       shared: shared ? { classes: shared.classes, personal: shared } : null,
     };
@@ -248,13 +257,24 @@ export class CommunityService {
     this.service.admin(adminId);
     this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
   }
-  reports(adminId: string) {
+  /** Open reports, danger first, then oldest first. Chat reports carry a snapshot size but never message text. */
+  reports(adminId: string): ReportSummary[] {
     this.service.admin(adminId);
-    return this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
-        r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName
+    const rows = this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
+        r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName,
+        r.thread_id IS NOT NULL isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
+        (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id) historyReports,
+        (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
+        (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
+        p.user_id pausedId, p.until pausedUntil
       FROM reports r JOIN users ru ON ru.id=r.reported_id JOIN users pu ON pu.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
-      WHERE r.resolved_at IS NULL ORDER BY r.created_at`).all() as
-      { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string }[];
+      LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND (p.until IS NULL OR p.until>?)
+      WHERE r.resolved_at IS NULL ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all(now()) as
+      (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null })[];
+    return rows.map(({ isChat, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, ...row }) => ({
+      ...row, isChat: !!isChat, history: { reports: historyReports, removals: historyRemovals, pauses: historyPauses },
+      pause: pausedId ? { until: pausedUntil } : null,
+    }));
   }
   resolveReport(adminId: string, reportId: string, outcome: 'dismissed' | 'removed'): void {
     this.service.admin(adminId);
@@ -279,16 +299,29 @@ export class CommunityService {
     return !!this.db.prepare('SELECT 1 FROM school_bans WHERE school_id=? AND user_id=?').get(schoolId, userId);
   }
   /** Summary counts for the workspace payload. */
-  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[] } {
+  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; unreadChats: number; unreadAt: string; chatPush: boolean } {
     const verification = this.verification(userId);
     const incoming = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='pending' AND requester_id<>? AND (user_low=? OR user_high=?)").get(userId, userId, userId) as { n: number };
     const classmates = this.classmates(userId);
-    return { verification, incomingRequests: incoming.n, friendCount: classmates.length, classmates };
+    // Same SQL as chat.inbox. It does not call ready(), so students still onboarding get 0. unreadAt is the
+    // server's clock when the count was computed, so the client keeps whichever count is newest.
+    const unreadChats = countUnreadChats(this.db, userId);
+    const unreadAt = new Date().toISOString();
+    const chatPush = (this.db.prepare('SELECT chat_push FROM users WHERE id=?').get(userId) as { chat_push: number } | undefined)?.chat_push !== 0;
+    return { verification, incomingRequests: incoming.n, friendCount: classmates.length, classmates, unreadChats, unreadAt, chatPush };
   }
-  /** Each accepted friend with the names of their classes, so the viewer's own timetable can say who they sit with. */
+  /** Each accepted friend with their classes by period, so the viewer's own timetable can say who they sit with. */
   classmates(userId: string): Classmate[] {
     const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId) as { id: string; display_name: string }[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, classes: this.personalOf(row.id).classes.map(cls => cls.name.trim().toLowerCase()) }));
+    return rows.map(row => ({ id: row.id, displayName: row.display_name, classes: classesByPeriod(this.personalOf(row.id)) }));
   }
+}
+
+/** (period, name) pairs for every period the person has assigned a class to. Names are lower-cased for case-insensitive matching. */
+export function classesByPeriod(personal: PersonalSchedule): Classmate['classes'] {
+  return Object.entries(personal.assignments).flatMap(([periodId, classId]) => {
+    const cls = personal.classes.find(entry => entry.id === classId);
+    return cls ? [{ periodId, name: cls.name.trim().toLowerCase(), key: classKey(cls.name), ...(cls.directoryId ? { directoryId: cls.directoryId } : {}) }] : [];
+  }).sort((left, right) => left.periodId.localeCompare(right.periodId));
 }

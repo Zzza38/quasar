@@ -1,7 +1,7 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "quasar-public-shell-v4";
-const SHELL_PATHS = new Set(["/", "/admin"]);
+const CACHE = "quasar-public-shell-v5";
+const SHELL_PATHS = new Set(["/", "/admin", "/help"]);
 
 function publicShell(response, expectedPath) {
   if (!response.ok || response.redirected) return false;
@@ -103,21 +103,43 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-// Notification payloads contain no task content. Navigation stays on this origin.
+// Notification payloads carry no names, task content, message or request text: the shown text comes from this
+// fixed table keyed by payload.kind. Anything unknown, including reminder payloads, shows the reminder text.
+// A fixed `tag` ignores the payload's; otherwise the payload tag is used, or `fallbackTag` without one.
+const REMINDER_NOTICE = { title: "Quasar reminder", body: "You have a task reminder. Open Quasar to view it.", url: "/#tasks", fallbackTag: "quasar-reminder" };
+const NOTICES = {
+  chat: { title: "Quasar", body: "You have new messages. Open Quasar to read them.", url: "/#messages", tag: "quasar-chat", renotify: true },
+  // Sent to the owner's browsers only, when a new support item arrives.
+  support: { title: "Quasar support", body: "A new support request is waiting. Open the support page to review it.", url: "/admin", fallbackTag: "quasar-support", renotify: true },
+};
+// Navigation stays on this origin and on these views only.
+const OPEN_URLS = new Set(["/#tasks", "/#messages", "/admin"]);
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data?.json() || {}; } catch { /* Show a generic reminder. */ }
-  event.waitUntil(self.registration.showNotification("Quasar reminder", {
-    body: "You have a task reminder. Open Quasar to view it.",
+  const kind = payload && typeof payload.kind === "string" && Object.prototype.hasOwnProperty.call(NOTICES, payload.kind) ? payload.kind : null;
+  const notice = kind ? NOTICES[kind] : REMINDER_NOTICE;
+  const shown = self.registration.showNotification(notice.title, {
+    body: notice.body,
     icon: "/icon.svg", badge: "/icon.svg",
-    tag: typeof payload.tag === "string" ? payload.tag.slice(0, 200) : "quasar-reminder",
-    data: { url: "/#tasks" },
-  }));
+    tag: notice.tag || (payload && typeof payload.tag === "string" && payload.tag ? payload.tag.slice(0, 200) : notice.fallbackTag),
+    // A chat or support push replacing an older one still alerts (chat pushes are capped at one per 10 minutes).
+    ...(notice.renotify ? { renotify: true } : {}),
+    data: { url: notice.url },
+  });
+  // Open tabs refresh the Messages badge (and any visible chat) at once instead of waiting for their next poll.
+  const told = kind === "chat"
+    ? self.clients.matchAll({ type: "window" }).then((windows) => { for (const client of windows) client.postMessage({ type: "CHAT_ACTIVITY" }); }).catch(() => undefined)
+    : Promise.resolve();
+  event.waitUntil(Promise.all([shown, told]));
 });
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil((async () => {
-    const target = new URL("/#tasks", self.location.origin).href;
+    const requested = event.notification.data?.url;
+    const path = typeof requested === "string" && OPEN_URLS.has(requested) ? requested : "/#tasks";
+    const target = new URL(path, self.location.origin).href;
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const existing = windows.find(client => new URL(client.url).origin === self.location.origin);
     if (existing) {

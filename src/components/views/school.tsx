@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { pluralize } from '@/lib/format';
-import { cn } from '@/lib/utils';
+import { cn, scrollToId } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon, type IconName } from '../icon';
 import { PrivateScheduleSheet } from '../overrides';
@@ -34,15 +34,19 @@ export function SchoolView({ state }: { state: AppState }) {
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  // "Wrong time?" on Today lands here: open the shared editor, or point at the correction form when editing is locked.
+  // "Wrong time?" on Today lands here: open the shared editor, or, when editing is locked, point at proposals
+  // (the Verify callout there covers unverified members) and fall back to the correction form. The param is
+  // cleared afterwards so a remount does not reopen the editor or scroll again.
   const fix = state.params.get('fix');
+  const { navigate } = state;
   useEffect(() => {
     if (fix !== 'times') return;
     if (!locked && online) setEditing(true);
-    else document.getElementById('correction-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [fix, locked, online]);
+    else scrollToId(locked && document.getElementById('proposals-title') ? 'proposals-title' : 'correction-title', true);
+    navigate('school', {}, { replace: true });
+  }, [fix, locked, online, navigate]);
 
-  return <div className="grid gap-5 animate-in fade-in-0 duration-300">
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">
       <SchoolCrest name={school.name} />
       <div className="grid min-w-0 flex-1 gap-1">
@@ -131,27 +135,47 @@ function SharedEditorSheet({ open, onClose, schedule, initialGrade, schoolId, ve
   return open ? <SharedEditorBody onClose={onClose} schedule={schedule} initialGrade={initialGrade} schoolId={schoolId} version={version} onSaved={onSaved} /> : null;
 }
 
+type Notice = { tone: 'success' | 'warning'; text: string };
+
 function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, onSaved }: { onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<void> }) {
+  // Frozen when the editor opens: the background sync updates the live props, and publishing against them would
+  // pass the server's stale-revision check and silently replace a classmate's newer revision.
+  const [base, setBase] = useState(() => ({ version, schedule }));
+  const [adopt, setAdopt] = useState(false);
+  if (adopt) {
+    setAdopt(false);
+    if (version !== base.version) setBase({ version, schedule });
+  }
   const [grade, setGrade] = useState<Grade>(initialGrade);
   const [copyGrades, setCopyGrades] = useState<Grade[]>([]);
   const [drafts, setDrafts] = useState<Partial<Record<Grade, Schedule>>>({});
-  const draft = drafts[grade] ?? scheduleForGrade(schedule, grade);
+  const baseFor = (entry: Grade, from = base.schedule) => scheduleForGrade(from, entry);
+  const draft = drafts[grade] ?? baseFor(grade);
   const setDraft = (value: Schedule) => setDrafts((current) => ({ ...current, [grade]: value }));
+  const editedGrades = (from = base.schedule, source = drafts) => GRADES.filter((entry) => source[entry] && JSON.stringify(source[entry]) !== JSON.stringify(baseFor(entry, from)));
+  const edited = editedGrades();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [stale, setStale] = useState(false);
+  const moved = version > base.version;
   const issues = describeIssues(draft);
+  const clearMessages = () => { setError(''); setNotice(null); };
   const submit = async () => {
-    setPending(true); setError(''); setStale(false);
+    setPending(true); clearMessages(); setStale(false);
     try {
-      await api.school.update.mutate({ schoolId, expectedVersion: version, schedule: scheduleSchema.parse(draft), grades: [grade, ...copyGrades] });
-      await onSaved();
+      const saved = [grade, ...copyGrades];
+      const updated = await api.school.update.mutate({ schoolId, expectedVersion: base.version, schedule: scheduleSchema.parse(draft), grades: saved });
+      // Move the base to our own revision so the next grade's publish is not rejected as stale.
+      setBase({ version: updated.version, schedule: updated.schedule });
       const remaining = { ...drafts };
-      for (const savedGrade of [grade, ...copyGrades]) delete remaining[savedGrade];
+      for (const savedGrade of saved) delete remaining[savedGrade];
       setDrafts(remaining);
       setCopyGrades([]);
-      if (Object.keys(remaining).length === 0) onClose();
-      else setError(`${gradeLabel(grade)} published. Other grades still have unpublished edits.`);
+      await onSaved();
+      const left = editedGrades(updated.schedule, remaining);
+      if (left.length === 0) onClose();
+      else setNotice({ tone: 'success', text: `${gradeLabel(grade)} published. ${left.map(gradeLabel).join(', ')} ${left.length === 1 ? 'still has' : 'still have'} unpublished edits.` });
     }
     catch (err) {
       const text = errorMessage(err);
@@ -159,15 +183,25 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
       if (/changed\. Reload/i.test(text)) setStale(true);
     } finally { setPending(false); }
   };
-  return <Modal open onClose={onClose} wide fullWidth title="Edit the shared schedule" description="Every member of the school sees your revision. Personal classes and adjustments are never changed by it."
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{stale && <Button variant="secondary" disabled={pending} onClick={async () => { await onSaved(); setStale(false); setError('Reloaded. Your draft is still here; saving now replaces the newer revision.'); }}>Reload latest</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Publish revision</Button></>}>
+  const reload = async () => {
+    setPending(true); clearMessages();
+    try {
+      await onSaved();
+      setAdopt(true);
+      setStale(false);
+      setNotice({ tone: 'warning', text: 'Reloaded. Your draft is still here; publishing now replaces the newer revision.' });
+    } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+  };
+  return <Modal open onClose={onClose} dirty={edited.length > 0} busy={pending} wide fullWidth title="Edit the shared schedule" description="Every member of the school sees your revision. Personal classes and adjustments are never changed by it."
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{stale && <Button variant="secondary" disabled={pending} onClick={() => void reload()}>Reload latest</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Publish revision</Button></>}>
+    {moved && !stale && <Callout tone="warning" icon="alert" role="status" actions={<Button size="sm" variant="secondary" disabled={pending} onClick={() => void reload()}>Reload latest</Button>}>Someone published revision {version} while you were editing. Reload it before publishing; your draft stays.</Callout>}
     <div className="grid gap-4 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04] lg:grid-cols-2">
       <div className="grid gap-2">
         <Label className="text-[13px] font-semibold text-foreground/80">Grade to edit</Label>
-        <Segmented<Grade> label="Grade to edit" value={grade} disabled={pending} options={GRADES.map((entry) => ({ value: entry, label: `${gradeLabel(entry)}${drafts[entry] ? ' *' : ''}` }))} onChange={(entry) => {
+        <Segmented<Grade> label="Grade to edit" value={grade} disabled={pending} options={GRADES.map((entry) => ({ value: entry, label: <>{gradeLabel(entry)}{edited.includes(entry) && <><span aria-hidden="true"> *</span><span className="sr-only"> (edited)</span></>}</> }))} onChange={(entry) => {
           setGrade(entry);
           setCopyGrades([]);
-          setError('');
+          clearMessages();
         }} />
         <Hint>* marks unpublished edits.</Hint>
       </div>
@@ -175,8 +209,8 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
         <Label className="text-[13px] font-semibold text-foreground/80">Copy from</Label>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Copy from">
           {GRADES.filter((entry) => entry !== grade).map((entry) => <Button key={entry} size="sm" disabled={pending} onClick={() => {
-            setDraft(structuredClone(drafts[entry] ?? scheduleForGrade(schedule, entry)));
-            setError('');
+            setDraft(structuredClone(drafts[entry] ?? baseFor(entry)));
+            clearMessages();
           }}>{gradeLabel(entry)}</Button>)}
         </div>
         <Hint>Replace the current {gradeLabel(grade)} draft with another grade’s schedule.</Hint>
@@ -193,6 +227,7 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
         </Toggle>)}
       </div>
     </fieldset>
+    {notice && <Callout tone={notice.tone} icon={notice.tone === 'success' ? 'check' : 'alert'} role="status">{notice.text}</Callout>}
     {error && <Callout tone={stale ? 'warning' : 'danger'} icon="alert" role="alert">{error}</Callout>}
   </Modal>;
 }

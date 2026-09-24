@@ -56,7 +56,8 @@ test('friends share classes only after acceptance, and removal revokes access', 
   // Bob sees the request badge and accepts.
   const bob = await signedIn(browser, f.bob);
   await bob.goto('/#today');
-  await expect(bob.getByLabel('1 friend requests').first()).toBeVisible();
+  // The badge is decorative; the People link carries the count as its description.
+  await expect(bob.getByRole('link', { name: 'People', exact: true }).filter({ visible: true }).first()).toHaveAccessibleDescription('1 friend request');
   await bob.goto('/#people');
   const incoming = bob.getByRole('list', { name: 'Incoming friend requests' }).getByRole('listitem').filter({ hasText: 'Alice' });
   await incoming.getByRole('button', { name: 'Accept' }).click();

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXTAUTH_SECRET: ci-only-secret-that-is-never-used-anywhere-else-1234567890
+          NEXTAUTH_URL: http://localhost:3100
+      - name: Keep the build for the browser job
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: .next
+          retention-days: 1
+          include-hidden-files: true
+
+  browser:
+    name: Browser tests
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-build
+          path: .next
+      - run: npx playwright install --with-deps chromium
+      # playwright.config.ts starts `next start` on port 3100 with its own throwaway database and secrets.
+      - run: npm run test:e2e
+      - name: Keep traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results
+          retention-days: 7

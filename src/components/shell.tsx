@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { PanelLeft } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, scrollToId } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
 import { Icon, Spinner, type IconName } from './icon';
@@ -18,8 +18,25 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
 import type { SyncState, WorkspaceSession } from './use-workspace';
 import { OPEN_ACCOUNT_EVENT } from './setup-checklist';
 
-const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users' };
+const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users', messages: 'message' };
 const NAV_KEY = 'quasar.navigationCollapsed';
+/** Ids of the hidden count descriptions the Tasks, People and Messages links point at with aria-describedby. */
+const COUNT_IDS: Partial<Record<View, string>> = { tasks: 'nav-task-count', people: 'nav-request-count', messages: 'nav-chat-count' };
+/** The pill every nav badge uses: the dock, the top-bar Messages link. */
+const BADGE_PILL = 'grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card';
+
+function badgeText(count: number): string {
+  return count > 99 ? '99+' : String(count);
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Tapping the tab you are already on scrolls back to the top, as in most phone apps. */
+function scrollTopIfActive(active: boolean) {
+  if (active) window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+}
 
 /** The Quasar mark: a flat Q that takes the current text colour, with the sparkle in the theme's primary colour. */
 export function BrandMark({ size = 32, className }: { size?: number; className?: string }) {
@@ -40,8 +57,8 @@ export function BrandLockup({ height = 120, className }: { height?: number; clas
   </span>;
 }
 
-export function Brand({ compact, className }: { compact?: boolean; className?: string }) {
-  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href="#today" aria-label="Quasar home">
+export function Brand({ compact, className, href = '#today' }: { compact?: boolean; className?: string; href?: string }) {
+  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href={href} aria-label="Quasar home">
     <BrandMark />
     {!compact && <span>Quasar</span>}
   </a>;
@@ -63,7 +80,7 @@ export function statusLabel(sync: SyncState): string {
     case 'conflict': return sync.count === 1 ? '1 change needs a choice' : `${sync.count} changes need a choice`;
     case 'failed': return 'Sync failed · saved on this device';
     case 'pending': return sync.count === 1 ? '1 change waiting to sync' : `${sync.count} changes waiting to sync`;
-    case 'offline': return 'Offline · saved on this device';
+    case 'offline': return sync.pending === 1 ? 'Offline · 1 change waiting to sync' : sync.pending > 1 ? `Offline · ${sync.pending} changes waiting to sync` : 'Offline · saved on this device';
     case 'saved': return 'Saved';
   }
 }
@@ -85,27 +102,38 @@ export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName,
     {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
     <span className={cn('truncate', labelClassName)}>{label}</span>
   </>;
+  // Announcements come from the one live region in Shell (the pill renders twice and remounts when it
+  // becomes clickable), so the pill itself stays quiet: a plain button when it acts, a silent status otherwise.
   if (clickable) {
     return <Badge asChild variant="secondary" className={classes}>
-      <button type="button" aria-label={label} role="status" aria-live="polite" title={sync.kind === 'conflict' ? 'Review the changes that need a choice' : 'Retry now'} onClick={sync.kind === 'conflict' ? onConflicts : onRetry}>{inner}</button>
+      <button type="button" aria-label={`${label}. ${sync.kind === 'conflict' ? 'Review' : 'Retry now'}`} title={sync.kind === 'conflict' ? 'Review the changes that need a choice' : 'Retry now'} onClick={sync.kind === 'conflict' ? onConflicts : onRetry}>{inner}</button>
     </Badge>;
   }
-  return <Badge variant="secondary" className={classes} aria-label={label} role="status" aria-live="polite">{inner}</Badge>;
+  return <Badge variant="secondary" className={classes} aria-label={label} role="status" aria-live="off">{inner}</Badge>;
 }
 
 /* ---------- Navigation ---------- */
 
-function TabBar({ view, taskCount, requestCount }: { view: View; taskCount: number; requestCount: number }) {
-  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))' }} aria-label="Main">
+interface NavCounts { taskCount: number; requestCount: number; chatCount: number }
+
+/** The count a nav entry's badge shows, or 0 for none. */
+function badgeCount(id: View, { taskCount, requestCount, chatCount }: NavCounts): number {
+  return id === 'tasks' ? taskCount : id === 'people' ? requestCount : id === 'messages' ? chatCount : 0;
+}
+
+/** The six-tab phone dock. Messages lives in the top bar instead (`dock: false`). */
+function TabBar({ view, counts }: { view: View; counts: NavCounts }) {
+  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }} aria-label="Main">
     <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
-      {VIEWS.map((entry) => {
+      {VIEWS.filter((entry) => entry.dock !== false).map((entry) => {
         const active = entry.id === view;
-        return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} title={entry.label} aria-current={active ? 'page' : undefined}
+        const count = badgeCount(entry.id, counts);
+        return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} aria-describedby={count > 0 ? COUNT_IDS[entry.id] : undefined} title={entry.label} aria-current={active ? 'page' : undefined}
+          onClick={() => scrollTopIfActive(active)}
           className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
           <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
           <span>{entry.label}</span>
-          {entry.id === 'tasks' && taskCount > 0 && <span className="absolute left-[calc(50%+6px)] top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</span>}
-          {entry.id === 'people' && requestCount > 0 && <span className="absolute left-[calc(50%+6px)] top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card" aria-label={`${requestCount} friend requests`}>{requestCount > 99 ? '99+' : requestCount}</span>}
+          {count > 0 && <span aria-hidden="true" className={cn('absolute left-[calc(50%+6px)] top-0.5', BADGE_PILL)}>{badgeText(count)}</span>}
         </a>;
       })}
     </div>
@@ -126,7 +154,23 @@ function useNavigationOpen(): [boolean, (open: boolean) => void] {
 
 /* ---------- Shell ---------- */
 
-export function Shell({ session, context, view, taskCount, children, gradeSettings }: { session: WorkspaceSession; context: WorkspaceContext; view: View; taskCount: number; children: ReactNode; gradeSettings?: ReactNode }) {
+export interface ShellProps {
+  session: WorkspaceSession;
+  context: WorkspaceContext;
+  view: View;
+  taskCount: number;
+  /** Unread chats for the Messages badges; null while offline, which hides both badges. */
+  chatUnread: number | null;
+  /** A phone chat thread: no dock, and the main area becomes a fixed-height column sized by `--chat-h`. */
+  immersive: boolean;
+  /** The account-wide "Message notifications" switch. */
+  chatPush: boolean;
+  onChatPush: (enabled: boolean) => Promise<void>;
+  children: ReactNode;
+  gradeSettings?: ReactNode;
+}
+
+export function Shell({ session, context, view, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings }: ShellProps) {
   const [account, setAccount] = useState(false);
   useEffect(() => {
     const open = () => setAccount(true);
@@ -136,15 +180,51 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
   const [navOpen, setNavOpen] = useNavigationOpen();
   const { sync, online, snapshot } = session;
   const requestCount = context.community?.incomingRequests ?? 0;
+  // Offline (null) hides the chat badges so a stale count never looks current.
+  const chatCount = online ? chatUnread ?? 0 : 0;
+  const counts: NavCounts = { taskCount, requestCount, chatCount };
+  const onMessages = view === 'messages';
+  const chatCountId = chatCount > 0 ? COUNT_IDS.messages : undefined;
   const displayName = context.user.displayName || 'Your account';
   const initials = (context.user.displayName || context.user.email || 'Q').slice(0, 1).toUpperCase();
-  const conflictsAnchor = () => { document.getElementById('conflicts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
+  const label = VIEWS.find((entry) => entry.id === view)?.label ?? 'Today';
+
+  // Name the tab after the view, and after a view change (not the first render) move focus to the new
+  // view's heading so screen readers announce the page. A dialog or field the view focused itself wins.
+  const shownView = useRef<View | null>(null);
+  useEffect(() => {
+    document.title = `${label} · Quasar`;
+    const previous = shownView.current;
+    shownView.current = view;
+    if (!previous || previous === view) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active.closest('#main, [role="dialog"], [role="alertdialog"]')) return;
+    const main = document.getElementById('main');
+    const target = main?.querySelector<HTMLElement>('h1') ?? main;
+    if (!target) return;
+    if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
+    target.classList.add('outline-none');
+    target.focus({ preventScroll: true });
+  }, [view, label]);
+  useEffect(() => () => { document.title = 'Quasar'; }, []);
+
+  const skipToMain = (event: MouseEvent<HTMLAnchorElement>) => {
+    // #main is not a route; changing the hash would open Today.
+    event.preventDefault();
+    document.getElementById('main')?.focus();
+  };
 
   // The tooltip provider lives here rather than in the server layout: a client
   // boundary directly under <body> made the prerendered page fail to hydrate.
   return <TooltipProvider><SidebarProvider open={navOpen} onOpenChange={setNavOpen} className="app app-canvas" style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties}>
-    <a className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg" href="#main">Skip to content</a>
+    <a className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg" href="#main" onClick={skipToMain}>Skip to content</a>
+    {/* The single live region for sync status: the visible pills are hidden at one breakpoint or the other. */}
+    <span role="status" aria-live="polite" className="sr-only">{statusLabel(sync)}</span>
+    {taskCount > 0 && <span id={COUNT_IDS.tasks} hidden>{taskCount === 1 ? '1 open task' : `${taskCount} open tasks`}</span>}
+    {requestCount > 0 && <span id={COUNT_IDS.people} hidden>{requestCount === 1 ? '1 friend request' : `${requestCount} friend requests`}</span>}
+    {chatCount > 0 && <span id={COUNT_IDS.messages} hidden>{chatCount === 1 ? '1 unread chat' : `${chatCount} unread chats`}</span>}
 
     <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
@@ -168,15 +248,15 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
             <SidebarMenu className="gap-1" aria-label="Main">
               {VIEWS.map((entry) => {
                 const active = entry.id === view;
+                const count = badgeCount(entry.id, counts);
                 return <SidebarMenuItem key={entry.id}>
                   <SidebarMenuButton asChild isActive={active} tooltip={entry.label} className="h-10 gap-3 rounded-xl px-3 text-[14px] font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground data-active:bg-primary-soft data-active:text-primary-soft-foreground data-active:hover:bg-primary-soft data-active:hover:text-primary-soft-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:text-foreground group-data-[collapsible=icon]:[&_svg]:size-5">
-                    <a href={`#${entry.id}`} aria-label={entry.label} aria-current={active ? 'page' : undefined}>
+                    <a href={`#${entry.id}`} aria-label={entry.label} aria-describedby={count > 0 ? COUNT_IDS[entry.id] : undefined} aria-current={active ? 'page' : undefined} onClick={() => scrollTopIfActive(active)}>
                       <Icon name={VIEW_ICONS[entry.id]} size={18} strokeWidth={active ? 2.4 : 2} />
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
-                  {entry.id === 'people' && requestCount > 0 && <SidebarMenuBadge className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums" aria-label={`${requestCount} friend requests`}>{requestCount > 99 ? '99+' : requestCount}</SidebarMenuBadge>}
-                  {entry.id === 'tasks' && taskCount > 0 && <SidebarMenuBadge className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums" aria-label={`${taskCount} open tasks`}>{taskCount > 99 ? '99+' : taskCount}</SidebarMenuBadge>}
+                  {count > 0 && <SidebarMenuBadge aria-hidden="true" className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums">{badgeText(count)}</SidebarMenuBadge>}
                 </SidebarMenuItem>;
               })}
             </SidebarMenu>
@@ -201,51 +281,65 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
     </Sidebar>
 
     <SidebarInset className="min-w-0 bg-transparent">
-      <header className="app-topbar glass sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-foreground/[0.06] px-4 lg:hidden">
+      <header className="app-topbar glass sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-foreground/[0.06] pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:hidden">
         <Brand />
         <div className="flex items-center gap-2">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="hidden min-[480px]:inline" />
-          <button type="button" className="rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
+          {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
+              it would become the accessible description whenever there is no unread count. */}
+          <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
+            className={cn('relative grid size-10 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-foreground hover:bg-muted')}>
+            <Icon name="message" size={21} strokeWidth={onMessages ? 2.4 : 2} />
+            {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
+          </a>
+          <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar initials={initials} />
           </button>
         </div>
       </header>
-      <div className="app-main mx-auto w-full max-w-[1120px] px-4 pt-5 pb-[calc(var(--nav-h)+28px)] lg:px-8 lg:pt-8 lg:pb-12" id="main">
-        <div className="mb-4 grid gap-3 empty:hidden">
+      {/* On Messages the desktop main area is a viewport-high column so only the list and the log scroll.
+          A phone thread (immersive) is a fixed-height column sized to the visual viewport by useChatViewport. */}
+      <div className={cn('app-main mx-auto w-full max-w-[1120px] px-4 pt-5 outline-none lg:px-8 lg:pt-8',
+        immersive ? 'flex flex-col pb-0 max-lg:h-[var(--chat-h,calc(100dvh_-_3.5rem))]' : 'pb-[calc(var(--nav-h)+28px)]',
+        onMessages ? 'lg:flex lg:h-dvh lg:flex-col lg:pb-8' : 'lg:pb-12')} id="main" tabIndex={-1}>
+        <div className="mb-4 grid shrink-0 gap-3 empty:hidden">
           {session.error && <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout>}
-          {!online && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Schedule and task changes stay saved on this device until you reconnect.{!context.school && ' Connect to finish school setup.'}</Callout>}
-          {online && session.offlineReady === false && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Retry offline setup</Button>}>Offline reopening is not ready yet. Keep this page open until setup finishes.</Callout>}
+          {/* Messages shows its own offline callout; two stacked banners would crowd a phone thread. */}
+          {!online && !onMessages && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Schedule and task changes stay saved on this device until you reconnect.{!context.school && ' Connect to finish school setup.'}</Callout>}
+          {online && session.offlineReady === false && session.offlineSupported && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Try again</Button>}>Quasar couldn’t save itself to this device, so it may not open without signal.</Callout>}
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
         {children}
       </div>
-      <TabBar view={view} taskCount={taskCount} requestCount={requestCount} />
+      {!immersive && <TabBar view={view} counts={counts} />}
     </SidebarInset>
 
     <Sheet open={account} onOpenChange={setAccount}>
-      <SheetContent side="right" className="w-full gap-0 border-l-0 p-0 text-foreground shadow-pop sm:max-w-md">
+      {/* data-[side=right]: prefixes so these beat the sheet's own w-3/4 and sm:max-w-sm (full width on phones). */}
+      <SheetContent side="right" className="gap-0 border-l-0 p-0 text-foreground shadow-pop data-[side=right]:w-full data-[side=right]:sm:max-w-md">
         <SheetHeader className="border-b px-5 py-4">
           <SheetTitle className="text-[17px] font-bold">Account</SheetTitle>
-          <SheetDescription className="sr-only">Your profile, appearance, reminders and sign-out.</SheetDescription>
+          <SheetDescription className="sr-only">Your profile, appearance, notifications and sign-out.</SheetDescription>
         </SheetHeader>
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 py-5">
+        {/* auto-rows-max: the summary hides its overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
+        <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <div className="flex items-center gap-3.5">
             <UserAvatar initials={initials} size="lg" className="size-14 text-xl" />
             <div className="min-w-0"><strong className="block truncate text-[16px] font-bold">{displayName}</strong><Hint className="truncate">{context.user.fullName}</Hint><Hint className="truncate">{context.user.email}</Hint></div>
           </div>
-          <dl className="grid overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
+          <dl className="grid shrink-0 overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
             <div><dt className="text-muted-foreground">School</dt><dd className="text-right font-semibold">{context.school?.name ?? 'Not chosen yet'}</dd></div>
             {context.school && <div><dt className="text-muted-foreground">Verification</dt><dd className="text-right font-semibold">{context.community?.verification.status === 'verified' ? 'Verified' : context.community?.verification.status === 'pending' ? 'Under review' : 'Not verified'}</dd></div>}
             <div><dt className="text-muted-foreground">Sync</dt><dd className="text-right font-semibold">{statusLabel(sync)}</dd></div>
-            <div><dt className="text-muted-foreground">Offline copy</dt><dd className="text-right font-semibold">{session.offlineReady === true ? 'Ready on this device' : session.offlineReady === false ? 'Not ready' : 'Preparing…'}</dd></div>
+            <div><dt className="text-muted-foreground">Works offline</dt><dd className="text-right font-semibold">{session.offlineReady === true ? 'Yes, on this device' : session.offlineReady === null ? 'Getting ready…' : session.offlineSupported ? 'Not yet' : 'Not in this browser'}</dd></div>
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
           <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
-          <div className="grid gap-3"><Eyebrow>Reminders</Eyebrow><NotificationSettings accountId={context.user.id} online={online} /></div>
+          <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           <div className="grid gap-2 border-t pt-5">
-            <Button icon="info" onClick={() => { window.open('/help', '_blank', 'noopener'); }}>Help and FAQ</Button>
+            <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
-            <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.syncing || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
+            <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
             {!online && <Hint>Signing out removes this account’s saved data from this device, so it needs a connection to make sure everything is uploaded first.</Hint>}
             {snapshot && snapshot.pending > 0 && online && <Hint>{snapshot.pending === 1 ? '1 change is' : `${snapshot.pending} changes are`} still waiting to sync. You will be asked what to do with them.</Hint>}
           </div>
@@ -253,8 +347,8 @@ export function Shell({ session, context, view, taskCount, children, gradeSettin
       </SheetContent>
     </Sheet>
 
-    <Modal open={session.logout.asking} onClose={session.cancelLogout} title="Sync before signing out?" description="Signing out removes this account’s saved data from this device."
-      footer={<><Button variant="ghost" disabled={session.logout.pending} onClick={session.cancelLogout}>Cancel</Button><Spacer /><Button variant="danger" disabled={session.logout.pending || !online || session.syncing} onClick={() => void session.finishLogout(true)}>Discard and sign out</Button><Button variant="primary" busy={session.logout.pending} disabled={!online || session.syncing || (snapshot?.conflicts.length ?? 0) > 0} onClick={() => void session.finishLogout(false)}>Sync and sign out</Button></>}>
+    <Modal open={session.logout.asking} onClose={session.cancelLogout} busy={session.logout.pending} title="Sync before signing out?" description="Signing out removes this account’s saved data from this device."
+      footer={<><Button variant="ghost" disabled={session.logout.pending} onClick={session.cancelLogout}>Cancel</Button><Spacer /><Button variant="danger" disabled={session.logout.pending || !online} onClick={() => void session.finishLogout(true)}>Discard and sign out</Button><Button variant="primary" busy={session.logout.pending} disabled={!online || (snapshot?.conflicts.length ?? 0) > 0} onClick={() => void session.finishLogout(false)}>Sync and sign out</Button></>}>
       <p className="text-sm">{snapshot?.pending === 1 ? '1 change is' : `${snapshot?.pending ?? 0} changes are`} still waiting to sync.</p>
       {(snapshot?.conflicts.length ?? 0) > 0 && <Callout tone="warning" icon="alert">Some changes need a choice first. Resolve them, or discard everything waiting.</Callout>}
       {session.error && <Callout tone="danger" role="alert">{session.error}</Callout>}

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { taskSchema, type Task } from '@/domain/task';
-import { addDays, classColor, daysBetween } from '@/lib/format';
+import { addDays, classColor, daysBetween, formatTimeZone } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { sortByDue, taskItems } from '../app-state';
@@ -15,7 +15,7 @@ import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Toggle } from '../ui/toggle';
-import { QuickAdd, TaskRow } from './today';
+import { QuickAdd, TaskRow, useCompletionUndo } from './today';
 
 const emptyTask: Task = { title: '', dueDate: null, dueTime: null, classId: null, notes: '', completed: false };
 
@@ -31,7 +31,8 @@ export function TasksView({ state }: { state: AppState }) {
   const [priorityFilter, setPriorityFilter] = useState('');
   const [sort, setSort] = useState('due');
   const editParam = state.params.get('edit');
-  useEffect(() => { if (editParam) { setEditing(editParam); state.navigate('tasks'); } }, [editParam, state]);
+  const { onComplete, undoBar } = useCompletionUndo(state);
+  useEffect(() => { if (editParam) { setEditing(editParam); state.navigate('tasks', undefined, { replace: true }); } }, [editParam, state]);
 
   const filtered = open.filter((item) => (!classFilter || item.task.classId === classFilter) && (!priorityFilter || (item.task.priority ?? 'normal') === priorityFilter));
   if (sort === 'priority') { const rank = { high: 0, normal: 1, low: 2 }; filtered.sort((a, b) => rank[a.task.priority ?? 'normal'] - rank[b.task.priority ?? 'normal']); }
@@ -45,22 +46,25 @@ export function TasksView({ state }: { state: AppState }) {
   ].filter((group) => group.items.length > 0);
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter((item) => item.task.dueDate && item.task.dueDate < state.today).length;
-  const filterToggle = 'h-8 gap-1.5 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
+  const filterToggle = 'h-9 shrink-0 gap-1.5 pointer-coarse:h-10 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
 
-  return <div className="grid gap-5 animate-in fade-in-0 duration-300">
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Tasks" eyebrow="To do" description={open.length === 0 ? 'Nothing open. Nice.' : `${open.length} open${overdue ? ` · ${overdue} overdue` : ''}${completed.length > 0 ? ` · ${completed.length} done` : ''}`}
       actions={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>New task</Button>} />
-    <QuickAdd onAdd={(title) => state.saveTask(crypto.randomUUID(), { ...emptyTask, title })} placeholder="Quick add a task, then press Enter" />
-    {(open.length > 0 || classFilter || priorityFilter) && <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
-      {state.personal.classes.length > 0 && <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by class">
+    <QuickAdd today={state.today} classes={state.personal.classes} onAdd={(title, extra) => state.saveTask(crypto.randomUUID(), { ...emptyTask, title, dueDate: extra.dueDate ?? null, classId: extra.classId ?? null })} />
+    {undoBar}
+    {(open.length > 0 || classFilter || priorityFilter) && <div className="relative flex flex-wrap items-center gap-x-4 gap-y-2.5 max-sm:-mx-4 max-sm:-my-1 max-sm:flex-nowrap max-sm:gap-x-3 max-sm:overflow-x-auto max-sm:px-4 max-sm:py-1 max-sm:[scrollbar-width:none]">
+      {/* On phones the class chips and the two selects share one sideways-scrolling row, however many classes there are.
+          `relative` keeps each Select's hidden native <select> inside the scroller; otherwise it widens the page on phones. */}
+      {state.personal.classes.length > 0 && <div className="flex flex-wrap gap-1.5 max-sm:shrink-0 max-sm:flex-nowrap" role="group" aria-label="Filter by class">
         <Toggle pressed={classFilter === ''} onPressedChange={() => setClassFilter('')} className={filterToggle}>All</Toggle>
         {state.personal.classes.map((cls) => <Toggle key={cls.id} pressed={classFilter === cls.id} onPressedChange={() => setClassFilter(classFilter === cls.id ? '' : cls.id)} className={filterToggle}><ColorDot color={classColor(cls.id, 'class', cls.color).dot} size={8} />{cls.name}</Toggle>)}
       </div>}
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0 max-sm:shrink-0 max-sm:flex-nowrap">
         <label className="sr-only" htmlFor="priority-filter">Priority</label>
-        <Select id="priority-filter" small className="w-auto" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">All priorities</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></Select>
+        <Select id="priority-filter" small className="w-auto shrink-0" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">All priorities</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></Select>
         <label className="sr-only" htmlFor="task-sort">Sort within each group</label>
-        <Select id="task-sort" small className="w-auto" value={sort} onChange={(event) => setSort(event.target.value)}><option value="due">Sort by due time</option><option value="priority">Sort by priority</option></Select>
+        <Select id="task-sort" small className="w-auto shrink-0" value={sort} onChange={(event) => setSort(event.target.value)}><option value="due">Sort by due time</option><option value="priority">Sort by priority</option></Select>
       </div>
     </div>}
     {groups.length === 0 && <Card><EmptyState icon="checkCircle" title={classFilter || priorityFilter ? 'No matching open tasks' : 'All clear'} action={!(classFilter || priorityFilter) ? <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add a task</Button> : <Button onClick={() => { setClassFilter(''); setPriorityFilter(''); }}>Clear filters</Button>}>{classFilter || priorityFilter ? 'Try another filter or add a task.' : 'Add homework, forms, practice, anything you need to remember.'}</EmptyState></Card>}
@@ -70,7 +74,7 @@ export function TasksView({ state }: { state: AppState }) {
           <span aria-hidden="true" className={cn('size-2 rounded-full', GROUP_TONES[group.title])} />
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
         </h2>
-        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} showDate={group.title !== 'Today' && group.title !== 'Tomorrow'} />)}</ul>
+        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={group.title !== 'Today' && group.title !== 'Tomorrow'} />)}</ul>
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
@@ -96,20 +100,26 @@ function FormGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function TaskSheet({ open, onClose, initial, current, classes, today, timeZone, onSave, onDelete }: { open: boolean; onClose: () => void; initial: Task | null; current?: Task | null; classes: Array<{ id: string; name: string; color?: string }>; today: string; timeZone: string; onSave: (task: Task) => Promise<void>; onDelete?: () => Promise<void> }) {
-  const [draft, setDraft] = useState<Task>(initial ?? emptyTask);
+  const [original, setOriginal] = useState<Task>(initial ?? emptyTask);
+  const [draft, setDraft] = useState<Task>(original);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const serialized = JSON.stringify(current);
   const [acknowledged, setAcknowledged] = useState(serialized);
   const changed = current !== undefined && serialized !== acknowledged;
   const isNew = current === undefined;
+  // Decided once per opening (the sheet is keyed by the task): a task deleted while the form is open keeps the draft and shows ChangedWhileEditing.
+  const [missingAtOpen] = useState(open && initial === null && !isNew);
+  const deleted = current === null;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
-  if (open && initial === null && !isNew) return <Modal open onClose={onClose} title="Task not found"><p className="text-sm text-muted-foreground">This task was deleted.</p></Modal>;
+  if (open && missingAtOpen) return <Modal open onClose={onClose} title="Task not found"><p className="text-sm text-muted-foreground">This task was deleted.</p></Modal>;
   const quick = [{ label: 'Today', offset: 0 }, { label: 'Tomorrow', offset: 1 }, { label: 'In 2 days', offset: 2 }, { label: 'Next week', offset: 7 }];
-  return <Modal open={open} onClose={onClose} title={isNew ? 'New task' : 'Edit task'}
-    footer={<>{onDelete && <Button variant="danger" disabled={pending || changed} onClick={() => { if (confirm('Delete this task?')) void run(onDelete); }}>Delete</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="task-form" type="submit" busy={pending} disabled={changed || !draft.title.trim()}>{isNew ? 'Add task' : 'Save'}</Button></>}>
+  const reminderZone = formatTimeZone(draft.reminder?.timeZone ?? timeZone);
+  return <Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'New task' : 'Edit task'}
+    footer={<>{onDelete && !deleted && <Button variant="danger" disabled={pending || changed} onClick={() => { if (confirm('Delete this task?')) void run(onDelete); }}>Delete</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="task-form" type="submit" busy={pending} disabled={changed || !draft.title.trim()}>{isNew || deleted ? 'Add task' : 'Save'}</Button></>}>
     <form id="task-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void run(() => onSave(taskSchema.parse({ ...draft, title: draft.title.trim() }))); }}>
-      <Field label="Task" htmlFor="task-title"><Input id="task-title" autoFocus required maxLength={300} value={draft.title} placeholder="What needs to get done?" className="h-12 text-[17px] font-semibold" onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>
+      <Field label="Task" htmlFor="task-title"><Input id="task-title" autoFocus={isNew} required maxLength={300} value={draft.title} placeholder="What needs to get done?" className="h-12 text-[17px] font-semibold" onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>
       <FormGroup title="When">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Due date" htmlFor="task-date"><Input id="task-date" type="date" value={draft.dueDate ?? ''} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value || null, dueTime: event.target.value ? draft.dueTime : null, recurrence: event.target.value ? (draft.recurrence ? { ...draft.recurrence, anchorDate: event.target.value } : draft.recurrence) : null, reminder: event.target.value ? draft.reminder : null })} /></Field>
@@ -141,11 +151,11 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
       <FormGroup title="Repeat and remind">
         {!draft.imported && <Field label="Repeat" htmlFor="task-repeat" hint={!draft.dueDate ? 'Pick a due date first' : 'Completing this task creates the next occurrence after syncing.'}><Select id="task-repeat" disabled={!draft.dueDate} value={draft.recurrence?.frequency ?? ''} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value ? { frequency: event.target.value as NonNullable<Task['recurrence']>['frequency'], interval: draft.recurrence?.interval ?? 1, until: draft.recurrence?.until ?? null, anchorDate: draft.dueDate! } : null })}><option value="">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></Select></Field>}
         {draft.recurrence && <div className="grid gap-3 sm:grid-cols-2"><Field label={`Every (${draft.recurrence.frequency === 'daily' ? 'days' : draft.recurrence.frequency === 'weekly' ? 'weeks' : 'months'})`} htmlFor="task-interval"><Input id="task-interval" type="number" min={1} max={365} required value={draft.recurrence.interval} onChange={(event) => setDraft({ ...draft, recurrence: { ...draft.recurrence!, interval: Number(event.target.value) } })} /></Field><Field label="Repeat until (optional)" htmlFor="task-until"><Input id="task-until" type="date" min={draft.dueDate ?? undefined} value={draft.recurrence.until ?? ''} onChange={(event) => setDraft({ ...draft, recurrence: { ...draft.recurrence!, until: event.target.value || null } })} /></Field></div>}
-        <Field label="Reminder" htmlFor="task-reminder" hint={draft.dueDate ? `Uses ${draft.reminder?.timeZone ?? timeZone}${!draft.dueTime ? ' at 9:00 AM for date-only tasks' : ''}. Enable browser notifications in Account.` : 'Pick a due date first'}><Select id="task-reminder" disabled={!draft.dueDate} value={draft.reminder ? String(draft.reminder.minutesBefore) : ''} onChange={(event) => setDraft({ ...draft, reminder: event.target.value !== '' ? { minutesBefore: Number(event.target.value), timeZone } : null })}><option value="">No reminder</option><option value="0">At due time</option><option value="10">10 minutes before</option><option value="30">30 minutes before</option><option value="60">1 hour before</option><option value="1440">1 day before</option>{draft.reminder && ![0, 10, 30, 60, 1440].includes(draft.reminder.minutesBefore) && <option value={draft.reminder.minutesBefore}>{draft.reminder.minutesBefore} minutes before</option>}</Select></Field>
+        <Field label="Reminder" htmlFor="task-reminder" hint={draft.dueDate ? `Reminders use ${reminderZone}.${!draft.dueTime ? ' With no due time, you get the reminder at 9:00 AM.' : ''} Turn on notifications in Account.` : 'Pick a due date first'}><Select id="task-reminder" disabled={!draft.dueDate} value={draft.reminder ? String(draft.reminder.minutesBefore) : ''} onChange={(event) => setDraft({ ...draft, reminder: event.target.value !== '' ? { minutesBefore: Number(event.target.value), timeZone } : null })}><option value="">No reminder</option><option value="0">At due time</option><option value="10">10 minutes before</option><option value="30">30 minutes before</option><option value="60">1 hour before</option><option value="1440">1 day before</option>{draft.reminder && ![0, 10, 30, 60, 1440].includes(draft.reminder.minutesBefore) && <option value={draft.reminder.minutesBefore}>{draft.reminder.minutesBefore} minutes before</option>}</Select></Field>
       </FormGroup>
       <Field label="Notes" htmlFor="task-notes"><Textarea id="task-notes" maxLength={10000} value={draft.notes} placeholder="Details, links, page numbers…" onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></Field>
       {!isNew && <div className="flex items-center gap-2.5 rounded-2xl bg-muted/60 px-4 py-3 ring-1 ring-inset ring-foreground/[0.04]"><Checkbox id="task-completed" className="size-5 rounded-full [&_svg]:size-3.5" checked={draft.completed} onCheckedChange={(checked) => setDraft({ ...draft, completed: checked === true })} /><Label htmlFor="task-completed" className="font-semibold">Completed</Label></div>}
-      {changed && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={taskFields(classes)} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setAcknowledged(serialized); } else onClose(); }} />}
+      {changed && !pending && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={taskFields(classes)} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setOriginal(current); setAcknowledged(serialized); } else onClose(); }} />}
       {error && <Callout tone="danger" role="alert">{error}</Callout>}
     </form>
   </Modal>;

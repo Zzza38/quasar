@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BookOpen, Calendar, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, Moon, Palette, Pencil, Plus, RefreshCw, Search, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BellOff, BookOpen, Calendar, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, MessageCircle, Moon, Palette, Pencil, Plus, RefreshCw, Search, SendHorizontal, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -52,6 +52,9 @@ const icons = {
   grip: GripVertical,
   drag: GripHorizontal,
   bell: Bell,
+  bellOff: BellOff,
+  message: MessageCircle,
+  send: SendHorizontal,
   palette: Palette,
   spinner: LoaderCircle,
 } satisfies Record<string, LucideIcon>;

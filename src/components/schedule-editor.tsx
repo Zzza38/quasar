@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
-import { addDays, browserTimeZone, formatDate, formatRange, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
+import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { Icon } from './icon';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
@@ -167,7 +167,7 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
     <div className="grid gap-2">
       {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-xl bg-muted/60 p-2 ring-1 ring-inset ring-foreground/[0.04]">
         <span aria-hidden="true" className="grid size-7 place-items-center rounded-lg bg-card text-[11px] font-extrabold text-muted-foreground shadow-card">{index + 1}</span>
-        <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <Hint>Unscheduled</Hint>}</div>
+        <div className="grid gap-1"><Input small aria-label={`Period ${index + 1} name`} placeholder="Period name" maxLength={120} value={period.label} disabled={disabled} onChange={(event) => update(index, { label: event.target.value })} />{!scheduled.has(period.id) && <Hint>No times set</Hint>}</div>
         <Select small aria-label={`Period ${index + 1} type`} value={period.kind} disabled={disabled} className="w-[104px]" onChange={(event) => update(index, { kind: event.target.value as SchoolPeriod['kind'] })}>
           <option value="class">Class</option><option value="lunch">Lunch</option><option value="other">Other</option>
         </Select>
@@ -342,6 +342,6 @@ export function ScheduleSummary({ schedule }: { schedule: Schedule }): ReactNode
     <Chip icon="book">{classes} class periods</Chip>
     {lunches > 0 && <Chip icon="coffee">{lunches === 1 ? 'Lunch' : `${lunches} lunch waves`}</Chip>}
     {schedule.exceptions.length > 0 && <Chip icon="calendar">{schedule.exceptions.length} exceptions</Chip>}
-    <Chip icon="clock">{schedule.timeZone.replaceAll('_', ' ')}</Chip>
+    <Chip icon="clock">{formatTimeZone(schedule.timeZone)}</Chip>
   </div>;
 }

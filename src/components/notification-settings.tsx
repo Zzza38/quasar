@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { serviceWorkerEnabled } from '@/client/service-worker-support';
 import { api, errorMessage } from '@/client/api';
 import { Icon } from './icon';
-import { Button, ErrorText, Hint } from './primitives';
+import { Button, ErrorText, Hint, Toggle } from './primitives';
 import { Label } from './ui/label';
 
 function applicationKey(value: string): Uint8Array<ArrayBuffer> {
@@ -30,37 +30,47 @@ async function readyRegistration(): Promise<ServiceWorkerRegistration> {
   });
 }
 
-export function NotificationSettings({ accountId, online }: { accountId: string; online: boolean }) {
+export function NotificationSettings({ accountId, online, chatPush, onChatPush }: { accountId: string; online: boolean; chatPush: boolean; onChatPush: (enabled: boolean) => Promise<void> }) {
   const [config, setConfig] = useState<{ enabled: boolean; publicKey: string | null } | null>(null);
   const [supported, setSupported] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission>('default');
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // The account-wide chat switch: the student's choice shows at once and stays until the workspace catches up.
+  const [chatChoice, setChatChoice] = useState<boolean | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState('');
+  useEffect(() => { if (chatChoice !== null && chatChoice === chatPush && !chatBusy) setChatChoice(null); }, [chatChoice, chatPush, chatBusy]);
   const storageKey = `quasar-push:${accountId}`;
+  // The server's push setup is kept while offline (the chat switch then shows as disabled); another account starts over.
+  useEffect(() => { setConfig(null); setChatChoice(null); setChatError(''); }, [accountId]);
   useEffect(() => {
     let alive = true;
     const supported = serviceWorkerEnabled && window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
-    setSupported(supported); setEnabled(false); setConfig(null); setError('');
-    if (!supported) return;
-    setPermission(Notification.permission);
+    setSupported(supported); setEnabled(false); setError('');
+    if (supported) setPermission(Notification.permission);
     if (!online) return;
-    // Sign-in already registered the worker for offline use; repeating it is a
-    // no-op that also warms it up so enabling below needs no wait.
-    void Promise.all([api.notifications.config.query(), navigator.serviceWorker.register('/sw.js')]).then(async ([config, registration]) => {
-      let subscription = await registration.pushManager.getSubscription();
-      // A subscription made with a previous server key cannot be reused. Drop
-      // it now, outside the click, so enabling later needs no extra network
-      // round-trips before the browser prompt.
-      if (subscription && config.publicKey && !sameKey(subscription, applicationKey(config.publicKey))) {
-        await api.notifications.unsubscribe.mutate({ accountId, endpoint: subscription.endpoint });
-        await subscription.unsubscribe(); subscription = null;
+    // The server config is account-wide (it drives the chat switch), so it loads even where this browser cannot push.
+    // Where it can, sign-in already registered the worker for offline use; repeating it is a no-op that also warms it
+    // up so enabling below needs no wait.
+    void (async () => {
+      const [config, registration] = await Promise.all([api.notifications.config.query(), supported ? navigator.serviceWorker.register('/sw.js') : Promise.resolve(null)]);
+      let subscribed = false;
+      if (registration) {
+        let subscription = await registration.pushManager.getSubscription();
+        // A subscription made with a previous server key cannot be reused. Drop it now, outside the click, so
+        // enabling later needs no extra network round-trips before the browser prompt.
+        if (subscription && config.publicKey && !sameKey(subscription, applicationKey(config.publicKey))) {
+          await api.notifications.unsubscribe.mutate({ accountId, endpoint: subscription.endpoint });
+          await subscription.unsubscribe(); subscription = null;
+        }
+        subscribed = subscription ? (await api.notifications.status.mutate({ accountId, endpoint: subscription.endpoint })).subscribed : false;
       }
-      const status = subscription ? await api.notifications.status.mutate({ accountId, endpoint: subscription.endpoint }) : null;
       if (!alive) return;
       setConfig(config);
-      setEnabled(status?.subscribed ?? false);
-    }).catch(error => { if (alive) setError(errorMessage(error)); });
+      setEnabled(subscribed);
+    })().catch(error => { if (alive) setError(errorMessage(error)); });
     return () => { alive = false; };
   }, [accountId, online, storageKey]);
 
@@ -93,6 +103,12 @@ export function NotificationSettings({ accountId, online }: { accountId: string;
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
+  async function changeChatPush(next: boolean) {
+    setChatBusy(true); setChatError(''); setChatChoice(next);
+    try { await onChatPush(next); }
+    catch (error) { setChatChoice(null); setChatError(errorMessage(error)); }
+    finally { setChatBusy(false); }
+  }
   async function disable() {
     setBusy(true); setError('');
     try {
@@ -118,5 +134,11 @@ export function NotificationSettings({ accountId, online }: { accountId: string;
     <Hint>{description}</Hint>
     <ErrorText>{error}</ErrorText>
     {supported && <div><Button size="sm" icon="bell" busy={busy} disabled={!online || (!enabled && (!config?.enabled || permission === 'denied'))} onClick={enabled ? disable : enable}>{enabled ? 'Disable on this browser' : 'Enable browser reminders'}</Button></div>}
+    {/* Chat pushes reach browsers enrolled for reminders; the switch is account-wide, so it shows wherever the server has push set up. */}
+    {config?.enabled && <div className="mt-2 grid gap-2 border-t border-foreground/[0.06] pt-3">
+      <Toggle label="Message notifications" description="Uses this browser’s reminder alerts. Never shows names or messages."
+        checked={chatChoice ?? chatPush} disabled={!online || chatBusy} onChange={(next) => void changeChatPush(next)} />
+      <ErrorText>{chatError}</ErrorText>
+    </div>}
   </div>;
 }

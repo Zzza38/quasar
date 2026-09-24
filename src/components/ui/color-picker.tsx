@@ -6,7 +6,17 @@ import { Input } from './input';
 import { Button } from './button';
 import { Slider } from './slider';
 
-const COLORS = ['#0891b2', '#4f46e5', '#7e22ce', '#be185d', '#c2410c', '#ca8a04', '#15803d', '#334155'];
+/** Named so screen readers say "Use Teal" rather than a hex code; the hex stays in the tooltip. */
+const COLORS = [
+  { hex: '#0891b2', name: 'Teal' },
+  { hex: '#4f46e5', name: 'Indigo' },
+  { hex: '#7e22ce', name: 'Purple' },
+  { hex: '#be185d', name: 'Pink' },
+  { hex: '#c2410c', name: 'Orange' },
+  { hex: '#ca8a04', name: 'Gold' },
+  { hex: '#15803d', name: 'Green' },
+  { hex: '#334155', name: 'Slate' },
+];
 
 /** Expanded color control composed with shadcn inputs, buttons and Radix sliders. */
 export function ColorPicker({ value, onValueChange, disabled, id, label = 'Hex color' }: {
@@ -14,6 +24,8 @@ export function ColorPicker({ value, onValueChange, disabled, id, label = 'Hex c
 }) {
   const [hsv, setHsv] = useState(() => hexToHsv(value));
   const [hex, setHex] = useState(value);
+  // Arrow keys on the 2-D area change the color silently otherwise; announce the new position.
+  const [spoken, setSpoken] = useState('');
   useEffect(() => {
     setHex(value);
     setHsv((current) => hsvToHex(current).toLowerCase() === value.toLowerCase() ? current : hexToHsv(value));
@@ -34,10 +46,13 @@ export function ColorPicker({ value, onValueChange, disabled, id, label = 'Hex c
         if (disabled || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
         event.preventDefault();
         const step = event.shiftKey ? 10 : 1;
-        update({ ...hsv, s: Math.max(0, Math.min(100, hsv.s + (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0))), v: Math.max(0, Math.min(100, hsv.v + (event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0))) });
+        const next = { ...hsv, s: Math.max(0, Math.min(100, hsv.s + (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0))), v: Math.max(0, Math.min(100, hsv.v + (event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0))) };
+        update(next);
+        setSpoken(`Saturation ${Math.round(next.s)}%, brightness ${Math.round(next.v)}%`);
       }}>
       <span aria-hidden="true" className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_#0008]" style={{ left: `${hsv.s}%`, top: `${100 - hsv.v}%`, backgroundColor: value }} />
     </div>
+    <span className="sr-only" aria-live="polite">{spoken}</span>
     <Slider aria-label="Hue" min={0} max={359} step={1} value={[hsv.h]} disabled={disabled} onValueChange={([h]) => update({ ...hsv, h })}
       trackClassName="bg-[linear-gradient(to_right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)]" />
     <div className="flex items-center gap-2">
@@ -46,8 +61,8 @@ export function ColorPicker({ value, onValueChange, disabled, id, label = 'Hex c
         onChange={(event) => { const next = event.target.value; setHex(next); if (/^#[\da-f]{6}$/i.test(next)) onValueChange(next); }} />
     </div>
     <div className="flex justify-between gap-1">
-      {COLORS.map((color) => <Button key={color} type="button" size="icon-sm" variant="ghost" disabled={disabled} aria-label={`Use ${color}`} aria-pressed={value.toLowerCase() === color}
-        className="size-6 rounded-full border border-black/10 p-0 ring-offset-background aria-pressed:ring-2 aria-pressed:ring-ring aria-pressed:ring-offset-2" style={{ backgroundColor: color }} onClick={() => onValueChange(color)} />)}
+      {COLORS.map((color) => <Button key={color.hex} type="button" size="icon-sm" variant="ghost" disabled={disabled} aria-label={`Use ${color.name}`} title={color.hex} aria-pressed={value.toLowerCase() === color.hex}
+        className="size-6 rounded-full border border-black/10 p-0 ring-offset-background pointer-coarse:size-8 pointer-coarse:min-h-0 pointer-coarse:min-w-0 aria-pressed:ring-2 aria-pressed:ring-ring aria-pressed:ring-offset-2" style={{ backgroundColor: color.hex }} onClick={() => onValueChange(color.hex)} />)}
     </div>
   </div>;
 }

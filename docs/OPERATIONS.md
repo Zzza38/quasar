@@ -7,7 +7,7 @@ The production installation is available at https://quasar.ziona.dev/ through Cl
 1. Choose a domain and configure HTTPS at the existing reverse proxy. Set `NEXTAUTH_URL=https://your-domain` and add `https://your-domain/api/auth/callback/google` to the Google OAuth web client's redirect URIs. The OAuth consent screen must permit your pilot accounts; a client left in testing only admits configured test users.
 2. Populate `.env.local` from `.env.example`. Keep a strong stable session secret, Google client credentials and the owner email outside Git. Restrict this file's permissions. Changing the secret signs out current online sessions; pending offline changes remain local until the same user signs in again.
 3. Build and start `docker compose up -d --build`. The included compose file binds the app to localhost port 3000 and persists SQLite in a named Docker volume. Mounts must be on local disk. Ensure Docker's storage location is local too.
-4. Proxy the domain to `127.0.0.1:3000`. Forward `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Forwarded-For` correctly; preserve the browser's `Origin`. Limit request bodies to 2 MB and add normal connection/request rate limits. Do not cache `/api/*`, OAuth, or dynamic HTML at the proxy. Immutable `/_next/static/*` assets may be cached. HTTPS is required for service workers outside localhost.
+4. Proxy the domain to `127.0.0.1:3000`. Forward `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Forwarded-For` correctly; preserve the browser's `Origin`. Limit request bodies to 5 MB (a timetable scan can carry three photos) and add normal connection/request rate limits. Do not cache `/api/*`, OAuth, or dynamic HTML at the proxy. Immutable `/_next/static/*` assets may be cached. HTTPS is required for service workers outside localhost.
 5. Check `/api/health`, complete Google sign-in, enter both names, create/select a school, and visit `/admin` with the owner account. Check a different Google account cannot access admin RPCs. Check failed saves retain form contents.
 6. Run the pilot checks below before inviting students. Keep the Google client secret and session secret backed up separately from the database.
 
@@ -18,7 +18,7 @@ server {
     listen 443 ssl;
     server_name your-domain;
     # ssl_certificate and ssl_certificate_key supplied by your TLS setup
-    client_max_body_size 2m;
+    client_max_body_size 5m;
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host $host;
@@ -58,6 +58,10 @@ Restore procedure:
 3. Replace the application's database with the backup while stopped. Remove the old companion WAL/SHM files only after preserving them; they must not be reused with the restored database. Restore the service user's ownership and restrictive file permissions.
 4. Restart, check health, sign in, inspect a known schedule/task and check queued sync. A restored older database can lack device base revisions; preserve those device queues and resolve them through a deliberate export/recovery workflow instead of clearing browser data. The current API rejects unknown base revisions to avoid silent overwrites.
 5. Test restoration into a separate disposable instance before pilot launch and periodically thereafter. Never rehearse by overwriting the live pilot database.
+
+## Chat data
+
+Chat messages and report evidence are stored unencrypted in SQLite, so every backup contains them. Protect backups as you would the live database. Nobody queries the `chat_*` tables or `reports.evidence` directly, including the owner, except during a restore or its verification. The owner reads chat text only through Show messages on a report in `/admin`, which writes an audit entry. The worker deletes old chat data on the schedule in [ARCHITECTURE.md](ARCHITECTURE.md#phase-4-chat); a restored older backup brings back messages that were already pruned until the next worker cycle removes them again. The 5 MB proxy body limit above also covers chat, whose messages are small.
 
 ## Monitoring and capacity
 

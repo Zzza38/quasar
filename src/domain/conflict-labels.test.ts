@@ -26,11 +26,11 @@ it('describes unnamed override periods without presenting an internal ID', () =>
   expect(conflict?.message).not.toContain('period-23');
 });
 
-it('labels an existing period with its last scheduled occurrence removed as Unscheduled', () => {
+it('labels an existing period with its last scheduled occurrence removed as having no times set', () => {
   const current = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'A') })) };
   const personal = { ...emptyPersonalSchedule(), classes: [{ id: 'wellness', name: 'Wellness' }], assignments: { A: 'wellness' } };
   const conflicts = detectOverrideConflicts(exampleSchedule, current, personal);
-  expect(conflicts).toContainEqual(expect.objectContaining({ kind: 'period-unscheduled', target: 'A', message: expect.stringContaining('Unscheduled') }));
+  expect(conflicts).toContainEqual(expect.objectContaining({ kind: 'period-unscheduled', target: 'A', message: expect.stringContaining('has no times set') }));
   expect(conflicts.some(conflict => conflict.kind === 'period-removed')).toBe(false);
   expect(detectOverrideConflicts(current, current, personal)).toEqual([]);
 });

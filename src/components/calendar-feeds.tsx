@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
+import { formatTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
 import { Button, Callout, Chip, ErrorText, Hint, Modal, Panel, Section } from './primitives';
@@ -52,7 +53,7 @@ export function CalendarFeeds({ state }: { state: AppState }) {
         <div className="grid min-w-0 gap-1">
           <strong className="break-words text-sm font-bold">{feed.name}</strong>
           <div className="flex flex-wrap gap-1.5"><Chip icon="calendar">{feed.itemCount} items</Chip>{!feed.enabled && <Chip>Paused</Chip>}{feed.lastError && <Chip tone="warning" icon="alert">Refresh failed</Chip>}</div>
-          <Hint>{feed.lastSuccessAt ? `Last updated ${stamp(feed.lastSuccessAt)}` : 'No successful refresh yet'} · {feed.timeZone.replaceAll('_', ' ')}</Hint>
+          <Hint>{feed.lastSuccessAt ? `Last updated ${stamp(feed.lastSuccessAt)}` : 'No successful refresh yet'} · {formatTimeZone(feed.timeZone)}</Hint>
           {feed.enabled && <Hint>Next refresh {stamp(feed.nextRefreshAt)}</Hint>}
         </div>
         </div>
@@ -65,7 +66,7 @@ export function CalendarFeeds({ state }: { state: AppState }) {
       {feed.lastError && <p className="text-sm text-destructive">{feed.lastError} Your saved items are unchanged. Try refreshing again.</p>}
     </li>)}</ul>}
     {!adding && <ErrorText>{error}</ErrorText>}
-    <Modal open={adding} wide onClose={() => { if (pending === null) setAdding(false); }} title="Add calendar" description="Copy the iCal link from your school portal, then paste it here."
+    <Modal open={adding} wide busy={pending !== null} onClose={() => setAdding(false)} title="Add calendar" description="Copy the iCal link from your school portal, then paste it here."
       footer={<><Button variant="ghost" disabled={pending !== null} onClick={() => setAdding(false)}>Cancel</Button></>}>
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Panel className="grid gap-2"><strong className="text-sm font-bold">Where to find the link</strong><FeedGuide compact /></Panel>
