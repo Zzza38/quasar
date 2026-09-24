@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, REPORT_CATEGORIES, bodyError, normalizeBody, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
-import { slurError } from '@/domain/chat-filter';
+import { censorSlurs } from '@/domain/chat-filter';
 import { CommunityService } from './community';
 import { countUnreadGlobal } from './global-chat';
 import type { Db } from './db';
@@ -71,10 +71,10 @@ export const pauseChatSchema = z.object({
   reason: z.string().trim().min(3).max(2000),
 });
 
-/** Server side: normalizeBody + bodyError + the slur filter (§11), throwing BAD_REQUEST with a fixed string. Never echoes input. */
+/** Server side: normalizeBody, then slurs censored to asterisks (§11), then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
 export function parseBody(raw: string): string {
-  const body = normalizeBody(typeof raw === 'string' ? raw : '');
-  const problem = bodyError(body) ?? slurError(body);
+  const body = censorSlurs(normalizeBody(typeof raw === 'string' ? raw : ''));
+  const problem = bodyError(body);
   if (problem) fail('BAD_REQUEST', problem);
   return body;
 }

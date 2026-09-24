@@ -1,14 +1,14 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, bodyError, normalizeBody, rawBodySchema } from '@/domain/chat';
-import { slurError } from '@/domain/chat-filter';
+import { censorSlurs } from '@/domain/chat-filter';
 import type { Db } from './db';
 import type { Service } from './service';
 
 /**
  * The global chat (docs/CHAT.md §11): one room that every member with names entered can read and post
  * in. Unlike one-to-one chat it is public by design, so the owner moderates it directly: the owner can
- * edit or delete any message, and the slur filter refuses a message before it is stored.
+ * edit or delete any message, and slurs are censored to asterisks before a message is stored.
  *
  * Every error message is a fixed string: nothing here ever echoes message text.
  */
@@ -49,10 +49,10 @@ export const globalEditSchema = globalMessageSchema.extend({ body: rawBodySchema
 export const globalReadSchema = z.object({ seq: z.number().int().min(0) });
 export const globalMuteSchema = z.object({ muted: z.boolean() });
 
-/** normalizeBody + bodyError + the slur filter, throwing BAD_REQUEST with a fixed string. Never echoes input. */
+/** normalizeBody, slurs censored to asterisks, then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
 export function parseGlobalBody(raw: string): string {
-  const body = normalizeBody(typeof raw === 'string' ? raw : '');
-  const problem = bodyError(body) ?? slurError(body);
+  const body = censorSlurs(normalizeBody(typeof raw === 'string' ? raw : ''));
+  const problem = bodyError(body);
   if (problem) fail('BAD_REQUEST', problem);
   return body;
 }

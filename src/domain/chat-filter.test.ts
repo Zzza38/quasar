@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasSlur, icePrankNotice, mentionsImmigrants, normalizeForFilter, slurError, SLUR_ERROR } from './chat-filter';
+import { censorSlurs, hasSlur, icePrankNotice, mentionsImmigrants, normalizeForFilter, slurNotice, SLUR_NOTICE } from './chat-filter';
 
 describe('chat filter', () => {
   it('lets ordinary swearing through', () => {
@@ -27,10 +27,22 @@ describe('chat filter', () => {
       expect(hasSlur(text), text).toBe(false);
   });
 
-  it('exposes a fixed error string and never the text', () => {
-    expect(slurError('what a retard')).toBe(SLUR_ERROR);
-    expect(slurError('what a jerk')).toBeNull();
-    expect(SLUR_ERROR).not.toContain('retard');
+  it('exposes a fixed notice and never the text', () => {
+    expect(slurNotice('what a retard')).toBe(SLUR_NOTICE);
+    expect(slurNotice('what a jerk')).toBeNull();
+    expect(SLUR_NOTICE).not.toContain('retard');
+  });
+
+  it('censors slurs to asterisks and leaves the rest of the message alone', () => {
+    expect(censorSlurs('this is a test for the filter: nigger')).toBe('this is a test for the filter: ******');
+    expect(censorSlurs('you faggot, fuck off')).toBe('you ******, fuck off');
+    expect(censorSlurs('F4GGOT and r3tards')).toBe('****** and *******');
+    expect(censorSlurs('fag\u200bgot')).toBe('******');
+    expect(censorSlurs('n i g g e r please')).toBe('****** please');
+    expect(censorSlurs('fаggot (cyrillic a)')).toBe('****** (cyrillic a)');
+    expect(censorSlurs('spicy raccoon in Japan')).toBe('spicy raccoon in Japan');
+    expect(censorSlurs('😀 chink 😀')).toBe('😀 ***** 😀');
+    expect(censorSlurs('')).toBe('');
   });
 
   it('normalizes without breaking ordinary text', () => {
