@@ -4,6 +4,8 @@
 
 /* Appearance is a data attribute on <html>, applied by src/lib/theme.ts before first paint. */
 @custom-variant dark (&:where([data-appearance="dark"], [data-appearance="dark"] *));
+/* Screens with no hover at all (phones, iPads without a trackpad): hover-revealed controls stay faintly visible. */
+@custom-variant no-hover (@media (hover: none));
 
 /* ---------- Design tokens (shadcn/ui vocabulary) ----------
    Light/dark come from data-appearance; the brand color comes from data-accent.
@@ -275,4 +277,6 @@
 .time-block-detail { display: none; position: absolute; left: 0; top: calc(100% + 6px); width: max-content; max-width: 260px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-float); font-size: 12px; pointer-events: none; }
 .time-block-detail span { display: block; margin-top: 3px; color: var(--muted-foreground); }
 .time-block:hover, .time-block:focus-within { z-index: 4; }
-.time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail { display: block; }
+.time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail, .time-block-open .time-block-detail { display: block; }
+/* A tapped (selected) block shows its detail card too: touch screens cannot hover, and iPad Safari does not focus a tapped button. */
+.time-block-open { z-index: 4; }

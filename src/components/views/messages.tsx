@@ -496,9 +496,12 @@ function Bubble({ message, date, time, showTime, online, open, onToggle, added, 
   const actionsId = useId();
   const mine = message.fromMe;
   const removed = message.body === null || message.deletedBy !== null;
-  // On touch screens, tapping the bubble opens its actions; a mouse uses the hover button.
+  // Tapping or clicking the bubble toggles its actions on every device. This is not gated on the
+  // pointer type: iPadOS reports a fine pointer whenever a keyboard case, trackpad or Pencil is
+  // around, and Safari never focuses a tapped button, so hover- and focus-only reveals would leave
+  // touch users with no way in. A click that selected text or landed on a link is left alone.
   const tap = (event: MouseEvent<HTMLDivElement>) => {
-    if (removed || finePointer() || (event.target as HTMLElement).closest('a')) return;
+    if (removed || (event.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return;
     onToggle();
   };
   return <li data-seq={message.seq} className={cn('group/msg flex flex-col', mine ? 'items-end' : 'items-start')}>
@@ -508,7 +511,7 @@ function Bubble({ message, date, time, showTime, online, open, onToggle, added, 
         ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'border border-dashed border-foreground/20 bg-transparent italic text-muted-foreground')}>{message.deletedBy === 'support' ? 'Hidden by support' : 'Message deleted'}</div>
         : <div title={formatDateTime(date, time)} onClick={tap} className={cn(BUBBLE, mine ? MINE : THEIRS)}><MessageText text={message.body ?? ''} mine={mine} /></div>}
       {!removed && <IconButton label="Message actions" icon="more" size="sm" aria-expanded={open} aria-controls={open ? actionsId : undefined} onClick={onToggle}
-        className="shrink-0 rounded-full text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 aria-expanded:opacity-100 pointer-fine:group-hover/msg:opacity-100 pointer-fine:group-focus-within/msg:opacity-100" />}
+        className="shrink-0 rounded-full text-muted-foreground opacity-0 transition-opacity no-hover:opacity-50 focus-visible:opacity-100 aria-expanded:opacity-100 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100" />}
     </div>
     {open && !removed && <div id={actionsId} className={cn('mt-1 flex flex-wrap items-center gap-1.5', mine && 'justify-end')}>
       {mine
