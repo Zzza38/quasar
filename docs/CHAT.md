@@ -1074,7 +1074,7 @@ There is no worker in the e2e server, so push is covered by Vitest only.
 - SSE, WebSockets, tRPC subscriptions, and any new service (Redis, an external chat provider). In-app sounds, and desktop notifications while the tab is open.
 - Offline chat: no IndexedDB, no offline-queue sends, no service-worker caching, no persisted unsent messages or drafts. "Add as task" is the only chat action that goes through the offline queue, because it creates a task.
 - Names or message text in push notifications, and any email or SMS alerts. Per-browser chat settings separate from reminder enrollment. The controls are the account toggle and per-chat mute.
-- Automated moderation in one-to-one chat: keyword filters, ML classifiers, crisis-content detection. (The global room has a slur filter, §11.) Moderation by students or teachers, parent accounts, age checks.
+- Automated moderation beyond the slur filter in §11: ML classifiers, crisis-content detection. Moderation by students or teachers, parent accounts, age checks.
 - Encrypting messages at rest, or end to end. The guarantee is that no product or API path shows unreported chats, and that evidence views are audited.
 - Owner tools beyond reports: browsing chats, message analytics, appeal workflows, notifying the reported student, penalties for abusive reporters.
 - A support or Quasar chat account, and owner broadcast messages.
@@ -1092,7 +1092,7 @@ Added 2026-09-24. One room, **Global chat**, that every member with names entere
 
 **Thread.** Each run of someone else's bubbles carries the sender's display name (with the verified check when they are verified). Mute is per member. There is no Block, Report or closed state. The empty state says who can read it and that slurs are blocked.
 
-**Filter (`src/domain/chat-filter.ts`).** `hasSlur` matches a fixed list of slurs as whole words after normalization (lowercase, accents stripped, leetspeak mapped, censor marks treated as wildcards, repeated letters allowed, spaced-out letters joined). Ordinary swearing passes. The composer disables Send and shows the reason (`SLUR_ERROR`, a fixed string) while the draft has a slur in it, and the server refuses the send or edit with the same string. Message text is never echoed.
+**Filter (`src/domain/chat-filter.ts`).** `hasSlur` matches a fixed list of slurs as whole words after normalization (lowercase, accents stripped, leetspeak mapped, censor marks treated as wildcards, repeated letters allowed, spaced-out letters joined). Ordinary swearing passes. The composer disables Send and shows the reason (`SLUR_ERROR`, a fixed string) while the draft has a slur in it, and the server refuses the send or edit with the same string. Message text is never echoed. Since 2026-09-24 (evening) the same check runs in one-to-one chat too (`parseBody` in `src/server/chat.ts`), and the ICE line below shows in both kinds of chat.
 
 **Owner tools.** Every bubble's actions menu offers the owner **Edit** and **Remove** (on their own messages, Delete). Both take an optional reason (200 characters) that everyone sees: a removed message reads "Removed by the owner: reason"; an edited one keeps the new text and reads "Edited by the owner: reason" under it. Both are recorded in `audit_log` (`global.edit`, `global.delete`) with the seq, sender and reason. A sender can delete their own message ("Message deleted", no reason). Nobody else can edit.
 

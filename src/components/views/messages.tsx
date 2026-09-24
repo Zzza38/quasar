@@ -388,7 +388,7 @@ function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClo
     <MessageLog state={state} chat={chat} name={name} mode="peer" onDelete={(message) => setModal({ kind: 'delete', messageId: message.id })} onReport={(seq) => { setReported(false); setModal({ kind: 'report', seq }); }} />
     {chat.pause
       ? <div className="border-t border-foreground/[0.06] pt-3 pb-[max(8px,env(safe-area-inset-bottom))] lg:px-4 lg:pb-4"><Hint role="status" className="text-[13px]">{pauseText(chat.pause, state.timeZone)}</Hint></div>
-      : <Composer key={userId} chat={chat} name={name} online={state.online} />}
+      : <Composer key={userId} chat={chat} name={name} online={state.online} filtered />}
 
     {modal?.kind === 'delete' && <ConfirmModal title="Delete for both of you?" description="It disappears from this chat now. Support can still see it for 30 days if this chat is reported." confirm="Delete" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.messageId); setModal(null); }} />}
@@ -502,8 +502,8 @@ function buildItems(messages: ChatMessage[], initialReadSeq: number | null, time
     // In the room, the name sits over the first bubble of someone else's run.
     const showName = global && !message.fromMe && (!previous || newDay || senderKey(previous) !== senderKey(message) || gap(message, previous));
     items.push({ kind: 'message', key: `m-${message.seq}`, message, date, time, showTime, showName });
-    // The ICE prank (§11): a joke line under any room message that mentions immigrants. Nothing is reported anywhere.
-    if (global && message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice() });
+    // The ICE prank (§11): a joke line under any message that mentions immigrants. Nothing is reported anywhere.
+    if (message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice() });
   });
   return items;
 }
@@ -736,7 +736,7 @@ function PendingBubble({ item, online, onRetry, onDiscard }: { item: Outgoing; o
 
 /* ---------- Composer ---------- */
 
-/** `filtered` turns on the room's slur filter: Send is disabled and the reason shows while the draft has a slur in it. */
+/** `filtered` turns on the slur filter (every chat has it): Send is disabled and the reason shows while the draft has a slur in it. */
 function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; name: string; online: boolean; filtered?: boolean }) {
   const [draft, setDraft] = useState(chat.initialDraft);
   const field = useRef<HTMLTextAreaElement>(null);
