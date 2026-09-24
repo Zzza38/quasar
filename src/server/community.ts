@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
+import { classKey } from '@/domain/class-match';
 import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import type { Service, User } from './service';
@@ -32,8 +33,8 @@ export const FRIEND_REQUEST_LIMIT = 30;
 
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
-/** One friend's timetable, as (period, lower-cased class name) pairs. Two people share a class only when the same name sits in the same period. */
-export type Classmate = { id: string; displayName: string; classes: { periodId: string; name: string }[] };
+/** One friend's timetable by period. Two people share a class when the same directory class, or the same words in any order (see classKey), sits in the same period. */
+export type Classmate = { id: string; displayName: string; classes: { periodId: string; name: string; key: string; directoryId?: string }[] };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
@@ -318,9 +319,9 @@ export class CommunityService {
 }
 
 /** (period, name) pairs for every period the person has assigned a class to. Names are lower-cased for case-insensitive matching. */
-export function classesByPeriod(personal: PersonalSchedule): { periodId: string; name: string }[] {
+export function classesByPeriod(personal: PersonalSchedule): Classmate['classes'] {
   return Object.entries(personal.assignments).flatMap(([periodId, classId]) => {
     const cls = personal.classes.find(entry => entry.id === classId);
-    return cls ? [{ periodId, name: cls.name.trim().toLowerCase() }] : [];
+    return cls ? [{ periodId, name: cls.name.trim().toLowerCase(), key: classKey(cls.name), ...(cls.directoryId ? { directoryId: cls.directoryId } : {}) }] : [];
   }).sort((left, right) => left.periodId.localeCompare(right.periodId));
 }

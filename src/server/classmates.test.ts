@@ -29,9 +29,15 @@ describe('classmates on the timetable', () => {
     community.request(me, evan); community.respond(evan, me, true);
     community.request(me, maya);
     const summary = community.summary(me);
-    expect(summary.classmates).toEqual([{ id: evan, displayName: 'Evan', classes: [{ periodId: 'A', name: 'pre-ap computer science' }, { periodId: 'B', name: 'biology' }] }]);
+    expect(summary.classmates).toEqual([{ id: evan, displayName: 'Evan', classes: [{ periodId: 'A', name: 'pre-ap computer science', key: 'ap computer pre science' }, { periodId: 'B', name: 'biology', key: 'biology' }] }]);
     const cs = { id: 'x', name: 'Pre-AP Computer Science ' };
     expect(classmatesFor({ community: summary }, { periodId: 'A', class: cs })).toEqual([{ id: evan, displayName: 'Evan' }]);
+    // The same course typed in another word order or with an honors suffix still counts (Evan's "Spanish 2 Honors" vs Parker's "Honors Spanish 2").
+    setClasses(evan, { A: 'Pre-AP Computer Science', B: 'Honors Spanish 2' });
+    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: { id: 'z', name: 'Spanish 2 Honors' } })).toEqual([{ id: evan, displayName: 'Evan' }]);
+    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: { id: 'z', name: 'Spanish 2H' } })).toEqual([{ id: evan, displayName: 'Evan' }]);
+    expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: { id: 'z', name: 'Spanish 3 Honors' } })).toEqual([]);
+    setClasses(evan, { A: 'Pre-AP Computer Science', B: 'Biology' });
     // Same class name in a different period is not a shared class.
     expect(classmatesFor({ community: summary }, { periodId: 'B', class: cs })).toEqual([]);
     expect(classmatesFor({ community: summary }, { periodId: 'A', class: { id: 'y', name: 'Chemistry' } })).toEqual([]);

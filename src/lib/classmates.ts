@@ -1,15 +1,16 @@
 import type { WorkspaceContext } from '@/components/app-state';
 import type { ResolvedPeriod } from '@/domain/schedule';
+import { classKey } from '@/domain/class-match';
 
 export type Classmate = { id: string; displayName: string };
 
-/** Friends who have a class with this name in this same period. Names are compared case-insensitively, the way the profile view does. */
+/** Friends who have the same class in this same period: the same directory entry, or the same words in any order (see classKey). */
 export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, period: Pick<ResolvedPeriod, 'periodId' | 'class'>): Classmate[] {
-  const className = period.class?.name;
-  if (!className) return [];
-  const key = className.trim().toLowerCase();
+  const own = period.class;
+  if (!own?.name) return [];
+  const key = classKey(own.name);
   return (context.community?.classmates ?? [])
-    .filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && cls.name === key))
+    .filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && (own.directoryId && cls.directoryId ? cls.directoryId === own.directoryId : cls.key === key)))
     .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
 }
 

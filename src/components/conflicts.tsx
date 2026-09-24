@@ -179,10 +179,10 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   return <Card aria-labelledby="review-title">
     <CardContent className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched. Here is what changed.</p></div></div>
+        <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched.{changes.length > 0 ? ' Here is what changed.' : ''}</p></div></div>
         {todayChanged ? <Chip tone="now" icon="alert">Today looks different</Chip> : <Chip tone="success" icon="check">Today is unaffected</Chip>}
       </div>
-      <ChangeList changes={changes} />
+      {changes.length > 0 ? <ChangeList changes={changes} /> : <Hint>Nothing changed in {personal.grade ? `the Grade ${personal.grade}` : 'your'} bell schedule. Support updated another grade or a school setting.</Hint>}
       {conflicts.length > 0 && <Callout tone="warning" icon="alert" title="Some of your personal settings refer to what changed" actions={<Button size="sm" variant="secondary" onClick={onOpenClasses}>Review my classes and adjustments</Button>}>
         <ul className="mt-1 grid list-disc gap-1 pl-4 text-[13.5px]">{conflicts.map((conflict) => <li key={conflict.id}>{conflict.message}</li>)}</ul>
       </Callout>}

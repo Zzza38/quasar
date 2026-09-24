@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { sameClass, type ClassLike } from '@/domain/class-match';
 import { addDays, classColor, formatDate, formatRange, formatRoom, pluralize, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
@@ -240,12 +241,13 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   }, [theirSchedule, profile, date]);
   const mine = state.personal;
   /** True when I have a class with this name in this period. */
-  const togetherIn = (periodId: string, name: string) => {
+  /** True when I have the same class in this period (same directory entry, or the same words in any order). */
+  const togetherIn = (periodId: string, theirs: ClassLike) => {
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
-    return !!own && own.name.trim().toLowerCase() === name.trim().toLowerCase();
+    return !!own && sameClass(own, theirs);
   };
   /** True when we sit in this class of theirs in at least one shared period. */
-  const sharedClass = (cls: { id: string; name: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls.name));
+  const sharedClass = (cls: ClassLike & { id: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls));
   const name = profile?.displayName ?? 'Member';
   const dayLabel = relativeDate(date, state.today, { weekday: 'long' });
   const result = <>
@@ -301,7 +303,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
             <IconButton label="Previous day" icon="chevronLeft" size="sm" disabled={date <= state.today} onClick={() => setPickedDate(addDays(date, -1))} />
             <IconButton label="Next day" icon="chevronRight" size="sm" onClick={() => setPickedDate(addDays(date, 1))} />
           </div> : undefined}>
-          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class.name) ? 'Together' : null} />}
+          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class) ? 'Together' : null} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
       </>}
