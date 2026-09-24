@@ -503,7 +503,7 @@ function buildItems(messages: ChatMessage[], initialReadSeq: number | null, time
     const showName = global && !message.fromMe && (!previous || newDay || senderKey(previous) !== senderKey(message) || gap(message, previous));
     items.push({ kind: 'message', key: `m-${message.seq}`, message, date, time, showTime, showName });
     // The ICE prank (§11): a joke line under any room message that mentions immigrants. Nothing is reported anywhere.
-    if (global && message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice(message.fromMe ? 'You' : senderName(message), message.seq) });
+    if (global && message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice() });
   });
   return items;
 }

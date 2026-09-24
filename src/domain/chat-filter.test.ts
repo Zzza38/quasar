@@ -34,13 +34,11 @@ describe('chat filter', () => {
     expect(normalizeForFilter('a b')).toBe('a b');
   });
 
-  it('spots immigrants for the prank, and the notice says nobody was reported', () => {
+  it('spots immigrants for the prank', () => {
     expect(mentionsImmigrants('we talked about immigrants in history')).toBe(true);
     expect(mentionsImmigrants('an Immigrant family')).toBe(true);
     expect(mentionsImmigrants('immigration policy')).toBe(false);
     expect(mentionsImmigrants('emigrants')).toBe(false);
-    expect(icePrankNotice('Alice', 42)).toContain('Alice');
-    expect(icePrankNotice('Alice', 42)).toContain('Case #ICE-000042');
-    expect(icePrankNotice('Alice', 42)).toContain('estimated response time never');
+    expect(icePrankNotice()).toBe('ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...');
   });
 });
