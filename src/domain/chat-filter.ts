@@ -72,10 +72,7 @@ export function mentionsImmigrants(text: string): boolean {
   return IMMIGRANTS.test(text);
 }
 
-/**
- * The joke line shown under a message that mentions immigrants. Deadpan on purpose, but the punchline is the
- * tell: the "case" never gets answered. Nothing is stored, sent or reported anywhere.
- */
-export function icePrankNotice(senderName: string, seq: number): string {
-  return `📞 ${senderName} said “immigrants”. Incident forwarded to the ICE hotline. Case #ICE-${String(seq).padStart(6, '0')}. Status: line busy, hold music playing, estimated response time never.`;
+/** The joke line shown under a message that mentions immigrants: a cartoon klaxon, the owner's exact wording. Nothing is stored, sent or reported anywhere. */
+export function icePrankNotice(): string {
+  return 'ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...';
 }
