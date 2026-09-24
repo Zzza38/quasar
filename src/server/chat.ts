@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, REPORT_CATEGORIES, bodyError, normalizeBody, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
 import { CommunityService } from './community';
+import { countUnreadGlobal } from './global-chat';
 import type { Db } from './db';
 import type { Service, User } from './service';
 
@@ -34,7 +35,10 @@ export type InboxRow =
   | { state: 'open'; peer: ChatPeer;
       lastMessage: { fromMe: boolean; preview: string | null; createdAt: string; deletedBy: 'sender' | 'support' | null } | null;
       unread: number; muted: boolean }
-  | { state: 'closed'; userId: string; displayName: string; lastAt: string };
+  | { state: 'closed'; userId: string; displayName: string; lastAt: string;
+      /** How the viewer can reopen it: lift their own block (then re-friend), send a friend request, or not at all (other school). */
+      reopen: 'unblock' | 'friend' | null };
+export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
 export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
   deletedBy: 'sender' | 'support' | null; anchor: boolean };
 /** Stored snapshot item. It holds no names; showEvidence derives them when the owner views it. */
@@ -85,14 +89,17 @@ function accessibleSql(t: string): string {
     ${CHAT.requiresVerification ? `AND ${verified(`${t}.user_low`)} AND ${verified(`${t}.user_high`)}` : ''})`;
 }
 
-/** Number of accessible, unmuted threads with at least one unread, undeleted incoming message. No ready() check. */
+/**
+ * Number of accessible, unmuted threads with at least one unread, undeleted incoming message, plus one
+ * for the global chat when it has unread messages and is not muted (§11). No ready() check.
+ */
 export function countUnreadChats(db: Db, userId: string): number {
   const me = db.prepare('SELECT display_name, full_name FROM users WHERE id=?').get(userId) as { display_name: string; full_name: string } | undefined;
   if (!me || !me.display_name || !me.full_name) return 0;
   const row = db.prepare(`SELECT count(*) n FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
     WHERE m.user_id=? AND m.muted=0 AND ${accessibleSql('t')}
     AND EXISTS (SELECT 1 FROM chat_messages c WHERE c.thread_id=t.id AND c.seq>m.last_read_seq AND c.sender_id<>? AND c.deleted_at IS NULL)`).get(userId, userId) as { n: number };
-  return row.n;
+  return row.n + (countUnreadGlobal(db, userId) > 0 ? 1 : 0);
 }
 
 export class ChatService {
@@ -206,13 +213,19 @@ export class ChatService {
         } });
       }
       open.sort((left, right) => right.at.localeCompare(left.at));
-      const closed = this.db.prepare(`SELECT u.id, u.display_name, t.last_message_at FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
+      // Only the viewer's own block and the schools are consulted, so the row never reveals whether the other person blocked them.
+      const closed = this.db.prepare(`SELECT u.id, u.display_name, u.school_id, t.last_message_at,
+        EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id=? AND b.blocked_id=u.id) AS blocked_by_me
+        FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
         JOIN users u ON u.id = CASE WHEN t.user_low=? THEN t.user_high ELSE t.user_low END
         WHERE m.user_id=? AND t.last_message_at IS NOT NULL AND t.last_message_at>=? AND NOT ${accessibleSql('t')}
-        ORDER BY t.last_message_at DESC`).all(viewerId, viewerId, this.iso(-CHAT.closedRowDays * DAY)) as { id: string; display_name: string; last_message_at: string }[];
+        ORDER BY t.last_message_at DESC`).all(viewerId, viewerId, viewerId, this.iso(-CHAT.closedRowDays * DAY)) as
+        { id: string; display_name: string; school_id: string | null; last_message_at: string; blocked_by_me: number }[];
+      const reopenOf = (row: { school_id: string | null; blocked_by_me: number }): 'unblock' | 'friend' | null =>
+        row.blocked_by_me ? 'unblock' : viewer.schoolId !== null && row.school_id === viewer.schoolId ? 'friend' : null;
       const rows: InboxRow[] = [
         ...open.map(entry => entry.row),
-        ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at })),
+        ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at, reopen: reopenOf(row) })),
         ...idle,
       ];
       return { rows, ...this.unreadChats(viewerId), pause: this.pause(viewerId) };
@@ -348,6 +361,23 @@ export class ChatService {
         .run(randomUUID(), viewerId, otherId, other.school_id ?? viewer.schoolId, input.note ? `${label}: ${input.note}` : label, this.iso(), thread.id, JSON.stringify(items), input.category);
       if (input.block) this.community.block(viewerId, otherId, true);
       return { blocked: input.block };
+    })();
+  }
+
+  /**
+   * Reopens a closed chat from the viewer's side: lifts the viewer's own block, if any, then sends a friend
+   * request (or accepts the other person's waiting one, which reopens the chat at once). The old history
+   * comes back once they are friends again. Failures from `request` keep their phase-3 wording.
+   */
+  reopen(viewerId: string, otherId: string): ReopenResult {
+    if (otherId === viewerId) fail('BAD_REQUEST', SELF);
+    return this.db.transaction(() => {
+      this.service.ready(viewerId);
+      const unblocked = !!this.db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(viewerId, otherId);
+      if (unblocked) this.community.block(viewerId, otherId, false);
+      const friendState = this.community.request(viewerId, otherId);
+      if (friendState !== 'friends' && friendState !== 'requested') fail('CONFLICT', 'This chat cannot be reopened right now.');
+      return { unblocked, friendState };
     })();
   }
 

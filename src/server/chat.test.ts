@@ -243,6 +243,45 @@ describe('5. revocation', () => {
   });
 });
 
+describe('6b. reopening a closed chat', () => {
+  it('lifts the viewer’s block and sends a request; acceptance brings the history back', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.cara);
+    f.send(f.cara, f.alice, 'before the block');
+    f.community.block(f.alice, f.cara, true);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'unblock' });
+    expect(f.chat.reopen(f.alice, f.cara)).toEqual({ unblocked: true, friendState: 'requested' });
+    expect(f.db.prepare('SELECT count(*) n FROM blocks WHERE blocker_id=?').get(f.alice)).toEqual({ n: 0 });
+    // Still closed until Cara accepts; the row now offers a plain friend request, and a repeat is harmless.
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'friend' });
+    expect(f.chat.reopen(f.alice, f.cara)).toEqual({ unblocked: false, friendState: 'requested' });
+    f.community.respond(f.cara, f.alice, true);
+    expect(f.chat.thread(f.alice, f.cara).messages.map(m => m.body)).toEqual(['before the block']);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'open' });
+  });
+
+  it('accepts the other person’s waiting request at once, and refuses across schools or through their block', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    f.send(f.alice, f.bob, 'hi');
+    f.community.remove(f.bob, f.alice);
+    f.community.request(f.bob, f.alice);
+    expect(f.chat.reopen(f.alice, f.bob)).toEqual({ unblocked: false, friendState: 'friends' });
+    expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ state: 'open' });
+    // Cara blocked Alice: Alice's row offers a request (nothing reveals the block), and the request gets the phase-3 refusal.
+    f.befriend(f.alice, f.cara);
+    f.send(f.alice, f.cara, 'hey');
+    f.community.block(f.cara, f.alice, true);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'friend' });
+    fails(() => f.chat.reopen(f.alice, f.cara), 'NOT_FOUND', 'This member is not available.');
+    // A former friend from another school cannot be re-added, so the row has no reopen option.
+    f.db.prepare('UPDATE users SET school_id=? WHERE id=?').run(f.other.id, f.bob);
+    f.community.remove(f.alice, f.bob);
+    expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ state: 'closed', reopen: null });
+    fails(() => f.chat.reopen(f.alice, f.bob), 'NOT_FOUND');
+  });
+});
+
 describe('6. closed rows', () => {
   it('shows the same report-only row after an unfriend or a block, for 30 days', () => {
     const f = fixture();
@@ -252,13 +291,13 @@ describe('6. closed rows', () => {
     f.community.remove(f.alice, f.bob);
     f.community.block(f.alice, f.cara, true);
     const unfriended = f.inboxRow(f.alice, f.bob)!, blocked = f.inboxRow(f.alice, f.cara)!;
-    expect(unfriended).toEqual({ state: 'closed', userId: f.bob, displayName: 'Bob', lastAt: expect.any(String) });
-    expect(blocked).toEqual({ state: 'closed', userId: f.cara, displayName: 'Cara', lastAt: expect.any(String) });
+    expect(unfriended).toEqual({ state: 'closed', userId: f.bob, displayName: 'Bob', lastAt: expect.any(String), reopen: 'friend' });
+    expect(blocked).toEqual({ state: 'closed', userId: f.cara, displayName: 'Cara', lastAt: expect.any(String), reopen: 'unblock' });
     expect(Object.keys(unfriended).sort()).toEqual(Object.keys(blocked).sort());
-    // Both sides see a closed row, and the blocked person's row looks the same.
+    // Both sides see a closed row, and the blocked person's row looks the same as the unfriended one.
     const bobSide = f.inboxRow(f.bob, f.alice)!, caraSide = f.inboxRow(f.cara, f.alice)!;
-    expect(bobSide).toEqual({ state: 'closed', userId: f.alice, displayName: 'Alice', lastAt: expect.any(String) });
-    expect(Object.keys(caraSide).sort()).toEqual(Object.keys(bobSide).sort());
+    expect(bobSide).toEqual({ state: 'closed', userId: f.alice, displayName: 'Alice', lastAt: expect.any(String), reopen: 'friend' });
+    expect(caraSide).toEqual({ ...bobSide, lastAt: expect.any(String) });
     expect(JSON.stringify(f.chat.inbox(f.alice))).not.toMatch(/from bob|from cara/);
 
     f.tick(31 * DAY);

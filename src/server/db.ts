@@ -247,6 +247,45 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
       INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, datetime('now'));
     `);
   })();
+  // Global chat migration: one room every member with names can read and post in, owner-moderated.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS global_chat (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT
+    );
+    INSERT OR IGNORE INTO global_chat(id, revision) VALUES(1, 0);
+
+    CREATE TABLE IF NOT EXISTS global_messages (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL,
+      sender_id TEXT NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      edited_at TEXT,
+      deleted_at TEXT,
+      deleted_by TEXT CHECK (deleted_by IN ('sender','owner')),
+      reason TEXT,
+      revision INTEGER NOT NULL,
+      UNIQUE(sender_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS global_messages_revision ON global_messages(revision);
+    CREATE INDEX IF NOT EXISTS global_messages_sender_time ON global_messages(sender_id, created_at);
+    CREATE INDEX IF NOT EXISTS global_messages_created ON global_messages(created_at);
+
+    CREATE TABLE IF NOT EXISTS global_members (
+      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      last_read_seq INTEGER NOT NULL DEFAULT 0,
+      notified_seq INTEGER NOT NULL DEFAULT 0,
+      muted INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  // The owner's reason for an edit or removal, shown to everyone under the message.
+  const globalColumns = db.pragma('table_info(global_messages)') as {name: string}[];
+  if (!globalColumns.some(column => column.name === 'reason')) db.exec('ALTER TABLE global_messages ADD COLUMN reason TEXT');
+  const memberColumns = db.pragma('table_info(global_members)') as {name: string}[];
+  if (!memberColumns.some(column => column.name === 'notified_seq')) db.exec('ALTER TABLE global_members ADD COLUMN notified_seq INTEGER NOT NULL DEFAULT 0');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, datetime('now'))");
   return db;
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };

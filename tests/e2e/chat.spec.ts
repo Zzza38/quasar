@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { ChatService } from '../../src/server/chat';
+import { CommunityService } from '../../src/server/community';
 import { exampleSchedule } from '../../src/domain/example';
 
 // Chat is polled (4 s threads, 10 s lists, 15 s badge), so each scenario gets room for several cycles.
@@ -85,14 +86,25 @@ async function choose(select: Locator, option: string) {
  */
 const badge = (page: Page) => page.getByRole('link', { name: 'Messages', exact: true }).filter({ visible: true }).first();
 
-/** A closed row looks the same however the chat closed: the name, "Chat closed" and one Report button. */
-async function expectClosedRow(page: Page, name: string) {
-  const row = page.getByRole('list', { name: 'Chats' }).getByRole('listitem').filter({ hasText: name });
+/**
+ * A closed row looks the same however the chat closed: the name, "Chat closed", a Report button and, for a
+ * schoolmate, one reopen button ("Add friend", or "Unblock" when the viewer blocked them). Nothing reveals the other side's block.
+ */
+async function expectClosedRow(page: Page, name: string, reopen: 'Unblock' | 'Add friend' = 'Add friend') {
+  const row = page.getByRole('list', { name: 'Chats', exact: true }).getByRole('listitem').filter({ hasText: name });
   await expect(row).toContainText('Chat closed', { timeout: 20_000 });
-  await expect(row.getByRole('button')).toHaveCount(1);
+  await expect(row.getByRole('button')).toHaveCount(2);
   await expect(row.getByRole('button', { name: `Report ${name}` })).toBeVisible();
+  await expect(row.getByRole('button', { name: reopen === 'Unblock' ? `Unblock ${name} and reopen the chat` : `Add ${name} as a friend` })).toBeVisible();
   await expect(row.getByRole('link')).toHaveCount(0);
   return row;
+}
+
+/** A friend request answered from outside the browser. */
+function respondAs(from: string, to: string, accept: boolean) {
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { new CommunityService(new Service(db, OWNER_EMAIL)).respond(from, to, accept); }
+  finally { db.close(); }
 }
 
 const notSent = (log: Locator) => log.getByText(/^Not sent\./);
@@ -190,6 +202,109 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await bob.goto('/#tasks');
   await expect(bob.getByRole('button', { name: 'Edit Hi Bob' })).toBeVisible();
   await expect(badge(bob)).toHaveAccessibleDescription('');
+});
+
+test('global chat: everyone posts, slurs are blocked with a reason, the owner edits and removes with reasons, and the ICE line is a joke', async ({ browser }, testInfo) => {
+  const f = seed();
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto('/#messages');
+  const groups = alice.getByRole('list', { name: 'Rooms' });
+  await expect(groups.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
+  await groups.getByRole('button', { name: 'Open Global chat' }).click();
+  await expect(alice.getByText('Everyone on Quasar can read and post here.')).toBeVisible();
+  const aliceComposer = alice.getByRole('textbox', { name: 'Message everyone' });
+  const aliceLog = alice.getByRole('log', { name: 'Global chat messages' });
+
+  // Swearing passes; a slur (even obfuscated) disables Send and shows the reason.
+  await aliceComposer.fill('this homework is bullshit');
+  await aliceComposer.press('Enter');
+  await expect(aliceLog.getByText('this homework is bullshit', { exact: true })).toBeVisible();
+  await aliceComposer.fill('shut up r3tard');
+  await expect(alice.getByRole('alert').filter({ hasText: 'That message has a slur in it' })).toBeVisible();
+  await expect(alice.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await aliceComposer.fill('we learned about immigrants today');
+  await aliceComposer.press('Enter');
+  await expect(aliceLog.getByText('we learned about immigrants today', { exact: true })).toBeVisible();
+  await expect(aliceLog.getByText(/Reporting to the ICE hotline… Just kidding/)).toBeVisible();
+
+  // Bob (never a friend of Alice) reads the room with names, and the room counts as one unread chat.
+  const bob = await phone(browser, f.bob);
+  await bob.goto('/#today');
+  await expect(badge(bob)).toHaveAccessibleDescription('1 unread chat', { timeout: 20_000 });
+  await bob.goto('/#messages?room=global');
+  const bobLog = bob.getByRole('log', { name: 'Global chat messages' });
+  await expect(bobLog).toContainText('this homework is bullshit');
+  await expect(bobLog.getByText('Alice', { exact: true }).first()).toBeVisible();
+  await expect(bob.locator('.tabbar')).toBeHidden();
+  const bobComposer = bob.getByRole('textbox', { name: 'Message everyone' });
+  await bobComposer.fill('hi from bob');
+  await bob.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(bobLog.getByText('hi from bob', { exact: true })).toBeVisible();
+  await expect(aliceLog.getByText('hi from bob', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  // Bob cannot edit or remove Alice's message; Alice can delete her own.
+  const bobSeesAlice = bobLog.getByRole('listitem').filter({ hasText: 'this homework is bullshit' });
+  await bobSeesAlice.getByRole('button', { name: 'Message actions' }).click();
+  await expect(bobSeesAlice.getByRole('button', { name: 'Add as task' })).toBeVisible();
+  await expect(bobSeesAlice.getByRole('button', { name: /Edit|Remove|Delete/ })).toHaveCount(0);
+
+  // The owner edits Bob's message and removes Alice's, each with a reason everyone sees.
+  const owner = await signedIn(browser, f.owner);
+  await owner.goto('/#messages?room=global');
+  const ownerLog = owner.getByRole('log', { name: 'Global chat messages' });
+  await expect(owner.getByText('You moderate this room')).toBeVisible();
+  const bobsMessage = ownerLog.getByRole('listitem').filter({ hasText: 'hi from bob' });
+  await bobsMessage.hover();
+  await bobsMessage.getByRole('button', { name: 'Message actions' }).click();
+  await bobsMessage.getByRole('button', { name: 'Edit message' }).click();
+  const edit = owner.getByRole('dialog', { name: 'Edit Bob’s message' });
+  await edit.getByLabel('Message').fill('hi from bob (be nice)');
+  await edit.getByLabel('Reason (optional, shown to everyone)').fill('tone');
+  await edit.getByRole('button', { name: 'Save' }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(ownerLog.getByText('hi from bob (be nice)', { exact: true })).toBeVisible();
+  await expect(ownerLog.getByText('Edited by the owner: tone')).toBeVisible();
+  const alicesMessage = ownerLog.getByRole('listitem').filter({ hasText: 'this homework is bullshit' });
+  await alicesMessage.hover();
+  await alicesMessage.getByRole('button', { name: 'Message actions' }).click();
+  await alicesMessage.getByRole('button', { name: 'Remove message' }).click();
+  const remove = owner.getByRole('dialog', { name: 'Remove Alice’s message?' });
+  await remove.getByLabel('Reason (optional, shown to everyone)').fill('keep it school-friendly');
+  await remove.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(remove).toHaveCount(0);
+  await expect(ownerLog.getByText('Removed by the owner: keep it school-friendly')).toBeVisible();
+
+  // Both changes reach the others by polling, reason included.
+  await expect(bobLog.getByText('hi from bob (be nice)', { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(bobLog.getByText('Edited by the owner: tone')).toBeVisible();
+  await expect(aliceLog.getByText('Removed by the owner: keep it school-friendly')).toBeVisible({ timeout: 10_000 });
+  await expect(aliceLog.getByText('this homework is bullshit', { exact: true })).toHaveCount(0);
+
+  for (const scheme of ['light', 'dark'] as const) {
+    await bob.emulateMedia({ colorScheme: scheme });
+    await owner.emulateMedia({ colorScheme: scheme });
+    await bob.screenshot({ path: testInfo.outputPath(`global-chat-phone-${scheme}.png`) });
+    await owner.screenshot({ path: testInfo.outputPath(`global-chat-desktop-${scheme}.png`) });
+  }
+});
+
+test('a blocked chat can be reopened: unblock sends a request, and acceptance brings the history back', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']], messages: [['alice', 'bob', 'see you at practice']] });
+  const bob = await signedIn(browser, f.bob);
+  await bob.goto(`/#messages?with=${f.alice}`);
+  await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('see you at practice');
+  await bob.getByRole('button', { name: 'Block', exact: true }).click();
+  await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
+  const row = await expectClosedRow(bob, 'Alice', 'Unblock');
+  await row.getByRole('button', { name: 'Unblock Alice and reopen the chat' }).click();
+  await expect(bob.getByRole('status').filter({ hasText: 'Alice is unblocked. Friend request sent. The chat reopens when Alice accepts.' })).toBeVisible();
+  // Until Alice answers, the row stays closed and now offers a plain friend request.
+  await expectClosedRow(bob, 'Alice', 'Add friend');
+  respondAs(f.alice, f.bob, true);
+  await expect(bob.getByRole('button', { name: 'Open chat with Alice' })).toBeVisible({ timeout: 20_000 });
+  await bob.getByRole('button', { name: 'Open chat with Alice' }).click();
+  await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('see you at practice');
+  await expect(bob.getByRole('textbox', { name: 'Message Alice' })).toBeVisible();
 });
 
 test('a failed send keeps the text and retries without duplicating', async ({ browser }) => {
@@ -338,7 +453,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   await bob.getByRole('button', { name: 'Block', exact: true }).click();
   await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'Alice is blocked.' })).toBeVisible();
-  await expectClosedRow(bob, 'Alice');
+  await expectClosedRow(bob, 'Alice', 'Unblock');
 
   // Alice keeps a closed row with Report, and the report holds Bob's messages.
   const alice = await signedIn(browser, f.alice);
@@ -412,7 +527,7 @@ test('reporting a message with block closes the chat identically for both', asyn
   await expect(report.getByRole('checkbox', { name: 'Also block Bob' })).toBeChecked();
   await report.getByRole('button', { name: 'Send report' }).click();
   await expect(alice.getByRole('status').filter({ hasText: 'Report sent. Bob is blocked.' })).toBeVisible();
-  await expectClosedRow(alice, 'Bob');
+  await expectClosedRow(alice, 'Bob', 'Unblock');
 
   // Bob's open thread closes at the next poll, and his row matches the harasser-blocked case.
   await expect(bob.getByText('This chat is closed.')).toBeVisible({ timeout: 20_000 });

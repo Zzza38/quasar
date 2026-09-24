@@ -8,6 +8,7 @@ import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatReportSchema, pauseChatSchema } from './chat';
+import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 export type Context = { userId: string | null; service: Service };
 /** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
 export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
@@ -33,6 +34,7 @@ const accountScoped = authenticated.input(z.object({ accountId: z.uuid() })).use
 /** Owner mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
 const adminScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
 const chat = (service: Service) => new ChatService(service);
+const room = (service: Service) => new GlobalChatService(service);
 export const appRouter = t.router({
   session: t.procedure.query(({ ctx }) => ctx.userId ? { user: ctx.service.user(ctx.userId), isAdmin: ctx.service.isAdmin(ctx.userId) } : null),
   profile: t.router({save: authenticated.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
@@ -55,14 +57,25 @@ export const appRouter = t.router({
   }),
   // Every chat procedure is account-scoped, queries included (docs/CHAT.md §2).
   chat: t.router({
-    inbox: accountScoped.query(({ ctx }) => chat(ctx.service).inbox(ctx.userId)),
+    // The list carries the global room's row too (§11), so the Messages view polls one endpoint.
+    inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), global: room(ctx.service).summary(ctx.userId) })),
     thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
     send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body)),
     delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
     read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
     mute: accountScoped.input(chatMuteSchema).mutation(({ ctx, input }) => chat(ctx.service).mute(ctx.userId, input.userId, input.muted)),
+    reopen: accountScoped.input(chatUserSchema).mutation(({ ctx, input }) => chat(ctx.service).reopen(ctx.userId, input.userId)),
     report: accountScoped.input(chatReportSchema).mutation(({ ctx, input }) => chat(ctx.service).report(ctx.userId, input.userId, input)),
     setPush: accountScoped.input(z.object({ enabled: z.boolean() })).mutation(({ ctx, input }) => chat(ctx.service).setPush(ctx.userId, input.enabled)),
+  }),
+  // The global chat room (docs/CHAT.md §11). Public to every member with names, so the owner moderates it directly.
+  global: t.router({
+    thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
+    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body)),
+    delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
+    edit: adminScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
+    read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
+    mute: accountScoped.input(globalMuteSchema).mutation(({ ctx, input }) => room(ctx.service).mute(ctx.userId, input.muted)),
   }),
   proposals: t.router({
     list: authenticated.query(({ ctx }) => new ProposalService(ctx.service).list(ctx.userId)),

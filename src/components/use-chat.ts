@@ -11,12 +11,22 @@ import { api, errorMessage, isTransportFailure, isUnauthorized, type RouterOutpu
 import type { AppState } from './app-state';
 
 type ChatRouter = RouterOutput['chat'];
+type GlobalRouter = RouterOutput['global'];
 export type ChatInbox = ChatRouter['inbox'];
 export type ChatInboxRow = ChatInbox['rows'][number];
 export type ChatThreadResult = ChatRouter['thread'];
-export type ChatMessage = ChatThreadResult['messages'][number];
+export type GlobalThreadResult = GlobalRouter['thread'];
+export type GlobalSummary = ChatInbox['global'];
 export type ChatPeer = ChatThreadResult['peer'];
+export type GlobalRoom = GlobalThreadResult['room'];
 export type ChatPause = NonNullable<ChatThreadResult['pause']>;
+/** A message in either kind of thread. Global messages also carry their sender and an edit stamp. */
+export type ChatMessage = ChatThreadResult['messages'][number] | GlobalThreadResult['messages'][number];
+export type GlobalMessage = GlobalThreadResult['messages'][number];
+/** Which conversation a thread hook drives: one friend, or the global room (docs/CHAT.md §11). */
+export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' };
+export const GLOBAL_TARGET: ChatTarget = { kind: 'global' };
+const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : 'global');
 
 /** Window event that asks every mounted chat poller to poll now (Tracker fires it on a service-worker CHAT_ACTIVITY message). */
 export const CHAT_ACTIVITY_EVENT = 'quasar:chat-activity';
@@ -40,12 +50,12 @@ export type Outgoing = {
   network: boolean;
 };
 
-/* ---------- Module memory: pending sends and drafts, keyed by `${accountId}:${userId}` ---------- */
+/* ---------- Module memory: pending sends and drafts, keyed by `${accountId}:${userId}` (or `:global`) ---------- */
 
 interface ThreadMemory {
   key: string;
   accountId: string;
-  userId: string;
+  target: ChatTarget;
   draft: string;
   outgoing: Outgoing[];
   /** Server messages from successful sends, waiting for the mounted thread to merge them. */
@@ -74,12 +84,12 @@ export function clearChatMemory(): void {
   memory.accountId = null;
 }
 
-function threadMemory(accountId: string, userId: string): ThreadMemory {
+function threadMemory(accountId: string, target: ChatTarget): ThreadMemory {
   claimAccount(accountId);
-  const key = `${accountId}:${userId}`;
+  const key = `${accountId}:${targetKey(target)}`;
   let entry = memory.threads.get(key);
   if (!entry) {
-    entry = { key, accountId, userId, draft: '', outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
+    entry = { key, accountId, target, draft: '', outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
     memory.threads.set(key, entry);
   }
   return entry;
@@ -133,7 +143,10 @@ const isQueued = (entry: ThreadMemory, clientId: string) => entry.outgoing.some(
 async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: ChatMessage } | { failure: Failure } | 'gone'> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      const result = await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.userId, clientId: item.clientId, body: item.body }, { signal: timeoutSignal(SEND_TIMEOUT_MS) });
+      const options = { signal: timeoutSignal(SEND_TIMEOUT_MS) };
+      const result = entry.target.kind === 'peer'
+        ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body }, options)
+        : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -348,7 +361,14 @@ export function useChatInbox(state: AppState, active = true) {
 
 /* ---------- Thread ---------- */
 
-type ThreadData = { peer: ChatPeer; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null };
+type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null };
+type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
+
+/** The thread query for either target. Both endpoints answer with the same page shape. */
+function queryThread(accountId: string, target: ChatTarget, cursor: { after?: number; before?: number }, signal?: AbortSignal): Promise<ThreadPage> {
+  if (target.kind === 'peer') return api.chat.thread.query({ accountId, userId: target.userId, ...cursor }, { signal });
+  return api.global.thread.query({ accountId, ...cursor }, { signal });
+}
 export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
 
 /**
@@ -368,12 +388,14 @@ function mergeMessages(current: ChatMessage[], changes: ChatMessage[], hasEarlie
 }
 
 /**
- * One conversation. Render it with `key={userId}` so a different chat starts from a clean state.
- * `onChange` runs after this tab changes something the chat list shows (send, delete, read, mute).
+ * One conversation: a friend, or the global room. Render it with a key per target so a different chat
+ * starts from a clean state. `onChange` runs after this tab changes something the chat list shows
+ * (send, delete, edit, read, mute).
  */
-export function useChatThread(state: AppState, userId: string, options: { onChange?: () => void } = {}) {
+export function useChatThread(state: AppState, target: ChatTarget, options: { onChange?: () => void } = {}) {
   const accountId = state.context.user.id;
-  const entry = threadMemory(accountId, userId);
+  const entry = threadMemory(accountId, target);
+  const userId = target.kind === 'peer' ? target.userId : null;
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
   const onChangeRef = useRef(options.onChange);
@@ -400,15 +422,16 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     const after = cursor.current;
     const muteAtStart = muteVersion.current;
     try {
-      const result = await api.chat.thread.query(after === null ? { accountId, userId } : { accountId, userId, after }, { signal });
+      const result = await queryThread(accountId, entry.target, after === null ? {} : { after }, signal);
       if (signal.aborted) return 'ok';
       const full = after === null || result.reset;
       cursor.current = result.revision;
       setData((previous) => {
         // A mute toggled while this poll was out wins over the poll's older value.
         const muted = previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted;
-        if (full || !previous) return { peer: result.peer, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
-        return { peer: result.peer, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
+        const room = result.room ?? null;
+        if (full || !previous) return { peer: result.peer, room, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
+        return { peer: result.peer, room, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
       });
       setLastReadSeq((previous) => Math.max(previous, result.lastReadSeq));
       setInitialReadSeq((previous) => previous ?? result.lastReadSeq);
@@ -424,7 +447,7 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
       if (after === null) { setError(errorMessage(err)); setStatus((current) => (current === 'loading' ? 'error' : current)); }
       return 'fail';
     }
-  }, [accountId, userId, entry]);
+  }, [accountId, entry]);
 
   const { pollNow, failures } = usePoller(entry.key, status !== 'closed', state.online, THREAD_POLL_MS, poll);
 
@@ -456,7 +479,7 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     if (!first) return;
     setLoadingEarlier(true);
     try {
-      const result = await api.chat.thread.query({ accountId, userId, before: first.seq });
+      const result = await queryThread(accountId, entry.target, { before: first.seq });
       // An older page never moves the revision cursor, so no change can be skipped.
       setData((previous) => previous && { ...previous, hasEarlier: result.hasEarlier, messages: mergeMessages(result.messages, previous.messages, false) });
     } catch (err) {
@@ -466,15 +489,19 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     } finally {
       setLoadingEarlier(false);
     }
-  }, [accountId, userId]);
+  }, [accountId, entry]);
 
   /** Marks everything up to `seq` read. Only moves forward; errors wait for the next chance. */
   const markRead = useCallback(async (seq: number) => {
     if (!latest.current.online || seq <= Math.max(lastReadRef.current, readRequested.current)) return;
     readRequested.current = seq;
     try {
-      const result = await api.chat.read.mutate({ accountId, userId, seq });
-      latest.current.setChatUnread(result.unreadChats, result.unreadAt);
+      if (userId) {
+        const result = await api.chat.read.mutate({ accountId, userId, seq });
+        latest.current.setChatUnread(result.unreadChats, result.unreadAt);
+      } else {
+        await api.global.read.mutate({ accountId, seq });
+      }
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
     } catch (err) {
@@ -487,7 +514,7 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
   const setMuted = useCallback(async (muted: boolean) => {
     muteVersion.current += 1;
     try {
-      const result = await api.chat.mute.mutate({ accountId, userId, muted });
+      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
       setData((previous) => previous && { ...previous, muted: result.muted });
       onChangeRef.current?.();
@@ -498,15 +525,35 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     }
   }, [accountId, userId]);
 
-  const deleteMessage = useCallback(async (messageId: string) => {
+  /** `reason` is the owner's note, shown to everyone; it only applies to global messages the owner removes. */
+  const deleteMessage = useCallback(async (messageId: string, reason = '') => {
     try {
-      await api.chat.delete.mutate({ accountId, userId, messageId });
+      if (userId) await api.chat.delete.mutate({ accountId, userId, messageId });
+      else await api.global.delete.mutate({ accountId, messageId, reason });
     } catch (err) {
-      if (errorCode(err) === 'NOT_FOUND') { setStatus('closed'); return; }
+      // A private chat that vanished is closed; a global message that vanished is simply gone, and the poll shows that.
+      if (errorCode(err) === 'NOT_FOUND' && userId) { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    setData((previous) => previous && { ...previous, messages: previous.messages.map((message) => (message.id === messageId && message.fromMe ? { ...message, body: null, deletedBy: 'sender' as const } : message)) });
+    // The owner's deletion of someone else's global message shows as "Removed by the owner" once the poll lands.
+    setData((previous) => previous && { ...previous, messages: previous.messages.map((message): ChatMessage => (message.id === messageId
+      ? { ...message, body: null, deletedBy: message.fromMe ? 'sender' : 'owner', ...(message.fromMe || userId ? {} : { reason }) } as ChatMessage : message)) });
+    pollNow();
+    onChangeRef.current?.();
+  }, [accountId, userId, pollNow]);
+
+  /** Owner only, global room only: replaces a message's text. The server applies the same body rules and filter. */
+  const editMessage = useCallback(async (messageId: string, body: string, reason = '') => {
+    if (userId) throw new Error('Only global chat messages can be edited.');
+    let result: { message: GlobalMessage };
+    try {
+      result = await api.global.edit.mutate({ accountId, messageId, body, reason });
+    } catch (err) {
+      if (isUnauthorized(err)) void latest.current.refresh();
+      throw err;
+    }
+    setData((previous) => previous && { ...previous, messages: previous.messages.map((message) => (message.id === messageId ? result.message : message)) });
     pollNow();
     onChangeRef.current?.();
   }, [accountId, userId, pollNow]);
@@ -523,6 +570,8 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     /** Load error for the first page (the thread shows it with Try again). */
     error,
     peer: data?.peer ?? null,
+    /** The global room's details; null for a one-to-one chat. */
+    room: data?.room ?? null,
     messages,
     hasEarlier: data?.hasEarlier ?? false,
     muted: data?.muted ?? false,
@@ -544,6 +593,7 @@ export function useChatThread(state: AppState, userId: string, options: { onChan
     markRead,
     setMuted,
     deleteMessage,
+    editMessage,
   };
 }
 

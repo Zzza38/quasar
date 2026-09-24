@@ -7,6 +7,7 @@ import { openDatabase, type Db } from './db';
 import { CHAT_DELIVERY_ENTITY, CHAT_PUSH_PAYLOAD, NotificationService, SUPPORT_PUSH_PAYLOAD, chatQuietHours, pushSubscriptionSchema, reminderInstant, supportDeliveryEntity } from './notifications';
 import { CommunityService } from './community';
 import { ChatService } from './chat';
+import { GlobalChatService } from './global-chat';
 import { exampleSchedule } from '@/domain/example';
 import type { Task } from '@/domain/task';
 const databases: Db[] = [];
@@ -259,6 +260,38 @@ describe('chat pushes', () => {
     broken.db.prepare('UPDATE schools SET schedule=? WHERE id=?').run(JSON.stringify({ ...schedule, timeZone: 'Not/AZone' }), broken.school.id);
     broken.send(eleven.getTime() - noon.getTime() - 2 * MINUTE);
     expect(await broken.notifications.deliverChat(eleven)).toEqual({ sent: 0, failed: 0 });
+  });
+
+  it('e. pushes for the global chat under the same rules, with its own mute and read markers', async () => {
+    const f = chatFixture();
+    const room = new GlobalChatService(f.service, () => f.clock.now);
+    // The fixture's accounts were created "today"; the test clock sits on Sep 15, so backdate them to before it.
+    f.db.prepare("UPDATE users SET created_at='2026-09-01T00:00:00.000Z'").run();
+    const post = (ms: number, from = f.cara) => { f.clock.now = f.at(ms); return room.send(from, randomUUID(), SECRET).message; };
+    // Cara is nobody's friend, so only the room can reach Bob. It waits 60 s, and the payload is the generic one.
+    post(0);
+    expect(await f.notifications.deliverChat(f.at(59_000))).toEqual({ sent: 0, failed: 0 });
+    expect(await f.notifications.deliverChat(f.at(61_000))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls[0][1]).toBe(CHAT_PUSH_PAYLOAD);
+    expect(f.db.prepare('SELECT notified_seq FROM global_members WHERE user_id=?').get(f.bob)).toEqual({ notified_seq: 1 });
+    // The same message is never pushed twice; a new one is, after the 10-minute window.
+    expect(await f.notifications.deliverChat(f.at(12 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    post(12 * MINUTE);
+    expect(await f.notifications.deliverChat(f.at(14 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    // Reading the room, muting it, or the message being deleted stops a push; the sender never gets one.
+    const third = post(30 * MINUTE);
+    room.read(f.bob, third.seq);
+    expect(await f.notifications.deliverChat(f.at(32 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    const fourth = post(45 * MINUTE);
+    room.mute(f.bob, true);
+    expect(await f.notifications.deliverChat(f.at(47 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    room.mute(f.bob, false);
+    room.delete(f.cara, fourth.id);
+    expect(await f.notifications.deliverChat(f.at(48 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    f.subscribe(f.cara);
+    post(60 * MINUTE);
+    expect(await f.notifications.deliverChat(f.at(62 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls.at(-1)![0].endpoint).toBe(subscription('' + f.bob).endpoint);
   });
 
   it('d. never pushes a message more than 24 hours old', async () => {
