@@ -22,6 +22,7 @@ const FAQ: ReadonlyArray<{ q: string; a: string }> = [
   { q: 'Reminders are not arriving.', a: 'Open Account from your avatar and check that “Task reminders” is on for this browser. On iPhone, reminders only work from the home-screen version of Quasar. Reminders are sent only for tasks that have a due date and a reminder set.' },
   { q: 'Who can see my name?', a: 'Your display name is visible to people at your school. Your full name is shown only when you and the person viewing are both verified. Nothing is sold and there are no ads or trackers.' },
   { q: 'Who can message me?', a: 'Only friends. Removing a friend or blocking closes the chat for both of you.' },
+  { q: 'What is the global chat?', a: 'One room under Group chats that everyone on Quasar can read and post in. Swearing is fine there, slurs are blocked before they send, and the owner can edit or remove any message, with the reason shown in its place.' },
   { q: 'Can support read my messages?', a: 'Only messages attached to a report. A report shares up to 30 messages from that one chat with support. Nobody at Quasar browses chats.' },
   { q: 'How do I sign out or delete my data?', a: 'Open Account from your avatar and choose “Sign out”. Signing out removes your data from this device. To delete your account entirely, send a message below.' },
 ];

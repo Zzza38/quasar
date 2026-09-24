@@ -3,6 +3,7 @@ import { Temporal } from '@js-temporal/polyfill';
 import webpush from 'web-push';
 import { z } from 'zod';
 import { CHAT } from '@/domain/chat';
+import { GLOBAL_READ_SEQ_SQL } from './global-chat';
 import { taskSchema, type Task } from '@/domain/task';
 import type { Db } from './db';
 
@@ -102,6 +103,21 @@ const CHAT_CANDIDATES_SQL = `SELECT c.thread_id AS threadId, max(c.seq) AS seq
     AND c.created_at<=@newest AND c.created_at>=@oldest
   GROUP BY c.thread_id`;
 
+/**
+ * The global room (docs/CHAT.md §11) as one more candidate, keyed 'global': the recipient has names and chat_push
+ * on, has not muted the room, and someone else's undeleted message is past both their read and notified markers,
+ * at least 60 s old and at most 24 h old.
+ */
+const GLOBAL_CANDIDATE_SQL = `SELECT 'global' AS threadId, max(c.seq) AS seq
+  FROM global_messages c JOIN users r ON r.id=@owner
+  WHERE r.chat_push=1 AND r.display_name<>'' AND r.full_name<>''
+    AND coalesce((SELECT m.muted FROM global_members m WHERE m.user_id=r.id), 0)=0
+    AND c.sender_id<>r.id AND c.deleted_at IS NULL
+    AND c.seq>max(${GLOBAL_READ_SEQ_SQL('r.id')}, coalesce((SELECT m.notified_seq FROM global_members m WHERE m.user_id=r.id), 0))
+    AND c.created_at<=@newest AND c.created_at>=@oldest
+  HAVING max(c.seq) IS NOT NULL`;
+const GLOBAL_THREAD = 'global';
+
 /** The recipient's school time zone, or the fallback when there is no school or the stored zone is unusable. */
 function chatTimeZone(schedule: string | null): string {
   if (!schedule) return CHAT.fallbackTimeZone;
@@ -190,6 +206,7 @@ export class NotificationService {
    * Generic chat pushes (docs/CHAT.md §6): delayed 60 s, at most one per recipient per 10 minutes and 20 per
    * 24 h, none between 22:00 and 07:00 in the recipient's school time zone, and none for muted chats or with
    * Message notifications off. Nothing older than 24 h is pushed, and the same messages are never pushed twice.
+   * The global room (§11) is one more candidate under the same rules, with its own mute and markers.
    */
   async deliverChat(now = new Date()): Promise<{ sent: number; failed: number }> {
     const result = { sent: 0, failed: 0 };
@@ -198,8 +215,10 @@ export class NotificationService {
     const at = (offsetMs: number) => new Date(now.getTime() - offsetMs).toISOString();
     const leaseCutoff = at(LEASE_MS);
     const windowStart = new Date(Math.floor(now.getTime() / CHAT.pushWindowMs) * CHAT.pushWindowMs).toISOString();
-    const candidates = (owner: string) => this.db.prepare(CHAT_CANDIDATES_SQL)
-      .all({ owner, newest: at(CHAT.pushDelayMs), oldest: at(DAY) }) as { threadId: string; seq: number }[];
+    const candidates = (owner: string) => {
+      const params = { owner, newest: at(CHAT.pushDelayMs), oldest: at(DAY) };
+      return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params)] as { threadId: string; seq: number }[];
+    };
     const recipients = this.db.prepare(`SELECT u.id, s.schedule FROM users u LEFT JOIN schools s ON s.id=u.school_id
       WHERE u.chat_push=1 AND EXISTS (SELECT 1 FROM push_subscriptions p WHERE p.owner_id=u.id) ORDER BY u.id`).all() as { id: string; schedule: string | null }[];
     for (const recipient of recipients) {
@@ -241,7 +260,13 @@ export class NotificationService {
         // 6. Record what was pushed, so the same messages are never pushed again, even after a restart.
         if (notified.size) {
           const update = this.db.prepare('UPDATE chat_members SET notified_seq=max(notified_seq,?) WHERE thread_id=? AND user_id=?');
-          this.db.transaction(() => { for (const [threadId, seq] of notified) update.run(seq, threadId, recipient.id); })();
+          const updateGlobal = this.db.prepare('INSERT INTO global_members(user_id,notified_seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET notified_seq=max(notified_seq,excluded.notified_seq)');
+          this.db.transaction(() => {
+            for (const [threadId, seq] of notified) {
+              if (threadId === GLOBAL_THREAD) updateGlobal.run(recipient.id, seq);
+              else update.run(seq, threadId, recipient.id);
+            }
+          })();
         }
       }
     }

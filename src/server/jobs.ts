@@ -1,5 +1,6 @@
 import { CalendarService } from './calendar';
 import { pruneChat } from './chat';
+import { pruneGlobalChat } from './global-chat';
 import { NotificationService } from './notifications';
 import type { Db } from './db';
 
@@ -17,7 +18,7 @@ type Options = { intervalMs?: number; onError?: (job: Job) => void };
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
-  calendar: new CalendarService(db), notifications: new NotificationService(db), chat: { prune: now => pruneChat(db, now) },
+  calendar: new CalendarService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); } },
 }): { stop: () => Promise<void> } {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');

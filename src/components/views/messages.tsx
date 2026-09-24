@@ -3,18 +3,23 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { bodyError, CHAT, linkParts, normalizeBody, REPORT_CATEGORIES, type ReportCategory } from '@/domain/chat';
+import { icePrankNotice, mentionsImmigrants, slurError } from '@/domain/chat-filter';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
-import { Button, Callout, Chip, EmptyState, Field, Hint, IconButton, Modal, Segmented, Spacer, Textarea } from '../primitives';
+import { Button, Callout, Chip, EmptyState, Field, Hint, IconButton, Input, Modal, Segmented, Spacer, Textarea } from '../primitives';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
-import { useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatThread, type Outgoing } from '../use-chat';
+import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatThread, type GlobalSummary, type Outgoing } from '../use-chat';
 
 type OpenRow = Extract<ChatInboxRow, { state: 'open' }>;
 type ClosedRow = Extract<ChatInboxRow, { state: 'closed' }>;
+
+/** `#messages?room=global` opens the global chat (docs/CHAT.md §11). */
+const GLOBAL_ROOM = 'global';
+const GLOBAL_NAME = 'Global chat';
 
 /** Gap after which a bubble shows its time even inside a run. */
 const RUN_GAP_MS = 10 * 60_000;
@@ -64,6 +69,25 @@ function useFinePointer(): boolean {
   return useSyncExternalStore(subscribePointer, finePointer, () => true);
 }
 
+/** Who sent a message, for runs and name labels: the global room keys by sender, a one-to-one chat by side. */
+function senderKey(message: ChatMessage): string {
+  return 'sender' in message ? message.sender.id : message.fromMe ? 'me' : 'them';
+}
+function senderName(message: ChatMessage): string {
+  return 'sender' in message ? message.sender.displayName : '';
+}
+/** The owner's edit or removal note on a global message, if any. */
+function moderation(message: ChatMessage): { edited: boolean; reason: string | null } {
+  if (!('sender' in message)) return { edited: false, reason: null };
+  return { edited: message.editedAt !== null, reason: message.reason };
+}
+function removedText(message: ChatMessage): string {
+  const { reason } = moderation(message);
+  if (message.deletedBy === 'support') return 'Hidden by support';
+  if (message.deletedBy === 'owner') return reason ? `Removed by the owner: ${reason}` : 'Removed by the owner';
+  return 'Message deleted';
+}
+
 /** Message text as React text nodes; only https links (full URL shown) are clickable. */
 function MessageText({ text, mine }: { text: string; mine: boolean }) {
   if (!CHAT.linkify) return <>{text}</>;
@@ -76,16 +100,19 @@ function MessageText({ text, mine }: { text: string; mine: boolean }) {
 
 export function MessagesView({ state }: { state: AppState }) {
   const withId = state.params.get('with');
+  const inRoom = state.params.get('room') === GLOBAL_ROOM;
+  /** The open conversation's key: a friend's id, "global", or null for the list alone. */
+  const openKey = withId ?? (inRoom ? GLOBAL_ROOM : null);
   const phone = useIsMobile();
   // Phones show the list or a thread; desktop shows both panes.
-  const listMounted = !phone || !withId;
+  const listMounted = !phone || !openKey;
   const inbox = useChatInbox(state, listMounted);
-  useChatViewport(phone && !!withId);
+  useChatViewport(phone && !!openKey);
   const [notice, setNotice] = useState('');
   const [reporting, setReporting] = useState<ClosedRow | null>(null);
 
   // Opening another chat clears the last result message.
-  useEffect(() => { if (withId) setNotice(''); }, [withId]);
+  useEffect(() => { if (openKey) setNotice(''); }, [openKey]);
 
   const rows = inbox.inbox?.rows ?? [];
   const closedRow = withId ? rows.find((row): row is ClosedRow => row.state === 'closed' && row.userId === withId) ?? null : null;
@@ -96,17 +123,17 @@ export function MessagesView({ state }: { state: AppState }) {
   // Leaving a thread removes the control that had focus (the list comes back on phones, and a block
   // closes the thread everywhere). Focus goes to the row of the chat just left, or to the heading.
   const heading = useRef<HTMLHeadingElement>(null);
-  const lastWith = useRef(withId);
+  const lastWith = useRef(openKey);
   const focusHeading = useRef(false);
   useEffect(() => {
     const previous = lastWith.current;
-    lastWith.current = withId;
-    if (withId || !previous || (!phone && !focusHeading.current)) return;
+    lastWith.current = openKey;
+    if (openKey || !previous || (!phone && !focusHeading.current)) return;
     const row = focusHeading.current ? null : document.querySelector<HTMLElement>(`[data-chat-row="${CSS.escape(previous)}"]`);
     focusHeading.current = false;
     if (row) row.focus();
     else heading.current?.focus({ preventScroll: true });
-  }, [withId, phone]);
+  }, [openKey, phone]);
 
   const backToList = (message: string) => {
     setNotice(message);
@@ -115,20 +142,34 @@ export function MessagesView({ state }: { state: AppState }) {
     reloadInbox();
     void state.refresh();
   };
+  /** Lifts the viewer's block (if any) and re-requests the friendship; a waiting request from the other side reopens at once. */
+  const reopen = async (row: ClosedRow) => {
+    const result = await api.chat.reopen.mutate({ accountId: state.context.user.id, userId: row.userId });
+    reloadInbox();
+    void state.refresh();
+    if (result.friendState === 'friends') {
+      setNotice(`Chat with ${row.displayName} reopened.`);
+      state.navigate('messages', { with: row.userId });
+    } else {
+      setNotice(`${result.unblocked ? `${row.displayName} is unblocked. ` : ''}Friend request sent. The chat reopens when ${row.displayName} accepts.`);
+    }
+  };
 
   return <div className="flex min-h-0 flex-1 flex-col gap-4 animate-in fade-in-0 duration-300">
     {/* A phone thread keeps the page heading for screen readers only. */}
-    <header className={cn('grid gap-1', withId && 'max-lg:sr-only')}><h1 ref={heading} tabIndex={-1} className="outline-none">Messages</h1></header>
+    <header className={cn('grid gap-1', openKey && 'max-lg:sr-only')}><h1 ref={heading} tabIndex={-1} className="outline-none">Messages</h1></header>
     {!state.online && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Messages load when you reconnect.</Callout>}
     {notice && <Callout tone="success" icon="check" role="status">{notice}</Callout>}
     <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-5">
-      {listMounted && <div className={cn('min-h-0 lg:overflow-y-auto lg:pr-1', withId && 'max-lg:hidden')}>
-        <ChatList state={state} inbox={inbox} selected={withId} onReport={(row) => { setNotice(''); setReporting(row); }} />
+      {listMounted && <div className={cn('min-h-0 lg:overflow-y-auto lg:pr-1', openKey && 'max-lg:hidden')}>
+        <ChatList state={state} inbox={inbox} selected={openKey} onReport={(row) => { setNotice(''); setReporting(row); }} onReopen={reopen} />
       </div>}
       {withId
         ? <Thread key={withId} state={state} userId={withId} phone={phone} fallbackName={openRow?.peer.displayName ?? closedRow?.displayName ?? ''} closedRow={closedRow}
-            onChange={onThreadChange} onClosed={reloadInbox} onReportClosed={setReporting} onLeave={backToList} />
-        : <div className="hidden min-h-0 place-items-center rounded-3xl bg-card text-sm text-muted-foreground shadow-card ring-1 ring-foreground/[0.06] lg:grid">Pick a chat.</div>}
+            onChange={onThreadChange} onClosed={reloadInbox} onReportClosed={setReporting} onReopen={reopen} onLeave={backToList} />
+        : inRoom
+          ? <GlobalThread key={GLOBAL_ROOM} state={state} phone={phone} onChange={onThreadChange} />
+          : <div className="hidden min-h-0 place-items-center rounded-3xl bg-card text-sm text-muted-foreground shadow-card ring-1 ring-foreground/[0.06] lg:grid">Pick a chat.</div>}
     </div>
     {reporting && <ReportModal state={state} userId={reporting.userId} name={reporting.displayName} mode="closed" onClose={() => setReporting(null)}
       onSent={() => { setReporting(null); setNotice('Report sent to support.'); reloadInbox(); }} />}
@@ -137,7 +178,7 @@ export function MessagesView({ state }: { state: AppState }) {
 
 /* ---------- Chat list ---------- */
 
-function ChatList({ state, inbox, selected, onReport }: { state: AppState; inbox: ReturnType<typeof useChatInbox>; selected: string | null; onReport: (row: ClosedRow) => void }) {
+function ChatList({ state, inbox, selected, onReport, onReopen }: { state: AppState; inbox: ReturnType<typeof useChatInbox>; selected: string | null; onReport: (row: ClosedRow) => void; onReopen: (row: ClosedRow) => Promise<void> }) {
   const data = inbox.inbox;
   const recent = (data?.rows ?? []).filter((row) => row.state === 'closed' || row.lastMessage !== null);
   const friends = (data?.rows ?? []).filter((row): row is OpenRow => row.state === 'open' && row.lastMessage === null);
@@ -146,13 +187,19 @@ function ChatList({ state, inbox, selected, onReport }: { state: AppState; inbox
     {inbox.error && !data && <Callout tone="danger" icon="alert" role="alert" actions={<Button size="sm" disabled={!state.online} onClick={inbox.reload}>Try again</Button>}>{inbox.error}</Callout>}
     {data && inbox.reconnecting && <Hint role="status">Reconnecting…</Hint>}
     {data?.pause && <Callout tone="warning" icon="lock">{data.pause.until ? `Support paused your messaging until ${pauseDate(data.pause.until, state.timeZone)}. You can still read your chats.` : 'Support paused your messaging. You can still read your chats.'}</Callout>}
+    {data && <section className="grid gap-2" aria-labelledby="chat-groups-title">
+      <h2 id="chat-groups-title" className="px-1 text-[12px] font-bold uppercase tracking-[0.1em] text-muted-foreground">Group chats</h2>
+      <ul className="grid gap-1" aria-label="Rooms">
+        <GlobalChatRow summary={data.global} state={state} selected={selected === GLOBAL_ROOM} />
+      </ul>
+    </section>}
     {data && data.rows.length === 0 && <EmptyState icon="users" title="No friends to message yet" action={<Button variant="primary" icon="users" onClick={() => state.navigate('people')}>Find friends</Button>}>Chats open once a schoolmate accepts your friend request.</EmptyState>}
     {recent.length > 0 && <section className="grid gap-2" aria-labelledby="chat-recent-title">
       <h2 id="chat-recent-title" className="px-1 text-[12px] font-bold uppercase tracking-[0.1em] text-muted-foreground">Recent</h2>
       <ul className="grid gap-1" aria-label="Chats">
         {recent.map((row) => row.state === 'open'
           ? <OpenChatRow key={row.peer.id} row={row} state={state} selected={selected === row.peer.id} />
-          : <ClosedChatRow key={row.userId} row={row} online={state.online} onReport={() => onReport(row)} />)}
+          : <ClosedChatRow key={row.userId} row={row} online={state.online} onReport={() => onReport(row)} onReopen={() => onReopen(row)} />)}
       </ul>
     </section>}
     {friends.length > 0 && <section className="grid gap-2" aria-labelledby="chat-friends-title">
@@ -169,6 +216,39 @@ function previewText(row: OpenRow): string {
   if (!last) return 'No messages yet';
   if (last.preview === null) return last.deletedBy === 'support' ? 'Hidden by support' : 'Message deleted';
   return last.fromMe ? `You: ${last.preview}` : last.preview;
+}
+
+function globalPreview(summary: GlobalSummary): string {
+  const last = summary.lastMessage;
+  if (!last) return 'Everyone on Quasar can post here';
+  if (last.preview === null) return last.deletedBy === 'owner' ? 'Removed by the owner' : 'Message deleted';
+  return `${last.fromMe ? 'You' : last.senderName}: ${last.preview}`;
+}
+
+/** The global room's row. It is always present and sits above the one-to-one chats. */
+function GlobalChatRow({ summary, state, selected }: { summary: GlobalSummary; state: AppState; selected: boolean }) {
+  const id = useId();
+  const unread = summary.unread > 0;
+  const described = [`${id}-preview`, summary.lastMessage && `${id}-time`, unread && `${id}-unread`, summary.muted && `${id}-muted`].filter(Boolean).join(' ');
+  return <li>
+    <button type="button" data-chat-row={GLOBAL_ROOM} aria-label={`Open ${GLOBAL_NAME}`} aria-describedby={described} aria-current={selected ? 'true' : undefined}
+      onClick={() => state.navigate('messages', { room: GLOBAL_ROOM })}
+      className="flex w-full min-w-0 items-center gap-3 rounded-2xl p-3 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring aria-[current=true]:bg-primary-soft">
+      <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-full bg-primary-soft text-primary-soft-foreground"><Icon name="users" size={18} /></span>
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <strong className={cn('truncate text-sm', unread ? 'font-extrabold' : 'font-semibold')}>{GLOBAL_NAME}</strong>
+          {summary.muted && <span id={`${id}-muted`} role="img" aria-label="Notifications muted" className="shrink-0 text-muted-foreground"><Icon name="bellOff" size={13} /></span>}
+          {summary.lastMessage && <span id={`${id}-time`} className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">{chatTime(summary.lastMessage.createdAt, state.timeZone, state.now)}</span>}
+        </span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span id={`${id}-preview`} className={cn('truncate text-[13px]', unread ? 'font-semibold text-foreground' : 'text-muted-foreground')}>{globalPreview(summary)}</span>
+          {unread && <span id={`${id}-unread`} role="img" aria-label={summary.unread === 1 ? '1 unread message' : `${summary.unread} unread messages`}
+            className={cn('ml-auto grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold leading-none tabular-nums', summary.muted ? 'bg-muted-foreground/20 text-muted-foreground' : 'bg-primary text-primary-foreground')}>{summary.unread > 99 ? '99+' : summary.unread}</span>}
+        </span>
+      </span>
+    </button>
+  </li>;
 }
 
 function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; selected: boolean }) {
@@ -198,14 +278,31 @@ function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; 
   </li>;
 }
 
-/** A closed chat: no history, no link, only Report. It looks the same however the chat closed. */
-function ClosedChatRow({ row, online, onReport }: { row: ClosedRow; online: boolean; onReport: () => void }) {
+/** The reopen control for a closed chat: lift the viewer's own block, or send a friend request. Nothing about the other side's block shows. */
+function ReopenButton({ row, online, onReopen, size = 'sm', variant = 'ghost' }: { row: ClosedRow; online: boolean; onReopen: () => Promise<void>; size?: 'sm' | 'md'; variant?: 'ghost' | 'secondary' | 'primary' }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  if (!row.reopen) return null;
+  const run = async () => {
+    setPending(true); setError('');
+    try { await onReopen(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+  };
+  const label = row.reopen === 'unblock' ? 'Unblock' : 'Add friend';
+  return <span className="grid justify-items-end gap-1">
+    <Button size={size} variant={variant} icon={row.reopen === 'unblock' ? 'unlock' : 'plus'} aria-label={`${label === 'Unblock' ? 'Unblock' : 'Add'} ${row.displayName}${label === 'Unblock' ? ' and reopen the chat' : ' as a friend'}`} busy={pending} disabled={!online} onClick={() => void run()}>{label}</Button>
+    {error && <Hint tone="danger" role="alert" className="text-right text-[12px]">{error}</Hint>}
+  </span>;
+}
+
+/** A closed chat: no history, no link, only Report and (when the viewer can) a reopen control. It looks the same however the chat closed. */
+function ClosedChatRow({ row, online, onReport, onReopen }: { row: ClosedRow; online: boolean; onReport: () => void; onReopen: () => Promise<void> }) {
   return <li className="flex min-w-0 items-center gap-3 rounded-2xl p-3">
     <MemberAvatar name={row.displayName} muted />
     <span className="grid min-w-0 flex-1 gap-0.5">
       <strong className="truncate text-sm font-semibold">{row.displayName}</strong>
       <span className="text-[13px] text-muted-foreground">Chat closed</span>
     </span>
+    <ReopenButton row={row} online={online} onReopen={onReopen} />
     <Button size="sm" variant="ghost" aria-label={`Report ${row.displayName}`} disabled={!online} onClick={onReport}>Report</Button>
   </li>;
 }
@@ -214,11 +311,11 @@ function ClosedChatRow({ row, online, onReport }: { row: ClosedRow; online: bool
 
 type ThreadModal = { kind: 'delete'; messageId: string } | { kind: 'block' } | { kind: 'report'; seq?: number } | null;
 
-function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClosed, onReportClosed, onLeave }: {
+function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClosed, onReportClosed, onReopen, onLeave }: {
   state: AppState; userId: string; phone: boolean; fallbackName: string; closedRow: ClosedRow | null;
-  onChange: () => void; onClosed: () => void; onReportClosed: (row: ClosedRow) => void; onLeave: (notice: string) => void;
+  onChange: () => void; onClosed: () => void; onReportClosed: (row: ClosedRow) => void; onReopen: (row: ClosedRow) => Promise<void>; onLeave: (notice: string) => void;
 }) {
-  const chat = useChatThread(state, userId, { onChange });
+  const chat = useChatThread(state, { kind: 'peer', userId }, { onChange });
   const name = chat.peer?.displayName ?? fallbackName;
   const [modal, setModal] = useState<ThreadModal>(null);
   const [actionError, setActionError] = useState('');
@@ -244,9 +341,10 @@ function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClo
     return frame(<>
       <div className="flex items-center gap-2 lg:px-4 lg:pt-3">{back}</div>
       <EmptyState icon="lock" title="This chat is closed." action={<div className="flex flex-wrap justify-center gap-2">
+        {closedRow && <ReopenButton row={closedRow} online={state.online} onReopen={() => onReopen(closedRow)} size="md" variant="secondary" />}
         {closedRow && <Button disabled={!state.online} onClick={() => onReportClosed(closedRow)}>Report</Button>}
         <Button variant="primary" onClick={() => state.navigate('messages')}>All chats</Button>
-      </div>} />
+      </div>}>{closedRow?.reopen === 'unblock' ? 'You blocked this person. Unblocking sends them a friend request; the chat and its history come back when they accept.' : closedRow?.reopen === 'friend' ? 'Add them as a friend again to reopen the chat with its history.' : undefined}</EmptyState>
     </>);
   }
 
@@ -287,7 +385,7 @@ function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClo
       {actionError && <Callout tone="danger" icon="alert" role="alert">{actionError}</Callout>}
       {reported && <Callout tone="success" icon="check" role="status">Report sent to support.</Callout>}
     </div>}
-    <MessageLog state={state} chat={chat} name={name} onDelete={(messageId) => setModal({ kind: 'delete', messageId })} onReport={(seq) => { setReported(false); setModal({ kind: 'report', seq }); }} />
+    <MessageLog state={state} chat={chat} name={name} mode="peer" onDelete={(message) => setModal({ kind: 'delete', messageId: message.id })} onReport={(seq) => { setReported(false); setModal({ kind: 'report', seq }); }} />
     {chat.pause
       ? <div className="border-t border-foreground/[0.06] pt-3 pb-[max(8px,env(safe-area-inset-bottom))] lg:px-4 lg:pb-4"><Hint role="status" className="text-[13px]">{pauseText(chat.pause, state.timeZone)}</Hint></div>
       : <Composer key={userId} chat={chat} name={name} online={state.online} />}
@@ -305,30 +403,116 @@ function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClo
   </>);
 }
 
+/* ---------- Global chat thread ---------- */
+
+type GlobalModal = { kind: 'delete'; message: ChatMessage } | { kind: 'edit'; message: ChatMessage } | null;
+
+/**
+ * The global room (§11). No block, report or "closed" state: it is public, and the owner moderates it
+ * directly with Edit and Delete on any message, each with a reason everyone can read.
+ */
+function GlobalThread({ state, phone, onChange }: { state: AppState; phone: boolean; onChange: () => void }) {
+  const chat = useChatThread(state, GLOBAL_TARGET, { onChange });
+  const [modal, setModal] = useState<GlobalModal>(null);
+  const [actionError, setActionError] = useState('');
+  const [muting, setMuting] = useState(false);
+  const canModerate = chat.room?.canModerate ?? false;
+  const back = <IconButton label="Back to chats" icon="arrowLeft" className="lg:hidden" onClick={() => state.navigate('messages')} />;
+
+  const section = useRef<HTMLElement>(null);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!phone || focused.current) return;
+    focused.current = true;
+    if (!section.current?.contains(document.activeElement)) section.current?.focus({ preventScroll: true });
+  }, [phone]);
+
+  const frame = (children: ReactNode) => <section ref={section} tabIndex={-1} aria-label={GLOBAL_NAME} className="flex min-h-0 flex-1 flex-col overflow-hidden outline-none lg:rounded-3xl lg:bg-card lg:shadow-card lg:ring-1 lg:ring-foreground/[0.06]">{children}</section>;
+
+  if (chat.status !== 'ready' || !chat.room) {
+    return frame(<>
+      <div className="flex items-center gap-2 lg:px-4 lg:pt-3">{back}<strong className="truncate text-[15px] font-bold">{GLOBAL_NAME}</strong></div>
+      <div className="grid gap-3 py-4 lg:px-4">
+        {chat.status === 'error' && chat.error
+          ? <Callout tone="danger" icon="alert" role="alert" actions={<Button size="sm" disabled={!state.online} onClick={chat.pollNow}>Try again</Button>}>{chat.error}</Callout>
+          : state.online && <Hint role="status">Loading messages…</Hint>}
+      </div>
+    </>);
+  }
+
+  const members = chat.room.members;
+  const toggleMute = async () => {
+    setMuting(true); setActionError('');
+    try { await chat.setMuted(!chat.muted); } catch (err) { setActionError(errorMessage(err)); } finally { setMuting(false); }
+  };
+  const mine = modal?.kind === 'delete' && modal.message.fromMe;
+
+  return frame(<>
+    <header className="flex items-center gap-1.5 border-b border-foreground/[0.06] pb-2 lg:px-4 lg:pt-3">
+      {back}
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <strong className="truncate text-[15.5px] font-bold">{GLOBAL_NAME}</strong>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <Chip tone="neutral" icon="users">{members === 1 ? '1 member' : `${members} members`}</Chip>
+          {canModerate && <Chip tone="success" icon="checkCircle">You moderate this room</Chip>}
+          {chat.reconnecting && <Hint role="status">Reconnecting…</Hint>}
+        </div>
+      </div>
+      <IconButton label={chat.muted ? 'Unmute notifications' : 'Mute notifications'} icon={chat.muted ? 'bell' : 'bellOff'} aria-busy={muting || undefined} disabled={!state.online || muting} onClick={() => void toggleMute()} />
+    </header>
+    {actionError && <div className="grid gap-2 pt-3 lg:px-4"><Callout tone="danger" icon="alert" role="alert">{actionError}</Callout></div>}
+    <MessageLog state={state} chat={chat} name="everyone" mode="global" canModerate={canModerate}
+      onDelete={(message) => setModal({ kind: 'delete', message })} onEdit={(message) => setModal({ kind: 'edit', message })} />
+    {chat.pause
+      ? <div className="border-t border-foreground/[0.06] pt-3 pb-[max(8px,env(safe-area-inset-bottom))] lg:px-4 lg:pb-4"><Hint role="status" className="text-[13px]">{pauseText(chat.pause, state.timeZone)}</Hint></div>
+      : <Composer key={GLOBAL_ROOM} chat={chat} name="everyone" online={state.online} filtered />}
+
+    {modal?.kind === 'delete' && (mine
+      ? <ConfirmModal title="Delete for everyone?" description="It disappears from the global chat now." confirm="Delete" online={state.online}
+          onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.message.id); setModal(null); }} />
+      : <ReasonModal title={`Remove ${senderName(modal.message)}’s message?`} description="Everyone sees “Removed by the owner” and your reason in its place." confirm="Remove" online={state.online}
+          onClose={() => setModal(null)} onConfirm={async (reason) => { await chat.deleteMessage(modal.message.id, reason); setModal(null); }} />)}
+    {modal?.kind === 'edit' && <EditModal message={modal.message} online={state.online} onClose={() => setModal(null)}
+      onSave={async (body, reason) => { await chat.editMessage(modal.message.id, body, reason); setModal(null); }} />}
+  </>);
+}
+
 /* ---------- Message log ---------- */
 
 type LogItem =
   | { kind: 'day'; key: string; label: string }
   | { kind: 'unread'; key: string }
-  | { kind: 'message'; key: string; message: ChatMessage; date: string; time: string; showTime: boolean };
+  | { kind: 'notice'; key: string; text: string }
+  | { kind: 'message'; key: string; message: ChatMessage; date: string; time: string; showTime: boolean; showName: boolean };
 
-function buildItems(messages: ChatMessage[], initialReadSeq: number | null, timeZone: string, today: string): LogItem[] {
+function buildItems(messages: ChatMessage[], initialReadSeq: number | null, timeZone: string, today: string, global: boolean): LogItem[] {
   const items: LogItem[] = [];
   const parts = messages.map((message) => instantParts(message.createdAt, timeZone));
   const firstUnread = initialReadSeq === null ? undefined : messages.find((message) => !message.fromMe && message.seq > initialReadSeq)?.seq;
   messages.forEach((message, index) => {
     const { date, time } = parts[index]!;
-    if (index === 0 || parts[index - 1]!.date !== date) items.push({ kind: 'day', key: `day-${date}`, label: dayLabel(date, today) });
+    const newDay = index === 0 || parts[index - 1]!.date !== date;
+    if (newDay) items.push({ kind: 'day', key: `day-${date}`, label: dayLabel(date, today) });
     if (message.seq === firstUnread) items.push({ kind: 'unread', key: 'unread' });
+    const previous = messages[index - 1];
     const next = messages[index + 1];
-    // The time sits under the last bubble of a run: next is from the other person, another day, or over 10 minutes later.
-    const showTime = !next || next.fromMe !== message.fromMe || parts[index + 1]!.date !== date || new Date(next.createdAt).getTime() - new Date(message.createdAt).getTime() > RUN_GAP_MS;
-    items.push({ kind: 'message', key: `m-${message.seq}`, message, date, time, showTime });
+    const gap = (later: ChatMessage, earlier: ChatMessage) => new Date(later.createdAt).getTime() - new Date(earlier.createdAt).getTime() > RUN_GAP_MS;
+    // The time sits under the last bubble of a run: next is from someone else, another day, or over 10 minutes later.
+    const showTime = !next || senderKey(next) !== senderKey(message) || parts[index + 1]!.date !== date || gap(next, message);
+    // In the room, the name sits over the first bubble of someone else's run.
+    const showName = global && !message.fromMe && (!previous || newDay || senderKey(previous) !== senderKey(message) || gap(message, previous));
+    items.push({ kind: 'message', key: `m-${message.seq}`, message, date, time, showTime, showName });
+    // The ICE prank (§11): a joke line under any room message that mentions immigrants. Nothing is reported anywhere.
+    if (global && message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice(message.fromMe ? 'You' : senderName(message)) });
   });
   return items;
 }
 
-function MessageLog({ state, chat, name, onDelete, onReport }: { state: AppState; chat: ChatThread; name: string; onDelete: (messageId: string) => void; onReport: (seq: number) => void }) {
+function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, onEdit, onReport }: {
+  state: AppState; chat: ChatThread; name: string; mode: 'peer' | 'global'; canModerate?: boolean;
+  onDelete: (message: ChatMessage) => void; onEdit?: (message: ChatMessage) => void; onReport?: (seq: number) => void;
+}) {
+  const global = mode === 'global';
   const { messages, outgoing } = chat;
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -342,7 +526,7 @@ function MessageLog({ state, chat, name, onDelete, onReport }: { state: AppState
   const [openActions, setOpenActions] = useState<number | null>(null);
   const [added, setAdded] = useState<Record<number, 'saving' | 'added' | string>>({});
   const [earlierError, setEarlierError] = useState('');
-  const items = useMemo(() => buildItems(messages, chat.initialReadSeq, state.timeZone, state.today), [messages, chat.initialReadSeq, state.timeZone, state.today]);
+  const items = useMemo(() => buildItems(messages, chat.initialReadSeq, state.timeZone, state.today, global), [messages, chat.initialReadSeq, state.timeZone, state.today, global]);
 
   const nearBottom = () => {
     const element = scroller.current;
@@ -463,16 +647,19 @@ function MessageLog({ state, chat, name, onDelete, onReport }: { state: AppState
       </div>}
       {empty && <div className="grid justify-items-center gap-2 px-4 py-10 text-center">
         <p className="text-[15px] font-bold">No messages yet.</p>
-        <Hint className="max-w-[40ch] text-[13px]">Only you and {name} can read this chat. Support sees messages only if one of you reports them.</Hint>
+        {global
+          ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs are blocked. The owner can edit or remove any message.</Hint>
+          : <Hint className="max-w-[40ch] text-[13px]">Only you and {name} can read this chat. Support sees messages only if one of you reports them.</Hint>}
       </div>}
-      <ol role="log" aria-live={quiet ? 'off' : 'polite'} aria-label={`Messages with ${name}`} className="grid grid-cols-[minmax(0,1fr)] gap-1">
+      <ol role="log" aria-live={quiet ? 'off' : 'polite'} aria-label={global ? 'Global chat messages' : `Messages with ${name}`} className="grid grid-cols-[minmax(0,1fr)] gap-1">
         {items.map((item) => {
           if (item.kind === 'day') return <li key={item.key} role="none" className="flex justify-center py-2"><span className="rounded-full bg-muted px-2.5 py-0.5 text-[11.5px] font-semibold text-muted-foreground">{item.label}</span></li>;
           if (item.kind === 'unread') return <li key={item.key} role="none" className="flex items-center gap-2 py-2 text-[11.5px] font-bold text-primary"><span aria-hidden="true" className="h-px flex-1 bg-primary/40" />New messages<span aria-hidden="true" className="h-px flex-1 bg-primary/40" /></li>;
+          if (item.kind === 'notice') return <li key={item.key} className="flex justify-center px-2 py-1"><span className="max-w-[48ch] rounded-xl bg-warning-soft px-3 py-1.5 text-center text-[12.5px] font-medium text-foreground/80 ring-1 ring-inset ring-foreground/[0.06]">{item.text}</span></li>;
           const { message } = item;
-          return <Bubble key={item.key} message={message} date={item.date} time={item.time} showTime={item.showTime} online={state.online}
+          return <Bubble key={item.key} message={message} date={item.date} time={item.time} showTime={item.showTime} showName={item.showName} online={state.online} mode={mode} canModerate={canModerate}
             open={openActions === message.seq} onToggle={() => setOpenActions((current) => (current === message.seq ? null : message.seq))}
-            added={added[message.seq]} onAddTask={() => void addTask(message)} onDelete={() => onDelete(message.id)} onReport={() => onReport(message.seq)} />;
+            added={added[message.seq]} onAddTask={() => void addTask(message)} onDelete={() => onDelete(message)} onEdit={onEdit && (() => onEdit(message))} onReport={onReport && (() => onReport(message.seq))} />;
         })}
       </ol>
       {/* Outside the live log: a sent message is announced once, when the log gains the confirmed copy. */}
@@ -489,13 +676,15 @@ const BUBBLE = 'min-w-0 rounded-2xl px-3.5 py-2 text-[15px] leading-snug whitesp
 const MINE = 'bg-primary text-primary-foreground';
 const THEIRS = 'bg-muted text-foreground ring-1 ring-inset ring-foreground/[0.04]';
 
-function Bubble({ message, date, time, showTime, online, open, onToggle, added, onAddTask, onDelete, onReport }: {
-  message: ChatMessage; date: string; time: string; showTime: boolean; online: boolean; open: boolean; onToggle: () => void;
-  added: 'saving' | 'added' | string | undefined; onAddTask: () => void; onDelete: () => void; onReport: () => void;
+function Bubble({ message, date, time, showTime, showName, online, mode, canModerate, open, onToggle, added, onAddTask, onDelete, onEdit, onReport }: {
+  message: ChatMessage; date: string; time: string; showTime: boolean; showName: boolean; online: boolean; mode: 'peer' | 'global'; canModerate: boolean;
+  open: boolean; onToggle: () => void; added: 'saving' | 'added' | string | undefined; onAddTask: () => void; onDelete: () => void; onEdit?: () => void; onReport?: () => void;
 }) {
   const actionsId = useId();
   const mine = message.fromMe;
   const removed = message.body === null || message.deletedBy !== null;
+  const { edited, reason } = moderation(message);
+  const name = senderName(message);
   // Tapping or clicking the bubble toggles its actions on every device. This is not gated on the
   // pointer type: iPadOS reports a fine pointer whenever a keyboard case, trackpad or Pencil is
   // around, and Safari never focuses a tapped button, so hover- and focus-only reveals would leave
@@ -504,27 +693,28 @@ function Bubble({ message, date, time, showTime, online, open, onToggle, added, 
     if (removed || (event.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return;
     onToggle();
   };
+  const label = mode === 'global' && !mine ? `${name}: ` : '';
+  const editNote = edited ? (reason ? `Edited by the owner: ${reason}` : 'Edited by the owner') : '';
   return <li data-seq={message.seq} className={cn('group/msg flex flex-col', mine ? 'items-end' : 'items-start')}>
+    {showName && <span className="mb-0.5 px-1 text-[12px] font-bold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" />}</span>}
     {/* The bubble keeps 80% of the row; the actions button sits beside it rather than eating into it. */}
     <div className={cn('flex items-center gap-1', removed ? 'max-w-[80%]' : 'max-w-[calc(80%+2.25rem)] pointer-coarse:max-w-[calc(80%+3rem)]', mine && 'flex-row-reverse')}>
       {removed
-        ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'border border-dashed border-foreground/20 bg-transparent italic text-muted-foreground')}>{message.deletedBy === 'support' ? 'Hidden by support' : 'Message deleted'}</div>
-        : <div title={formatDateTime(date, time)} onClick={tap} className={cn(BUBBLE, mine ? MINE : THEIRS)}><MessageText text={message.body ?? ''} mine={mine} /></div>}
+        ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'border border-dashed border-foreground/20 bg-transparent italic text-muted-foreground')}>{label && <span className="sr-only">{label}</span>}{removedText(message)}</div>
+        : <div title={formatDateTime(date, time)} onClick={tap} className={cn(BUBBLE, mine ? MINE : THEIRS)}>{label && <span className="sr-only">{label}</span>}<MessageText text={message.body ?? ''} mine={mine} /></div>}
       {!removed && <IconButton label="Message actions" icon="more" size="sm" aria-expanded={open} aria-controls={open ? actionsId : undefined} onClick={onToggle}
         className="shrink-0 rounded-full text-muted-foreground opacity-0 transition-opacity no-hover:opacity-50 focus-visible:opacity-100 aria-expanded:opacity-100 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100" />}
     </div>
     {open && !removed && <div id={actionsId} className={cn('mt-1 flex flex-wrap items-center gap-1.5', mine && 'justify-end')}>
-      {mine
-        ? <Button size="sm" variant="ghost" icon="trash" aria-label="Delete message" disabled={!online} onClick={onDelete}>Delete</Button>
-        : <>
-          {added === 'added'
-            ? <Hint role="status" className="px-2 text-[13px] text-success">Added to Tasks.</Hint>
-            : <Button size="sm" variant="ghost" icon="tasks" busy={added === 'saving'} onClick={onAddTask}>Add as task</Button>}
-          <Button size="sm" variant="ghost" icon="alert" disabled={!online} onClick={onReport}>Report message</Button>
-          {added && added !== 'added' && added !== 'saving' && <Hint tone="danger" role="alert">{added}</Hint>}
-        </>}
+      {!mine && (added === 'added'
+        ? <Hint role="status" className="px-2 text-[13px] text-success">Added to Tasks.</Hint>
+        : <Button size="sm" variant="ghost" icon="tasks" busy={added === 'saving'} onClick={onAddTask}>Add as task</Button>)}
+      {!mine && onReport && <Button size="sm" variant="ghost" icon="alert" disabled={!online} onClick={onReport}>Report message</Button>}
+      {canModerate && onEdit && <Button size="sm" variant="ghost" icon="edit" aria-label="Edit message" disabled={!online} onClick={onEdit}>Edit</Button>}
+      {(mine || canModerate) && <Button size="sm" variant="ghost" icon="trash" aria-label={mine ? 'Delete message' : 'Remove message'} disabled={!online} onClick={onDelete}>{mine ? 'Delete' : 'Remove'}</Button>}
+      {!mine && added && added !== 'added' && added !== 'saving' && <Hint tone="danger" role="alert">{added}</Hint>}
     </div>}
-    {showTime && <span className="mt-0.5 px-1 text-xs text-muted-foreground">{formatTime(time)}</span>}
+    {(showTime || editNote) && <span className="mt-0.5 px-1 text-xs text-muted-foreground">{showTime && formatTime(time)}{showTime && editNote && ' · '}{editNote}</span>}
   </li>;
 }
 
@@ -546,12 +736,14 @@ function PendingBubble({ item, online, onRetry, onDiscard }: { item: Outgoing; o
 
 /* ---------- Composer ---------- */
 
-function Composer({ chat, name, online }: { chat: ChatThread; name: string; online: boolean }) {
+/** `filtered` turns on the room's slur filter: Send is disabled and the reason shows while the draft has a slur in it. */
+function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; name: string; online: boolean; filtered?: boolean }) {
   const [draft, setDraft] = useState(chat.initialDraft);
   const field = useRef<HTMLTextAreaElement>(null);
   const fine = useFinePointer();
   const normalized = normalizeBody(draft);
-  const problem = bodyError(normalized);
+  const filterProblem = filtered ? slurError(normalized) : null;
+  const problem = bodyError(normalized) ?? filterProblem;
   const left = CHAT.maxLength - normalized.length;
   const canSend = online && problem === null;
 
@@ -582,7 +774,8 @@ function Composer({ chat, name, online }: { chat: ChatThread; name: string; onli
       <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="max-h-[7.5rem] min-h-10 resize-none text-base md:text-base" autoComplete="off" maxLength={1100}
         placeholder={online ? 'Message' : 'Offline'} disabled={!online} enterKeyHint={fine ? 'send' : 'enter'} value={draft}
         onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} />
-      {left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
+      {filterProblem && <Hint tone="danger" role="alert" className="px-1">{filterProblem}</Hint>}
+      {!filterProblem && left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
     </div>
     <IconButton type="submit" label="Send" icon="send" variant="primary" disabled={!canSend} className="size-10 shrink-0 rounded-full" />
   </form>;
@@ -600,6 +793,45 @@ function ConfirmModal({ title, description, confirm, online, onClose, onConfirm 
   return <Modal open onClose={onClose} busy={pending} title={title} description={description}
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={!online} onClick={() => void run()}>{confirm}</Button></>}>
     {error ? <Callout tone="danger" icon="alert" role="alert">{error}</Callout> : null}
+  </Modal>;
+}
+
+/** The owner removes someone's room message, with an optional reason everyone sees in its place. */
+function ReasonModal({ title, description, confirm, online, onClose, onConfirm }: { title: string; description: string; confirm: string; online: boolean; onClose: () => void; onConfirm: (reason: string) => Promise<void> }) {
+  const [reason, setReason] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const run = async () => {
+    setPending(true); setError('');
+    try { await onConfirm(reason.trim()); } catch (err) { setError(errorMessage(err)); setPending(false); }
+  };
+  return <Modal open onClose={onClose} busy={pending} dirty={reason.trim().length > 0} title={title} description={description}
+    footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={!online} onClick={() => void run()}>{confirm}</Button></>}>
+    <Field label="Reason (optional, shown to everyone)" htmlFor="global-remove-reason"><Input id="global-remove-reason" maxLength={200} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Spam, personal info, off topic…" /></Field>
+    {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+  </Modal>;
+}
+
+/** The owner rewrites a room message. The same body rules and slur filter apply, and the reason shows under the message. */
+function EditModal({ message, online, onClose, onSave }: { message: ChatMessage; online: boolean; onClose: () => void; onSave: (body: string, reason: string) => Promise<void> }) {
+  const [draft, setDraft] = useState(message.body ?? '');
+  const [reason, setReason] = useState(moderation(message).reason ?? '');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const normalized = normalizeBody(draft);
+  const problem = bodyError(normalized) ?? slurError(normalized);
+  const changed = normalized !== (message.body ?? '') || reason.trim() !== (moderation(message).reason ?? '');
+  const save = async () => {
+    if (problem) return;
+    setPending(true); setError('');
+    try { await onSave(normalized, reason.trim()); } catch (err) { setError(errorMessage(err)); setPending(false); }
+  };
+  return <Modal open onClose={onClose} busy={pending} dirty={changed} title={message.fromMe ? 'Edit your message' : `Edit ${senderName(message)}’s message`}
+    description="Everyone sees the new text, “Edited by the owner” and your reason."
+    footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={!online || !!problem || !changed} onClick={() => void save()}>Save</Button></>}>
+    <Field label="Message" htmlFor="global-edit-body" error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={1100} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
+    <Field label="Reason (optional, shown to everyone)" htmlFor="global-edit-reason"><Input id="global-edit-reason" maxLength={200} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Fixed the time, removed a phone number…" /></Field>
+    {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;
 }
 

@@ -98,7 +98,8 @@ Three checks are defined once in `src/server/chat.ts` and run inside the same tr
 | Delete the other person's message | Nobody | The row doesn't match the query, so the call returns `NOT_FOUND` "This chat is closed." (the same wording, so there is no oracle). |
 | Leave | Not a separate action for one-to-one chats | "Leaving" means Remove friend or Block. Both end `access` for both people at once and leave closed rows (D7). |
 | Report a chat or a message | Either member, whether the chat is open or closed | Requires `member`, not `access`, so a student who blocked, was blocked or was unfriended can still report. A student removed by support can report too once they join another school, because the app shows onboarding to anyone with no school. The snapshot must hold at least one message with text; otherwise `BAD_REQUEST` "This chat has no messages to report.". Limits: 1 open chat report per (reporter, thread), which gives `CONFLICT`, and the existing 10 open reports per reporter, which gives `TOO_MANY_REQUESTS`. A message report's anchor must be the other person's message and must still have text. `block: true` also blocks, in the same transaction. |
-| Block effects | Either person | The phase-3 `block` deletes the friendship, so `access` fails for both at once. The open row leaves both lists and the unread counts, and the worker's recheck drops pending pushes. Both people see a closed row (D7). Phase-3 `request` refuses to re-friend while the block exists. Unblocking does not reopen the chat. After a new friendship, the old history (within retention) comes back. |
+| Block effects | Either person | The phase-3 `block` deletes the friendship, so `access` fails for both at once. The open row leaves both lists and the unread counts, and the worker's recheck drops pending pushes. Both people see a closed row (D7). Phase-3 `request` refuses to re-friend while the block exists. Unblocking alone does not reopen the chat; `chat.reopen` (added 2026-09-24) lifts the viewer's own block and sends the friend request in one step, and accepts a waiting request at once. After a new friendship, the old history (within retention) comes back. |
+| Reopen | The viewer of a closed row | `chat.reopen({ userId })` → `{ unblocked, friendState: 'friends' \| 'requested' }`. Closed rows carry `reopen: 'unblock' \| 'friend' \| null`, computed only from the viewer's own block and the two schools, so a row never reveals whether the other person blocked the viewer; if they did, the request fails with the phase-3 "This member is not available." (the same answer People gives). The row shows "Unblock" or "Add friend" beside Report; the closed thread view shows the same button with an explanation. |
 | Support removal effects | Owner | `removeFromSchool` deletes all of the student's friendships, so every one of their chats fails `access`. It already resolves every open report against them, chat reports included, as `removed`. Their messages stay until retention clears them, and their former friends keep closed rows for 30 days. |
 | School change effects | Automatic | None on access (D4). The verified chip reflects the other person's current school. |
 | Verification effects | Automatic | Display only: the chip and the full-name rule. With `CHAT.requiresVerification` on, losing verification ends `access` at once. |
@@ -1066,17 +1067,39 @@ There is no worker in the e2e server, so push is covered by Vitest only.
 
 ## 10. Non-goals for this phase
 
-- Group chats of any kind: friend groups, class groups, school-wide rooms. Messages or message requests from people who aren't friends.
+- Group chats beyond the single global room in §11: friend groups, class groups, school-wide rooms. Messages or message requests from people who aren't friends.
 - Images, files, voice, stickers, GIFs, reactions, replies or quotes, forwarding, editing (delete and resend instead), pinning, search, export.
 - Link previews, link reputation checks, and any server fetch of message content. Clickable `http://` and other non-https schemes.
 - Read receipts, typing indicators, online presence, "last seen" (D10).
 - SSE, WebSockets, tRPC subscriptions, and any new service (Redis, an external chat provider). In-app sounds, and desktop notifications while the tab is open.
 - Offline chat: no IndexedDB, no offline-queue sends, no service-worker caching, no persisted unsent messages or drafts. "Add as task" is the only chat action that goes through the offline queue, because it creates a task.
 - Names or message text in push notifications, and any email or SMS alerts. Per-browser chat settings separate from reminder enrollment. The controls are the account toggle and per-chat mute.
-- Automated moderation: keyword filters, ML classifiers, crisis-content detection. Moderation by students or teachers, parent accounts, age checks.
+- Automated moderation in one-to-one chat: keyword filters, ML classifiers, crisis-content detection. (The global room has a slur filter, §11.) Moderation by students or teachers, parent accounts, age checks.
 - Encrypting messages at rest, or end to end. The guarantee is that no product or API path shows unreported chats, and that evidence views are audited.
 - Owner tools beyond reports: browsing chats, message analytics, appeal workflows, notifying the reported student, penalties for abusive reporters.
 - A support or Quasar chat account, and owner broadcast messages.
 - Account deletion and data export. The retention rules in §3.5 are the only deletion.
 - Verification-gated chat. It exists as `CHAT.requiresVerification`, off by default.
 - Changing the six-tab phone dock, a Today-view chat widget, or an unread count in the document title.
+
+## 11. Global chat (migration 7)
+
+Added 2026-09-24. One room, **Global chat**, that every member with names entered can read and post in, across schools. It is public by design, so the rules are the opposite of one-to-one chat in two places: there is no privacy guarantee toward the owner, and the owner moderates it directly.
+
+**Where it lives.** The chat list (`#messages`) starts with a **Group chats** section holding one row, "Global chat", above Recent and Friends. It opens at `#messages?room=global`, which is immersive on phones like a thread. The row shows the newest message as "Name: text", the viewer's unread count and a mute icon. The room counts as one unread chat in the badge when it has unread messages from others and is not muted (`countUnreadChats`).
+
+**Push.** `deliverChat` treats the room as one more candidate (`GLOBAL_CANDIDATE_SQL`, keyed `'global'`) under the §6 rules: the same 60 s delay, 10-minute and daily caps, quiet hours, the account's Message notifications switch, the room's own mute, and `global_members.notified_seq` so nothing is pushed twice. The payload is the same generic one.
+
+**Thread.** Each run of someone else's bubbles carries the sender's display name (with the verified check when they are verified). Mute is per member. There is no Block, Report or closed state. The empty state says who can read it and that slurs are blocked.
+
+**Filter (`src/domain/chat-filter.ts`).** `hasSlur` matches a fixed list of slurs as whole words after normalization (lowercase, accents stripped, leetspeak mapped, censor marks treated as wildcards, repeated letters allowed, spaced-out letters joined). Ordinary swearing passes. The composer disables Send and shows the reason (`SLUR_ERROR`, a fixed string) while the draft has a slur in it, and the server refuses the send or edit with the same string. Message text is never echoed.
+
+**Owner tools.** Every bubble's actions menu offers the owner **Edit** and **Remove** (on their own messages, Delete). Both take an optional reason (200 characters) that everyone sees: a removed message reads "Removed by the owner: reason"; an edited one keeps the new text and reads "Edited by the owner: reason" under it. Both are recorded in `audit_log` (`global.edit`, `global.delete`) with the seq, sender and reason. A sender can delete their own message ("Message deleted", no reason). Nobody else can edit.
+
+**The ICE prank.** Under any room message that mentions "immigrant" or "immigrants", the client renders a joke line: "📞 Name said “immigrants”. Reporting to the ICE hotline… Just kidding. Nobody was reported, and nobody ever will be." It is computed on the client from the message text (`mentionsImmigrants`, `icePrankNotice`); nothing is stored, sent or reported anywhere.
+
+**Data (migration 7).** `global_chat` (one row: `revision`, `last_message_at`), `global_messages` (`seq`, `id`, `sender_id`, `body`, `created_at`, `edited_at`, `deleted_at`, `deleted_by` in `sender|owner`, `reason`, `revision`, unique on `(sender_id, id)`), `global_members` (`user_id`, `last_read_seq`, `notified_seq`, `muted`). Retention matches §3.5 (`pruneGlobalChat`: 180 days, deleted text emptied after 30) and runs in the worker's chat step. Messaging pauses (§3.4) and the per-minute and per-day limits (§3.3) apply to the room; new-chat limits do not.
+
+**API (`global` router, all account-scoped).** `thread({ after? | before? })` returns `{ peer: null, room: { members, canModerate }, messages, revision, lastReadSeq, hasEarlier, reset, muted, pause }`, the same page shape as `chat.thread`, so `useChatThread` drives both with a `ChatTarget` (`{ kind: 'peer', userId }` or `{ kind: 'global' }`). `send({ clientId, body })`, `delete({ messageId, reason })`, `edit({ messageId, body, reason })` (owner, `adminScoped`), `read({ seq })`, `mute({ muted })`. `chat.inbox` gains `global: { lastMessage, unread, muted }`. Messages carry `sender: { id, displayName, verified }`, `editedAt` and `reason`.
+
+**Tests.** `src/domain/chat-filter.test.ts` (swearing passes, slurs and obfuscations fail, innocent words pass), `src/server/global-chat.test.ts` (access, filter, delete and edit permissions with reasons and audit rows, revision polling, paging, unread and mute, limits and pauses, retry IDs, retention, account scoping) and the "global chat" test in `tests/e2e/chat.spec.ts`.
