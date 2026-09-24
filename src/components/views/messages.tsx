@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { bodyError, CHAT, linkParts, normalizeBody, REPORT_CATEGORIES, type ReportCategory } from '@/domain/chat';
-import { icePrankNotice, mentionsImmigrants, slurError } from '@/domain/chat-filter';
+import { censorSlurs, icePrankNotice, mentionsImmigrants, slurNotice } from '@/domain/chat-filter';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -648,7 +648,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
       {empty && <div className="grid justify-items-center gap-2 px-4 py-10 text-center">
         <p className="text-[15px] font-bold">No messages yet.</p>
         {global
-          ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs are blocked. The owner can edit or remove any message.</Hint>
+          ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs get censored. The owner can edit or remove any message.</Hint>
           : <Hint className="max-w-[40ch] text-[13px]">Only you and {name} can read this chat. Support sees messages only if one of you reports them.</Hint>}
       </div>}
       <ol role="log" aria-live={quiet ? 'off' : 'polite'} aria-label={global ? 'Global chat messages' : `Messages with ${name}`} className="grid grid-cols-[minmax(0,1fr)] gap-1">
@@ -736,14 +736,14 @@ function PendingBubble({ item, online, onRetry, onDiscard }: { item: Outgoing; o
 
 /* ---------- Composer ---------- */
 
-/** `filtered` turns on the slur filter (every chat has it): Send is disabled and the reason shows while the draft has a slur in it. */
+/** `filtered` shows the slur notice (every chat has the filter): the draft still sends, and the server stores it with the slur censored. */
 function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; name: string; online: boolean; filtered?: boolean }) {
   const [draft, setDraft] = useState(chat.initialDraft);
   const field = useRef<HTMLTextAreaElement>(null);
   const fine = useFinePointer();
   const normalized = normalizeBody(draft);
-  const filterProblem = filtered ? slurError(normalized) : null;
-  const problem = bodyError(normalized) ?? filterProblem;
+  const notice = filtered ? slurNotice(normalized) : null;
+  const problem = bodyError(normalized);
   const left = CHAT.maxLength - normalized.length;
   const canSend = online && problem === null;
 
@@ -758,7 +758,8 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
   const update = (text: string) => { setDraft(text); chat.saveDraft(text); };
   const submit = () => {
     if (!canSend) return;
-    chat.send(normalized);
+    // Censored locally too, so the pending bubble never shows the slur while the send is out.
+    chat.send(censorSlurs(normalized));
     update('');
     field.current?.focus();
   };
@@ -774,8 +775,8 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
       <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="max-h-[7.5rem] min-h-10 resize-none text-base md:text-base" autoComplete="off" maxLength={1100}
         placeholder={online ? 'Message' : 'Offline'} disabled={!online} enterKeyHint={fine ? 'send' : 'enter'} value={draft}
         onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} />
-      {filterProblem && <Hint tone="danger" role="alert" className="px-1">{filterProblem}</Hint>}
-      {!filterProblem && left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
+      {notice && <Hint role="status" className="px-1">{notice}</Hint>}
+      {!notice && left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
     </div>
     <IconButton type="submit" label="Send" icon="send" variant="primary" disabled={!canSend} className="size-10 shrink-0 rounded-full" />
   </form>;
@@ -818,8 +819,9 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   const [reason, setReason] = useState(moderation(message).reason ?? '');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const normalized = normalizeBody(draft);
-  const problem = bodyError(normalized) ?? slurError(normalized);
+  const normalized = censorSlurs(normalizeBody(draft));
+  const problem = bodyError(normalized);
+  const notice = slurNotice(normalizeBody(draft));
   const changed = normalized !== (message.body ?? '') || reason.trim() !== (moderation(message).reason ?? '');
   const save = async () => {
     if (problem) return;
@@ -829,7 +831,7 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   return <Modal open onClose={onClose} busy={pending} dirty={changed} title={message.fromMe ? 'Edit your message' : `Edit ${senderName(message)}’s message`}
     description="Everyone sees the new text, “Edited by the owner” and your reason."
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={!online || !!problem || !changed} onClick={() => void save()}>Save</Button></>}>
-    <Field label="Message" htmlFor="global-edit-body" error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={1100} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
+    <Field label="Message" htmlFor="global-edit-body" hint={notice ?? undefined} error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={1100} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
     <Field label="Reason (optional, shown to everyone)" htmlFor="global-edit-reason"><Input id="global-edit-reason" maxLength={200} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Fixed the time, removed a phone number…" /></Field>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;

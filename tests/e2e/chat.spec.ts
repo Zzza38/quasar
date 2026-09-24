@@ -204,7 +204,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await expect(badge(bob)).toHaveAccessibleDescription('');
 });
 
-test('global chat: everyone posts, slurs are blocked with a reason, the owner edits and removes with reasons, and the ICE line is a joke', async ({ browser }, testInfo) => {
+test('global chat: everyone posts, slurs are censored, the owner edits and removes with reasons, and the ICE line is a joke', async ({ browser }, testInfo) => {
   const f = seed();
   const alice = await signedIn(browser, f.alice);
   await alice.goto('/#messages');
@@ -215,13 +215,15 @@ test('global chat: everyone posts, slurs are blocked with a reason, the owner ed
   const aliceComposer = alice.getByRole('textbox', { name: 'Message everyone' });
   const aliceLog = alice.getByRole('log', { name: 'Global chat messages' });
 
-  // Swearing passes; a slur (even obfuscated) disables Send and shows the reason.
+  // Swearing passes; a slur (even obfuscated) shows a notice and is stored censored.
   await aliceComposer.fill('this homework is bullshit');
   await aliceComposer.press('Enter');
   await expect(aliceLog.getByText('this homework is bullshit', { exact: true })).toBeVisible();
   await aliceComposer.fill('shut up r3tard');
-  await expect(alice.getByRole('alert').filter({ hasText: 'That message has a slur in it' })).toBeVisible();
-  await expect(alice.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await expect(alice.getByRole('status').filter({ hasText: 'Slurs get censored before your message is sent.' })).toBeVisible();
+  await aliceComposer.press('Enter');
+  await expect(aliceLog.getByText('shut up ******', { exact: true })).toBeVisible();
+  await expect(aliceLog.getByText(/r3tard/)).toHaveCount(0);
   await aliceComposer.fill('we learned about immigrants today');
   await aliceComposer.press('Enter');
   await expect(aliceLog.getByText('we learned about immigrants today', { exact: true })).toBeVisible();

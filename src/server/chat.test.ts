@@ -11,7 +11,6 @@ import { ChatService, pruneChat, type InboxRow } from './chat';
 import { appRouter } from './router';
 import { logTrpcError } from './trpc-log';
 import { exampleSchedule } from '@/domain/example';
-import { SLUR_ERROR } from '@/domain/chat-filter';
 
 const DAY = 86_400_000;
 const CLOSED = 'This chat is closed.';
@@ -245,11 +244,11 @@ describe('5. revocation', () => {
 });
 
 describe('5b. slur filter', () => {
-  it('refuses a slur with a fixed message in one-to-one chat too, and lets swearing through', () => {
+  it('stores slurs censored in one-to-one chat too, and lets swearing through', () => {
     const f = fixture();
     f.befriend(f.alice, f.bob);
-    fails(() => f.chat.send(f.alice, f.bob, randomUUID(), 'you f4ggot'), 'BAD_REQUEST', SLUR_ERROR);
-    expect(f.db.prepare('SELECT count(*) n FROM chat_messages').get()).toEqual({ n: 0 });
+    expect(f.send(f.alice, f.bob, 'you f4ggot').body).toBe('you ******');
+    expect(f.db.prepare('SELECT body FROM chat_messages').get()).toEqual({ body: 'you ******' });
     expect(f.send(f.alice, f.bob, 'this test is bullshit').body).toBe('this test is bullshit');
   });
 });

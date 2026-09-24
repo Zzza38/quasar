@@ -6,7 +6,6 @@ import { Service } from './service';
 import { GlobalChatService, countUnreadGlobal, pruneGlobalChat } from './global-chat';
 import { ChatService, countUnreadChats } from './chat';
 import { appRouter } from './router';
-import { SLUR_ERROR } from '@/domain/chat-filter';
 import { exampleSchedule } from '@/domain/example';
 
 const DAY = 86_400_000;
@@ -55,10 +54,10 @@ describe('global chat', () => {
     fails(() => f.room.send(f.newcomer, randomUUID(), 'hey'), 'BAD_REQUEST');
   });
 
-  it('refuses slurs with a fixed message but lets swearing through', () => {
+  it('stores slurs censored but lets swearing through', () => {
     const f = fixture();
-    fails(() => f.room.send(f.alice, randomUUID(), 'you f4ggot'), 'BAD_REQUEST', SLUR_ERROR);
-    expect(f.db.prepare('SELECT count(*) n FROM global_messages').get()).toEqual({ n: 0 });
+    expect(f.send(f.alice, 'you f4ggot').body).toBe('you ******');
+    expect(f.db.prepare('SELECT body FROM global_messages').get()).toEqual({ body: 'you ******' });
     expect(f.send(f.alice, 'this homework is fucking bullshit').body).toBe('this homework is fucking bullshit');
   });
 
@@ -79,7 +78,7 @@ describe('global chat', () => {
     const f = fixture();
     const message = f.send(f.bob, 'meet at 3');
     await expect(f.caller(f.alice).global.edit({ accountId: f.alice, messageId: message.id, body: 'meet at 4' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    fails(() => f.room.edit(f.owner, message.id, 'you retard'), 'BAD_REQUEST', SLUR_ERROR);
+    expect(f.room.edit(f.owner, message.id, 'you retard').message.body).toBe('you ******');
     const edited = f.room.edit(f.owner, message.id, 'meet at 4 (fixed by the owner)', 'wrong time').message;
     expect(edited.body).toBe('meet at 4 (fixed by the owner)');
     expect(edited.editedAt).toEqual(expect.any(String));
@@ -87,7 +86,8 @@ describe('global chat', () => {
     expect(f.send(f.bob, 'untouched').reason).toBeNull();
     expect(edited.sender.displayName).toBe('Bob');
     expect(f.room.thread(f.bob).messages[0]).toMatchObject({ body: 'meet at 4 (fixed by the owner)', fromMe: true, editedAt: expect.any(String) });
-    expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action='global.edit'").get()).toEqual({ n: 1 });
+    // Two edits so far: the censored one and the real one.
+    expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action='global.edit'").get()).toEqual({ n: 2 });
     f.room.delete(f.owner, message.id);
     fails(() => f.room.edit(f.owner, message.id, 'again'), 'NOT_FOUND');
   });
