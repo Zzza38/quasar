@@ -12,6 +12,24 @@ function applicationKey(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(decoded, char => char.charCodeAt(0));
 }
 
+function sameKey(subscription: PushSubscription, key: Uint8Array): boolean {
+  const current = subscription.options.applicationServerKey;
+  if (!current) return true;
+  const bytes = new Uint8Array(current);
+  return bytes.length === key.length && bytes.every((byte, i) => byte === key[i]);
+}
+
+// Registration normally happened at sign-in for offline use; registering again
+// is a no-op. Waiting on `ready` alone can hang forever if activation fails.
+async function readyRegistration(): Promise<ServiceWorkerRegistration> {
+  const registration = await navigator.serviceWorker.register('/sw.js');
+  if (registration.active) return registration;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Reminder setup did not finish. Reload and try again.')), 15_000);
+    navigator.serviceWorker.ready.then(value => { clearTimeout(timer); resolve(value); }, reject);
+  });
+}
+
 export function NotificationSettings({ accountId, online, chatPush, onChatPush }: { accountId: string; online: boolean; chatPush: boolean; onChatPush: (enabled: boolean) => Promise<void> }) {
   const [config, setConfig] = useState<{ enabled: boolean; publicKey: string | null } | null>(null);
   const [supported, setSupported] = useState(false);
@@ -34,12 +52,19 @@ export function NotificationSettings({ accountId, online, chatPush, onChatPush }
     if (supported) setPermission(Notification.permission);
     if (!online) return;
     // The server config is account-wide (it drives the chat switch), so it loads even where this browser cannot push.
+    // Where it can, sign-in already registered the worker for offline use; repeating it is a no-op that also warms it
+    // up so enabling below needs no wait.
     void (async () => {
-      const config = await api.notifications.config.query();
+      const [config, registration] = await Promise.all([api.notifications.config.query(), supported ? navigator.serviceWorker.register('/sw.js') : Promise.resolve(null)]);
       let subscribed = false;
-      if (supported) {
-        const registration = await navigator.serviceWorker.getRegistration('/');
-        const subscription = await registration?.pushManager.getSubscription();
+      if (registration) {
+        let subscription = await registration.pushManager.getSubscription();
+        // A subscription made with a previous server key cannot be reused. Drop it now, outside the click, so
+        // enabling later needs no extra network round-trips before the browser prompt.
+        if (subscription && config.publicKey && !sameKey(subscription, applicationKey(config.publicKey))) {
+          await api.notifications.unsubscribe.mutate({ accountId, endpoint: subscription.endpoint });
+          await subscription.unsubscribe(); subscription = null;
+        }
         subscribed = subscription ? (await api.notifications.status.mutate({ accountId, endpoint: subscription.endpoint })).subscribed : false;
       }
       if (!alive) return;
@@ -53,19 +78,23 @@ export function NotificationSettings({ accountId, online, chatPush, onChatPush }
     if (!config?.publicKey) return;
     setBusy(true); setError('');
     try {
-      // Permission is requested directly from the user's button gesture.
-      const permission = await Notification.requestPermission();
-      setPermission(permission);
-      if (permission !== 'granted') return;
-      await navigator.serviceWorker.register('/sw.js');
-      const registration = await navigator.serviceWorker.ready;
+      const registration = await readyRegistration();
+      // Safari only allows subscribing while the click's user activation is
+      // still live, and a separate Notification.requestPermission() call
+      // consumes it. subscribe() shows the permission prompt itself in every
+      // browser, so it is the first and only prompting step.
       let subscription = await registration.pushManager.getSubscription();
-      const key = applicationKey(config.publicKey);
-      if (subscription?.options.applicationServerKey && new Uint8Array(subscription.options.applicationServerKey).some((byte, i) => byte !== key[i])) {
-        await api.notifications.unsubscribe.mutate({ accountId, endpoint: subscription.endpoint });
-        await subscription.unsubscribe(); subscription = null;
+      try {
+        subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationKey(config.publicKey) });
+      } catch (error) {
+        setPermission(Notification.permission);
+        if (error instanceof DOMException && error.name === 'NotAllowedError') {
+          if (Notification.permission !== 'denied') setError('Notifications were not allowed. Try again and choose Allow.');
+          return;
+        }
+        throw error;
       }
-      subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      setPermission(Notification.permission);
       const data = subscription.toJSON();
       if (!data.keys?.p256dh || !data.keys?.auth) throw new Error('The browser did not provide push credentials');
       await api.notifications.subscribe.mutate({ accountId, endpoint: subscription.endpoint, keys: { p256dh: data.keys.p256dh, auth: data.keys.auth } });
@@ -98,7 +127,7 @@ export function NotificationSettings({ accountId, online, chatPush, onChatPush }
     : permission === 'denied' ? 'Notifications are blocked. Allow them in your browser’s site settings, then reopen this menu.'
     : !config ? 'Checking browser reminders…'
     : !config.enabled ? 'Browser reminders need to be configured on the server.'
-    : enabled ? 'Reminders are enabled on this browser. Choose a reminder when editing a task. Delivery depends on your browser and connection.'
+    : enabled ? 'Reminders are enabled on this browser. Choose a reminder when editing a task. Delivery depends on your browser and connection; on a Mac, also make sure this browser is allowed under System Settings › Notifications.'
     : 'Enable reminders on this browser, then choose a reminder when editing a task. Task details stay hidden in notifications.';
   return <div className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
     <Label className="flex items-center gap-2 text-[13px] font-semibold text-foreground/80"><span className={`grid size-7 place-items-center rounded-lg ${enabled ? 'bg-success-soft text-success' : 'bg-secondary text-secondary-foreground'}`}><Icon name="bell" size={14} /></span>Task reminders{enabled && <span className="text-xs font-bold text-success">· On</span>}</Label>
