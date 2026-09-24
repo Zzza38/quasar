@@ -44,9 +44,23 @@ const SLUR_PATTERN = new RegExp(`${NOT_LETTER_BEFORE}(?:${SLURS.map(stemPattern)
 
 const LEET: Record<string, string> = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b', '$': 's', '@': 'a', '!': 'i', '|': 'l', '€': 'e', '£': 'l', '¡': 'i', '#': '*', '•': '*', '·': '*' };
 
-/** Lowercase ASCII with accents stripped, leet letters mapped, censor marks kept as "*", and spaced-out letters joined. */
+/** Cyrillic and Greek letters that look like Latin ones, so "fаggot" with a Cyrillic а is still caught. */
+const LOOKALIKES: Record<string, string> = {
+  'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'ԛ': 'q', 'һ': 'h', 'ԝ': 'w', 'к': 'k', 'т': 't', 'в': 'b', 'м': 'm', 'н': 'h', 'г': 'r', 'ո': 'n', 'ɡ': 'g', 'ı': 'i', 'ɩ': 'i', 'ǀ': 'l',
+  'α': 'a', 'ε': 'e', 'ο': 'o', 'ρ': 'p', 'ι': 'i', 'κ': 'k', 'ν': 'v', 'τ': 't', 'υ': 'u', 'χ': 'x', 'β': 'b', 'γ': 'y', 'η': 'n', 'ζ': 'z',
+};
+const LOOKALIKE_PATTERN = new RegExp(`[${Object.keys(LOOKALIKES).join('')}]`, 'gu');
+
+/**
+ * Lowercase ASCII with invisible characters removed (zero-width spaces and joiners, soft hyphens, every Unicode
+ * format and control character, combining marks), lookalike letters and leet letters mapped, censor marks kept
+ * as "*", and spaced-out letters joined.
+ */
 export function normalizeForFilter(text: string): string {
-  const value = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const value = text.normalize('NFKD')
+    .replace(/[\p{Cf}\p{Cc}\p{Mn}\p{Me}\u200b-\u200f\u2060-\u206f\ufeff\u00ad]/gu, '')
+    .toLowerCase()
+    .replace(LOOKALIKE_PATTERN, char => LOOKALIKES[char] ?? char)
     .replace(/[0134578$@!|€£¡#•·]/g, char => LEET[char] ?? char);
   // "n i g g e r" and "n.i.g.g.e.r": a run of three or more single letters separated by spaces or punctuation
   // becomes one word. No slur is two letters long, so pairs are left alone.

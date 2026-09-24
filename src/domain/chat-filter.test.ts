@@ -17,6 +17,11 @@ describe('chat filter', () => {
       expect(hasSlur(text), text).toBe(true);
   });
 
+  it('sees through invisible characters and lookalike letters', () => {
+    for (const text of ['fag\u200bgot', 'f\u200ba\u200bg\u200bg\u200bo\u200bt', 'nig\u200dger', 'ret\u00adard', 'fa\ufeffggot', 'fаggot', 'nіggеr', 'ｆａｇｇｏｔ', 'rеtаrd', 'f\u2060aggot'])
+      expect(hasSlur(text), JSON.stringify(text)).toBe(true);
+  });
+
   it('does not match innocent words that contain a stem', () => {
     for (const text of ['raccoon', 'spicy food', 'Japan', 'spices', 'conspicuous', 'cocoon', 'homogeneous', 'Pakistan', 'retardant', 'tardy', 'ABO blood type', 'yiddish', 'sauerkraut', 'spiced', 'a b', 'I am so late', 'fire retardant foam'])
       expect(hasSlur(text), text).toBe(false);
