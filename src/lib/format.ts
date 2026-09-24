@@ -62,6 +62,33 @@ export function relativeDate(date: string, today: string, options: { weekday?: '
   return formatDate(date, options);
 }
 
+/**
+ * The local date ("YYYY-MM-DD") and 24-hour time ("HH:MM") of an instant in a time zone. Pass the
+ * pieces to formatDate / formatTime / relativeDate; never round-trip them through `new Date(date)`.
+ */
+export function instantParts(iso: string, timeZone: string): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(iso));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? '00';
+  return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
+}
+
+/**
+ * Chat list time: "now", "5m", "4:12 PM" earlier today, "Yesterday", "Mon" within the last 6 days,
+ * otherwise "Sep 3". Days are counted in the student's time zone.
+ */
+export function chatTime(iso: string, timeZone: string, now: Date): string {
+  const elapsed = now.getTime() - new Date(iso).getTime();
+  if (elapsed < 60_000) return 'now'; // Includes small clock differences that put the message in the future.
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  const { date, time } = instantParts(iso, timeZone);
+  const days = daysBetween(date, todayIn(timeZone, now));
+  if (days <= 0) return formatTime(time);
+  if (days === 1) return 'Yesterday';
+  if (days <= 6) return WEEKDAYS[weekdayOf(date) - 1].short;
+  return formatDate(date);
+}
+
 export function minutesUntil(instant: string, now: Date): number {
   return Math.round((new Date(instant).getTime() - now.getTime()) / 60_000);
 }

@@ -5,14 +5,16 @@ import type { Entity } from '@/domain/sync';
 import { taskSchema, type Task } from '@/domain/task';
 
 export type WorkspaceContext = Omit<Workspace, 'entities'>;
-export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school' | 'people';
-export const VIEWS: Array<{ id: View; label: string }> = [
+export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school' | 'people' | 'messages';
+/** Every routable view. `dock: false` keeps a view out of the six-tab phone dock (it has its own top-bar link). */
+export const VIEWS: Array<{ id: View; label: string; dock?: boolean }> = [
   { id: 'today', label: 'Today' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'classes', label: 'Classes' },
   { id: 'school', label: 'School' },
   { id: 'people', label: 'People' },
+  { id: 'messages', label: 'Messages', dock: false },
 ];
 
 export interface TaskItem { id: string; task: Task; entity: Entity }
@@ -49,4 +51,8 @@ export interface AppState {
   /** `replace` swaps the current history entry (for stripping one-shot params) and keeps the scroll position. */
   navigate: (view: View, params?: Record<string, string>, options?: { replace?: boolean }) => void;
   params: URLSearchParams;
+  /** Unread chats (conversations, not messages) for the badge; null while offline, which hides it. */
+  chatUnread: number | null;
+  /** Offers a server-stamped unread count; the one with the latest `at` wins. */
+  setChatUnread: (count: number, at: string) => void;
 }

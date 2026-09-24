@@ -1,4 +1,4 @@
-import { createTRPCClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import { createTRPCClient, httpBatchLink, httpLink, splitLink, TRPCClientError } from '@trpc/client';
 import type { AppRouter } from '@/server/router';
 import type { inferRouterOutputs } from '@trpc/server';
 
@@ -6,8 +6,16 @@ export type RouterOutput = inferRouterOutputs<AppRouter>;
 export type Workspace = RouterOutput['workspace'];
 export type School = RouterOutput['school']['list'][number];
 
+/**
+ * A chat send always travels alone (httpLink), so it is never batched with a poll: its 15 s timeout
+ * and a Playwright route on the chat.send URL both apply to exactly one request.
+ */
 export const api = createTRPCClient<AppRouter>({
-  links: [httpBatchLink({ url: '/api/trpc' })],
+  links: [splitLink({
+    condition: (op) => op.path === 'chat.send',
+    true: httpLink({ url: '/api/trpc' }),
+    false: httpBatchLink({ url: '/api/trpc' }),
+  })],
 });
 
 export const UNREACHABLE_MESSAGE = "Can't reach Quasar. Check your connection and try again. Nothing you typed was lost.";

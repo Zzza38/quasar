@@ -177,6 +177,76 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     }
     db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, datetime('now'))");
   })();
+  // Phase-4 migration: one-to-one chat between accepted friends, messaging pauses, and chat reports.
+  // Three steps in order, because the reports indexes need the new columns.
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_threads (
+        id TEXT PRIMARY KEY,
+        user_low TEXT NOT NULL REFERENCES users(id),
+        user_high TEXT NOT NULL REFERENCES users(id),
+        revision INTEGER NOT NULL DEFAULT 0,
+        last_message_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_low, user_high),
+        CHECK(user_low < user_high)
+      );
+      CREATE INDEX IF NOT EXISTS chat_threads_high ON chat_threads(user_high);
+      CREATE INDEX IF NOT EXISTS chat_threads_last ON chat_threads(last_message_at);
+
+      CREATE TABLE IF NOT EXISTS chat_members (
+        thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        last_read_seq INTEGER NOT NULL DEFAULT 0,
+        notified_seq INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        first_sent_at TEXT,
+        PRIMARY KEY(thread_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS chat_members_user ON chat_members(user_id);
+      CREATE INDEX IF NOT EXISTS chat_members_first_sent ON chat_members(user_id, first_sent_at) WHERE first_sent_at IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL,
+        thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT,
+        deleted_by TEXT CHECK (deleted_by IN ('sender','support')),
+        revision INTEGER NOT NULL,
+        UNIQUE(sender_id, id)
+      );
+      CREATE INDEX IF NOT EXISTS chat_messages_thread_seq ON chat_messages(thread_id, seq);
+      CREATE INDEX IF NOT EXISTS chat_messages_thread_revision ON chat_messages(thread_id, revision);
+      CREATE INDEX IF NOT EXISTS chat_messages_sender_time ON chat_messages(sender_id, created_at);
+      CREATE INDEX IF NOT EXISTS chat_messages_created ON chat_messages(created_at);
+      CREATE INDEX IF NOT EXISTS chat_messages_deleted ON chat_messages(deleted_at) WHERE deleted_at IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_pauses (
+        user_id TEXT PRIMARY KEY REFERENCES users(id),
+        until TEXT,
+        actor_id TEXT NOT NULL REFERENCES users(id),
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const reportColumns = db.pragma('table_info(reports)') as {name: string}[];
+    // No foreign key on thread_id on purpose: pruning a thread must not be blocked by an old report.
+    if (!reportColumns.some(column => column.name === 'thread_id')) db.exec('ALTER TABLE reports ADD COLUMN thread_id TEXT');
+    // Frozen JSON snapshot; NULL for profile reports and after the 180-day purge.
+    if (!reportColumns.some(column => column.name === 'evidence')) db.exec('ALTER TABLE reports ADD COLUMN evidence TEXT');
+    // 'danger' | 'bullying' | 'sexual' | 'spam' | 'other'; NULL for phase-3 profile reports.
+    if (!reportColumns.some(column => column.name === 'category')) db.exec('ALTER TABLE reports ADD COLUMN category TEXT');
+    const userColumns = db.pragma('table_info(users)') as {name: string}[];
+    if (!userColumns.some(column => column.name === 'chat_push')) db.exec('ALTER TABLE users ADD COLUMN chat_push INTEGER NOT NULL DEFAULT 1');
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS reports_thread ON reports(reporter_id, thread_id, resolved_at);
+      CREATE INDEX IF NOT EXISTS reports_reported ON reports(reported_id, resolved_at);
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, datetime('now'));
+    `);
+  })();
   return db;
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };

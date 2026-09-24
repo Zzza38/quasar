@@ -17,6 +17,9 @@ function worker() {
   const requests: Array<{ path: string; credentials?: string }> = [];
   const notifications: Array<{ title: string; options: any }> = [];
   const opened: string[] = [];
+  const posted: Array<{ client: string; message: unknown }> = [];
+  const navigated: string[] = [];
+  let windows: Array<{ url: string }> = [];
   const deletedCaches: string[] = [];
   let offline = false;
   let anonymousRedirect = false;
@@ -45,7 +48,16 @@ function worker() {
       location: { origin: ORIGIN },
       addEventListener: (type: string, handler: (event: any) => void) => { events.set(type, handler); },
       registration: { showNotification: async (title: string, options: any) => { notifications.push({ title, options }); } },
-      skipWaiting: async () => undefined, clients: { claim: async () => undefined, matchAll: async () => [], openWindow: async (url: string) => { opened.push(url); } },
+      skipWaiting: async () => undefined, clients: {
+        claim: async () => undefined,
+        matchAll: async () => windows.map((client) => ({
+          url: client.url,
+          postMessage: (message: unknown) => { posted.push({ client: client.url, message }); },
+          navigate: async (url: string) => { navigated.push(url); },
+          focus: async () => undefined,
+        })),
+        openWindow: async (url: string) => { opened.push(url); },
+      },
     },
   });
   async function dispatch(type: string, properties: Record<string, unknown> = {}) {
@@ -61,7 +73,10 @@ function worker() {
     return resolved;
   }
   return {
-    cache, requests, dispatch, notifications, opened, deletedCaches,
+    cache, requests, dispatch, notifications, opened, deletedCaches, posted, navigated,
+    openTabs: (...urls: string[]) => { windows = urls.map((url) => ({ url: address(url) })); },
+    push: (payload: unknown) => dispatch("push", { data: { json: () => payload } }),
+    click: (url: unknown) => dispatch("notificationclick", { notification: { data: { url }, close: () => undefined } }),
     offline: () => { offline = true; },
     redirect: () => { anonymousRedirect = true; },
     breakBundle: () => { brokenBundle = true; },
@@ -147,5 +162,48 @@ describe("push notifications", () => {
     await sw.dispatch("notificationclick", { notification: { data: { url: "https://evil.example" }, close: () => { closed = true; } } });
     expect(closed).toBe(true);
     expect(sw.opened).toEqual([ORIGIN + "/#tasks"]);
+  });
+  it("shows fixed chat text with no names or messages, and tells open tabs to refresh", async () => {
+    const sw = worker();
+    sw.openTabs("/#today", "/#messages?with=abc");
+    await sw.push({ kind: "chat", tag: "attacker-tag", title: "Bob", body: "ZX-SECRET-42", url: "https://evil.example" });
+    expect(sw.notifications).toHaveLength(1);
+    const [shown] = sw.notifications;
+    expect(shown.title).toBe("Quasar");
+    expect(shown.options.body).toBe("You have new messages. Open Quasar to read them.");
+    expect(shown.options.tag).toBe("quasar-chat");
+    expect(shown.options.renotify).toBe(true);
+    expect(shown.options.data).toEqual({ url: "/#messages" });
+    expect(JSON.stringify(shown)).not.toMatch(/Bob|ZX-SECRET-42|evil/);
+    expect(sw.posted).toEqual([
+      { client: ORIGIN + "/#today", message: { type: "CHAT_ACTIVITY" } },
+      { client: ORIGIN + "/#messages?with=abc", message: { type: "CHAT_ACTIVITY" } },
+    ]);
+  });
+  it("falls back to the reminder text for unknown kinds and never posts chat activity for reminders", async () => {
+    const sw = worker();
+    sw.openTabs("/#today");
+    await sw.push({ kind: "toString", tag: "task-2" });
+    await sw.push({ kind: "reminder", tag: "task-3" });
+    await sw.push(null);
+    expect(sw.notifications.map((entry) => entry.title)).toEqual(["Quasar reminder", "Quasar reminder", "Quasar reminder"]);
+    expect(sw.notifications.map((entry) => entry.options.data.url)).toEqual(["/#tasks", "/#tasks", "/#tasks"]);
+    expect(sw.notifications.map((entry) => entry.options.tag)).toEqual(["task-2", "task-3", "quasar-reminder"]);
+    expect(sw.notifications.every((entry) => entry.options.renotify === undefined)).toBe(true);
+    expect(sw.posted).toEqual([]);
+  });
+  it("opens only the allowed views when a notification is clicked", async () => {
+    const sw = worker();
+    await sw.click("/#messages");
+    await sw.click("/#tasks");
+    await sw.click("/#messages?with=abc");
+    await sw.click("javascript:alert(1)");
+    await sw.click(undefined);
+    expect(sw.opened).toEqual([ORIGIN + "/#messages", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks", ORIGIN + "/#tasks"]);
+    const open = worker();
+    open.openTabs("/#today");
+    await open.click("/#messages");
+    expect(open.navigated).toEqual([ORIGIN + "/#messages"]);
+    expect(open.opened).toEqual([]);
   });
 });

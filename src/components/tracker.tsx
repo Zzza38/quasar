@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/client/api';
+import { serviceWorkerEnabled } from '@/client/service-worker-support';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
@@ -22,6 +23,8 @@ import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
 import { PeopleView } from './views/people';
+import { MessagesView } from './views/messages';
+import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
 
 /* ---------- Hash routing keeps the public offline shell at "/" ---------- */
@@ -86,6 +89,32 @@ function useNow(intervalMs = 30_000): Date {
   return now;
 }
 
+/** A server-stamped unread-chat count, tied to the account it was computed for. */
+type ChatUnread = { accountId: string; count: number; at: number };
+
+/**
+ * The Messages badge count. Three sources offer counts (the workspace context, chat.inbox and chat.read),
+ * each stamped by the server when it computed them; the latest stamp wins whatever order responses
+ * arrive in, and an equal stamp keeps the current value.
+ */
+function useChatUnread(accountId: string | undefined, community: { unreadChats?: number; unreadAt?: string } | null | undefined) {
+  const [latest, setLatest] = useState<ChatUnread | null>(null);
+  const offer = useCallback((owner: string, count: number, at: string) => {
+    const stamp = Date.parse(at);
+    if (!Number.isFinite(stamp) || !Number.isFinite(count)) return;
+    setLatest((current) => current && current.accountId === owner && current.at >= stamp ? current : { accountId: owner, count: Math.max(0, count), at: stamp });
+  }, []);
+  // A context cached on this device before chat existed has no count; it simply offers nothing.
+  const contextCount = community?.unreadChats;
+  const contextAt = community?.unreadAt;
+  useEffect(() => {
+    if (accountId && typeof contextCount === 'number' && typeof contextAt === 'string') offer(accountId, contextCount, contextAt);
+  }, [accountId, contextCount, contextAt, offer]);
+  const setChatUnread = useCallback((count: number, at: string) => { if (accountId) offer(accountId, count, at); }, [accountId, offer]);
+  // Another account's count is never shown.
+  return { count: latest && latest.accountId === accountId ? latest.count : 0, setChatUnread };
+}
+
 /* ---------- Root ---------- */
 
 export function Tracker() {
@@ -103,6 +132,32 @@ export function Tracker() {
   const userId = context?.user.id;
   useEffect(() => { setSetupClasses(!!userId && classesStep.pending(userId)); setSetupFeed(!!userId && feedStep.pending(userId)); }, [userId, context?.school?.id]);
 
+  const chatUnread = useChatUnread(userId, context?.community);
+  // Unsent chat messages and drafts live only in memory; signing out or losing the session forgets them.
+  useEffect(() => { if (session.authRequired || session.logout.pending) clearChatMemory(); }, [session.authRequired, session.logout.pending]);
+  // Coming back online retries chat messages that failed for network reasons, in every thread (same IDs, so safe).
+  const wasOnline = useRef(session.online);
+  useEffect(() => {
+    const cameOnline = session.online && !wasOnline.current;
+    wasOnline.current = session.online;
+    if (cameOnline && userId) resumeChatSends(userId);
+  }, [session.online, userId]);
+  // A chat push tells open tabs to refresh: the badge through the workspace sync, and any visible chat pollers.
+  const synchronizeRef = useRef(session.synchronize);
+  useEffect(() => { synchronizeRef.current = session.synchronize; });
+  useEffect(() => {
+    if (!serviceWorkerEnabled || typeof navigator === 'undefined' || !navigator.serviceWorker) return;
+    const container = navigator.serviceWorker;
+    const onMessage = (event: MessageEvent) => {
+      if ((event.data as { type?: unknown } | null)?.type !== 'CHAT_ACTIVITY') return;
+      window.dispatchEvent(new Event(CHAT_ACTIVITY_EVENT));
+      void synchronizeRef.current();
+    };
+    container.addEventListener('message', onMessage);
+    container.startMessages();
+    return () => container.removeEventListener('message', onMessage);
+  }, []);
+
   if (session.authRequired) return <Welcome message={session.error || undefined} />;
   if (session.loading && !context) return <CenteredNotice title="Opening your schedule…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
   if (!context || !snapshot) {
@@ -117,6 +172,7 @@ export function Tracker() {
   }
 
   const school = context.school;
+  const accountId = context.user.id;
   const schedule = effectiveSchedule(school.schedule, personal);
   const timeZone = schedule.timeZone;
   // Right after joining, the wizard continues with the classes step until the student finishes or skips it.
@@ -146,10 +202,22 @@ export function Tracker() {
     refresh: session.initialize,
     navigate: route.navigate,
     params: route.params,
+    chatUnread: session.online ? chatUnread.count : null,
+    setChatUnread: chatUnread.setChatUnread,
+  };
+  const onMessages = route.view === 'messages';
+  // A phone thread fills the screen above the keyboard; Shell hides the dock (desktop never shows one).
+  const immersive = onMessages && route.params.has('with');
+  const onChatPush = async (enabled: boolean) => {
+    await api.chat.setPush.mutate({ accountId, enabled });
+    await session.synchronize();
   };
 
-  return <Shell session={session} context={context} view={route.view} taskCount={openTasks} gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
-    {!personal.grade && state.personalValid && <div className="mb-4 flex flex-wrap items-center gap-4 rounded-2xl bg-card p-4 shadow-card ring-2 ring-primary/40">
+  return <Shell session={session} context={context} view={route.view} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
+    chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
+    gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
+    {/* The grade prompt would crowd the chat column; it shows again on every other view. */}
+    {!personal.grade && state.personalValid && !onMessages && <div className="mb-4 flex flex-wrap items-center gap-4 rounded-2xl bg-card p-4 shadow-card ring-2 ring-primary/40">
       <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>
       <p className="min-w-0 flex-1 basis-[220px] text-sm font-medium">Choose your grade to see the right school schedule and lunch times.</p>
       <div className="min-w-[220px]"><GradePicker personal={personal} save={state.savePersonal} /></div>
@@ -167,5 +235,6 @@ export function Tracker() {
     {route.view === 'classes' && <ClassesView state={state} />}
     {route.view === 'school' && <SchoolView state={state} />}
     {route.view === 'people' && <PeopleView state={state} />}
+    {route.view === 'messages' && <MessagesView state={state} />}
   </Shell>;
 }

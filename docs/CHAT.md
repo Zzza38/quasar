@@ -1,6 +1,6 @@
 # Quasar phase 4: chat implementation spec
 
-**Status (2026-09-24):** This is the phase-4 design, and nothing in it is implemented yet. It is the final spec. It starts from the winning "reliability" draft and adds the judges' grafts from the "safety" and "ux" drafts. Where the judges disagreed, the spec picks one answer and gives the reason in a sentence. Every number and switch is a default the owner can change later. The constants live in one `CHAT` object at the top of `src/domain/chat.ts`. The phase-4 exit gate is "messaging scope and abuse-handling behavior are specified and verified". Sections 2, 3 and 9 cover it. A completeness review against the code (same day) fixed the places where an implementer would have had to guess. The main changes: body validation now happens in the service, so errors are fixed strings and not zod JSON. The unread count uses server-stamped newest-wins, with no `use-workspace` change. Thread sizing uses a scoped `visualViewport` hook, which also covers iOS. Admin chat mutations are account-bound. The retention SQL is indexable. The racy lost-response e2e step is gone.
+**Status (2026-09-24):** Implemented in full (no §8 scope cuts), and this document now describes the shipped behavior; the review round's clarifications are folded in below. It started as the final phase-4 design. It starts from the winning "reliability" draft and adds the judges' grafts from the "safety" and "ux" drafts. Where the judges disagreed, the spec picks one answer and gives the reason in a sentence. Every number and switch is a default the owner can change later. The constants live in one `CHAT` object at the top of `src/domain/chat.ts`. The phase-4 exit gate is "messaging scope and abuse-handling behavior are specified and verified". Sections 2, 3 and 9 cover it. A completeness review against the code (same day) fixed the places where an implementer would have had to guess. The main changes: body validation now happens in the service, so errors are fixed strings and not zod JSON. The unread count uses server-stamped newest-wins, with no `use-workspace` change. Thread sizing uses a scoped `visualViewport` hook, which also covers iOS. Admin chat mutations are account-bound. The retention SQL is indexable. The racy lost-response e2e step is gone.
 
 Sources read before writing:
 - `PLAN.md`, `docs/ARCHITECTURE.md`, `docs/FABLE_HANDOFF.md`, `AGENTS.md`
@@ -88,7 +88,7 @@ Three checks are defined once in `src/server/chat.ts` and run inside the same tr
 
 | Action | Who may | Checked how |
 | --- | --- | --- |
-| Start a conversation | Either friend | There is no separate step. The first successful `chat.send` (or `chat.mute`) creates the `chat_threads` row and both `chat_members` rows. Requires `access` and `notPaused`. The sender's first message in a thread counts toward the limit of 20 new conversations per day (§3). |
+| Start a conversation | Either friend | There is no separate step. The first successful `chat.send` (or `chat.mute`) creates the `chat_threads` row and both `chat_members` rows. `chat.send` requires `access` and `notPaused`; `chat.mute` requires only `access`, so a paused student can still mute (§3.4). The sender's first message in a thread counts toward the limit of 20 new conversations per day (§3). |
 | Send | Either friend who is not paused | Order inside one transaction: self check and body validation → `access` → idempotency lookup on `(sender_id, id)` → `notPaused` → rate limits → insert. A retry of an already-stored message therefore never uses up quota, and it still succeeds after a pause starts, because the message was already sent. |
 | Read a thread | Either friend, paused or not | `chat.thread` requires `access`. |
 | List chats, count unread | The signed-in student | `chat.inbox` and the workspace `unreadChats` join `friendships` (`accepted`) and exclude blocks with `NOT EXISTS` inside the SQL, so a revoked pair leaves the open list on the very next poll. Closed rows (D7) come from `chat_members` plus `last_message_at`, with no text. |
@@ -413,7 +413,8 @@ export type ChatMessage = { id: string; seq: number; fromMe: boolean; body: stri
   deletedBy: 'sender' | 'support' | null };                       // body null when deleted or hidden
 export type ChatPause = { until: string | null };                  // ISO; null = until lifted
 export type InboxRow =
-  | { state: 'open'; peer: ChatPeer; lastMessage: { fromMe: boolean; preview: string | null; createdAt: string } | null;
+  | { state: 'open'; peer: ChatPeer; lastMessage: { fromMe: boolean; preview: string | null; createdAt: string;
+      deletedBy: 'sender' | 'support' | null } | null;             // deletedBy picks "Message deleted" or "Hidden by support"
       unread: number; muted: boolean }                             // preview ≤ 120 chars, null when deleted
   | { state: 'closed'; userId: string; displayName: string; lastAt: string };
 export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
@@ -450,6 +451,7 @@ Every `chat.*` procedure is **`accountScoped`**, so every input also carries `ac
 - More than 200 changes returns `reset: true` with the latest page.
 - A friend pair that has no thread yet returns empty with `revision: 0`.
 - `after` greater than the thread's current revision (the thread was pruned and recreated, or never existed) returns `reset: true` with the latest page, so a stale cursor can never hide new messages.
+- `hasEarlier` is meaningful only for pages: no cursor, `before`, or a `reset: true` response. An `after` poll without a reset always returns `hasEarlier: false`, and the client keeps its own value.
 
 **Changes to existing procedures:**
 - `community.profile` also returns `hasChat: boolean`, which is true when the pair's thread exists and has `last_message_at IS NOT NULL`.
@@ -568,7 +570,8 @@ The `revision` cursor is already the right shape for `Last-Event-ID`. If streami
 | `NOT_FOUND`, `FORBIDDEN` or `BAD_REQUEST` | **Discard** only, with the server message. |
 
 - A failure also marks every message queued behind it as failed, which preserves order. **Retry** resends all failed messages in order.
-- When `state.online` turns true, messages that failed for network reasons retry automatically. This is safe because their IDs are unchanged.
+- Only **Retry** and reconnecting resend a failed message. Sending a new message never does, so a message the student left at "Not sent." is never sent behind their back. While a retryable failed message exists, a new message joins the queue as failed ("Not sent.", with Retry and Discard) behind it, and **Retry** sends them all in order.
+- When `state.online` turns from false to true, messages that failed for network reasons retry automatically, in every thread of the account, not only the open one (`resumeChatSends(accountId)` in `use-chat.ts`, called by Tracker). This is safe because their IDs are unchanged. A new message queued behind them joins that retry only when everything ahead of it failed for network reasons, so it can never overtake a rate-limited message. Opening a thread never resends anything.
 - **Lost response:** if a poll returns a message whose `id` equals a pending or failed `clientId`, that bubble becomes sent.
 
 ### Unread counts and the badge
@@ -686,7 +689,9 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 - While polling fails: Hint `role="status"` "Reconnecting…".
 
 **Log:**
-- `ol role="log" aria-live="polite" aria-label="Messages with {name}"`, one `li` per message.
+- `ol role="log" aria-live="polite" aria-label="Messages with {name}"`, one `li` per confirmed message. While "Load earlier messages" is prepending a page, the log is `aria-live="off"`, so a screen reader doesn't read the whole older page.
+- Unsent messages (pending and failed) render after the log in `ul aria-label="Unsent messages"`, inside the same scroller. They sit outside the live region, so a sent message is announced once, when its confirmed copy joins the log. "Not sent." is `role="alert"`, so failures are still announced.
+- "Load earlier messages" keeps the reader's place by anchoring on the oldest loaded message, and only when the older page actually lands (a poll that lands first leaves the anchor alone).
 - At the top when `hasEarlier`: Button "Load earlier messages" (`busy` while loading).
 - Day separators: "Today", "Yesterday", `formatDate(date, { weekday: 'short' })`.
 - A divider "New messages" sits above the first message with `seq > lastReadSeq` from the moment the thread opened.
@@ -709,6 +714,8 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 - **Scrolling:** the log auto-scrolls only when it is already within 80 px of the bottom. Otherwise a floating Button "New messages" (icon `arrowDown`, `aria-label="Jump to new messages"`) appears.
 - **Pending:** the bubble is at 60% opacity with a `clock` icon and the caption "Sending…".
 - **Failed:** a danger ring, "Not sent." plus the server message when there is one, and Buttons "Retry" (`aria-label="Retry sending"`) and "Discard".
+
+**Focus:** on phones, opening a thread unmounts the list, so focus moves to the thread region ("Chat with {name}", `tabIndex={-1}`). Going back to the list focuses the row of the chat just left, or the "Messages" heading (`tabIndex={-1}`) when that row is gone. Leaving after a block, or a report with block, focuses the heading on every screen size.
 
 **Empty thread:**
 - "No messages yet."
@@ -751,7 +758,8 @@ Student-facing confirmations use `Modal`, not `confirm()`.
   - chat: "Support sees your report and the last 30 messages in this chat. {name} isn’t told who reported."
   - message: "Support sees your report, this message and the messages around it. {name} isn’t told who reported."
 - `Segmented` with `label="What’s wrong?"` and `className="w-full flex-col items-stretch"`. Its options are the five `REPORT_CATEGORIES` labels, and nothing is selected at first. `Segmented` requires a `value`, so it is typed `Segmented<ReportCategory | ''>` with `value=''` initially. Radix `ToggleGroup` shows no item as on for an unknown value, and `onChange` never sends `''` back.
-- With `danger` selected: an info Callout "If someone is in immediate danger, call 911. For crisis support, call or text 988."
+- With `danger` selected: an info Callout `role="status"` "If someone is in immediate danger, call 911. For crisis support, call or text 988." The note field's `aria-describedby` points at it, so a screen reader hears it when choosing Danger and again when tabbing to the note.
+- The category options are 44 px tall on touch screens.
 - `Field` "Anything else? (optional)" wrapping `Textarea id="chat-report-note"` (`maxLength={2000}`).
 - `Checkbox` from `ui/checkbox` labelled "Also block {name}", checked by default. It is hidden when the chat is closed.
 - Buttons "Cancel", "Send report" (danger). "Send report" is disabled until a category is chosen.
@@ -775,14 +783,14 @@ Background polls never reset an open composer, the report form, or scroll positi
 
 ### People view additions
 
-- Friends row: Button "Message" (icon `message`).
+- Friends row: Button "Message" (icon `message`). Below `sm` it is icon-only (the text stays for screen readers), so friends' names keep their room at 390 px.
 - Profile footer for friends: Button "Message" (primary).
 - Profile report panel: `Checkbox` "Include our last 30 messages", shown when `hasChat` and checked by default (§3.1).
 
 ### Account sheet
 
 - The `Eyebrow` "Reminders" becomes "Notifications".
-- `NotificationSettings` gains the props `chatPush` and `onChatPush`, and a `Toggle` labelled "Message notifications" with the description "Uses this browser’s reminder alerts. Never shows names or messages." The Toggle is rendered whenever the server has push configured (`config?.enabled`), below the existing reminder controls. Chat pushes go only to browsers enrolled for reminders (non-goal §10).
+- `NotificationSettings` gains the props `chatPush` and `onChatPush`, and a `Toggle` labelled "Message notifications" with the description "Uses this browser’s reminder alerts. Never shows names or messages." The Toggle is rendered whenever the server has push configured (`config?.enabled`), below the existing reminder controls. The setting is account-wide, so the config loads whenever the student is online, even on a browser that can't receive push itself, and the switch shows there too. Chat pushes go only to browsers enrolled for reminders (non-goal §10).
 - It calls `chat.setPush` and then `session.synchronize()`. It is disabled offline.
 
 ### Help (`src/components/help.tsx` FAQ)
@@ -802,10 +810,10 @@ Background polls never reset an open composer, the report form, or scroll positi
 - Button "Show messages ({count})". Its result is `ol aria-label="Reported messages"`, where each line shows "{sender} · {time}" and the text, the tags "Deleted by sender" / "Hidden by support", the Chip "Reported message" on the anchor, and Button "Hide message".
 - Button "Pause messaging" opens a Modal:
   - title "Pause {name}’s messaging";
-  - `Select aria-label="Pause length"` with "1 day", "7 days", "30 days", "Until lifted";
+  - `Field` "Pause length" with a `Select` (`aria-label="Pause length"`) offering "1 day", "7 days", "30 days", "Until lifted";
   - `Field` "Reason for the audit log" with `Textarea`;
   - buttons "Cancel" and "Pause messaging".
-- New Section "Paused members", description "These accounts can read their chats but cannot send messages.", empty text "Nobody is paused." Each row reads "{name} · until {date}" or "{name} · until lifted", with Button "Lift pause".
+- New Section "Paused members", description "These accounts can read their chats but cannot send messages.", empty text "Nobody is paused." Each row reads "{name} · until {date}" or "{name} · until lifted", with Button "Lift pause" (`aria-label="Lift pause for {name}"`, so each row's button is distinct).
 
 ### Icons (`icon.tsx`)
 
@@ -822,13 +830,13 @@ Add `message: MessageCircle`, `send: SendHorizontal` and `bellOff: BellOff`.
 | Heading | `getByRole('heading', { name: 'Messages', exact: true })` |
 | Lists | `getByRole('list', { name: 'Chats' })`, `getByRole('list', { name: 'Start a chat' })` |
 | Rows | `getByRole('button', { name: 'Open chat with Bob' })`, closed row `getByRole('button', { name: 'Report Bob' })`, text "Chat closed" |
-| Thread | `getByRole('log', { name: 'Messages with Bob' })`, `button 'Back to chats'`, `button 'Open Bob’s profile'`, `button 'Mute notifications'`, `button 'Report'`, `button 'Block'`, `button 'All chats'` |
+| Thread | `getByRole('region', { name: 'Chat with Bob' })`, `getByRole('log', { name: 'Messages with Bob' })`, `list 'Unsent messages'` (pending and failed bubbles), `button 'Back to chats'`, `button 'Open Bob’s profile'`, `button 'Mute notifications'`, `button 'Report'`, `button 'Block'`, `button 'All chats'` |
 | Composer | `getByRole('textbox', { name: 'Message Bob' })`, `button 'Send'` |
 | Message actions | `button 'Message actions'`, `button 'Delete message'`, `button 'Add as task'`, `button 'Report message'`, `button 'Retry sending'`, `button 'Discard'`, `button 'Load earlier messages'`, `button 'Jump to new messages'` |
-| Dialogs | `dialog 'Report Bob'` / `dialog 'Report message'` with `group 'What’s wrong?'` → `radio 'Someone may be in danger'`, `textbox 'Anything else? (optional)'`, `checkbox 'Also block Bob'`, `button 'Send report'`; `dialog 'Delete for both of you?'` → `button 'Delete'`; `dialog 'Block Bob?'` → `button 'Block'` |
+| Dialogs | `dialog 'Report Bob'` / `dialog 'Report message'` with `radiogroup 'What’s wrong?'` → `radio 'Someone may be in danger'`, `textbox 'Anything else? (optional)'`, `checkbox 'Also block Bob'`, `button 'Send report'`; `dialog 'Delete for both of you?'` → `button 'Delete'`; `dialog 'Block Bob?'` → `button 'Block'` |
 | People | `button 'Message'`, `checkbox 'Include our last 30 messages'` |
 | Account | `switch 'Message notifications'` |
-| Admin | `button /^Show messages/`, `list 'Reported messages'`, `button 'Hide message'`, `button 'Pause messaging'`, `combobox 'Pause length'`, `heading 'Paused members'`, `button 'Lift pause'` |
+| Admin | `button /^Show messages/`, `list 'Reported messages'`, `button 'Hide message'`, `button 'Pause messaging'`, `combobox 'Pause length'`, `heading 'Paused members'`, `button 'Lift pause for Bob'` (a plain `'Lift pause'` substring match also works) |
 | Statuses | "Report sent to support.", "Report sent. Bob is blocked.", "Added to Tasks.", "Reconnecting…", "This chat is closed." |
 
 ---

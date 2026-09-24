@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
+import { Checkbox } from '../ui/checkbox';
+import { Label } from '../ui/label';
 import { Skeleton } from '../ui/skeleton';
 import { Timeline } from './today';
 
@@ -146,7 +148,9 @@ export function PeopleView({ state }: { state: AppState }) {
     <Section id="friends-title" title="Friends" icon="star" description={friends ? pluralize(friends.friends.length, 'friend') : undefined}>
       {friendsLoading && <LoadingRows />}
       {friends && friends.friends.length === 0 && <EmptyState icon="users" title="No friends yet">Find schoolmates below and send a request. Once they accept, you can compare classes and see each other’s day.</EmptyState>}
-      {!!friends?.friends.length && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Friends">{friends.friends.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
+      {!!friends?.friends.length && <ul className="grid gap-2 md:grid-cols-2" aria-label="Friends">{friends.friends.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
+        {/* Icon-only below sm so the friend's name keeps its room; the hidden text keeps the name "Message". */}
+        <Button size="sm" icon="message" className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => state.navigate('messages', { with: member.id })}><span className="max-sm:sr-only">Message</span></Button>
         <Button size="sm" iconRight="arrowRight" onClick={() => setProfileId(member.id)}>See day</Button>
       </MemberRow>)}</ul>}
     </Section>
@@ -214,6 +218,8 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const [pending, setPending] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [reason, setReason] = useState('');
+  /** Attach the chat's last 30 messages to the report (only offered when the two of you have chatted). */
+  const [includeChat, setIncludeChat] = useState(true);
   const [notice, setNotice] = useState('');
   /** Where the last action's result shows: at the top, or next to the Manage buttons that started it. */
   const [resultAt, setResultAt] = useState<'top' | 'manage'>('top');
@@ -251,7 +257,17 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     : profile.friendState === 'none' && !profile.blocked && profile.sameSchool ? <Button variant="primary" icon="plus" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.request.mutate({ accountId, userId }), 'Request sent.')}>Add friend</Button>
     : profile.friendState === 'requested' ? <Button busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.remove.mutate({ accountId, userId }), 'Request cancelled.')}>Cancel request</Button>
     : profile.friendState === 'incoming' ? <Button variant="primary" icon="check" busy={pending} disabled={!state.online} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId, accept: true }), `You and ${name} are now friends.`)}>Accept request</Button>
+    : profile.friendState === 'friends' ? <Button variant="primary" icon="message" disabled={pending} onClick={() => state.navigate('messages', { with: userId })}>Message</Button>
     : null;
+  const attachChat = !!profile?.hasChat && includeChat;
+  const sendReport = async () => {
+    // With the chat attached this is a chat report (category "Something else", the typed reason as its note);
+    // otherwise the phase-3 profile report, unchanged.
+    if (attachChat) await api.chat.report.mutate({ accountId, userId, category: 'other', note: reason.trim(), block: false });
+    else await api.community.report.mutate({ accountId, userId, reason: reason.trim() });
+    setReporting(false); setReason(''); setIncludeChat(true);
+  };
+  const cancelReport = () => { setReporting(false); setReason(''); setIncludeChat(true); };
   return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(profile.joinedAt.slice(0, 10), { year: true })}`].filter(Boolean).join(' · ') : undefined}
     footer={nextStep ? <><Spacer />{nextStep}</> : undefined}>
     {(!profile || resultAt === 'top') && result}
@@ -299,7 +315,8 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
         {reporting && <Panel className="grid gap-3 bg-card ring-2 ring-destructive/30">
           <strong className="text-sm font-bold">Report {name} to support</strong>
           <Field label="What happened?" htmlFor="report-reason" hint="Support reads every report. Reports are private."><Textarea id="report-reason" autoFocus minLength={10} maxLength={2000} rows={4} value={reason} onChange={event => setReason(event.target.value)} /></Field>
-          <div className="flex gap-2"><Button size="sm" variant="danger" busy={pending} disabled={reason.trim().length < 10} onClick={() => void run(async () => { await api.community.report.mutate({ accountId, userId, reason: reason.trim() }); setReporting(false); setReason(''); }, 'Report sent to support.', 'manage')}>Send report</Button><Button size="sm" variant="ghost" disabled={pending} onClick={() => { setReporting(false); setReason(''); }}>Cancel</Button></div>
+          {profile.hasChat && <div className="flex items-center gap-2"><Checkbox id="report-include-chat" checked={includeChat} disabled={pending} onCheckedChange={checked => setIncludeChat(checked === true)} /><Label htmlFor="report-include-chat" className="text-sm font-semibold">Include our last 30 messages</Label></div>}
+          <div className="flex gap-2"><Button size="sm" variant="danger" busy={pending} disabled={reason.trim().length < 10} onClick={() => void run(sendReport, 'Report sent to support.', 'manage')}>Send report</Button><Button size="sm" variant="ghost" disabled={pending} onClick={cancelReport}>Cancel</Button></div>
         </Panel>}
         {resultAt === 'manage' && result}
       </div>

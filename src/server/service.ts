@@ -30,6 +30,20 @@ export function suggestNames(googleName: string, email: string): { displayName: 
   const displayName = (first || (fromEmail ? fromEmail[0].toUpperCase() + fromEmail.slice(1) : '')).slice(0, 80);
   return { displayName, fullName };
 }
+const RESERVED_WORDS = new Set(['quasar', 'support', 'admin', 'administrator', 'moderator', 'staff', 'official']);
+/**
+ * True when any whole word of the name is reserved, so nobody can pose as Quasar or support in chat.
+ * Words are compared lowercased (NFKC, so full-width letters fold) and with punctuation inside the word
+ * removed ("s.u.p.p.o.r.t"). Each punctuation-separated piece is checked too ("Quasar-Support").
+ * "Stafford" and "Badminton" pass because only whole words count.
+ */
+export function reservedDisplayName(name: string): boolean {
+  const words = name.normalize('NFKC').toLowerCase().replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').split(/\s+/).filter(Boolean);
+  return words.some(word => {
+    const pieces = [word.replace(/[^\p{L}\p{N}]/gu, ''), ...word.split(/[^\p{L}\p{N}]+/u)];
+    return pieces.some(piece => RESERVED_WORDS.has(piece));
+  });
+}
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
@@ -52,8 +66,10 @@ export class Service {
   isAdmin(id: string): boolean { return !!this.ownerEmail && this.user(id).email.toLowerCase() === this.ownerEmail.trim().toLowerCase(); }
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
   profile(id: string, input: z.infer<typeof namesSchema>): User {
-    this.user(id);
+    const current = this.user(id);
     const names = namesSchema.parse(input);
+    // Only a new or changed display name is checked, so an existing student can still save a new full name.
+    if (names.displayName !== current.displayName && reservedDisplayName(names.displayName)) fail('BAD_REQUEST', 'Choose a display name that doesn’t mention Quasar or support.');
     this.db.prepare('UPDATE users SET display_name=?,full_name=? WHERE id=?').run(names.displayName, names.fullName, id);
     return this.user(id);
   }

@@ -12,6 +12,7 @@ import { openDatabase } from '../src/server/db';
 import { Service } from '../src/server/service';
 import { CommunityService } from '../src/server/community';
 import { ProposalService } from '../src/server/proposals';
+import { ChatService } from '../src/server/chat';
 import { exampleSchedule } from '../src/domain/example';
 
 const PORT = 3120;
@@ -28,7 +29,7 @@ Object.assign(process.env, {
   GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-client-secret',
 });
 
-type Fixture = { maya: string; owner: string; newbies: string[]; schoolName: string; checklistTitle: string };
+type Fixture = { maya: string; bob: string; owner: string; newbies: string[]; schoolName: string; checklistTitle: string; chatThread: string; chatReadSeq: number };
 
 function seed(): Fixture {
   for (const suffix of ['', '-wal', '-shm']) rmSync(DB_PATH + suffix, { force: true });
@@ -106,9 +107,34 @@ function seed(): Fixture {
     db.prepare('UPDATE schedule_proposals SET created_at=?').run('2026-09-16T14:00:00.000Z');
     db.prepare('UPDATE proposal_votes SET created_at=?').run('2026-09-16T14:30:00.000Z');
 
+    // Chat (phase 4). Bob and Maya talk across two days; Priya's chat is muted with one unread; Sam is a
+    // friend with no messages yet; Tariq's chat closed (unfriended) after Maya reported it.
+    const [priya, sam, tariq] = [padding[1], padding[2], padding[3]];
+    for (const friend of [priya, sam, tariq]) { community.request(maya, friend); community.respond(friend, maya, true); }
+    let clock = new Date('2026-09-16T20:05:00Z');
+    const chat = new ChatService(service, () => clock);
+    const say = (from: string, to: string, text: string, at: string) => { clock = new Date(at); return chat.send(from, to, randomUUID(), text).message; };
+    say(bob, maya, 'Did you finish the chem pre-lab?', '2026-09-16T20:05:00Z');
+    say(maya, bob, 'Almost. Question 4 is confusing', '2026-09-16T20:07:00Z');
+    say(maya, bob, 'Is it asking for moles or grams?', '2026-09-16T20:07:30Z');
+    say(bob, maya, 'Grams. Ms. Okafor said so in class', '2026-09-16T20:09:00Z');
+    const oops = say(maya, bob, 'ok thanks!! 🙏', '2026-09-16T20:10:00Z');
+    clock = new Date('2026-09-16T20:11:00Z'); chat.delete(maya, bob, oops.id);
+    const readUpTo = say(maya, bob, 'Thanks, that helps', '2026-09-16T20:11:30Z');
+    say(bob, maya, 'Study group for the Algebra II quiz tomorrow before first period? Library, 7:15. Bring the review sheet from https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit so we can split up the problems.', '2026-09-17T12:30:00Z');
+    say(bob, maya, 'Also can you send me the notes from US History?', '2026-09-17T12:31:00Z');
+    say(priya, maya, 'Are you going to the game Friday?', '2026-09-17T11:10:00Z');
+    clock = new Date('2026-09-17T11:11:00Z'); chat.mute(maya, priya, true);
+    say(tariq, maya, 'Why did you not answer me', '2026-09-15T21:00:00Z');
+    say(tariq, maya, 'Answer me now', '2026-09-15T21:02:00Z');
+    clock = new Date('2026-09-15T21:05:00Z');
+    chat.report(maya, tariq, { category: 'danger', note: 'He keeps messaging me late at night.', block: false });
+    community.remove(maya, tariq);
+    const bobThread = db.prepare('SELECT thread_id FROM chat_messages WHERE seq=?').get(readUpTo.seq) as { thread_id: string };
+
     // One onboarding user per viewport/theme combination, since completing the names step persists them.
     const newbies = Array.from({ length: 4 }, () => user('', ''));
-    return { maya, owner, newbies, schoolName, checklistTitle };
+    return { maya, bob, owner, newbies, schoolName, checklistTitle, chatThread: bobThread.thread_id, chatReadSeq: readUpTo.seq };
   } finally { db.close(); }
 }
 
@@ -250,6 +276,42 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await page.getByRole('dialog').getByRole('heading', { name: 'Bob', exact: true }).waitFor();
     await shot(page, 'people-profile', variant, 'Bob’s profile dialog (friend, shares Algebra II in period A)', false);
   });
+  // Each variant starts with Bob's two newest messages unread (the previous variant's visit read them).
+  const unreadBob = () => {
+    const db = openDatabase(DB_PATH);
+    try { db.prepare('UPDATE chat_members SET last_read_seq=? WHERE thread_id=? AND user_id=?').run(fixture.chatReadSeq, fixture.chatThread, fixture.maya); }
+    finally { db.close(); }
+  };
+  await attempt('messages', variant, async () => {
+    unreadBob();
+    await go('messages', 'Messages');
+    await page.getByRole('list', { name: 'Chats' }).getByRole('button', { name: 'Open chat with Bob' }).waitFor({ timeout: 20_000 });
+    await shot(page, 'messages', variant, 'Messages list: Bob (2 unread), Priya (muted, 1 unread), Tariq (chat closed), Sam under Friends');
+  });
+  await attempt('messages-thread', variant, async () => {
+    unreadBob();
+    await page.goto(`${BASE}/#messages?with=${fixture.bob}`);
+    await page.getByRole('log', { name: 'Messages with Bob' }).getByText('notes from US History', { exact: false }).waitFor({ timeout: 20_000 });
+    await shot(page, 'messages-thread', variant, 'Thread with Bob: yesterday and today, a deleted message, a link, the New messages divider', false);
+    await attempt('messages-actions', variant, async () => {
+      const item = page.getByRole('log', { name: 'Messages with Bob' }).getByRole('listitem').filter({ hasText: 'Grams. Ms. Okafor' });
+      // Not a bubble tap on the phone: an earlier full-page screenshot resets Chromium's touch emulation,
+      // so (pointer: fine) matches and the tap handler (correctly, for a mouse) ignores it.
+      await item.hover();
+      await item.getByRole('button', { name: 'Message actions' }).click();
+      await item.getByRole('button', { name: 'Add as task' }).waitFor();
+      await page.getByRole('textbox', { name: 'Message Bob' }).fill('Sure, sending them tonight');
+      await shot(page, 'messages-actions', variant, 'Thread with the message actions row open and a draft in the composer', false);
+    });
+    await attempt('messages-report', variant, async () => {
+      await page.getByRole('button', { name: 'Report', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Report Bob' });
+      await dialog.getByRole('radio', { name: 'Someone may be in danger' }).click();
+      await dialog.getByText('call or text 988', { exact: false }).waitFor();
+      await shot(page, 'messages-report', variant, 'Report Bob dialog with Danger chosen and the 911/988 callout', false);
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+    });
+  });
   await attempt('account', variant, async () => {
     await go('today', /Maya/);
     await openAccount(page);
@@ -331,7 +393,12 @@ async function main() {
     await waitForHealth(server);
     browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {});
     const variants: Variant[] = [{ device: 'phone', theme: 'light' }, { device: 'phone', theme: 'dark' }, { device: 'desktop', theme: 'light' }, { device: 'desktop', theme: 'dark' }];
-    for (const [index, variant] of variants.entries()) await sweep(browser, fixture, variant, fixture.newbies[index]);
+    // SWEEP_VARIANTS=phone-light,desktop-dark limits the run to those variants.
+    const only = process.env.SWEEP_VARIANTS?.split(',').map((entry) => entry.trim()).filter(Boolean);
+    for (const [index, variant] of variants.entries()) {
+      if (only?.length && !only.includes(`${variant.device}-${variant.theme}`)) continue;
+      await sweep(browser, fixture, variant, fixture.newbies[index]);
+    }
   } finally {
     await browser?.close().catch(() => undefined);
     stop();

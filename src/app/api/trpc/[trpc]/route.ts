@@ -3,6 +3,7 @@ import { appRouter } from '@/server/router';
 import { Service } from '@/server/service';
 import { getDb } from '@/server/db';
 import { getUserId } from '@/server/auth';
+import { logTrpcError } from '@/server/trpc-log';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 async function handler(req: Request) {
@@ -12,14 +13,14 @@ async function handler(req: Request) {
     const expected = process.env.NEXTAUTH_URL ? new URL(process.env.NEXTAUTH_URL).origin : new URL(req.url).origin;
     if (!origin || origin !== expected) return new Response('Invalid origin', {status: 403});
     if (!req.headers.get('content-type')?.startsWith('application/json')) return new Response('JSON required', {status: 415});
-    if (Number(req.headers.get('content-length')) > 2000000) return new Response('Request too large', {status: 413});
+    if (Number(req.headers.get('content-length')) > 5000000) return new Response('Request too large', {status: 413});
     const body = await req.clone().text();
-    if (body.length > 2000000) return new Response('Request too large', {status: 413});
+    if (body.length > 5000000) return new Response('Request too large', {status: 413});
   }
   return fetchRequestHandler({ endpoint: '/api/trpc', req, router: appRouter,
     createContext: async () => ({ userId: await getUserId(), service: new Service(getDb()) }),
     // Procedure name and error code only: inputs may hold private schedule data.
-    onError: ({ path, error }) => { if (error.code !== 'UNAUTHORIZED') console.error(`tRPC ${path ?? 'unknown'} failed: ${error.code} ${error.message}`); },
+    onError: logTrpcError,
     responseMeta: () => ({ headers: { 'Cache-Control': 'no-store' } })
   });
 }

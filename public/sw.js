@@ -103,21 +103,41 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-// Notification payloads contain no task content. Navigation stays on this origin.
+// Notification payloads carry no names, task content or message text: the shown text comes from this
+// fixed table keyed by payload.kind. Anything unknown, including reminder payloads, shows the reminder text.
+const REMINDER_NOTICE = { title: "Quasar reminder", body: "You have a task reminder. Open Quasar to view it.", url: "/#tasks" };
+const NOTICES = {
+  chat: { title: "Quasar", body: "You have new messages. Open Quasar to read them.", url: "/#messages", tag: "quasar-chat" },
+};
+// Navigation stays on this origin and on these views only.
+const OPEN_URLS = new Set(["/#tasks", "/#messages"]);
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data?.json() || {}; } catch { /* Show a generic reminder. */ }
-  event.waitUntil(self.registration.showNotification("Quasar reminder", {
-    body: "You have a task reminder. Open Quasar to view it.",
+  const kind = payload && typeof payload.kind === "string" && Object.prototype.hasOwnProperty.call(NOTICES, payload.kind) ? payload.kind : null;
+  const notice = kind ? NOTICES[kind] : REMINDER_NOTICE;
+  const shown = self.registration.showNotification(notice.title, {
+    body: notice.body,
     icon: "/icon.svg", badge: "/icon.svg",
-    tag: typeof payload.tag === "string" ? payload.tag.slice(0, 200) : "quasar-reminder",
-    data: { url: "/#tasks" },
-  }));
+    // A chat push replacing an older one still alerts (the server sends at most one per 10 minutes).
+    ...(notice.tag
+      ? { tag: notice.tag, renotify: true }
+      : { tag: payload && typeof payload.tag === "string" ? payload.tag.slice(0, 200) : "quasar-reminder" }),
+    data: { url: notice.url },
+  });
+  // Open tabs refresh the Messages badge (and any visible chat) at once instead of waiting for their next poll.
+  const told = kind === "chat"
+    ? self.clients.matchAll({ type: "window" }).then((windows) => { for (const client of windows) client.postMessage({ type: "CHAT_ACTIVITY" }); }).catch(() => undefined)
+    : Promise.resolve();
+  event.waitUntil(Promise.all([shown, told]));
 });
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil((async () => {
-    const target = new URL("/#tasks", self.location.origin).href;
+    const requested = event.notification.data?.url;
+    const path = typeof requested === "string" && OPEN_URLS.has(requested) ? requested : "/#tasks";
+    const target = new URL(path, self.location.origin).href;
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const existing = windows.find(client => new URL(client.url).origin === self.location.origin);
     if (existing) {

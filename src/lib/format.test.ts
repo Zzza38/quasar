@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { browserTimeZone, classColor, formatRoom, formatSeconds, formatTimeZone, todayIn } from './format';
+import { browserTimeZone, chatTime, classColor, formatRoom, formatSeconds, formatTimeZone, instantParts, todayIn } from './format';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -59,5 +59,45 @@ describe('lunch colour', () => {
     expect(lunch.dot).toBe('#78716c');
     const classes = new Set(Array.from({ length: 200 }, (_, index) => classColor(`class-${index}`).dot));
     expect(classes.has(lunch.dot)).toBe(false);
+  });
+});
+
+describe('instant parts', () => {
+  it('splits an instant into the local date and 24-hour time of a zone', () => {
+    expect(instantParts('2026-09-24T20:12:00Z', 'America/New_York')).toEqual({ date: '2026-09-24', time: '16:12' });
+    expect(instantParts('2026-09-25T02:30:00Z', 'America/Los_Angeles')).toEqual({ date: '2026-09-24', time: '19:30' });
+    expect(instantParts('2026-09-24T20:12:00Z', 'Asia/Kolkata')).toEqual({ date: '2026-09-25', time: '01:42' });
+  });
+  it('uses 00 for midnight, never 24', () => {
+    expect(instantParts('2026-09-24T04:00:30Z', 'America/New_York')).toEqual({ date: '2026-09-24', time: '00:00' });
+  });
+});
+
+describe('chat list times', () => {
+  const zone = 'America/New_York';
+  const now = new Date('2026-09-24T20:12:00Z'); // Thursday 4:12 PM in New York
+  const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
+  it('shows "now" under a minute, also for a timestamp slightly in the future', () => {
+    expect(chatTime(ago(10_000), zone, now)).toBe('now');
+    expect(chatTime(ago(-5_000), zone, now)).toBe('now');
+  });
+  it('shows minutes under an hour', () => {
+    expect(chatTime(ago(60_000), zone, now)).toBe('1m');
+    expect(chatTime(ago(59 * 60_000), zone, now)).toBe('59m');
+  });
+  it('shows the clock time earlier today', () => {
+    expect(chatTime('2026-09-24T13:05:00Z', zone, now)).toBe('9:05 AM');
+  });
+  it('counts days in the student\'s zone, not UTC', () => {
+    // 11:30 PM Wednesday in New York is already Thursday in UTC.
+    expect(chatTime('2026-09-24T03:30:00Z', zone, now)).toBe('Yesterday');
+    // 00:30 AM Thursday in New York is still Wednesday in Los Angeles.
+    expect(chatTime('2026-09-24T04:30:00Z', 'America/Los_Angeles', now)).toBe('Yesterday');
+  });
+  it('shows the weekday within 6 days and the date after that', () => {
+    expect(chatTime('2026-09-22T15:00:00Z', zone, now)).toBe('Tue');
+    expect(chatTime('2026-09-18T15:00:00Z', zone, now)).toBe('Fri');
+    expect(chatTime('2026-09-17T15:00:00Z', zone, now)).toBe('Sep 17');
+    expect(chatTime('2026-09-03T15:00:00Z', zone, now)).toBe('Sep 3');
   });
 });
