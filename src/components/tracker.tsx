@@ -239,7 +239,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   };
   const onMessages = route.view === 'messages';
   // A phone thread fills the screen above the keyboard; Shell hides the dock (desktop never shows one).
-  const immersive = onMessages && (route.params.has('with') || route.params.get('room') === 'global');
+  const immersive = onMessages && (route.params.has('with') || route.params.has('group') || route.params.get('room') === 'global');
   const onChatPush = async (enabled: boolean) => {
     await api.chat.setPush.mutate({ accountId, enabled });
     await session.synchronize();

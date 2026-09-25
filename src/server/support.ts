@@ -334,6 +334,8 @@ export class SupportService {
       this.row(input.userId);
       const { changes } = this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(input.userId, input.schoolId);
       if (!changes) fail('NOT_FOUND', 'This member is not removed from that school.');
+      // An open appeal against the removal (docs/CHAT.md §14) is answered by lifting it.
+      this.db.prepare("UPDATE support_requests SET resolved_at=? WHERE user_id=? AND school_id=? AND kind='appeal:ban' AND resolved_at IS NULL").run(new Date().toISOString(), input.userId, input.schoolId);
       this.audit(adminId, 'support.unban', input.schoolId, { userId: input.userId, reason: input.reason });
     }).immediate();
   }

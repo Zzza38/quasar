@@ -11,7 +11,8 @@ import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
-import { Avatar, AvatarFallback } from './ui/avatar';
+import { AvatarSettings } from './avatar-settings';
+import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet';
@@ -71,11 +72,9 @@ export function Brand({ compact, className, href = '/', onClick }: { compact?: b
   </a>;
 }
 
-/** Gradient initial avatar shared by the sidebar, top bar and account sheet. */
-function UserAvatar({ initials, size = 'default', className }: { initials: string; size?: 'default' | 'lg'; className?: string }) {
-  return <Avatar size={size} className={cn('ring-0', className)}>
-    <AvatarFallback className="font-extrabold text-primary-foreground" style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 75%, white) 0%, var(--primary) 60%, color-mix(in srgb, var(--primary) 70%, black) 100%)' }}>{initials}</AvatarFallback>
-  </Avatar>;
+/** The signed-in student's picture (or gradient initial) in the sidebar, top bar and account sheet (docs/CHAT.md §13). */
+function UserAvatar({ user, size = 'sm', className }: { user: { displayName: string; email: string; avatar?: string | null }; size?: 'sm' | 'md' | 'lg'; className?: string }) {
+  return <MemberAvatar name={user.displayName || user.email || 'Q'} src={user.avatar ?? null} size={size} className={className} />;
 }
 
 /* ---------- Sync status ---------- */
@@ -197,7 +196,6 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
   const onMessages = view === 'messages';
   const chatCountId = chatCount > 0 ? COUNT_IDS.messages : undefined;
   const displayName = context.user.displayName || 'Your account';
-  const initials = (context.user.displayName || context.user.email || 'Q').slice(0, 1).toUpperCase();
   const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
   // Keep the workspace tab named Quasar. After a view change (not the first render), move focus to the
@@ -279,7 +277,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" tooltip={displayName} onClick={() => setAccount(true)} aria-haspopup="dialog" className="h-14 rounded-2xl bg-card px-2.5 shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-full group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:shadow-none group-data-[collapsible=icon]:ring-0">
-              <UserAvatar initials={initials} />
+              <UserAvatar user={context.user} className="size-8" />
               <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden"><strong className="truncate text-[13.5px] font-bold">{displayName}</strong><span className="truncate text-xs text-muted-foreground">{context.school?.name ?? context.user.email}</span></span>
               <Icon name="settings" size={16} className="text-muted-foreground group-data-[collapsible=icon]:hidden" />
             </SidebarMenuButton>
@@ -302,7 +300,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
           </a>
           <button type="button" className="grid size-10 shrink-0 place-items-center rounded-full outline-none pointer-coarse:size-11 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
-            <UserAvatar initials={initials} />
+            <UserAvatar user={context.user} className="size-8" />
           </button>
         </div>
       </header>
@@ -333,9 +331,11 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         {/* auto-rows-max: the summary hides its overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
         <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <div className="flex items-center gap-3.5">
-            <UserAvatar initials={initials} size="lg" className="size-14 text-xl" />
+            <UserAvatar user={context.user} size="lg" />
             <div className="min-w-0"><strong className="block truncate text-[16px] font-bold">{displayName}</strong><Hint className="truncate">{context.user.fullName}</Hint><Hint className="truncate">{context.user.email}</Hint></div>
           </div>
+          {context.user.displayName && <div className="grid gap-3"><Eyebrow>Profile photo</Eyebrow><AvatarSettings accountId={context.user.id} online={online} onChanged={session.initialize}
+            user={{ displayName: context.user.displayName, avatar: context.user.avatar ?? null, avatarSource: context.user.avatarSource ?? 'none', hasGooglePicture: context.user.hasGooglePicture ?? false }} /></div>}
           <dl className="grid shrink-0 overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
             <div><dt className="text-muted-foreground">School</dt><dd className="text-right font-semibold">{context.school?.name ?? 'Not chosen yet'}</dd></div>
             {context.school && <div><dt className="text-muted-foreground">Verification</dt><dd className="text-right font-semibold">{context.community?.verification.status === 'verified' ? 'Verified' : context.community?.verification.status === 'pending' ? 'Under review' : 'Not verified'}</dd></div>}

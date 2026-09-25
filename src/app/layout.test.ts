@@ -19,8 +19,8 @@ describe('response security headers', () => {
     expect(directives.get('object-src')).toEqual(["'none'"]);
     expect(directives.get('frame-ancestors')).toEqual(["'none'"]);
     expect(directives.get('base-uri')).toEqual(["'self'"]);
-    // Scan photo previews are data: URLs; nothing in the app creates blob: URLs.
-    expect(directives.get('img-src')).toEqual(["'self'", 'data:']);
+    // Scan photo previews are data: URLs; nothing in the app creates blob: URLs. Google profile pictures (docs/CHAT.md §13) come from Google's CDN.
+    expect(directives.get('img-src')).toEqual(["'self'", 'data:', 'https://*.googleusercontent.com']);
     // Google sign-in is a fetch plus navigation, never a form post to Google.
     expect(directives.get('form-action')).toEqual(["'self'"]);
   });

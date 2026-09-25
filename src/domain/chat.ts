@@ -12,6 +12,12 @@ export const CHAT = {
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
   fallbackTimeZone: 'America/New_York', requiresVerification: false, linkify: true,
+  /** Friend groups (docs/CHAT.md §12): members per group, creator included; groups one account may create per rolling day; the name's length. */
+  groupMaxMembers: 20, groupsPerDay: 5, groupNameMax: 60,
+  /** How long a typing signal lasts (§13); the composer renews it every typingRenewMs while the student keeps typing. */
+  typingMs: 6_000, typingRenewMs: 2_500,
+  /** The longest appeal a student can write against a pause or a removal (§14). */
+  appealMaxLength: 2000,
 } as const;
 
 // C0 and C1 control characters except \n (U+000A) and \t (U+0009).
@@ -51,7 +57,8 @@ export function bodyError(normalized: string): BodyError | null {
 }
 
 const URL_PATTERN = /https:\/\/[^\s<>"]+/g;
-const TRAILING = /[.,;:!?)\]}'"]+$/;
+// Punctuation glued to the end of a URL is not part of it, nor are markdown closers (`**link**`, `_link_`, `~~link~~`).
+const TRAILING = /[.,;:!?)\]}'"*_~`]+$/;
 /** Splits text into plain runs and `https://` links. Only https URLs without credentials become links (§3.6). */
 export function linkParts(text: string): Array<{ text: string; href?: string }> {
   if (!CHAT.linkify) return text ? [{ text }] : [];

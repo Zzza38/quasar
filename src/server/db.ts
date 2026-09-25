@@ -414,6 +414,73 @@ function migrate(db: Db): void {
     CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(16, datetime('now'));
   `);
+  // Migration 17 (docs/CHAT.md §12-§14): profile pictures, friend groups, read and delivery markers, typing
+  // signals, appeals against sanctions and group reports.
+  // - users: the Google profile picture URL saved at sign-in, an uploaded picture (a small JPEG or WebP blob), its
+  //   version (cache-busts the avatar URL) and whether the student chose initials over any picture.
+  // - chat_members: how far the other person's device has fetched (delivered_seq) and a typing signal's expiry.
+  // - chat_groups, chat_group_members, chat_group_messages: friend groups, mirroring the one-to-one tables.
+  // - reports.group_id: a report of a group message (no foreign key, like thread_id: pruning must not be blocked).
+  // - support_requests.kind: '' for the existing requests and feedback; 'appeal:pause' and 'appeal:ban' for appeals.
+  {
+    const userColumns = db.pragma('table_info(users)') as {name: string}[];
+    if (!userColumns.some(column => column.name === 'google_picture')) db.exec("ALTER TABLE users ADD COLUMN google_picture TEXT NOT NULL DEFAULT ''");
+    if (!userColumns.some(column => column.name === 'avatar')) db.exec('ALTER TABLE users ADD COLUMN avatar BLOB');
+    if (!userColumns.some(column => column.name === 'avatar_mime')) db.exec("ALTER TABLE users ADD COLUMN avatar_mime TEXT NOT NULL DEFAULT ''");
+    if (!userColumns.some(column => column.name === 'avatar_version')) db.exec('ALTER TABLE users ADD COLUMN avatar_version INTEGER NOT NULL DEFAULT 0');
+    if (!userColumns.some(column => column.name === 'avatar_hidden')) db.exec('ALTER TABLE users ADD COLUMN avatar_hidden INTEGER NOT NULL DEFAULT 0');
+    const memberColumns = db.pragma('table_info(chat_members)') as {name: string}[];
+    if (!memberColumns.some(column => column.name === 'delivered_seq')) db.exec('ALTER TABLE chat_members ADD COLUMN delivered_seq INTEGER NOT NULL DEFAULT 0');
+    if (!memberColumns.some(column => column.name === 'typing_until')) db.exec('ALTER TABLE chat_members ADD COLUMN typing_until TEXT');
+    const reportColumns = db.pragma('table_info(reports)') as {name: string}[];
+    if (!reportColumns.some(column => column.name === 'group_id')) db.exec('ALTER TABLE reports ADD COLUMN group_id TEXT');
+    const requestColumns = db.pragma('table_info(support_requests)') as {name: string}[];
+    if (!requestColumns.some(column => column.name === 'kind')) db.exec("ALTER TABLE support_requests ADD COLUMN kind TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_groups (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        creator_id TEXT NOT NULL REFERENCES users(id),
+        revision INTEGER NOT NULL DEFAULT 0,
+        last_message_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS chat_groups_creator ON chat_groups(creator_id, created_at);
+      CREATE INDEX IF NOT EXISTS chat_groups_last ON chat_groups(last_message_at);
+
+      CREATE TABLE IF NOT EXISTS chat_group_members (
+        group_id TEXT NOT NULL REFERENCES chat_groups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        role TEXT NOT NULL CHECK (role IN ('admin','member')),
+        joined_at TEXT NOT NULL,
+        left_at TEXT,
+        last_read_seq INTEGER NOT NULL DEFAULT 0,
+        delivered_seq INTEGER NOT NULL DEFAULT 0,
+        notified_seq INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        typing_until TEXT,
+        PRIMARY KEY(group_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS chat_group_members_user ON chat_group_members(user_id, left_at);
+
+      CREATE TABLE IF NOT EXISTS chat_group_messages (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        group_id TEXT NOT NULL REFERENCES chat_groups(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT,
+        deleted_by TEXT CHECK (deleted_by IN ('sender','admin','support')),
+        revision INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS chat_group_messages_group_seq ON chat_group_messages(group_id, seq);
+      CREATE INDEX IF NOT EXISTS chat_group_messages_group_revision ON chat_group_messages(group_id, revision);
+      CREATE INDEX IF NOT EXISTS chat_group_messages_sender_time ON chat_group_messages(sender_id, created_at);
+      CREATE INDEX IF NOT EXISTS chat_group_messages_created ON chat_group_messages(created_at);
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(17, datetime('now'));
+    `);
+  }
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

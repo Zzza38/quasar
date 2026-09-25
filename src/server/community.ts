@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
 import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
+import { leaveAllGroups } from './group-chat';
+import { avatarUrl, type AvatarRow } from './avatars';
 import type { Service, User } from './service';
 
 /**
@@ -34,10 +36,10 @@ export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'd
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
 /** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
 export type Classmate = { id: string; displayName: string; personal: PersonalSchedule };
-export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean };
+export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
-type MemberRow = { id: string; display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
+type MemberRow = AvatarRow & { display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
 
 export function emailDomain(email: string): string { return email.toLowerCase().split('@')[1] ?? ''; }
 export function parseEmailDomains(stored: string): string[] { return stored.split(',').map(entry => entry.trim().toLowerCase()).filter(Boolean); }
@@ -138,6 +140,7 @@ export class CommunityService {
       id: row.id, displayName: row.display_name, fullName: viewerVerified && verified ? row.full_name : null,
       grade: this.personalOf(row.id).grade ?? null, verified, joinedAt: row.created_at,
       friendState: this.friendState(viewerId, row.id), blocked: !!this.db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(viewerId, row.id),
+      avatar: avatarUrl(row),
     };
   }
   members(viewerId: string, query = ''): { members: MemberSummary[]; viewerVerified: boolean } {
@@ -301,18 +304,19 @@ export class CommunityService {
     this.service.admin(adminId);
     const rows = this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
         r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName,
-        r.thread_id IS NOT NULL isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
+        (r.thread_id IS NOT NULL OR r.group_id IS NOT NULL) isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
         (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id) historyReports,
         (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
         (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
-        p.user_id pausedId, p.until pausedUntil
+        p.user_id pausedId, p.until pausedUntil, p.reason pausedReason,
+        EXISTS (SELECT 1 FROM support_requests a WHERE a.user_id=r.reported_id AND a.kind='appeal:pause' AND a.resolved_at IS NULL) pausedAppealed
       FROM reports r JOIN users ru ON ru.id=r.reported_id JOIN users pu ON pu.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
       LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND (p.until IS NULL OR p.until>?)
       WHERE r.resolved_at IS NULL ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all(now()) as
-      (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null })[];
-    return rows.map(({ isChat, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, ...row }) => ({
+      (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null; pausedReason: string | null; pausedAppealed: number })[];
+    return rows.map(({ isChat, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, pausedReason, pausedAppealed, ...row }) => ({
       ...row, isChat: !!isChat, history: { reports: historyReports, removals: historyRemovals, pauses: historyPauses },
-      pause: pausedId ? { until: pausedUntil } : null,
+      pause: pausedId ? { until: pausedUntil, reason: pausedReason ?? '', appealed: !!pausedAppealed } : null,
     }));
   }
   resolveReport(adminId: string, reportId: string, outcome: 'dismissed' | 'removed'): void {
@@ -339,6 +343,8 @@ export class CommunityService {
       this.db.prepare("UPDATE verification_requests SET resolved_at=?, decision='declined', actor_id=? WHERE user_id=? AND school_id=? AND resolved_at IS NULL").run(now(), adminId, userId, schoolId);
       this.withdrawProposals(userId, schoolId);
       this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
+      // Their friend groups end too (docs/CHAT.md §12): a group admin hands over to the longest-standing member.
+      leaveAllGroups(this.db, userId, now());
       this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
       if (user.school_id === schoolId) this.db.prepare('UPDATE users SET school_id=NULL, reviewed_version=NULL WHERE id=?').run(userId);
       this.service.audit(adminId, 'member.remove', schoolId, { userId, reason: text });

@@ -23,6 +23,13 @@ type VerificationRequest = RouterOutput['admin']['verificationRequests'][number]
 type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
+type BanRow = RouterOutput['admin']['bans'][number];
+/** What a support request is: a correction request or feedback, or an appeal against a pause or a removal (docs/CHAT.md §14). */
+function requestKind(kind: Request['kind']): { label: string; appeal: 'pause' | 'ban' } | null {
+  if (kind === 'appeal:pause') return { label: 'Appeal: messaging pause', appeal: 'pause' };
+  if (kind === 'appeal:ban') return { label: 'Appeal: removal from school', appeal: 'ban' };
+  return null;
+}
 type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
 type Security = RouterOutput['admin']['security'];
 type PauseTarget = { userId: string; name: string };
@@ -57,6 +64,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [reports, setReports] = useState<Report[]>([]);
   const [proposals, setProposals] = useState<PendingProposal[]>([]);
   const [pauses, setPauses] = useState<ChatPauseRow[]>([]);
+  const [bans, setBans] = useState<BanRow[]>([]);
   // adminScoped mutations carry the signed-in account, so a switch in another tab can't write under the wrong one.
   const [accountId, setAccountId] = useState<string | null>(initial?.accountId ?? null);
   const accountRef = useRef<string | null>(initial?.accountId ?? null);
@@ -89,7 +97,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const refresh = useCallback(async () => {
     // Losing owner access drops everything support loaded, including student proofs and report snapshots.
     const revoke = () => {
-      setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setEvidence({});
+      setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setBans([]); setEvidence({});
       setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); reasons.current.clear();
     };
     setLoading(true); setError(''); setFailed(false);
@@ -100,8 +108,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       accountRef.current = nextAccount; setAccountId(nextAccount);
       setReauth(!!session?.isAdmin && !session.adminReady);
       if (!session?.adminReady) { revoke(); return; }
-      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query(), api.admin.security.query()]);
-      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setAllowed(true);
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query(), api.admin.security.query(), api.admin.bans.query()]);
+      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
       setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
@@ -219,13 +227,23 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </TabsContent>
 
       <TabsContent value="inbox" className="grid gap-5">
-      <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
+      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, and appeals against a messaging pause or a removal.'}>
         {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
-        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
-          <p className="whitespace-pre-wrap text-sm">{request.message}</p>
-          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.email })}>Open member</Button><Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>Mark resolved</Button></div>
-        </li>)}</ul>}
+        {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => {
+          const appeal = requestKind(request.kind);
+          return <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+            {appeal && <div><Chip tone="warning" icon="flag">{appeal.label}</Chip></div>}
+            <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{appeal ? request.displayName || request.email : request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email}{appeal && request.schoolName ? ` · ${request.schoolName}` : ''})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
+            <p className="whitespace-pre-wrap text-sm">{request.message}</p>
+            <div className="flex flex-wrap gap-2">
+              {!appeal && request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
+              {appeal?.appeal === 'pause' && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: request.userId })); }}>Lift pause</Button>}
+              {appeal?.appeal === 'ban' && request.schoolId && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: request.userId, schoolId: request.schoolId! })); }}>Lift removal</Button>}
+              <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName || request.email })}>Open member</Button>
+              <Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>{appeal ? 'Keep as is' : 'Mark resolved'}</Button>
+            </div>
+          </li>;
+        })}</ul>}
       </Section>
 
       <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
@@ -268,17 +286,25 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
               <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
               <Button size="sm" onClick={() => openMember({ userId: report.reportedId, name: report.reportedName })}>Open member</Button>
               <Button size="sm" icon="lock" disabled={!accountId} onClick={() => setPauseTarget({ userId: report.reportedId, name: report.reportedName })}>Pause messaging</Button>
-              {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason for the audit log.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
+              {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason. The student sees it and can appeal.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
             </div>
           </li>;
         })}</ul>}
       </Section>
 
-      <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages.">
+      <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages. They see the reason and can appeal.">
         {!loading && pauses.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is paused.</Hint>}
         {pauses.length > 0 && <ul className="grid gap-2">{pauses.map((pause) => <li key={pause.userId} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="min-w-0"><p className="text-sm"><strong className="font-bold">{pause.displayName}</strong> · until {pause.until ? formatInstant(pause.until) : 'lifted'}</p><Hint>{pause.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {pause.reason}</Hint></div>
           <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift pause for ${pause.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: pause.userId })); }}>Lift pause</Button>
+        </li>)}</ul>}
+      </Section>
+
+      <Section id="removed-title" title="Removed members" icon="ban" description="Students removed from a school. They see the reason on the school step, can appeal, and can join another school. Lifting a removal lets them rejoin.">
+        {!loading && bans.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is removed.</Hint>}
+        {bans.length > 0 && <ul className="grid gap-2">{bans.map((ban) => <li key={`${ban.userId}:${ban.schoolId}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          <div className="min-w-0 grid gap-1"><p className="text-sm"><strong className="font-bold">{ban.displayName}</strong> · removed from {ban.schoolName} on {formatDate(instantParts(ban.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</p><Hint>{ban.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {ban.reason}</Hint>{ban.appealed && <div><Chip tone="warning" icon="flag">Appeal pending</Chip></div>}</div>
+          <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift removal for ${ban.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: ban.userId, schoolId: ban.schoolId })); }}>Lift removal</Button>
         </li>)}</ul>}
       </Section>
 
@@ -353,7 +379,7 @@ function PauseSheet({ target, accountId, onClose, onPaused }: { target: PauseTar
     finally { setPending(false); }
   };
   return <Modal open onClose={onClose} dirty={reason.length > 0} busy={pending} title={`Pause ${target.name}’s messaging`}
-    description="They can still read their chats, mute, block and report, but they cannot send messages. Their open reports close as paused, and the pause is written to the audit log."
+    description="They can still read their chats, mute, block and report, but they cannot send messages. They see the reason and can appeal. Their open reports close as paused, and the pause is written to the audit log."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={trimmed.length < 3} onClick={() => void submit()}>Pause messaging</Button></>}>
     <div className="grid gap-4">
       <Field label="Pause length" htmlFor="pause-length">
@@ -364,7 +390,7 @@ function PauseSheet({ target, accountId, onClose, onPaused }: { target: PauseTar
           <option value="lifted">Until lifted</option>
         </Select>
       </Field>
-      <Field label="Reason for the audit log" htmlFor="pause-reason" hint="At least 3 characters."><Textarea id="pause-reason" required minLength={3} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} disabled={pending} /></Field>
+      <Field label="Reason (shown to the student)" htmlFor="pause-reason" hint="The student reads this under the pause notice and can appeal. At least 3 characters."><Textarea id="pause-reason" required minLength={3} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} disabled={pending} /></Field>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     </div>
   </Modal>;
