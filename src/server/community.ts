@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
-import { classKey } from '@/domain/class-match';
 import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import type { Service, User } from './service';
@@ -33,8 +32,8 @@ export const FRIEND_REQUEST_LIMIT = 30;
 
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
-/** One friend's timetable by period. Two people share a class when the same directory class, or the same words in any order (see classKey), sits in the same period. */
-export type Classmate = { id: string; displayName: string; classes: { periodId: string; name: string; key: string; directoryId?: string }[] };
+/** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
+export type Classmate = { id: string; displayName: string; personal: PersonalSchedule };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
@@ -353,23 +352,15 @@ export class CommunityService {
     return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, unreadChats, unreadAt, chatPush };
   }
   /**
-   * Each accepted friend at the viewer's current school with their classes by period, so the viewer's own timetable
-   * can say who they sit with. A friendship survives a school change, but period ids repeat across schools ("p1",
-   * "A"), so a friend at another school never shares a class with the viewer.
+   * Each accepted friend at the viewer's current school with their personal timetable, so the viewer's own timetable
+   * can compare actual meetings on a date. A friendship survives a school change, but period ids repeat across schools
+   * ("p1", "A"), so a friend at another school never shares a class with the viewer.
    */
   classmates(userId: string): Classmate[] {
     const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       JOIN users me ON me.id=?
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
       ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as { id: string; display_name: string }[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, classes: classesByPeriod(this.personalOf(row.id)) }));
+    return rows.map(row => ({ id: row.id, displayName: row.display_name, personal: this.personalOf(row.id) }));
   }
-}
-
-/** (period, name) pairs for every period the person has assigned a class to. Names are lower-cased for case-insensitive matching. */
-export function classesByPeriod(personal: PersonalSchedule): Classmate['classes'] {
-  return Object.entries(personal.assignments).flatMap(([periodId, classId]) => {
-    const cls = personal.classes.find(entry => entry.id === classId);
-    return cls ? [{ periodId, name: cls.name.trim().toLowerCase(), key: classKey(cls.name), ...(cls.directoryId ? { directoryId: cls.directoryId } : {}) }] : [];
-  }).sort((left, right) => left.periodId.localeCompare(right.periodId));
 }

@@ -250,7 +250,20 @@ describe('timetable scanning', () => {
       { className: 'कोला', periodId: 'B', directoryId: fort.id },
     ]));
     const { rows } = await f.scan.scan(f.student, image);
-    expect(rows.map(row => [row.name, row.periodIds, row.directoryId])).toEqual([['किला', ['A'], undefined], ['कोला', ['B'], undefined]]);
+    expect(rows.map(row => [row.name, row.periodIds, row.directoryId])).toEqual([['किला', ['A'], fort.id], ['कोला', ['B'], undefined]]);
+  });
+
+  it('finds directory classes without model IDs and leaves typos and conflicting sections for review', async () => {
+    const f = fixture();
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'Alg II', periodId: 'A' },
+      { className: 'Algebar II', periodId: 'B', directoryId: f.algebra.id },
+      { className: 'Algebra II', teacher: 'Mr. Other', periodId: 'C', directoryId: f.algebra.id },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows[0]).toMatchObject({ directoryId: f.algebra.id, teacher: 'Ms. Ortiz', room: '204' });
+    expect(rows[1]).toMatchObject({ name: 'Algebar II', directoryId: undefined, teacher: undefined });
+    expect(rows[2]).toMatchObject({ teacher: 'Mr. Other', directoryId: undefined });
   });
 
   it('tolerates fenced JSON and reports unusable answers', async () => {
