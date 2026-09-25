@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, REPORT_CATEGORIES, bodyError, normalizeBody, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
+import { CHAT, REPORT_CATEGORIES, bodyError, censorBody, normalizeBody, rawBodySchema, reportCategorySchema, TOO_MANY_NEW_CHATS_MESSAGE, type ReportCategory } from '@/domain/chat';
+import { censorSlurs } from '@/domain/chat-filter';
 import { CommunityService } from './community';
+import { countSentSince, countUnreadGlobal } from './global-chat';
 import type { Db } from './db';
 import type { Service, User } from './service';
 
@@ -34,7 +36,10 @@ export type InboxRow =
   | { state: 'open'; peer: ChatPeer;
       lastMessage: { fromMe: boolean; preview: string | null; createdAt: string; deletedBy: 'sender' | 'support' | null } | null;
       unread: number; muted: boolean }
-  | { state: 'closed'; userId: string; displayName: string; lastAt: string };
+  | { state: 'closed'; userId: string; displayName: string; lastAt: string;
+      /** How the viewer can reopen it: lift their own block (then re-friend), send a friend request, or not at all (other school). */
+      reopen: 'unblock' | 'friend' | null };
+export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
 export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
   deletedBy: 'sender' | 'support' | null; anchor: boolean };
 /** Stored snapshot item. It holds no names; showEvidence derives them when the owner views it. */
@@ -66,12 +71,21 @@ export const pauseChatSchema = z.object({
   reason: z.string().trim().min(3).max(2000),
 });
 
-/** Server side: normalizeBody + bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
+/** Server side: normalizeBody, then slurs censored to asterisks outside https links (censorBody, §11), then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
 export function parseBody(raw: string): string {
-  const body = normalizeBody(typeof raw === 'string' ? raw : '');
+  const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
   const problem = bodyError(body);
   if (problem) fail('BAD_REQUEST', problem);
   return body;
+}
+
+/**
+ * The chat list's preview of a message: slurs censored first (rows stored before the filter existed, and slur-shaped
+ * words inside links), then whitespace collapsed and cut to 120 characters. Censoring after the cut would miss a
+ * slur split at the boundary.
+ */
+export function listPreview(body: string): string {
+  return censorSlurs(body).replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
 /**
@@ -85,14 +99,17 @@ function accessibleSql(t: string): string {
     ${CHAT.requiresVerification ? `AND ${verified(`${t}.user_low`)} AND ${verified(`${t}.user_high`)}` : ''})`;
 }
 
-/** Number of accessible, unmuted threads with at least one unread, undeleted incoming message. No ready() check. */
+/**
+ * Number of accessible, unmuted threads with at least one unread, undeleted incoming message, plus one
+ * for the global chat when it has unread messages and is not muted (§11). No ready() check.
+ */
 export function countUnreadChats(db: Db, userId: string): number {
   const me = db.prepare('SELECT display_name, full_name FROM users WHERE id=?').get(userId) as { display_name: string; full_name: string } | undefined;
   if (!me || !me.display_name || !me.full_name) return 0;
   const row = db.prepare(`SELECT count(*) n FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
     WHERE m.user_id=? AND m.muted=0 AND ${accessibleSql('t')}
     AND EXISTS (SELECT 1 FROM chat_messages c WHERE c.thread_id=t.id AND c.seq>m.last_read_seq AND c.sender_id<>? AND c.deleted_at IS NULL)`).get(userId, userId) as { n: number };
-  return row.n;
+  return row.n + (countUnreadGlobal(db, userId) > 0 ? 1 : 0);
 }
 
 export class ChatService {
@@ -201,18 +218,24 @@ export class ChatService {
         const deleted = !!last.deleted_at;
         open.push({ at: friend.last_message_at, row: {
           state: 'open', peer, muted,
-          lastMessage: { fromMe: last.sender_id === viewerId, preview: deleted ? null : last.body.replace(/\s+/g, ' ').trim().slice(0, 120), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null },
+          lastMessage: { fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null },
           unread: (unread.get(friend.thread_id, friend.last_read_seq ?? 0, viewerId) as { n: number }).n,
         } });
       }
       open.sort((left, right) => right.at.localeCompare(left.at));
-      const closed = this.db.prepare(`SELECT u.id, u.display_name, t.last_message_at FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
+      // Only the viewer's own block and the schools are consulted, so the row never reveals whether the other person blocked them.
+      const closed = this.db.prepare(`SELECT u.id, u.display_name, u.school_id, t.last_message_at,
+        EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id=? AND b.blocked_id=u.id) AS blocked_by_me
+        FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
         JOIN users u ON u.id = CASE WHEN t.user_low=? THEN t.user_high ELSE t.user_low END
         WHERE m.user_id=? AND t.last_message_at IS NOT NULL AND t.last_message_at>=? AND NOT ${accessibleSql('t')}
-        ORDER BY t.last_message_at DESC`).all(viewerId, viewerId, this.iso(-CHAT.closedRowDays * DAY)) as { id: string; display_name: string; last_message_at: string }[];
+        ORDER BY t.last_message_at DESC`).all(viewerId, viewerId, viewerId, this.iso(-CHAT.closedRowDays * DAY)) as
+        { id: string; display_name: string; school_id: string | null; last_message_at: string; blocked_by_me: number }[];
+      const reopenOf = (row: { school_id: string | null; blocked_by_me: number }): 'unblock' | 'friend' | null =>
+        row.blocked_by_me ? 'unblock' : viewer.schoolId !== null && row.school_id === viewer.schoolId ? 'friend' : null;
       const rows: InboxRow[] = [
         ...open.map(entry => entry.row),
-        ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at })),
+        ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at, reopen: reopenOf(row) })),
         ...idle,
       ];
       return { rows, ...this.unreadChats(viewerId), pause: this.pause(viewerId) };
@@ -260,14 +283,14 @@ export class ChatService {
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
-      const sent = (since: number) => (this.db.prepare('SELECT count(*) n FROM chat_messages WHERE sender_id=? AND created_at>?').get(viewerId, this.iso(-since)) as { n: number }).n;
+      const sent = (since: number) => countSentSince(this.db, viewerId, this.iso(-since));
       if (sent(60_000) >= CHAT.perMinute) fail('TOO_MANY_REQUESTS', 'You’re sending messages too fast. Wait a minute and try again.');
       if (sent(DAY) >= CHAT.perDay) fail('TOO_MANY_REQUESTS', 'You reached today’s message limit. Try again tomorrow.');
       const current = this.findThread(viewerId, otherId);
       const mine = current ? this.db.prepare('SELECT first_sent_at FROM chat_members WHERE thread_id=? AND user_id=?').get(current.id, viewerId) as { first_sent_at: string | null } | undefined : undefined;
       if (!mine?.first_sent_at) {
         const started = this.db.prepare('SELECT count(*) n FROM chat_members WHERE user_id=? AND first_sent_at IS NOT NULL AND first_sent_at>?').get(viewerId, this.iso(-DAY)) as { n: number };
-        if (started.n >= CHAT.newChatsPerDay) fail('TOO_MANY_REQUESTS', 'You started 20 new chats today. Try again tomorrow.');
+        if (started.n >= CHAT.newChatsPerDay) fail('TOO_MANY_REQUESTS', TOO_MANY_NEW_CHATS_MESSAGE);
       }
       const thread = this.ensureThread(viewerId, otherId);
       const revision = this.bumpRevision(thread.id);
@@ -276,7 +299,7 @@ export class ChatService {
       this.db.prepare('UPDATE chat_threads SET last_message_at=? WHERE id=?').run(createdAt, thread.id);
       this.db.prepare('UPDATE chat_members SET last_read_seq=max(last_read_seq, ?), first_sent_at=coalesce(first_sent_at, ?) WHERE thread_id=? AND user_id=?').run(row.seq, createdAt, thread.id, viewerId);
       return { message: this.message(viewerId, row) };
-    })();
+    }).immediate();
   }
 
   delete(viewerId: string, otherId: string, messageId: string): { deleted: true } {
@@ -290,7 +313,7 @@ export class ChatService {
       const revision = this.bumpRevision(thread.id);
       this.db.prepare("UPDATE chat_messages SET deleted_at=?, deleted_by='sender', revision=? WHERE seq=?").run(this.iso(), revision, row.seq);
       return { deleted: true as const };
-    })();
+    }).immediate();
   }
 
   read(viewerId: string, otherId: string, seq: number): { unreadChats: number; unreadAt: string } {
@@ -303,18 +326,18 @@ export class ChatService {
           WHERE thread_id=? AND user_id=?`).run(seq, thread.id, thread.id, viewerId);
       }
       return this.unreadChats(viewerId);
-    })();
+    }).immediate();
   }
 
-  /** Mute is the viewer's own setting, so a paused student can still use it. */
-  mute(viewerId: string, otherId: string, muted: boolean): { muted: boolean } {
+  /** Mute is the viewer's own setting, so a paused student can still use it. Returns the new badge count (muted chats are left out of it). */
+  mute(viewerId: string, otherId: string, muted: boolean): { muted: boolean; unreadChats: number; unreadAt: string } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
     return this.db.transaction(() => {
       this.access(viewerId, otherId);
       const thread = this.ensureThread(viewerId, otherId);
       this.db.prepare('UPDATE chat_members SET muted=? WHERE thread_id=? AND user_id=?').run(Number(muted), thread.id, viewerId);
-      return { muted };
-    })();
+      return { muted, ...this.unreadChats(viewerId) };
+    }).immediate();
   }
 
   /** Needs only membership, so a student who blocked, was blocked or was unfriended can still report (D7). */
@@ -348,7 +371,24 @@ export class ChatService {
         .run(randomUUID(), viewerId, otherId, other.school_id ?? viewer.schoolId, input.note ? `${label}: ${input.note}` : label, this.iso(), thread.id, JSON.stringify(items), input.category);
       if (input.block) this.community.block(viewerId, otherId, true);
       return { blocked: input.block };
-    })();
+    }).immediate();
+  }
+
+  /**
+   * Reopens a closed chat from the viewer's side: lifts the viewer's own block, if any, then sends a friend
+   * request (or accepts the other person's waiting one, which reopens the chat at once). The old history
+   * comes back once they are friends again. Failures from `request` keep their phase-3 wording.
+   */
+  reopen(viewerId: string, otherId: string): ReopenResult {
+    if (otherId === viewerId) fail('BAD_REQUEST', SELF);
+    return this.db.transaction(() => {
+      this.service.ready(viewerId);
+      const unblocked = !!this.db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(viewerId, otherId);
+      if (unblocked) this.community.block(viewerId, otherId, false);
+      const friendState = this.community.request(viewerId, otherId);
+      if (friendState !== 'friends' && friendState !== 'requested') fail('CONFLICT', 'This chat cannot be reopened right now.');
+      return { unblocked, friendState };
+    }).immediate();
   }
 
   setPush(viewerId: string, enabled: boolean): { enabled: boolean } {
@@ -374,7 +414,7 @@ export class ChatService {
       const reportedName = name(report.reported_id), reporterName = name(report.reporter_id);
       this.audit(adminId, 'reports.view', report.school_id, { reportId });
       return { items: report.items.map(entry => ({ ...entry, senderName: entry.fromReported ? reportedName : reporterName })) };
-    })();
+    }).immediate();
   }
   redactMessage(adminId: string, reportId: string, seq: number): void {
     this.service.admin(adminId);
@@ -390,7 +430,7 @@ export class ChatService {
       const items = report.items.map(entry => entry.seq === seq ? { ...entry, deletedBy: 'support' as const } : entry);
       this.db.prepare('UPDATE reports SET evidence=? WHERE id=?').run(JSON.stringify(items), reportId);
       this.audit(adminId, 'chat.redact', report.school_id, { reportId, seq });
-    })();
+    }).immediate();
   }
   pauseChat(adminId: string, raw: z.infer<typeof pauseChatSchema>): void {
     this.service.admin(adminId);
@@ -402,7 +442,7 @@ export class ChatService {
       this.db.prepare('INSERT OR REPLACE INTO chat_pauses(user_id,until,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(input.userId, until, adminId, input.reason, this.iso());
       this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='paused' WHERE reported_id=? AND resolved_at IS NULL").run(this.iso(), adminId, input.userId);
       this.audit(adminId, 'chat.pause', user.school_id, { userId: input.userId, days: input.days, reason: input.reason });
-    })();
+    }).immediate();
   }
   liftChatPause(adminId: string, userId: string): void {
     this.service.admin(adminId);
@@ -411,7 +451,7 @@ export class ChatService {
       if (!user) return fail('NOT_FOUND', 'Member not found.');
       this.db.prepare('DELETE FROM chat_pauses WHERE user_id=?').run(userId);
       this.audit(adminId, 'chat.resume', user.school_id, { userId });
-    })();
+    }).immediate();
   }
   chatPauses(adminId: string): { userId: string; displayName: string; email: string; until: string | null; reason: string; createdAt: string }[] {
     this.service.admin(adminId);
@@ -430,5 +470,5 @@ export function pruneChat(db: Db, now: Date = new Date()): void {
     db.prepare('UPDATE reports SET evidence=NULL WHERE evidence IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at < ?').run(ago(CHAT.evidenceDays));
     db.prepare('DELETE FROM chat_threads WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
     db.prepare("DELETE FROM notification_deliveries WHERE entity_id='chat:messages' AND updated_at < ?").run(ago(2));
-  })();
+  }).immediate();
 }

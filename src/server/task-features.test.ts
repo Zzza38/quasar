@@ -46,6 +46,13 @@ describe('recurring task synchronization', () => {
     applied(service.sync(owner, mutation({ ...data, completed: true })));
     expect(service.workspace(owner).entities).toHaveLength(3);
   });
+  it('ends the series instead of storing a successor dated past 2199', () => {
+    const { service, owner, db } = fixture();
+    const base = applied(service.sync(owner, mutation({ ...legacy, dueDate: '2199-12-31', recurrence: { frequency: 'daily', interval: 1, until: null } })));
+    applied(service.sync(owner, mutation({ ...base.data, completed: true }, base)));
+    expect(service.workspace(owner).entities).toHaveLength(1);
+    expect(db.prepare('SELECT count(*) n FROM recurring_successors').get()).toEqual({ n: 0 });
+  });
   it('accepts historical legacy bases while merging newly added optional fields', () => {
     const { service, owner } = fixture();
     const base = applied(service.sync(owner, mutation(legacy)));
@@ -71,5 +78,39 @@ describe('calendar task metadata ownership', () => {
     const result = applied(service.sync(owner, mutation({ ...base.data, completed: true }, base)));
     expect(result.data).toMatchObject({ completed: true, imported: { sourceRemoved: true } });
     expect(service.workspace(owner).entities).toHaveLength(1);
+  });
+});
+describe('completion time', () => {
+  it('stamps when a task is completed, keeps it while completed and clears it on reopening', () => {
+    const { service, owner } = fixture();
+    const base = applied(service.sync(owner, mutation({ ...legacy, completedAt: '2020-01-01T00:00:00.000Z' })));
+    expect(base.data.completedAt).toBeUndefined();
+    const before = Date.now();
+    const done = applied(service.sync(owner, mutation({ ...base.data, completed: true }, base)));
+    expect(Date.parse(done.data.completedAt as string)).toBeGreaterThanOrEqual(before - 1000);
+    const renamed = applied(service.sync(owner, mutation({ ...done.data, title: 'Study more', completedAt: '2020-01-01T00:00:00.000Z' }, done)));
+    expect(renamed.data.completedAt).toBe(done.data.completedAt);
+    const reopened = applied(service.sync(owner, mutation({ ...renamed.data, completed: false }, renamed)));
+    expect(reopened.data.completedAt).toBeUndefined();
+  });
+  it('keeps an offline completion time, and two devices completing the same task never conflict', () => {
+    const { service, owner } = fixture();
+    const base = applied(service.sync(owner, mutation(legacy)));
+    const first = applied(service.sync(owner, mutation({ ...base.data, completed: true, completedAt: '2024-01-30T08:00:00.000Z' }, base)));
+    expect(first.data.completedAt).toBe('2024-01-30T08:00:00.000Z');
+    const second = applied(service.sync(owner, mutation({ ...base.data, completed: true, completedAt: '2024-01-30T09:00:00.000Z' }, base)));
+    expect(second.data.completedAt).toBe('2024-01-30T08:00:00.000Z');
+    // A stamp from the future is not trusted.
+    const reopened = applied(service.sync(owner, mutation({ ...second.data, completed: false }, second)));
+    const future = applied(service.sync(owner, mutation({ ...reopened.data, completed: true, completedAt: '2199-01-01T00:00:00.000Z' }, reopened)));
+    expect(Date.parse(future.data.completedAt as string)).toBeLessThanOrEqual(Date.now());
+  });
+  it('does not carry the completion time to the next repeat', () => {
+    const { service, owner } = fixture();
+    const base = applied(service.sync(owner, mutation({ ...legacy, recurrence: { frequency: 'daily', interval: 1, until: null } })));
+    applied(service.sync(owner, mutation({ ...base.data, completed: true }, base)));
+    const next = service.workspace(owner).entities.find(item => item.id !== base.id)!;
+    expect(next.data.completed).toBe(false);
+    expect(next.data.completedAt).toBeUndefined();
   });
 });

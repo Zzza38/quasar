@@ -4,20 +4,23 @@ import { appRouter } from './router';
 import { Service } from './service';
 import { generateVAPIDKeys } from 'web-push';
 import { openDatabase, type Db } from './db';
-import { CHAT_DELIVERY_ENTITY, CHAT_PUSH_PAYLOAD, NotificationService, SUPPORT_PUSH_PAYLOAD, chatQuietHours, pushSubscriptionSchema, reminderInstant, supportDeliveryEntity } from './notifications';
+import { CHAT_DELIVERY_ENTITY, CHAT_PUSH_PAYLOAD, NotificationService, PUSH_SUBSCRIPTION_LIMIT, SUPPORT_PUSH_PAYLOAD, chatQuietHours, pushSubscriptionSchema, reminderInstant, supportDeliveryEntity } from './notifications';
 import { CommunityService } from './community';
 import { ChatService } from './chat';
+import { countUnreadGlobal, GlobalChatService } from './global-chat';
 import { exampleSchedule } from '@/domain/example';
-import type { Task } from '@/domain/task';
+import { taskSchema, type Task } from '@/domain/task';
 const databases: Db[] = [];
 afterEach(() => { databases.splice(0).forEach(db => db.close()); });
 const vapid = { ...generateVAPIDKeys(), subject: 'mailto:owner@example.com' };
 const subscription = (token = 'one') => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${token}`, keys: { p256dh: vapid.publicKey, auth: Buffer.alloc(16, 1).toString('base64url') } });
+/** Browsers in these fixtures were enrolled before any reminder or support item they are expected to receive. */
+const enrolled = () => new Date('2026-09-01T00:00:00Z');
 const task: Task = { title: 'Private homework', dueDate: '2026-09-11', dueTime: '10:00', notes: '', classId: null, completed: false, reminder: { minutesBefore: 15, timeZone: 'America/New_York' } };
 function fixture(sendPush = vi.fn().mockResolvedValue({})) {
   const db = openDatabase(':memory:'); databases.push(db);
   for (const id of ['one', 'two']) db.prepare('INSERT INTO users(id,google_sub,email,created_at) VALUES(?,?,?,?)').run(id, id, `${id}@example.com`, new Date().toISOString());
-  const service = new NotificationService(db, { vapid, sendPush });
+  const service = new NotificationService(db, { vapid, sendPush, now: enrolled });
   const put = (value: Task = task, deleted = false) => db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES('one','task','task',1,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET data=excluded.data,deleted=excluded.deleted`).run(JSON.stringify(value), Number(deleted));
   put(); service.subscribe('one', subscription());
   return { db, service, sendPush, put };
@@ -64,6 +67,29 @@ describe('browser reminders', () => {
     await f.service.deliverDue(due);
     expect(f.db.prepare('SELECT * FROM push_subscriptions').all()).toHaveLength(0);
   });
+  it('keeps delivering other reminders when a browser is removed partway through a run', async () => {
+    const f = fixture();
+    f.sendPush.mockImplementation(async (target: { endpoint: string }) => { if (target.endpoint === subscription().endpoint) throw { statusCode: 410 }; return {}; });
+    // Two due reminders on a browser that has gone away, and another account's due reminder on a working browser.
+    f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES('one','second','task',1,?,0),('two','theirs','task',1,?,0)`).run(JSON.stringify(task), JSON.stringify(task));
+    f.service.subscribe('two', subscription('two'));
+    expect(await f.service.deliverDue(due)).toEqual({ sent: 1, failed: 1 });
+    expect(f.sendPush.mock.calls.filter(call => call[0].endpoint === subscription('two').endpoint)).toHaveLength(1);
+    expect(f.db.prepare('SELECT owner_id FROM push_subscriptions').all()).toEqual([{ owner_id: 'two' }]);
+  });
+  it('never replays reminders that came due before a browser was enrolled or re-enabled', async () => {
+    const f = fixture();
+    expect(await f.service.deliverDue(due)).toEqual({ sent: 1, failed: 0 });
+    // Disable then Enable deletes the browser's delivery rows; a second browser enrolled later has none either.
+    const later = new NotificationService(f.db, { vapid, sendPush: f.sendPush, now: () => new Date(due.getTime() + 60_000) });
+    f.service.unsubscribe('one', subscription()); later.subscribe('one', subscription());
+    later.subscribe('one', subscription('two'));
+    expect(await f.service.deliverDue(new Date(due.getTime() + 120_000))).toEqual({ sent: 0, failed: 0 });
+    expect(f.sendPush).toHaveBeenCalledTimes(1);
+    // Reminders that come due afterwards reach both browsers.
+    f.put({ ...task, dueDate: '2026-09-12' });
+    expect(await f.service.deliverDue(new Date(due.getTime() + DAY))).toEqual({ sent: 2, failed: 0 });
+  });
   it('skips completed, deleted, undated and stale tasks', async () => {
     const f = fixture();
     f.put({ ...task, completed: true }); await f.service.deliverDue(due);
@@ -99,11 +125,93 @@ describe('browser reminders', () => {
     }
     expect(pushSubscriptionSchema.safeParse({ ...subscription(), keys: { auth: 'short', p256dh: 'short' } }).success).toBe(false);
   });
+  it('refuses encryption keys that are not a P-256 point, and drops a stored browser whose keys are unusable', async () => {
+    const random = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url');
+    expect(pushSubscriptionSchema.safeParse({ ...subscription(), keys: { ...subscription().keys, p256dh: random } }).success).toBe(false);
+    const f = fixture();
+    expect(() => f.service.subscribe('one', { ...subscription('fake'), keys: { ...subscription().keys, p256dh: random } })).toThrow();
+    // A row saved before keys were checked is deleted on its first attempt instead of failing forever.
+    f.db.prepare('UPDATE push_subscriptions SET p256dh=?').run(random);
+    expect(await f.service.deliverDue(due)).toEqual({ sent: 0, failed: 1 });
+    expect(f.sendPush).not.toHaveBeenCalled();
+    expect(f.db.prepare('SELECT * FROM push_subscriptions').all()).toHaveLength(0);
+  });
+  it('keeps at most ten browsers per account, dropping the oldest other one', async () => {
+    const f = fixture();
+    let clock = enrolled().getTime();
+    const service = new NotificationService(f.db, { vapid, sendPush: f.sendPush, now: () => new Date(clock += 60_000) });
+    for (let index = 0; index < 14; index++) service.subscribe('one', subscription(`browser-${index}`));
+    service.subscribe('two', subscription('theirs'));
+    const endpoints = (owner: string) => (f.db.prepare('SELECT endpoint FROM push_subscriptions WHERE owner_id=? ORDER BY created_at').all(owner) as { endpoint: string }[]).map(row => row.endpoint);
+    expect(endpoints('one')).toEqual(Array.from({ length: PUSH_SUBSCRIPTION_LIMIT }, (_, index) => subscription(`browser-${index + 4}`).endpoint));
+    expect(endpoints('two')).toEqual([subscription('theirs').endpoint]);
+    // Re-enabling the oldest remaining browser keeps it; the limit is never exceeded.
+    service.subscribe('one', subscription('browser-4'));
+    expect(endpoints('one')).toHaveLength(PUSH_SUBSCRIPTION_LIMIT);
+    expect(endpoints('one')).toContain(subscription('browser-4').endpoint);
+    // A due reminder goes to each kept browser once.
+    expect(await f.service.deliverDue(due)).toEqual({ sent: PUSH_SUBSCRIPTION_LIMIT, failed: 0 });
+  });
   it('does not claim push is configured without server keys', async () => {
     const f = fixture(); const service = new NotificationService(f.db, { vapid: null });
     expect(service.config()).toEqual({ enabled: false, publicKey: null });
     expect(() => service.subscribe('one', subscription())).toThrow('not configured');
     expect(await service.deliverDue(due)).toEqual({ sent: 0, failed: 0 });
+  });
+  it('treats a malformed or mismatched VAPID configuration as not configured and logs no key material', () => {
+    const f = fixture(); const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const other = generateVAPIDKeys();
+    try {
+      const bad = [{ ...vapid, subject: 'owner@example.com' }, { ...vapid, privateKey: 'c2hvcnQ' }, { ...vapid, publicKey: other.publicKey }];
+      for (const config of [...bad, ...bad]) expect(new NotificationService(f.db, { vapid: config }).config()).toEqual({ enabled: false, publicKey: null });
+      // Environment values go through the same check.
+      vi.stubEnv('VAPID_PUBLIC_KEY', vapid.publicKey); vi.stubEnv('VAPID_PRIVATE_KEY', other.privateKey); vi.stubEnv('VAPID_SUBJECT', vapid.subject);
+      const fromEnv = new NotificationService(f.db);
+      expect(fromEnv.config()).toEqual({ enabled: false, publicKey: null });
+      expect(() => fromEnv.subscribe('one', subscription())).toThrow('not configured');
+      expect(new NotificationService(f.db, { vapid }).config()).toEqual({ enabled: true, publicKey: vapid.publicKey });
+      // One fixed line per distinct bad configuration, however many services the router builds.
+      expect(error).toHaveBeenCalledTimes(4);
+      const logged = JSON.stringify(error.mock.calls);
+      for (const secret of [vapid.privateKey, vapid.publicKey, other.privateKey, other.publicKey, 'owner@example.com']) expect(logged).not.toContain(secret);
+    } finally { error.mockRestore(); vi.unstubAllEnvs(); }
+  });
+  it('parses only live tasks with a reminder near now, and still reaches reminders at the zone and lead-time extremes', async () => {
+    const f = fixture();
+    const insert = (id: string, data: string) => f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES('one',?,'task',1,?,0)`).run(id, data);
+    insert('done', JSON.stringify({ ...task, completed: true }));
+    insert('plain', JSON.stringify({ ...task, reminder: null }));
+    insert('undated', JSON.stringify({ ...task, dueDate: null, dueTime: null, reminder: null }));
+    insert('later', JSON.stringify({ ...task, dueDate: '2026-12-01' }));
+    insert('old', JSON.stringify({ ...task, dueDate: '2025-09-11' }));
+    insert('broken', '{not json');
+    const parse = vi.spyOn(taskSchema, 'parse');
+    try {
+      expect(await f.service.deliverDue(due)).toEqual({ sent: 1, failed: 0 });
+      // The due task only: once when selected, once in the recheck before sending.
+      expect(parse).toHaveBeenCalledTimes(2);
+    } finally { parse.mockRestore(); }
+    // A week of lead time on a late due time in UTC-11, delivered almost 24 h late.
+    const week = { ...task, dueDate: '2026-09-18', dueTime: '23:59', reminder: { minutesBefore: 10080, timeZone: 'Pacific/Pago_Pago' } };
+    expect(reminderInstant(week)).toBe('2026-09-12T10:59:00Z');
+    f.put(week); expect(await f.service.deliverDue(new Date('2026-09-13T10:58:00Z'))).toEqual({ sent: 1, failed: 0 });
+    // No lead time on a midnight due time in UTC+14, delivered almost 24 h late.
+    const east = { ...task, dueDate: '2026-09-20', dueTime: '00:00', reminder: { minutesBefore: 0, timeZone: 'Pacific/Kiritimati' } };
+    expect(reminderInstant(east)).toBe('2026-09-19T10:00:00Z');
+    f.put(east); expect(await f.service.deliverDue(new Date('2026-09-20T09:59:00Z'))).toEqual({ sent: 1, failed: 0 });
+  });
+  it('prunes reminder delivery rows past the claim window but leaves chat and support rows to their own retention', async () => {
+    const f = fixture();
+    const browser = (f.db.prepare('SELECT id FROM push_subscriptions').get() as { id: string }).id;
+    const row = (entity: string, at: string) => f.db.prepare(`INSERT INTO notification_deliveries(owner_id,entity_id,reminder_at,subscription_id,status,attempts,last_error,updated_at)
+      VALUES('one',?,?,?,'sent',1,NULL,?)`).run(entity, at, browser, at);
+    row('stale-task', '2026-09-09T13:44:00Z');
+    row('recent-task', '2026-09-09T13:46:00Z');
+    row(CHAT_DELIVERY_ENTITY, '2026-09-05T00:00:00.000Z');
+    row(supportDeliveryEntity('reports', 'r1'), '2026-09-06T00:00:00.000Z');
+    expect(await f.service.deliverDue(due)).toEqual({ sent: 1, failed: 0 });
+    expect((f.db.prepare('SELECT entity_id FROM notification_deliveries ORDER BY entity_id').all() as { entity_id: string }[]).map(r => r.entity_id))
+      .toEqual([CHAT_DELIVERY_ENTITY, 'recent-task', supportDeliveryEntity('reports', 'r1'), 'task']);
   });
 });
 
@@ -147,7 +255,7 @@ function chatFixture(sendPush = vi.fn().mockResolvedValue({})) {
   const at = (ms: number) => new Date(noon.getTime() + ms);
   /** Sends a message at `ms` after noon. */
   const send = (ms: number, from = alice, to = bob, body = SECRET) => { clock.now = at(ms); return chat.send(from, to, randomUUID(), body).message; };
-  const notifications = new NotificationService(db, { vapid, sendPush });
+  const notifications = new NotificationService(db, { vapid, sendPush, now: () => clock.now });
   const subscribe = (owner = bob, token: string = owner) => notifications.subscribe(owner, subscription(token));
   const deliveries = () => db.prepare('SELECT * FROM notification_deliveries ORDER BY updated_at').all() as { owner_id: string; entity_id: string; reminder_at: string; status: string; attempts: number }[];
   const notifiedSeq = (owner = bob) => (db.prepare('SELECT notified_seq FROM chat_members WHERE user_id=?').get(owner) as { notified_seq: number }).notified_seq;
@@ -261,6 +369,68 @@ describe('chat pushes', () => {
     expect(await broken.notifications.deliverChat(eleven)).toEqual({ sent: 0, failed: 0 });
   });
 
+  it('e. pushes for the global chat under the same rules, with its own mute and read markers', async () => {
+    const f = chatFixture();
+    const room = new GlobalChatService(f.service, () => f.clock.now);
+    // The fixture's accounts were created "today"; the test clock sits on Sep 15, so backdate them to before it.
+    f.db.prepare("UPDATE users SET created_at='2026-09-01T00:00:00.000Z'").run();
+    const post = (ms: number, from = f.cara) => { f.clock.now = f.at(ms); return room.send(from, randomUUID(), SECRET).message; };
+    // Cara is nobody's friend, so only the room can reach Bob. It waits 60 s, and the payload is the generic one.
+    post(0);
+    expect(await f.notifications.deliverChat(f.at(59_000))).toEqual({ sent: 0, failed: 0 });
+    expect(await f.notifications.deliverChat(f.at(61_000))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls[0][1]).toBe(CHAT_PUSH_PAYLOAD);
+    expect(f.db.prepare('SELECT notified_seq FROM global_members WHERE user_id=?').get(f.bob)).toEqual({ notified_seq: 1 });
+    // The same message is never pushed twice; a new one is, after the 10-minute window.
+    expect(await f.notifications.deliverChat(f.at(12 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    post(12 * MINUTE);
+    expect(await f.notifications.deliverChat(f.at(14 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    // Reading the room, muting it, or the message being deleted stops a push; the sender never gets one.
+    const third = post(30 * MINUTE);
+    room.read(f.bob, third.seq);
+    expect(await f.notifications.deliverChat(f.at(32 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    const fourth = post(45 * MINUTE);
+    room.mute(f.bob, true);
+    expect(await f.notifications.deliverChat(f.at(47 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    room.mute(f.bob, false);
+    room.delete(f.cara, fourth.id);
+    expect(await f.notifications.deliverChat(f.at(48 * MINUTE))).toEqual({ sent: 0, failed: 0 });
+    f.subscribe(f.cara);
+    post(60 * MINUTE);
+    expect(await f.notifications.deliverChat(f.at(62 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls.at(-1)![0].endpoint).toBe(subscription('' + f.bob).endpoint);
+  });
+
+  it('e. never pushes the global chat for messages from someone the recipient blocked', async () => {
+    const f = chatFixture();
+    const room = new GlobalChatService(f.service, () => f.clock.now);
+    f.db.prepare("UPDATE users SET created_at='2026-09-01T00:00:00.000Z'").run();
+    f.community.block(f.bob, f.cara, true);
+    f.clock.now = f.at(0); room.send(f.cara, randomUUID(), SECRET);
+    expect(await f.notifications.deliverChat(f.at(61_000))).toEqual({ sent: 0, failed: 0 });
+    // The block is one way: Cara still gets pushed for Bob's room messages once she has a browser enrolled.
+    f.subscribe(f.cara);
+    f.clock.now = f.at(2 * MINUTE); room.send(f.bob, randomUUID(), SECRET);
+    expect(await f.notifications.deliverChat(f.at(4 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls.at(-1)![0].endpoint).toBe(subscription('' + f.cara).endpoint);
+  });
+
+  it('e. a global push keeps a newcomer\'s read marker, so the room\'s older messages stay read', async () => {
+    const f = chatFixture();
+    const room = new GlobalChatService(f.service, () => f.clock.now);
+    f.db.prepare("UPDATE users SET created_at='2026-09-01T00:00:00.000Z'").run();
+    const post = (ms: number) => { f.clock.now = f.at(ms); return room.send(f.cara, randomUUID(), SECRET).message; };
+    let before = post(0);
+    for (let minute = 1; minute < 5; minute++) before = post(minute * MINUTE);
+    // Bob joined after those five messages; only the next one is new to him.
+    f.db.prepare('UPDATE users SET created_at=? WHERE id=?').run(f.at(5 * MINUTE).toISOString(), f.bob);
+    post(6 * MINUTE);
+    expect(countUnreadGlobal(f.db, f.bob)).toBe(1);
+    expect(await f.notifications.deliverChat(f.at(6 * MINUTE + 61_000))).toEqual({ sent: 1, failed: 0 });
+    expect(countUnreadGlobal(f.db, f.bob)).toBe(1);
+    expect(f.db.prepare('SELECT last_read_seq, notified_seq FROM global_members WHERE user_id=?').get(f.bob)).toEqual({ last_read_seq: before.seq, notified_seq: before.seq + 1 });
+  });
+
   it('d. never pushes a message more than 24 hours old', async () => {
     const f = chatFixture();
     f.send(0);
@@ -305,6 +475,49 @@ describe('chat pushes', () => {
     expect(await f.notifications.deliverChat(f.at(7 * MINUTE + 1))).toEqual({ sent: 1, failed: 0 });
   });
 
+  it('e. stops pushing to a browser its provider keeps refusing after five attempts across windows', async () => {
+    const f = chatFixture(vi.fn().mockRejectedValue({ statusCode: 403 }));
+    const failing = subscription(f.bob).endpoint;
+    f.send(0);
+    let failed = 0;
+    // Every worker cycle for three hours: without a cap each 10-minute window would start five fresh attempts.
+    for (let minute = 2; minute <= 180; minute++) failed += (await f.notifications.deliverChat(f.at(minute * MINUTE))).failed;
+    expect(failed).toBe(5);
+    expect(f.sendPush).toHaveBeenCalledTimes(5);
+    expect(f.notifiedSeq()).toBe(0);
+    // Another browser of the same recipient is not held back by the failing one.
+    f.sendPush.mockImplementation(async (target: { endpoint: string }) => { if (target.endpoint === failing) throw { statusCode: 403 }; return {}; });
+    f.subscribe(f.bob, 'bob-phone');
+    expect(await f.notifications.deliverChat(f.at(181 * MINUTE))).toEqual({ sent: 1, failed: 0 });
+    expect(f.sendPush.mock.calls.at(-1)?.[0].endpoint).toBe(subscription('bob-phone').endpoint);
+    expect(f.sendPush).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([
+    ['a 5xx', { statusCode: 503 }],
+    ['a 429', { statusCode: 429 }],
+    ['a network error or timeout', new Error('getaddrinfo ENOTFOUND fcm.googleapis.com')],
+  ])('e. backs off during an outage that answers with %s and pushes again soon after it ends', async (_label, failure) => {
+    let outage = true;
+    const f = chatFixture(vi.fn().mockImplementation(async () => { if (outage) throw failure; return {}; }));
+    f.send(0);
+    let failed = 0;
+    for (let minute = 2; minute <= 120; minute++) failed += (await f.notifications.deliverChat(f.at(minute * MINUTE))).failed;
+    // Two hours of outage: a few tries every half hour after the first five, never five fresh ones per window.
+    expect(failed).toBeGreaterThan(5);
+    expect(failed).toBeLessThanOrEqual(10);
+    expect(f.notifiedSeq()).toBe(0);
+    outage = false;
+    let recoveredAt = 0;
+    for (let minute = 121; minute <= 240 && !recoveredAt; minute++) {
+      if ((await f.notifications.deliverChat(f.at(minute * MINUTE))).sent) recoveredAt = minute;
+    }
+    // Pushes resume within the half-hour backoff (plus a worker cycle), not after 24 hours.
+    expect(recoveredAt).toBeGreaterThan(0);
+    expect(recoveredAt).toBeLessThanOrEqual(121 + 31);
+    expect(f.notifiedSeq()).toBeGreaterThan(0);
+  });
+
   it('f. deliverDue ignores chat:messages rows', async () => {
     const f = chatFixture();
     f.send(0);
@@ -315,7 +528,7 @@ describe('chat pushes', () => {
     const reminder: Task = { ...task, dueDate: '2026-09-15', dueTime: '12:30', reminder: { minutesBefore: 15, timeZone: 'America/New_York' } };
     f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,'homework','task',1,?,0)`).run(f.bob, JSON.stringify(reminder));
     expect(await f.notifications.deliverDue(f.at(20 * MINUTE))).toEqual({ sent: 1, failed: 0 });
-    expect(JSON.parse(f.sendPush.mock.calls[1][1])).toMatchObject({ title: 'Quasar reminder', url: '/#tasks' });
+    expect(JSON.parse(f.sendPush.mock.calls[1][1])).toMatchObject({ title: 'Quasar reminder', url: '/tasks' });
     expect(f.deliveries().filter(row => row.entity_id === CHAT_DELIVERY_ENTITY)).toEqual(rows);
   });
 });
@@ -338,7 +551,7 @@ function supportFixture(sendPush = vi.fn().mockResolvedValue({})) {
   const school = service.createSchool(alice, { name: 'Community High', location: 'Boston, MA', schedule: exampleSchedule });
   for (const id of [owner, alice, bob, cara]) service.join(id, { schoolId: school.id, choice: 'community' });
   const community = new CommunityService(service);
-  const notifications = new NotificationService(db, { vapid, sendPush, ownerEmail: 'owner@example.com' });
+  const notifications = new NotificationService(db, { vapid, sendPush, ownerEmail: 'owner@example.com', now: enrolled });
   const subscribe = (id: string, token: string) => notifications.subscribe(id, subscription(token));
   subscribe(owner, 'owner-laptop'); subscribe(owner, 'owner-phone'); subscribe(alice, 'alice-phone');
   const deliveries = () => db.prepare("SELECT * FROM notification_deliveries WHERE entity_id LIKE 'support:%' ORDER BY entity_id, subscription_id").all() as { owner_id: string; entity_id: string; reminder_at: string; status: string; last_error: string | null }[];
@@ -377,6 +590,14 @@ describe('owner support pushes', () => {
     f.service.feedback(f.bob, 'The dark theme is hard to read on my phone.');
     expect(await restarted.deliverSupport()).toEqual({ sent: 2, failed: 0 });
     expect(f.sendPush).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not replay an item that arrived before an owner browser was enrolled', async () => {
+    const f = supportFixture();
+    f.correction();
+    new NotificationService(f.db, { vapid, sendPush: f.sendPush, now: () => new Date(Date.now() + MINUTE) }).subscribe(f.owner, subscription('owner-tablet'));
+    expect(await f.notifications.deliverSupport(new Date(Date.now() + 2 * MINUTE))).toEqual({ sent: 2, failed: 0 });
+    expect(f.endpoints().sort()).toEqual([subscription('owner-laptop').endpoint, subscription('owner-phone').endpoint]);
   });
 
   it('claims each item once when two workers overlap', async () => {
@@ -508,7 +729,7 @@ describe('owner support pushes', () => {
     const reminder: Task = { ...task, dueDate: '2026-09-15', dueTime: '12:30' };
     f.db.prepare(`INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,'homework','task',1,?,0)`).run(f.owner, JSON.stringify(reminder));
     expect(await f.notifications.deliverDue(new Date(noon.getTime() + 20 * MINUTE))).toEqual({ sent: 2, failed: 0 });
-    expect(JSON.parse(f.sendPush.mock.calls[4][1])).toMatchObject({ title: 'Quasar reminder', url: '/#tasks' });
+    expect(JSON.parse(f.sendPush.mock.calls[4][1])).toMatchObject({ title: 'Quasar reminder', url: '/tasks' });
     expect(f.deliveries()).toEqual(rows);
     // And support pushes ignore chat and reminder rows: nothing new to push.
     expect(await f.notifications.deliverSupport(new Date(noon.getTime() + 21 * MINUTE))).toEqual({ sent: 0, failed: 0 });

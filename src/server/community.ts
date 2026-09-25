@@ -53,11 +53,17 @@ export class CommunityService {
     if (!schoolId) return false;
     return !!this.db.prepare('SELECT 1 FROM school_verifications WHERE user_id=? AND school_id=?').get(userId, schoolId);
   }
+  /**
+   * The student's verification at their current school. A domain support attached after the student joined
+   * verifies them here, on their next workspace load, so "sign in with a school address" holds for existing
+   * members too instead of only at join.
+   */
   verification(userId: string): Verification {
     const user = this.service.user(userId);
     if (!user.schoolId) return { status: 'none', method: null };
     const row = this.db.prepare('SELECT method FROM school_verifications WHERE user_id=? AND school_id=?').get(userId, user.schoolId) as { method: 'domain' | 'support' } | undefined;
     if (row) return { status: 'verified', method: row.method };
+    if (this.verifyByDomain(userId, user.schoolId)) return { status: 'verified', method: 'domain' };
     const pending = this.db.prepare('SELECT 1 FROM verification_requests WHERE user_id=? AND school_id=? AND resolved_at IS NULL').get(userId, user.schoolId);
     return { status: pending ? 'pending' : 'none', method: null };
   }
@@ -69,7 +75,11 @@ export class CommunityService {
     const domains = parseEmailDomains(row.email_domains);
     const domain = emailDomain(user.email);
     if (!domain || !domains.some(entry => domain === entry || domain.endsWith(`.${entry}`))) return false;
-    this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(userId, schoolId, 'domain', null, now());
+    this.db.transaction(() => {
+      this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(userId, schoolId, 'domain', null, now());
+      // A proof sent before support added the domain is settled by it, so it leaves the support queue.
+      this.db.prepare("UPDATE verification_requests SET resolved_at=?, decision='approved', actor_id=NULL WHERE user_id=? AND school_id=? AND resolved_at IS NULL").run(now(), userId, schoolId);
+    })();
     return true;
   }
   requestVerification(userId: string, raw: z.infer<typeof proofSchema>): Verification {
@@ -85,10 +95,18 @@ export class CommunityService {
       if (declined.n >= 3) fail('TOO_MANY_REQUESTS', 'Support declined three requests this week. Contact support before sending more.');
       this.db.prepare('INSERT INTO verification_requests(id,user_id,school_id,proof,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), userId, user.schoolId, input.proof, now());
       return this.verification(userId);
-    })();
+    }).immediate();
   }
   /** Called from the school join path so domain matches verify without a request. */
   onJoin(userId: string, schoolId: string): void { this.verifyByDomain(userId, schoolId); }
+  /**
+   * Closes a member's open schedule proposals at a school they left or lost verification for. Their votes stay
+   * stored but stop counting, because tallies only count currently verified members (src/server/proposals.ts).
+   * Runs inside the caller's transaction.
+   */
+  withdrawProposals(userId: string, schoolId: string): void {
+    this.db.prepare("UPDATE schedule_proposals SET status='withdrawn', closed_at=? WHERE proposer_id=? AND school_id=? AND status='open'").run(now(), userId, schoolId);
+  }
 
   /* ---------- Directory and profiles ---------- */
 
@@ -190,18 +208,28 @@ export class CommunityService {
       if (pending.n >= FRIEND_REQUEST_LIMIT) fail('TOO_MANY_REQUESTS', `You have ${FRIEND_REQUEST_LIMIT} requests waiting for an answer. Wait for replies before sending more.`);
       this.db.prepare('INSERT INTO friendships(user_low,user_high,requester_id,status,created_at) VALUES(?,?,?,?,?)').run(low, high, viewerId, 'pending', now());
       return 'requested';
-    })();
+    }).immediate();
   }
   respond(viewerId: string, otherId: string, accept: boolean): FriendState {
     this.service.ready(viewerId);
     const [low, high] = pair(viewerId, otherId);
-    return this.db.transaction(() => {
+    const state = this.db.transaction((): FriendState | 'stale' => {
       const existing = this.db.prepare("SELECT requester_id FROM friendships WHERE user_low=? AND user_high=? AND status='pending'").get(low, high) as { requester_id: string } | undefined;
       if (!existing || existing.requester_id === viewerId) fail('NOT_FOUND', 'There is no request to answer.');
-      if (accept) { this.db.prepare("UPDATE friendships SET status='accepted', responded_at=? WHERE user_low=? AND user_high=?").run(now(), low, high); return 'friends'; }
+      // Same rule as request(): a request left over from before either person changed school cannot become a
+      // friendship neither of them could start now, so accepting it drops it instead.
+      const schools = this.db.prepare('SELECT school_id FROM users WHERE id IN (?,?)').all(low, high) as { school_id: string | null }[];
+      const sameSchool = schools.length === 2 && schools[0]!.school_id !== null && schools[0]!.school_id === schools[1]!.school_id;
+      if (accept && sameSchool && !this.hidden(viewerId, otherId)) {
+        this.db.prepare("UPDATE friendships SET status='accepted', responded_at=? WHERE user_low=? AND user_high=?").run(now(), low, high);
+        return 'friends';
+      }
       this.db.prepare('DELETE FROM friendships WHERE user_low=? AND user_high=?').run(low, high);
-      return 'none';
-    })();
+      return accept ? 'stale' : 'none';
+    }).immediate();
+    // Thrown after the commit, so the stale request stays deleted.
+    if (state === 'stale') fail('NOT_FOUND', 'This request is no longer available. You two are no longer at the same school.');
+    return state;
   }
   /** Removes a friendship or withdraws a pending request. Access to shared classes ends at once. */
   remove(viewerId: string, otherId: string): FriendState {
@@ -223,7 +251,7 @@ export class CommunityService {
         const [low, high] = pair(viewerId, otherId);
         this.db.prepare('DELETE FROM friendships WHERE user_low=? AND user_high=?').run(low, high);
       } else this.db.prepare('DELETE FROM blocks WHERE blocker_id=? AND blocked_id=?').run(viewerId, otherId);
-    })();
+    }).immediate();
   }
   report(viewerId: string, raw: z.infer<typeof reportSchema>): void {
     const viewer = this.service.ready(viewerId);
@@ -246,16 +274,24 @@ export class CommunityService {
   }
   decideVerification(adminId: string, requestId: string, approve: boolean): void {
     this.service.admin(adminId);
-    this.db.transaction(() => {
+    const banned = this.db.transaction(() => {
       const request = this.db.prepare('SELECT user_id, school_id FROM verification_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already handled.');
-      this.db.prepare('UPDATE verification_requests SET resolved_at=?, decision=?, actor_id=? WHERE id=?').run(now(), approve ? 'approved' : 'declined', adminId, requestId);
-      if (approve) this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(request.user_id, request.school_id, 'support', adminId, now());
-    })();
+      // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
+      const banned = approve && this.isBanned(request.user_id, request.school_id);
+      this.db.prepare('UPDATE verification_requests SET resolved_at=?, decision=?, actor_id=? WHERE id=?').run(now(), approve && !banned ? 'approved' : 'declined', adminId, requestId);
+      if (approve && !banned) this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(request.user_id, request.school_id, 'support', adminId, now());
+      return banned;
+    }).immediate();
+    // Thrown after the commit, so the stale request stays closed.
+    if (banned) fail('CONFLICT', 'This student was removed from this school, so the request was declined.');
   }
   revokeVerification(adminId: string, userId: string, schoolId: string): void {
     this.service.admin(adminId);
-    this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
+      this.withdrawProposals(userId, schoolId);
+    }).immediate();
   }
   /** Open reports, danger first, then oldest first. Chat reports carry a snapshot size but never message text. */
   reports(adminId: string): ReportSummary[] {
@@ -280,7 +316,10 @@ export class CommunityService {
     this.service.admin(adminId);
     this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=? AND resolved_at IS NULL').run(now(), adminId, outcome, reportId);
   }
-  /** Support removal: the member leaves the school, loses verification and friendships there, and cannot rejoin. */
+  /**
+   * Support removal: the member leaves the school, loses their verification and any open verification request there,
+   * and cannot rejoin. Every friendship they have ends, at any school, which closes all of their chats (docs/CHAT.md D4).
+   */
   removeFromSchool(adminId: string, userId: string, schoolId: string, reason: string): void {
     this.service.admin(adminId);
     const text = z.string().trim().min(3).max(2000).parse(reason);
@@ -289,11 +328,13 @@ export class CommunityService {
       if (!user) fail('NOT_FOUND', 'Member not found.');
       this.db.prepare('INSERT OR REPLACE INTO school_bans(school_id,user_id,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(schoolId, userId, adminId, text, now());
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
+      this.db.prepare("UPDATE verification_requests SET resolved_at=?, decision='declined', actor_id=? WHERE user_id=? AND school_id=? AND resolved_at IS NULL").run(now(), adminId, userId, schoolId);
+      this.withdrawProposals(userId, schoolId);
       this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
       this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
       if (user.school_id === schoolId) this.db.prepare('UPDATE users SET school_id=NULL, reviewed_version=NULL WHERE id=?').run(userId);
       this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(adminId, 'member.remove', schoolId, JSON.stringify({ userId, reason: text }), now());
-    })();
+    }).immediate();
   }
   isBanned(userId: string, schoolId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM school_bans WHERE school_id=? AND user_id=?').get(schoolId, userId);
@@ -302,18 +343,25 @@ export class CommunityService {
   summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; unreadChats: number; unreadAt: string; chatPush: boolean } {
     const verification = this.verification(userId);
     const incoming = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='pending' AND requester_id<>? AND (user_low=? OR user_high=?)").get(userId, userId, userId) as { n: number };
+    const friends = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='accepted' AND (user_low=? OR user_high=?)").get(userId, userId) as { n: number };
     const classmates = this.classmates(userId);
     // Same SQL as chat.inbox. It does not call ready(), so students still onboarding get 0. unreadAt is the
     // server's clock when the count was computed, so the client keeps whichever count is newest.
     const unreadChats = countUnreadChats(this.db, userId);
     const unreadAt = new Date().toISOString();
     const chatPush = (this.db.prepare('SELECT chat_push FROM users WHERE id=?').get(userId) as { chat_push: number } | undefined)?.chat_push !== 0;
-    return { verification, incomingRequests: incoming.n, friendCount: classmates.length, classmates, unreadChats, unreadAt, chatPush };
+    return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, unreadChats, unreadAt, chatPush };
   }
-  /** Each accepted friend with their classes by period, so the viewer's own timetable can say who they sit with. */
+  /**
+   * Each accepted friend at the viewer's current school with their classes by period, so the viewer's own timetable
+   * can say who they sit with. A friendship survives a school change, but period ids repeat across schools ("p1",
+   * "A"), so a friend at another school never shares a class with the viewer.
+   */
   classmates(userId: string): Classmate[] {
     const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
-      WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId) as { id: string; display_name: string }[];
+      JOIN users me ON me.id=?
+      WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
+      ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as { id: string; display_name: string }[];
     return rows.map(row => ({ id: row.id, displayName: row.display_name, classes: classesByPeriod(this.personalOf(row.id)) }));
   }
 }

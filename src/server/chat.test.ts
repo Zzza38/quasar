@@ -243,6 +243,74 @@ describe('5. revocation', () => {
   });
 });
 
+describe('5b. slur filter', () => {
+  it('stores slurs censored in one-to-one chat too, and lets swearing through', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    expect(f.send(f.alice, f.bob, 'you f4ggot').body).toBe('you ******');
+    expect(f.db.prepare('SELECT body FROM chat_messages').get()).toEqual({ body: 'you ******' });
+    expect(f.send(f.alice, f.bob, 'this test is bullshit').body).toBe('this test is bullshit');
+  });
+
+  it('keeps https links whole, so a slur-shaped path segment or host label does not break the link', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    expect(f.send(f.alice, f.bob, 'read https://en.wikipedia.org/wiki/Coon_Rapids,_Minnesota you f4ggot').body)
+      .toBe('read https://en.wikipedia.org/wiki/Coon_Rapids,_Minnesota you ******');
+    expect(f.send(f.alice, f.bob, 'https://www.paki.example.com/w0p/').body).toBe('https://www.paki.example.com/w0p/');
+    // Not a link (http, or credentials), so censored like any other text.
+    expect(f.send(f.alice, f.bob, 'http://example.com/coon').body).toBe('http://example.com/****');
+  });
+
+  it('censors the list preview before cutting it, so a stored slur split at 120 characters never shows', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    f.send(f.alice, f.bob, 'placeholder');
+    // A row stored before the filter existed: the slur straddles the 120-character cut.
+    f.db.prepare('UPDATE chat_messages SET body=?').run(`${'x'.repeat(116)} retard`);
+    expect(f.inboxRow(f.bob, f.alice)).toMatchObject({ lastMessage: { preview: `${'x'.repeat(116)} ***` } });
+  });
+});
+
+describe('6b. reopening a closed chat', () => {
+  it('lifts the viewer’s block and sends a request; acceptance brings the history back', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.cara);
+    f.send(f.cara, f.alice, 'before the block');
+    f.community.block(f.alice, f.cara, true);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'unblock' });
+    expect(f.chat.reopen(f.alice, f.cara)).toEqual({ unblocked: true, friendState: 'requested' });
+    expect(f.db.prepare('SELECT count(*) n FROM blocks WHERE blocker_id=?').get(f.alice)).toEqual({ n: 0 });
+    // Still closed until Cara accepts; the row now offers a plain friend request, and a repeat is harmless.
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'friend' });
+    expect(f.chat.reopen(f.alice, f.cara)).toEqual({ unblocked: false, friendState: 'requested' });
+    f.community.respond(f.cara, f.alice, true);
+    expect(f.chat.thread(f.alice, f.cara).messages.map(m => m.body)).toEqual(['before the block']);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'open' });
+  });
+
+  it('accepts the other person’s waiting request at once, and refuses across schools or through their block', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    f.send(f.alice, f.bob, 'hi');
+    f.community.remove(f.bob, f.alice);
+    f.community.request(f.bob, f.alice);
+    expect(f.chat.reopen(f.alice, f.bob)).toEqual({ unblocked: false, friendState: 'friends' });
+    expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ state: 'open' });
+    // Cara blocked Alice: Alice's row offers a request (nothing reveals the block), and the request gets the phase-3 refusal.
+    f.befriend(f.alice, f.cara);
+    f.send(f.alice, f.cara, 'hey');
+    f.community.block(f.cara, f.alice, true);
+    expect(f.inboxRow(f.alice, f.cara)).toMatchObject({ state: 'closed', reopen: 'friend' });
+    fails(() => f.chat.reopen(f.alice, f.cara), 'NOT_FOUND', 'This member is not available.');
+    // A former friend from another school cannot be re-added, so the row has no reopen option.
+    f.db.prepare('UPDATE users SET school_id=? WHERE id=?').run(f.other.id, f.bob);
+    f.community.remove(f.alice, f.bob);
+    expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ state: 'closed', reopen: null });
+    fails(() => f.chat.reopen(f.alice, f.bob), 'NOT_FOUND');
+  });
+});
+
 describe('6. closed rows', () => {
   it('shows the same report-only row after an unfriend or a block, for 30 days', () => {
     const f = fixture();
@@ -252,13 +320,13 @@ describe('6. closed rows', () => {
     f.community.remove(f.alice, f.bob);
     f.community.block(f.alice, f.cara, true);
     const unfriended = f.inboxRow(f.alice, f.bob)!, blocked = f.inboxRow(f.alice, f.cara)!;
-    expect(unfriended).toEqual({ state: 'closed', userId: f.bob, displayName: 'Bob', lastAt: expect.any(String) });
-    expect(blocked).toEqual({ state: 'closed', userId: f.cara, displayName: 'Cara', lastAt: expect.any(String) });
+    expect(unfriended).toEqual({ state: 'closed', userId: f.bob, displayName: 'Bob', lastAt: expect.any(String), reopen: 'friend' });
+    expect(blocked).toEqual({ state: 'closed', userId: f.cara, displayName: 'Cara', lastAt: expect.any(String), reopen: 'unblock' });
     expect(Object.keys(unfriended).sort()).toEqual(Object.keys(blocked).sort());
-    // Both sides see a closed row, and the blocked person's row looks the same.
+    // Both sides see a closed row, and the blocked person's row looks the same as the unfriended one.
     const bobSide = f.inboxRow(f.bob, f.alice)!, caraSide = f.inboxRow(f.cara, f.alice)!;
-    expect(bobSide).toEqual({ state: 'closed', userId: f.alice, displayName: 'Alice', lastAt: expect.any(String) });
-    expect(Object.keys(caraSide).sort()).toEqual(Object.keys(bobSide).sort());
+    expect(bobSide).toEqual({ state: 'closed', userId: f.alice, displayName: 'Alice', lastAt: expect.any(String), reopen: 'friend' });
+    expect(caraSide).toEqual({ ...bobSide, lastAt: expect.any(String) });
     expect(JSON.stringify(f.chat.inbox(f.alice))).not.toMatch(/from bob|from cara/);
 
     f.tick(31 * DAY);
@@ -310,7 +378,8 @@ describe('7. unread and read', () => {
     // Muted: out of the badge, but the row keeps its count.
     f.send(f.bob, f.alice, 'new');
     expect(f.chat.unreadChats(f.alice).unreadChats).toBe(1);
-    f.chat.mute(f.alice, f.bob, true);
+    // The answer carries the new badge count, so the client updates the badge at once.
+    expect(f.chat.mute(f.alice, f.bob, true)).toEqual({ muted: true, unreadChats: 0, unreadAt: expect.any(String) });
     expect(f.chat.unreadChats(f.alice).unreadChats).toBe(0);
     expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ unread: 1, muted: true });
   });
@@ -524,7 +593,7 @@ describe('11. pause', () => {
     const until = new Date(f.clock.now.getTime() + 7 * DAY).toISOString();
     expect(f.chat.inbox(f.bob).pause).toEqual({ until });
     expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until });
-    expect(f.chat.mute(f.bob, f.alice, true)).toEqual({ muted: true });
+    expect(f.chat.mute(f.bob, f.alice, true)).toMatchObject({ muted: true });
     expect(f.chat.report(f.bob, f.alice, { category: 'other', block: false })).toEqual({ blocked: false });
     f.community.block(f.bob, f.cara, true);
     expect(f.send(f.alice, f.bob, 'friends can still write').body).toBe('friends can still write');
@@ -595,12 +664,20 @@ describe('14. reserved names', () => {
   it('rejects new names that mention Quasar or support, and keeps stored ones', async () => {
     const f = fixture();
     const alice = f.caller(f.alice);
-    for (const displayName of ['Quasar Support', 's.u.p.p.o.r.t', 'Admin Team', 'Quasar-Official', 'ＳＴＡＦＦ']) {
-      await expect(alice.profile.save({ displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose a display name that doesn’t mention Quasar or support.' });
+    // Cyrillic and Greek lookalikes, digit swaps, accents, spaced-out letters and joined reserved words are caught too.
+    for (const displayName of ['Quasar Support', 's.u.p.p.o.r.t', 'Admin Team', 'Quasar-Official', 'ＳＴＡＦＦ',
+      '\u0405u\u0440\u0440ort', 'Qu\u0430sar', '\u0405taff', 'Supp0rt', 'Suppórt', 'S u p p o r t', 'QuasarSupport', 'Admin!']) {
+      await expect(alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose a display name that doesn’t mention Quasar or support.' });
     }
-    for (const displayName of ['Stafford', 'Badminton Bob']) expect((await alice.profile.save({ displayName, fullName: 'Alice Fullname' })).displayName).toBe(displayName);
+    for (const displayName of ['Stafford', 'Badminton Bob', 'Staff0rd', 'Jo 5', 'Zoë 👨\u200D👩\u200D👧']) expect((await alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).displayName).toBe(displayName);
+    // Bidi overrides and zero-width characters are removed, so a name cannot read backwards or render blank.
+    expect((await alice.profile.save({ accountId: f.alice, displayName: '\u202Etroppus', fullName: 'Alice\u200B Fullname\u00AD' }))).toMatchObject({ displayName: 'troppus', fullName: 'Alice Fullname' });
+    for (const displayName of ['\u200B', '\u200B\u202E\u2060', '...']) {
+      await expect(alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    await expect(alice.profile.save({ accountId: f.alice, displayName: 'Alice', fullName: '\u200B\u200B' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     f.db.prepare('UPDATE users SET display_name=? WHERE id=?').run('Support', f.bob);
-    expect((await f.caller(f.bob).profile.save({ displayName: 'Support', fullName: 'Bob New Fullname' })).fullName).toBe('Bob New Fullname');
+    expect((await f.caller(f.bob).profile.save({ accountId: f.bob, displayName: 'Support', fullName: 'Bob New Fullname' })).fullName).toBe('Bob New Fullname');
   });
 });
 

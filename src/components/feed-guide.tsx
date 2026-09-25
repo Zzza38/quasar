@@ -2,10 +2,11 @@
 
 import { useState, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { browserTimeZone, formatTimeZone } from '@/lib/format';
+import { formatTimeZone } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
 import { Button, Callout, ErrorText, Field, Hint, Input } from './primitives';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 
 /**
  * Where students actually get an iCal link from. Schoology comes first because that is what
@@ -50,29 +51,41 @@ export const FEED_SOURCES: ReadonlyArray<{ id: string; name: string; steps: Reac
   },
 ];
 
-/** Step-by-step instructions for getting an iCal link, one source at a time. */
+/**
+ * Step-by-step instructions for getting an iCal link, one source at a time. Radix Tabs give the source pills one
+ * Tab stop with arrow, Home and End keys, and name each step list after its pill.
+ */
 export function FeedGuide({ initial = 'schoology', compact }: { initial?: string; compact?: boolean }) {
   const [sourceId, setSourceId] = useState(initial);
   const source = FEED_SOURCES.find((entry) => entry.id === sourceId) ?? FEED_SOURCES[0];
-  return <div className="grid gap-3">
-    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Where is your homework?">
-      {FEED_SOURCES.map((entry) => <button key={entry.id} type="button" role="tab" aria-selected={entry.id === source.id} onClick={() => setSourceId(entry.id)}
-        className={cn('rounded-full px-3 py-1.5 text-sm font-semibold ring-1 ring-inset transition-colors', entry.id === source.id ? 'bg-primary text-primary-foreground ring-primary' : 'bg-card text-muted-foreground ring-foreground/[0.08] hover:bg-muted hover:text-foreground')}>{entry.name}</button>)}
-    </div>
-    <ol role="tabpanel" className={cn('grid list-decimal gap-1.5 pl-5 text-muted-foreground marker:font-bold marker:text-foreground/60', compact ? 'text-[13px]' : 'text-sm')}>
-      {source.steps.map((step, index) => <li key={index} className="pl-1">{step}</li>)}
-    </ol>
-    {source.note && <Hint><Icon name="info" size={12} className="mr-1 inline" />{source.note}</Hint>}
-  </div>;
+  return <Tabs value={source.id} onValueChange={setSourceId} className="grid gap-3">
+    <TabsList variant="line" aria-label="Where is your homework?" className="h-auto w-auto flex-wrap justify-start gap-1.5 rounded-none p-0">
+      {FEED_SOURCES.map((entry) => <TabsTrigger key={entry.id} value={entry.id}
+        className="h-auto flex-none rounded-full border-0 bg-card px-3 py-1.5 font-semibold text-muted-foreground ring-1 ring-inset ring-foreground/[0.08] transition-colors after:hidden hover:bg-muted hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:ring-primary data-[state=active]:hover:bg-primary data-[state=active]:hover:text-primary-foreground">{entry.name}</TabsTrigger>)}
+    </TabsList>
+    {FEED_SOURCES.map((entry) => <TabsContent key={entry.id} value={entry.id} className="grid gap-3 rounded-md focus-visible:ring-2 focus-visible:ring-ring">
+      <ol className={cn('grid list-decimal gap-1.5 pl-5 text-muted-foreground marker:font-bold marker:text-foreground/60', compact ? 'text-[13px]' : 'text-sm')}>
+        {entry.steps.map((step, index) => <li key={index} className="pl-1">{step}</li>)}
+      </ol>
+      {entry.note && <Hint><Icon name="info" size={12} className="mr-1 inline" />{entry.note}</Hint>}
+    </TabsContent>)}
+  </Tabs>;
 }
 
-/** Name, link and time zone. Used by the setup step and the Add calendar dialog. */
-export function FeedSubscribeForm({ accountId, online, id = 'calendar-feed-form', onSubscribed, autoFocus, defaultName = 'School homework' }: {
-  accountId: string; online: boolean; id?: string; onSubscribed: () => Promise<void>; autoFocus?: boolean; defaultName?: string;
+/**
+ * Name, link and time zone. Used by the setup step and the Add calendar dialog. Imported due dates and
+ * times are stored as wall-clock times in the calendar's zone. The task list and overdue checks read them
+ * in the school's zone, while a reminder added to an imported task counts from the calendar's zone
+ * (TaskSheet in views/tasks.tsx). The calendar zone starts as `schoolTimeZone` rather than the device's
+ * zone so the two agree; a calendar set to another zone reminds by that zone's clock but turns overdue
+ * by the school's, which differ by the offset between the zones.
+ */
+export function FeedSubscribeForm({ accountId, online, schoolTimeZone, id = 'calendar-feed-form', onSubscribed, autoFocus, defaultName = 'School homework' }: {
+  accountId: string; online: boolean; schoolTimeZone: string; id?: string; onSubscribed: () => Promise<unknown>; autoFocus?: boolean; defaultName?: string;
 }) {
   const [name, setName] = useState(defaultName);
   const [url, setUrl] = useState('');
-  const [timeZone, setTimeZone] = useState(browserTimeZone);
+  const [timeZone, setTimeZone] = useState(schoolTimeZone);
   const [showZone, setShowZone] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -81,7 +94,8 @@ export function FeedSubscribeForm({ accountId, online, id = 'calendar-feed-form'
     setPending(true); setError('');
     try {
       await api.calendar.subscribe.mutate({ accountId, name: name.trim(), url: url.trim(), timeZone: timeZone.trim() });
-      setUrl('');
+      // The next calendar needs its own link and name, so a second feed is not saved under the same name.
+      setUrl(''); setName('');
       await onSubscribed();
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
@@ -92,7 +106,7 @@ export function FeedSubscribeForm({ accountId, online, id = 'calendar-feed-form'
     <div className="grid gap-4 sm:grid-cols-2">
       <Field label="Call it" htmlFor={`${id}-name`}><Input id={`${id}-name`} required maxLength={100} value={name} disabled={pending} onChange={(event) => setName(event.target.value)} placeholder="School homework" /></Field>
       {showZone
-        ? <Field label="Calendar time zone" htmlFor={`${id}-zone`} hint="Used when the feed does not say."><Input id={`${id}-zone`} required maxLength={100} value={timeZone} disabled={pending} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></Field>
+        ? <Field label="Calendar time zone" htmlFor={`${id}-zone`} hint="Imported due dates and times are shown in this zone, and times the feed leaves unzoned are read in it. Keep your school’s zone unless you have a reason not to."><Input id={`${id}-zone`} required maxLength={100} value={timeZone} disabled={pending} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></Field>
         : <div className="grid content-end"><Hint>Time zone: {formatTimeZone(timeZone)} <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setShowZone(true)}>Change</button></Hint></div>}
     </div>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}

@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { resolveDay, scheduleSchema, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
+import { clampDate, describeDayIssues, REMOVED_PERIOD_LABEL, resolveDay, resolveDayInRange, rotationNeverAdvances, scheduleSchema, withCycleDay, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
 import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { Icon } from './icon';
 import { ScheduleGrid } from './schedule-grid';
@@ -65,7 +65,7 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
     {slots.length === 0 && <Hint>{emptyText}</Hint>}
     {slots.map((slot, index) => <div key={slot.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 min-[481px]:grid-cols-[minmax(0,1fr)_118px_118px_auto]">
       <Select small aria-label={`Slot ${index + 1} period`} value={slot.periodId} disabled={disabled} onChange={(event) => update(index, { periodId: event.target.value })}>
-        {!periods.some((period) => period.id === slot.periodId) && <option value={slot.periodId}>{slot.periodId || 'Choose a period'}</option>}
+        {!periods.some((period) => period.id === slot.periodId) && <option value={slot.periodId}>{slot.periodId ? REMOVED_PERIOD_LABEL : 'Choose a period'}</option>}
         {periods.map((period) => <option key={period.id} value={period.id}>{period.label}{period.kind === 'lunch' ? ' (lunch)' : ''}</option>)}
       </Select>
       <div className="col-span-full grid grid-cols-2 gap-1.5 min-[481px]:contents">
@@ -87,6 +87,15 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
   const [section, setSection] = useState<Section>(initialSection);
   const issues = useMemo(() => describeIssues(value), [value]);
   const set = (patch: Partial<Schedule>) => onChange({ ...value, ...patch });
+  // Turning "Same as school days" off usually leaves the two lists equal, so the choice is remembered here rather
+  // than derived from the data alone; otherwise the switch snaps back on and the Advance days picker never appears.
+  // It lives in the editor, not in Basics, because the tab panels unmount when another tab is opened.
+  const matching = sameWeekdays(value.advanceWeekdays, value.schoolWeekdays);
+  const [customAdvance, setCustomAdvance] = useState(!matching);
+  const singleDay = value.cycleDays.length <= 1;
+  // A one-day schedule hides the switch, so when a second day arrives it starts from the data again.
+  const [wasSingle, setWasSingle] = useState(singleDay);
+  if (wasSingle !== singleDay) { setWasSingle(singleDay); setCustomAdvance(!matching); }
   return <Tabs value={section} onValueChange={(next) => setSection(next as Section)} className="gap-4">
     <div className="-mx-1 overflow-x-auto px-1">
       <TabsList aria-label="Schedule editor section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
@@ -100,7 +109,10 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
     {issues.length > 0 && <Callout tone="warning" icon="alert" title={`${issues.length === 1 ? 'One thing' : `${issues.length} things`} to fix before saving`} role="alert">
       <ul className="grid list-disc gap-0.5 pl-4 text-[13.5px]">{issues.slice(0, 8).map((issue) => <li key={issue}>{issue}</li>)}{issues.length > 8 && <li>…and {issues.length - 8} more</li>}</ul>
     </Callout>}
-    <TabsContent value="basics"><Basics value={value} set={set} disabled={disabled} /></TabsContent>
+    {rotationNeverAdvances(value) && <Callout tone="warning" icon="alert" title="The rotation never moves on">
+      No weekdays advance it, so the same rotation day repeats every school day. It only changes on an exception that advances or restarts the rotation. In Basics, turn on “Same as school days” or choose advance days.
+    </Callout>}
+    <TabsContent value="basics"><Basics value={value} set={set} disabled={disabled} sameAdvance={matching && !customAdvance} setCustomAdvance={setCustomAdvance} /></TabsContent>
     <TabsContent value="periods"><Periods value={value} set={set} disabled={disabled} /></TabsContent>
     <TabsContent value="days"><Days value={value} set={set} disabled={disabled} personal={personal} /></TabsContent>
     <TabsContent value="exceptions"><Exceptions value={value} set={set} disabled={disabled} /></TabsContent>
@@ -108,9 +120,12 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
   </Tabs>;
 }
 
-function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
+function sameWeekdays(left: number[], right: number[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function Basics({ value, set, disabled, sameAdvance, setCustomAdvance }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean; sameAdvance: boolean; setCustomAdvance: (custom: boolean) => void }) {
   const zones = useMemo(timeZones, []);
-  const sameAdvance = JSON.stringify(value.advanceWeekdays) === JSON.stringify(value.schoolWeekdays);
   const singleDay = value.cycleDays.length <= 1;
   return <div className="grid gap-5">
     <Field label="School time zone" htmlFor="tz">
@@ -126,7 +141,7 @@ function Basics({ value, set, disabled }: { value: Schedule; set: (patch: Partia
     </div>
     {!singleDay && <div className="grid gap-2">
       <Label className="text-muted-foreground">Rotation advances after these days</Label>
-      <Toggle label="Same as school days" checked={sameAdvance} disabled={disabled} onChange={(checked) => set({ advanceWeekdays: checked ? value.schoolWeekdays : value.advanceWeekdays.filter((day) => value.schoolWeekdays.includes(day)) })} />
+      <Toggle label="Same as school days" checked={sameAdvance} disabled={disabled} onChange={(checked) => { setCustomAdvance(!checked); set({ advanceWeekdays: checked ? value.schoolWeekdays : value.advanceWeekdays.filter((day) => value.schoolWeekdays.includes(day)) }); }} />
       {!sameAdvance && <WeekdayPicker label="Advance days" value={value.advanceWeekdays} disabled={disabled} onChange={(advanceWeekdays) => set({ advanceWeekdays })} />}
     </div>}
     {!singleDay && <Panel className="grid gap-3">
@@ -148,7 +163,10 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
   const update = (index: number, patch: Partial<SchoolPeriod>) => set({ periods: value.periods.map((period, position) => position === index ? { ...period, ...patch } : period) });
   const scheduled = scheduledPeriodIds(value);
   const usage = (id: string) => value.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === id)).length;
+  // The period waiting in the in-place removal confirmation (docs/CHAT.md §Dialogs: no native confirm()).
+  const [removing, setRemoving] = useState<string | null>(null);
   const remove = (index: number) => {
+    setRemoving(null);
     const id = value.periods[index].id;
     set({
       periods: value.periods.filter((_, position) => position !== index),
@@ -173,8 +191,12 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
         </Select>
         <div className="flex items-center gap-0.5">
           <IconButton size="sm" label={`Move period ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} />
-          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (!confirmRemoval || usage(period.id) === 0 || confirm(`Remove ${period.label || 'this period'} from ${usage(period.id)} rotation day(s)?`)) remove(index); }} />
+          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (!confirmRemoval || usage(period.id) === 0) remove(index); else setRemoving(period.id); }} />
         </div>
+        {removing === period.id && <Callout tone="warning" icon="alert" role="alert" className="col-span-full" title={`Remove ${period.label || 'this period'}?`} actions={<>
+          <Button size="sm" variant="danger" disabled={disabled} onClick={() => remove(index)}>Remove period</Button>
+          <Button size="sm" autoFocus onClick={() => setRemoving(null)}>Keep it</Button>
+        </>}>It is used on {usage(period.id) === 1 ? '1 rotation day' : `${usage(period.id)} rotation days`}, and its times there are removed too.</Callout>}
       </div>)}
     </div>
     <div className="flex flex-wrap gap-2">
@@ -184,33 +206,71 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
   </div>;
 }
 
+/**
+ * Gives every other rotation day the source day's times, slot by slot, keeping each day's own periods in order.
+ * A day with more slots than the source keeps its extra slots, with their own times, when they still start at or
+ * after the last copied slot ends; the ones that would overlap are dropped and reported so the caller can warn first.
+ */
+export function copyTimesToAllDays(days: CycleDay[], sourceId: string): { cycleDays: CycleDay[]; dropped: Array<{ label: string; count: number }> } {
+  const source = days.find((day) => day.id === sourceId);
+  if (!source) return { cycleDays: days, dropped: [] };
+  const dropped: Array<{ label: string; count: number }> = [];
+  const cycleDays = days.map((day) => {
+    if (day.id === source.id) return day;
+    const slots = source.slots.map((slot, index) => ({ id: day.slots[index]?.id ?? randomId(), periodId: day.slots[index]?.periodId ?? slot.periodId, start: slot.start, end: slot.end }));
+    let lost = 0;
+    for (const extra of day.slots.slice(source.slots.length)) {
+      const last = slots[slots.length - 1];
+      if (!last || last.end <= extra.start) slots.push(extra);
+      else lost += 1;
+    }
+    if (lost) dropped.push({ label: day.label, count: lost });
+    return { ...day, slots };
+  });
+  return { cycleDays, dropped };
+}
+
 export function Days({ value, set, disabled, personal }: { personal?: PersonalSchedule; value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
+  // The in-place confirmation waiting for an answer (docs/CHAT.md §Dialogs: no native confirm()).
+  const [confirming, setConfirming] = useState<{ kind: 'copy' | 'remove'; dayId: string } | null>(null);
   const updateDay = (id: string, patch: Partial<CycleDay>) => set({ cycleDays: value.cycleDays.map((day) => day.id === id ? { ...day, ...patch } : day) });
   const addDay = () => {
     const id = slugId(`day-${value.cycleDays.length + 1}`, value.cycleDays.map((day) => day.id));
     const day: CycleDay = { id, label: `Day ${value.cycleDays.length + 1}`, slots: [] };
-    set({ cycleDays: [...value.cycleDays, day], ...(value.cycleDays.length === 0 ? { anchorCycleDayId: id } : {}) });
+    const next = withCycleDay(value, day);
+    set({ cycleDays: next.cycleDays, anchorCycleDayId: next.anchorCycleDayId, advanceWeekdays: next.advanceWeekdays });
   };
   const removeDay = (id: string) => {
+    setConfirming(null);
     const remaining = value.cycleDays.filter((day) => day.id !== id);
     set({ cycleDays: remaining, anchorCycleDayId: value.anchorCycleDayId === id ? remaining[0]?.id ?? '' : value.anchorCycleDayId, exceptions: value.exceptions.filter((exception) => !(exception.kind === 'reset' && exception.cycleDayId === id)) });
   };
-  const copyTimesToAll = (source: CycleDay) => set({
-    cycleDays: value.cycleDays.map((day) => day.id === source.id ? day : ({
-      ...day,
-      slots: source.slots.map((slot, index) => ({ id: day.slots[index]?.id ?? randomId(), periodId: day.slots[index]?.periodId ?? slot.periodId, start: slot.start, end: slot.end })),
-    })),
-  });
+  const copyTimesToAll = (source: CycleDay) => {
+    setConfirming(null);
+    set({ cycleDays: copyTimesToAllDays(value.cycleDays, source.id).cycleDays });
+  };
+  const removing = confirming?.kind === 'remove' ? value.cycleDays.find((day) => day.id === confirming.dayId) : undefined;
   return <div className="grid gap-4">
-    <ScheduleGrid personal={personal} value={value} onChange={(next) => set(next)} disabled={disabled} onEditDay={setOpen} onRemoveDay={(id) => { if (confirm(`Remove ${value.cycleDays.find(day => day.id === id)?.label}? Dates will be recalculated across the remaining days.`)) removeDay(id); }} />
-    {value.cycleDays.filter(day => day.id === open).map(day => <Panel key={day.id} className="grid gap-3 p-3">
+    {removing && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${removing.label}?`} actions={<>
+      <Button size="sm" variant="danger" disabled={disabled || value.cycleDays.length <= 1} onClick={() => removeDay(removing.id)}>Remove day</Button>
+      <Button size="sm" autoFocus onClick={() => setConfirming(null)}>Keep it</Button>
+    </>}>Dates will be recalculated across the remaining days.</Callout>}
+    <ScheduleGrid personal={personal} value={value} onChange={(next) => set(next)} disabled={disabled} onEditDay={setOpen} onRemoveDay={(id) => setConfirming({ kind: 'remove', dayId: id })} />
+    {value.cycleDays.filter(day => day.id === open).map(day => {
+      const dropped = confirming?.kind === 'copy' && confirming.dayId === day.id ? copyTimesToAllDays(value.cycleDays, day.id).dropped : null;
+      return <Panel key={day.id} className="grid gap-3 p-3">
       <div className="flex items-center gap-2"><strong className="text-sm">{day.label} times</strong><Spacer />
-        <Button size="sm" disabled={disabled || !day.slots.length} onClick={() => { if (confirm(`Apply the times from ${day.label} to every other day, keeping each day's period order?`)) copyTimesToAll(day); }}>Copy times to all days</Button>
+        <Button size="sm" disabled={disabled || !day.slots.length} onClick={() => setConfirming({ kind: 'copy', dayId: day.id })}>Copy times to all days</Button>
         <IconButton icon="x" label="Close day times" onClick={() => setOpen(null)} />
       </div>
+      {dropped && <Callout tone="warning" icon="alert" role="alert" title={`Apply the times from ${day.label} to every other day?`} actions={<>
+        <Button size="sm" variant="primary" disabled={disabled || !day.slots.length} onClick={() => copyTimesToAll(day)}>Copy times</Button>
+        <Button size="sm" autoFocus onClick={() => setConfirming(null)}>Cancel</Button>
+      </>}>Each day keeps its own period order.{dropped.length ? ` Periods that would overlap the copied times are removed: ${dropped.map((entry) => `${entry.label} loses ${entry.count}`).join(', ')}.` : ''}</Callout>}
       <SlotsEditor slots={day.slots} periods={value.periods} disabled={disabled} onChange={(slots) => updateDay(day.id, { slots })} />
-    </Panel>)}
+    </Panel>;
+    })}
     <div><Button size="sm" icon="plus" disabled={disabled || value.cycleDays.length >= 366} onClick={addDay}>Add rotation day</Button></div>
   </div>;
 }
@@ -305,18 +365,23 @@ export function Preview({ value }: { value: Schedule }) {
   const [weekStart, setWeekStart] = useState(() => weekOf(today)[0]);
   if (!parsed.success) return <Callout tone="neutral" icon="info">Fix the issues above to preview this schedule.</Callout>;
   const schedule = parsed.data;
-  const days = Array.from({ length: 14 }, (_, index) => addDays(weekStart, index)).map((entry) => ({ date: entry, day: resolveDay(schedule, entry) }));
+  // Paging can reach the ends of the supported range, where resolveDay throws; those days show as unavailable.
+  const days = Array.from({ length: 14 }, (_, index) => addDays(weekStart, index)).map((entry) => ({ date: entry, day: resolveDayInRange(schedule, entry) }));
   const selected = resolveDay(schedule, date);
-  const strip = (offset: number) => days.slice(offset, offset + 7).map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '-' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}` }));
+  const pick = (entry: string) => { if (resolveDayInRange(schedule, entry)) setDate(entry); };
+  const page = (by: number) => setWeekStart(weekOf(clampDate(addDays(weekStart, by)))[0]);
+  const strip = (offset: number) => days.slice(offset, offset + 7).map(({ date: entry, day }) => !day
+    ? { date: entry, closed: true, caption: '-', label: `${formatDate(entry, { weekday: 'long' })}: outside the supported dates` }
+    : { date: entry, closed: day.closed, caption: day.closed ? '-' : schedule.cycleDays.length > 1 ? day.cycleDayLabel : `${day.periods.length}p`, label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'closed' : day.cycleDayLabel}` });
   return <div className="grid gap-4">
     <div className="flex items-center justify-between gap-2">
-      <IconButton label="Previous two weeks" icon="chevronLeft" onClick={() => setWeekStart(addDays(weekStart, -14))} />
+      <IconButton label="Previous two weeks" icon="chevronLeft" onClick={() => page(-14)} />
       <strong className="text-sm">{formatDate(weekStart)} – {formatDate(addDays(weekStart, 13), { year: true })}</strong>
-      <IconButton label="Next two weeks" icon="chevronRight" onClick={() => setWeekStart(addDays(weekStart, 14))} />
+      <IconButton label="Next two weeks" icon="chevronRight" onClick={() => page(14)} />
     </div>
     <div className="grid gap-1">
-      <WeekStrip days={strip(0)} selected={date} today={today} onSelect={setDate} />
-      <WeekStrip days={strip(7)} selected={date} today={today} onSelect={setDate} />
+      <WeekStrip days={strip(0)} selected={date} today={today} onSelect={pick} />
+      <WeekStrip days={strip(7)} selected={date} today={today} onSelect={pick} />
     </div>
     <Panel className="grid gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -327,7 +392,7 @@ export function Preview({ value }: { value: Schedule }) {
       {selected.periods.length > 0 && <ul className="grid gap-1 text-sm">
         {selected.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3 rounded-lg bg-card px-3 py-1.5 ring-1 ring-foreground/[0.05]"><span className="font-medium">{period.label}{period.kind === 'lunch' ? ' · lunch' : ''}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}
       </ul>}
-      {selected.issues.length > 0 && <Hint tone="danger">{selected.issues.length} period(s) could not be placed on this date.</Hint>}
+      {selected.issues.length > 0 && <Hint tone="danger">{describeDayIssues(selected.issues).join(' ')}</Hint>}
     </Panel>
   </div>;
 }

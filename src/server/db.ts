@@ -1,14 +1,40 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { repairTaskDates } from '@/domain/task';
 
 export type Db = Database.Database;
+/**
+ * True for SQLITE_BUSY and its variants: another connection (the web server or the worker) held the write lock
+ * for longer than busy_timeout. The data is fine; the same work can simply run again later. Transactions that
+ * may write use `.immediate()`, so they wait for the lock at BEGIN (where busy_timeout applies) instead of
+ * failing at once when a read inside a deferred transaction has to become a write.
+ */
+export function isBusy(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : '';
+  return code.startsWith('SQLITE_BUSY');
+}
 export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.sqlite'): Db {
   if (path !== ':memory:') mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
   const db = new Database(path);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
+  try {
+    db.pragma('busy_timeout = 5000');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    // Every step runs in one write transaction. The web server and the worker restart together after a deploy, and
+    // both open the database: the second opener waits at BEGIN (where busy_timeout applies) and then finds each step
+    // already applied, instead of racing a check-then-ALTER ("duplicate column name") or failing when a read has to
+    // become a write (SQLITE_BUSY_SNAPSHOT). A failed migration rolls back as a whole and the handle is closed, so
+    // getDb() can simply try again on the next request.
+    db.transaction(() => migrate(db)).immediate();
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return db;
+}
+/** Every step is idempotent, so it is safe to run on each open; openDatabase runs it inside one immediate transaction. */
+function migrate(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS schools (
@@ -56,7 +82,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, datetime('now'));
   `);
   // Additive phase-2 migration. Existing entity history and offline bases remain intact.
-  db.transaction(() => {
+  {
     db.exec(`
       CREATE TABLE IF NOT EXISTS calendar_subscriptions (
         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
@@ -97,7 +123,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     `);
     const columns = db.pragma('table_info(calendar_subscriptions)') as {name: string}[];
     if (!columns.some(column => column.name === 'cached_feed')) db.exec('ALTER TABLE calendar_subscriptions ADD COLUMN cached_feed TEXT');
-  })();
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS school_classes (
       id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id),
@@ -108,7 +134,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, datetime('now'));
   `);
   // Phase-3 migration: school verification, profiles, friendships, safety controls and schedule voting.
-  db.transaction(() => {
+  {
     db.exec(`
       CREATE TABLE IF NOT EXISTS school_verifications (
         user_id TEXT NOT NULL REFERENCES users(id), school_id TEXT NOT NULL REFERENCES schools(id),
@@ -156,10 +182,10 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
     `);
     const schoolColumns = db.pragma('table_info(schools)') as {name: string}[];
     if (!schoolColumns.some(column => column.name === 'email_domains')) db.exec("ALTER TABLE schools ADD COLUMN email_domains TEXT NOT NULL DEFAULT ''");
-  })();
+  }
   // Onboarding migration: remember the Google profile name to prefill the names step, and let
   // support requests come from students who have not joined a school yet.
-  db.transaction(() => {
+  {
     const userColumns = db.pragma('table_info(users)') as {name: string}[];
     if (!userColumns.some(column => column.name === 'google_name')) db.exec("ALTER TABLE users ADD COLUMN google_name TEXT NOT NULL DEFAULT ''");
     const requestColumns = db.pragma('table_info(support_requests)') as {name: string; notnull: number}[];
@@ -176,10 +202,10 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
       `);
     }
     db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, datetime('now'))");
-  })();
+  }
   // Phase-4 migration: one-to-one chat between accepted friends, messaging pauses, and chat reports.
   // Three steps in order, because the reports indexes need the new columns.
-  db.transaction(() => {
+  {
     db.exec(`
       CREATE TABLE IF NOT EXISTS chat_threads (
         id TEXT PRIMARY KEY,
@@ -246,8 +272,114 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/quasar.
       CREATE INDEX IF NOT EXISTS reports_reported ON reports(reported_id, resolved_at);
       INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, datetime('now'));
     `);
-  })();
-  return db;
+  }
+  // Global chat migration: one room every member with names can read and post in, owner-moderated.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS global_chat (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT
+    );
+    INSERT OR IGNORE INTO global_chat(id, revision) VALUES(1, 0);
+
+    CREATE TABLE IF NOT EXISTS global_messages (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL,
+      sender_id TEXT NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      edited_at TEXT,
+      deleted_at TEXT,
+      deleted_by TEXT CHECK (deleted_by IN ('sender','owner')),
+      reason TEXT,
+      revision INTEGER NOT NULL,
+      UNIQUE(sender_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS global_messages_revision ON global_messages(revision);
+    CREATE INDEX IF NOT EXISTS global_messages_sender_time ON global_messages(sender_id, created_at);
+    CREATE INDEX IF NOT EXISTS global_messages_created ON global_messages(created_at);
+
+    CREATE TABLE IF NOT EXISTS global_members (
+      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      last_read_seq INTEGER NOT NULL DEFAULT 0,
+      notified_seq INTEGER NOT NULL DEFAULT 0,
+      muted INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  // The owner's reason for an edit or removal, shown to everyone under the message.
+  const globalColumns = db.pragma('table_info(global_messages)') as {name: string}[];
+  if (!globalColumns.some(column => column.name === 'reason')) db.exec('ALTER TABLE global_messages ADD COLUMN reason TEXT');
+  const memberColumns = db.pragma('table_info(global_members)') as {name: string}[];
+  if (!memberColumns.some(column => column.name === 'notified_seq')) db.exec('ALTER TABLE global_members ADD COLUMN notified_seq INTEGER NOT NULL DEFAULT 0');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, datetime('now'))");
+  // Global message IDs are unique across the room, not only per sender: owner Remove and Edit address a
+  // message by ID, so another member must never be able to post under an ID already in use. Rows that
+  // reused an ID before this index existed keep the oldest row's ID; later copies get a fresh UUID.
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='global_messages_id'").get()) {
+    db.exec(`UPDATE global_messages SET id = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2)
+        || '-' || substr('89ab', 1 + abs(random()) % 4, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))
+      WHERE seq NOT IN (SELECT min(seq) FROM global_messages GROUP BY id);
+      CREATE UNIQUE INDEX IF NOT EXISTS global_messages_id ON global_messages(id);`);
+  }
+  // Sync quotas count an account's receipts from the last day.
+  db.exec('CREATE INDEX IF NOT EXISTS mutation_receipts_owner_time ON mutation_receipts(owner_id, created_at)');
+  // Migration 8: audit_log only grows, so the per-account rate limits (school creation, schedule scans, calendar
+  // additions) and the report history counts (removals and pauses of one student) need indexes rather than full scans.
+  // The history counts filter by action first, which leaves only the rare owner actions for json_extract; an index on
+  // the extracted value is avoided because it would make any insert with a non-JSON detail fail. Deleting a push
+  // subscription cascades to its deliveries, where subscription_id is the last primary-key column.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS audit_log_actor ON audit_log(actor_id, action, created_at);
+    CREATE INDEX IF NOT EXISTS audit_log_action ON audit_log(action, created_at);
+    CREATE INDEX IF NOT EXISTS notification_deliveries_subscription ON notification_deliveries(subscription_id);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(8, datetime('now'));
+  `);
+  // Migration 9: the worker prunes notification_deliveries every minute by time (reminder and support rows by
+  // reminder_at, chat rows by entity_id and updated_at). entity_id is not the leading primary-key column, so without
+  // these each prune scanned the whole table.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS notification_deliveries_reminder_at ON notification_deliveries(reminder_at);
+    CREATE INDEX IF NOT EXISTS notification_deliveries_entity_updated ON notification_deliveries(entity_id, updated_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, datetime('now'));
+  `);
+  // Migration 10: every friend request counts the sender's pending requests (requester_id, status), and the chat and
+  // support push jobs look up each recipient's browsers every minute (owner_id). Neither column led an index.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS friendships_requester ON friendships(requester_id, status);
+    CREATE INDEX IF NOT EXISTS push_subscriptions_owner ON push_subscriptions(owner_id, created_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(10, datetime('now'));
+  `);
+  // Migration 11: task dates were narrowed to the schedule's 1900-2199 range, but older builds let a typed year such
+  // as 0002 or 2300 be saved. Such a task fails taskSchema, so it would be hidden everywhere and could not be edited.
+  // repairTaskDates drops the out-of-range dates; the repair is a new version with a history row, so devices pick it
+  // up on their next sync and three-way merges still find the old version as a base.
+  // Migration 13 is the same repair run again: it now also drops a calendar import's end date after 2199 (an event
+  // ending, or a VTODO due, past it), which the first version left in place, so databases that recorded 11 before
+  // that repair it too. A fresh database runs the repair once and records both.
+  if (!db.prepare('SELECT 1 FROM schema_migrations WHERE version=13').get()) {
+    const rows = db.prepare("SELECT owner_id, id, version, data FROM entities WHERE kind='task' AND deleted=0").all() as { owner_id: string; id: string; version: number; data: string }[];
+    const update = db.prepare('UPDATE entities SET version=?, data=? WHERE owner_id=? AND id=?');
+    const history = db.prepare('INSERT INTO entity_history VALUES(?,?,?,?)');
+    for (const row of rows) {
+      let repaired;
+      try { repaired = repairTaskDates(JSON.parse(row.data)); } catch { continue; }
+      if (!repaired) continue;
+      const version = row.version + 1;
+      update.run(version, JSON.stringify(repaired), row.owner_id, row.id);
+      history.run(row.owner_id, row.id, version, JSON.stringify({ id: row.id, kind: 'task', version, data: repaired, deleted: false }));
+    }
+    db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(11, datetime('now')), (13, datetime('now'))");
+  }
+  // Migration 12: each proposal keeps the counted votes and the threshold from its last tally, so a closed proposal goes
+  // on showing the result that decided it after voters leave or the school grows (open proposals count current
+  // verified members live). Proposals that closed before this have NULL here and show their raw vote counts and the
+  // live threshold, as they always did. Each column is added only if missing, so a database that recorded 12 before
+  // tally_threshold existed gains it too.
+  const proposalColumns = db.pragma('table_info(schedule_proposals)') as {name: string}[];
+  if (!proposalColumns.some(column => column.name === 'tally_for')) db.exec('ALTER TABLE schedule_proposals ADD COLUMN tally_for INTEGER');
+  if (!proposalColumns.some(column => column.name === 'tally_against')) db.exec('ALTER TABLE schedule_proposals ADD COLUMN tally_against INTEGER');
+  if (!proposalColumns.some(column => column.name === 'tally_threshold')) db.exec('ALTER TABLE schedule_proposals ADD COLUMN tally_threshold INTEGER');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(12, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

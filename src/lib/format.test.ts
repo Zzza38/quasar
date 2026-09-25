@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { browserTimeZone, chatTime, classColor, formatRoom, formatSeconds, formatTimeZone, instantParts, todayIn } from './format';
+import { browserTimeZone, chatTime, classColor, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, formatTimeZone, instantParts, minutesLeft, pluralize, relativeDate, reminderLabel, slugId, todayIn } from './format';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -9,6 +9,16 @@ describe('precise countdown', () => {
     expect(formatSeconds(59)).toBe('0:59');
     expect(formatSeconds(3600 + 5 * 60 + 7)).toBe('1:05:07');
     expect(formatSeconds(-4)).toBe('0:00');
+  });
+
+  it('rounds the minutes left up, so a running period never reads 0 min and agrees with the seconds view', () => {
+    const now = new Date('2026-09-17T12:51:37Z');
+    expect(minutesLeft('2026-09-17T13:00:00Z', now)).toBe(9); // 8:23 left
+    expect(minutesLeft('2026-09-17T12:52:06Z', now)).toBe(1); // 0:29 left
+    expect(minutesLeft('2026-09-17T12:51:38Z', now)).toBe(1); // 0:01 left
+    expect(minutesLeft('2026-09-17T12:56:37Z', now)).toBe(5); // exactly 5:00
+    expect(minutesLeft('2026-09-17T12:51:37Z', now)).toBe(0);
+    expect(minutesLeft('2026-09-17T12:50:00Z', now.getTime())).toBe(0);
   });
 });
 
@@ -99,5 +109,78 @@ describe('chat list times', () => {
     expect(chatTime('2026-09-18T15:00:00Z', zone, now)).toBe('Fri');
     expect(chatTime('2026-09-17T15:00:00Z', zone, now)).toBe('Sep 17');
     expect(chatTime('2026-09-03T15:00:00Z', zone, now)).toBe('Sep 3');
+  });
+});
+
+describe('12-hour clock times', () => {
+  it('shows midnight and noon as 12, not 0', () => {
+    expect(formatTime('00:00')).toBe('12:00 AM');
+    expect(formatTime('00:05')).toBe('12:05 AM');
+    expect(formatTime('12:00')).toBe('12:00 PM');
+    expect(formatTime('08:05')).toBe('8:05 AM');
+    expect(formatTime('23:59')).toBe('11:59 PM');
+  });
+
+  it('shows the AM/PM suffix once when both ends share it, and on both ends across noon', () => {
+    expect(formatRange('08:05', '09:00')).toBe('8:05–9:00 AM');
+    expect(formatRange('13:10', '14:00')).toBe('1:10–2:00 PM');
+    expect(formatRange('11:30', '12:10')).toBe('11:30 AM–12:10 PM');
+    expect(formatRange('23:30', '00:15')).toBe('11:30 PM–12:15 AM');
+  });
+});
+
+describe('relative dates and durations', () => {
+  it('names the neighbouring days and formats the rest', () => {
+    expect(relativeDate('2026-09-24', '2026-09-24')).toBe('Today');
+    expect(relativeDate('2026-09-25', '2026-09-24')).toBe('Tomorrow');
+    expect(relativeDate('2026-09-23', '2026-09-24')).toBe('Yesterday');
+    expect(relativeDate('2026-09-28', '2026-09-24')).toBe('Mon, Sep 28');
+    expect(relativeDate('2026-09-28', '2026-09-24', { weekday: 'long' })).toBe('Monday, Sep 28');
+  });
+
+  it('formats minutes as hours and minutes, ignoring the sign', () => {
+    expect(formatMinutes(0)).toBe('0 min');
+    expect(formatMinutes(59)).toBe('59 min');
+    expect(formatMinutes(60)).toBe('1 h');
+    expect(formatMinutes(125)).toBe('2 h 5 min');
+    expect(formatMinutes(-90)).toBe('1 h 30 min');
+  });
+
+  it('pluralizes by count', () => {
+    expect(pluralize(1, 'task')).toBe('1 task');
+    expect(pluralize(0, 'task')).toBe('0 tasks');
+    expect(pluralize(2, 'class', 'classes')).toBe('2 classes');
+  });
+});
+
+describe('slug IDs', () => {
+  it('never reuses a taken ID, including labels that only differ in punctuation', () => {
+    expect(slugId('Math', [])).toBe('Math');
+    expect(slugId('Math', ['Math'])).toBe('Math-2');
+    expect(slugId('Math', ['Math', 'Math-2'])).toBe('Math-3');
+    expect(slugId('Math?', ['Math'])).toBe('Math-2');
+    expect(slugId('AP Bio', ['AP-Bio'])).toBe('AP-Bio-2');
+  });
+
+  it('keeps IDs to safe ASCII and falls back when a label has none', () => {
+    expect(slugId('  Français 2 ', [])).toBe('Fran-ais-2');
+    expect(slugId('日本語', [])).toBe('item');
+    expect(slugId('日本語', ['item'])).toBe('item-2');
+    expect(slugId('', [], 'period')).toBe('period');
+    expect(slugId('_study', [])).toBe('item-_study');
+    expect(slugId('x'.repeat(60), [])).toHaveLength(40);
+  });
+});
+
+describe('reminder labels', () => {
+  it('names whole days and hours the way the task editor offers them, and falls back to minutes', () => {
+    expect(reminderLabel(0)).toBe('At due time');
+    expect(reminderLabel(10)).toBe('10 minutes before');
+    expect(reminderLabel(1)).toBe('1 minute before');
+    expect(reminderLabel(60)).toBe('1 hour before');
+    expect(reminderLabel(120)).toBe('2 hours before');
+    expect(reminderLabel(90)).toBe('90 minutes before');
+    expect(reminderLabel(1440)).toBe('1 day before');
+    expect(reminderLabel(10080)).toBe('7 days before');
   });
 });

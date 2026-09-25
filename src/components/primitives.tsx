@@ -5,7 +5,7 @@
  * Views import from here so the shadcn variant vocabulary stays in one place.
  */
 
-import { Children, Fragment, isValidElement, useId, type ButtonHTMLAttributes, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { Children, createContext, Fragment, isValidElement, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon, Spinner, type IconName } from './icon';
@@ -21,6 +21,7 @@ import { Switch } from './ui/switch';
 import { Textarea as ShadTextarea } from './ui/textarea';
 import { Toggle as ShadToggle } from './ui/toggle';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
+import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui';
 
 /* ---------- Buttons ---------- */
 
@@ -57,8 +58,8 @@ export function Spacer() {
 
 /* ---------- Text helpers ---------- */
 
-export function Hint({ children, className, tone = 'muted', role }: { children: ReactNode; className?: string; tone?: 'muted' | 'danger'; role?: 'alert' | 'status' }) {
-  return <p role={role} className={cn('text-xs leading-relaxed', tone === 'danger' ? 'text-destructive' : 'text-muted-foreground', className)}>{children}</p>;
+export function Hint({ children, className, tone = 'muted', role, id }: { children: ReactNode; className?: string; tone?: 'muted' | 'danger'; role?: 'alert' | 'status'; id?: string }) {
+  return <p id={id} role={role} className={cn('text-xs leading-relaxed', tone === 'danger' ? 'text-destructive' : 'text-muted-foreground', className)}>{children}</p>;
 }
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
@@ -100,17 +101,56 @@ export function StatTile({ label, value, icon, tone = 'neutral', onClick, classN
 
 /* ---------- Forms ---------- */
 
-export function Field({ label, hint, error, children, className, htmlFor }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; htmlFor?: string }) {
+/**
+ * What a Field tells the control it labels: the control's id, the id of the hint or error text shown under it,
+ * and whether the control's value is invalid (an error about a failed save is not about the value).
+ */
+export type FieldLink = { controlId: string; hintId?: string; errorId?: string; invalid?: boolean };
+const FieldContext = createContext<FieldLink | null>(null);
+
+/**
+ * Ids Field gives its visible hint and error text. Only one is shown at a time, like the markup below.
+ * An error marks the control invalid unless `invalid` is false.
+ */
+export function fieldLink(htmlFor: string | undefined, hint: ReactNode, error: ReactNode, invalid = Boolean(error)): FieldLink | null {
+  if (!htmlFor) return null;
+  if (error) return { controlId: htmlFor, errorId: `${htmlFor}-error`, invalid };
+  if (hint) return { controlId: htmlFor, hintId: `${htmlFor}-hint` };
+  return { controlId: htmlFor };
+}
+
+type AriaDescription = { 'aria-describedby'?: string; 'aria-invalid'?: ComponentProps<'input'>['aria-invalid'] };
+
+/**
+ * ARIA a control inside a Field should carry: its own aria-describedby plus the Field's hint or error, and
+ * aria-invalid when the Field shows a validation error. Applies only to the control the Field's label points at, so
+ * other controls nested in the same Field are left alone; explicit props from the caller still win.
+ */
+export function fieldAria(link: FieldLink | null, id: string | undefined, own: AriaDescription): AriaDescription {
+  if (!link || !id || id !== link.controlId) return own;
+  const linked = link.errorId ?? link.hintId;
+  const describedBy = [own['aria-describedby'], linked].filter(Boolean).join(' ') || undefined;
+  return { 'aria-describedby': describedBy, 'aria-invalid': own['aria-invalid'] ?? (link.errorId && link.invalid ? true : undefined) };
+}
+
+function useFieldAria(id: string | undefined, own: AriaDescription) {
+  return fieldAria(useContext(FieldContext), id, own);
+}
+
+/** `invalid={false}` shows `error` without marking the control invalid, for failures such as a save that did not go through. */
+export function Field({ label, hint, error, invalid, children, className, htmlFor }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; invalid?: boolean; children: ReactNode; className?: string; htmlFor?: string }) {
+  const link = fieldLink(htmlFor, hint, error, invalid);
   return <div className={cn('grid gap-1.5', className)}>
     <Label htmlFor={htmlFor} className="text-[13px] font-semibold text-foreground/80">{label}</Label>
-    {children}
-    {hint && !error ? <Hint>{hint}</Hint> : null}
-    {error ? <Hint tone="danger" role="alert">{error}</Hint> : null}
+    <FieldContext.Provider value={link}>{children}</FieldContext.Provider>
+    {hint && !error ? <Hint id={link?.hintId}>{hint}</Hint> : null}
+    {error ? <Hint id={link?.errorId} tone="danger" role="alert">{error}</Hint> : null}
   </div>;
 }
 
 export function Input({ className, small, ...rest }: ComponentProps<'input'> & { small?: boolean }) {
-  return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-base md:text-[13px]', className)} {...rest} />;
+  const aria = useFieldAria(rest.id, { 'aria-describedby': rest['aria-describedby'], 'aria-invalid': rest['aria-invalid'] });
+  return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-base md:text-[13px]', className)} {...rest} {...aria} />;
 }
 
 /**
@@ -141,15 +181,27 @@ function collectOptions(children: ReactNode, into: { value: string; disabled: bo
 }
 const textOf = (node: ReactNode): string => Array.isArray(node) ? node.map(textOf).join('') : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
 
-export function Select({ className, small, children, value, onChange, id, name, disabled, required, autoFocus, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledby, 'aria-describedby': ariaDescribedby, 'aria-invalid': ariaInvalid }: SelectProps) {
+/**
+ * How `<option>` values map to Radix item values and back. Radix item values cannot be '', so an enabled
+ * `value=""` option is stored as EMPTY. `decode` returns null for anything that is not one of the items:
+ * inside a <form>, Radix's hidden native select reports '' when the value changes in the same render that
+ * adds its option, and passing that on would clear the field.
+ */
+export function selectModel(children: ReactNode) {
   const options = collectOptions(children);
   const placeholder = options.find((option) => option.value === '' && option.disabled);
   const items = options.filter((option) => option !== placeholder);
   const encode = (raw: string) => (raw === '' ? (placeholder && !items.some((item) => item.value === '') ? '' : EMPTY) : raw);
-  const decode = (raw: string) => (raw === EMPTY ? '' : raw);
+  const decode = (raw: string): string | null => (items.some((item) => encode(item.value) === raw) ? (raw === EMPTY ? '' : raw) : null);
+  return { placeholder, items, encode, decode };
+}
+
+export function Select({ className, small, children, value, onChange, id, name, disabled, required, autoFocus, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledby, 'aria-describedby': ariaDescribedby, 'aria-invalid': ariaInvalid }: SelectProps) {
+  const { placeholder, items, encode, decode } = selectModel(children);
   const current = value === undefined ? undefined : encode(value);
-  return <ShadSelect value={current} name={name} disabled={disabled} required={required} onValueChange={(next) => { const decoded = decode(next); void onChange?.({ target: { value: decoded }, currentTarget: { value: decoded } }); }}>
-    <SelectTrigger id={id} size={small ? 'sm' : 'default'} autoFocus={autoFocus} aria-label={ariaLabel} aria-labelledby={ariaLabelledby} aria-describedby={ariaDescribedby} aria-invalid={ariaInvalid}
+  const aria = useFieldAria(id, { 'aria-describedby': ariaDescribedby, 'aria-invalid': ariaInvalid });
+  return <ShadSelect value={current} name={name} disabled={disabled} required={required} onValueChange={(next) => { const decoded = decode(next); if (decoded !== null) void onChange?.({ target: { value: decoded }, currentTarget: { value: decoded } }); }}>
+    <SelectTrigger id={id} size={small ? 'sm' : 'default'} autoFocus={autoFocus} aria-label={ariaLabel} aria-labelledby={ariaLabelledby} aria-describedby={aria['aria-describedby']} aria-invalid={aria['aria-invalid']}
       className={cn('w-full rounded-xl bg-card pl-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] dark:bg-input/20 data-[size=sm]:rounded-lg data-[size=sm]:pl-2.5 data-[size=sm]:text-[13px]', className)}>
       <SelectValue placeholder={placeholder?.label} />
     </SelectTrigger>
@@ -160,7 +212,8 @@ export function Select({ className, small, children, value, onChange, id, name, 
 }
 
 export function Textarea({ className, ...rest }: ComponentProps<'textarea'>) {
-  return <ShadTextarea className={cn('min-h-24 rounded-xl bg-card px-3 py-2.5 dark:bg-input/20', className)} {...rest} />;
+  const aria = useFieldAria(rest.id, { 'aria-describedby': rest['aria-describedby'], 'aria-invalid': rest['aria-invalid'] });
+  return <ShadTextarea className={cn('min-h-24 rounded-xl bg-card px-3 py-2.5 dark:bg-input/20', className)} {...rest} {...aria} />;
 }
 
 export function Toggle({ checked, onChange, label, disabled, id, description }: { checked: boolean; onChange: (value: boolean) => void; label: ReactNode; disabled?: boolean; id?: string; description?: ReactNode }) {
@@ -182,6 +235,32 @@ export function Segmented<T extends string>({ value, options, onChange, label, d
   </ToggleGroup>;
 }
 
+/**
+ * Single choice among larger custom items (option cards, color swatches). Built on the Radix single ToggleGroup
+ * that Segmented uses, but unstyled: the group is a radiogroup with one Tab stop, and the arrow keys, Home and End
+ * move between its ChoiceItems. Tapping the chosen item again keeps it chosen.
+ */
+export function ChoiceGroup<T extends string>({ value, onChange, label, children, className }: { value: T | null; onChange: (value: T) => void; label: string; children: ReactNode; className?: string }) {
+  return <ToggleGroupPrimitive.Root type="single" value={value ?? ''} onValueChange={(next) => { if (next) onChange(next as T); }} aria-label={label} className={className}>{children}</ToggleGroupPrimitive.Root>;
+}
+
+/** One radio in a ChoiceGroup. It carries `data-state="on"` when chosen, for styling. */
+export function ChoiceItem({ value, className, children, ...rest }: { value: string; className?: string; children?: ReactNode; 'aria-label'?: string; title?: string; style?: CSSProperties }) {
+  return <ToggleGroupPrimitive.Item value={value} className={className} {...rest}>{children}</ToggleGroupPrimitive.Item>;
+}
+
+/** Large selectable option card, a radio inside a ChoiceGroup. */
+export function OptionCard({ value, title, description, className, icon }: { value: string; title: ReactNode; description: ReactNode; className?: string; icon?: 'layers' | 'edit' | 'check' | 'users' }) {
+  return <ChoiceItem value={value}
+    className={cn('group/option flex gap-3 rounded-2xl bg-card px-4 py-3.5 text-left ring-1 ring-foreground/[0.08] transition-[background-color,box-shadow] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=on]:bg-primary-soft data-[state=on]:ring-2 data-[state=on]:ring-primary data-[state=on]:hover:bg-primary-soft', className)}>
+    <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 border-control-border transition-colors group-data-[state=on]/option:border-primary group-data-[state=on]/option:bg-primary group-data-[state=on]/option:text-primary-foreground"><Icon name="check" size={12} strokeWidth={3} className="invisible group-data-[state=on]/option:visible" /></span>
+    <span className="grid gap-1">
+      <strong className="flex items-center gap-2 text-sm font-bold">{icon && <Icon name={icon} size={14} className="text-muted-foreground" />}{title}</strong>
+      <Hint className="group-data-[state=on]/option:text-primary-soft-foreground/80">{description}</Hint>
+    </span>
+  </ChoiceItem>;
+}
+
 export function WeekdayPicker({ value, onChange, label, disabled }: { value: number[]; onChange: (value: number[]) => void; label: string; disabled?: boolean }) {
   const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   return <div className="flex flex-wrap gap-1.5" role="group" aria-label={label}>
@@ -200,7 +279,7 @@ export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ d
     {days.map((day) => {
       const active = day.date === selected;
       const isToday = day.date === today;
-      return <button key={day.date} type="button" aria-pressed={active} aria-label={day.label} onClick={() => onSelect(day.date)}
+      return <button key={day.date} type="button" aria-pressed={active} aria-current={isToday ? 'date' : undefined} aria-label={day.label} onClick={() => onSelect(day.date)}
         className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow,transform] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           active ? 'bg-primary text-primary-foreground shadow-[0_6px_16px_-6px_color-mix(in_srgb,var(--primary)_70%,transparent)]' : 'text-muted-foreground hover:bg-muted', day.closed && !active && 'opacity-60')}>
         <span className={cn('text-[10.5px] font-bold uppercase tracking-wide', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>{formatDate(day.date, { weekday: 'short' }).slice(0, 3)}</span>
@@ -270,9 +349,9 @@ export function ColorDot({ color, size = 10 }: { color: string; size?: number })
 
 /* ---------- Surfaces ---------- */
 
-/** A card with a heading row. `id` is placed on the heading for aria-labelledby. */
+/** A card with a heading row. `id` is placed on the heading, and the card becomes a region named by it. */
 export function Section({ title, id, description, action, children, className, contentClassName, eyebrow, icon, ...rest }: Omit<ComponentProps<'div'>, 'title'> & { title: ReactNode; id?: string; description?: ReactNode; action?: ReactNode; eyebrow?: ReactNode; icon?: IconName; contentClassName?: string }) {
-  return <Card className={cn('gap-4', className)} aria-labelledby={id} {...rest}>
+  return <Card className={cn('gap-4', className)} role={id ? 'region' : undefined} aria-labelledby={id} {...rest}>
     <CardHeader className="gap-x-3 gap-y-3 max-sm:flex max-sm:flex-wrap max-sm:items-start">
       <div className="flex min-w-0 items-start gap-3">
         {icon && <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary-soft-foreground"><Icon name={icon} size={16} strokeWidth={2.2} /></span>}
@@ -288,17 +367,6 @@ export function Section({ title, id, description, action, children, className, c
   </Card>;
 }
 
-export function SectionHeader({ title, description, action, eyebrow }: { title: ReactNode; description?: ReactNode; action?: ReactNode; eyebrow?: ReactNode }) {
-  return <div className="flex flex-wrap items-start justify-between gap-3">
-    <div className="min-w-0 grid gap-1">
-      {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-      <h2 className="text-[15.5px] font-bold leading-snug tracking-tight">{title}</h2>
-      {description && <p className="text-sm text-muted-foreground">{description}</p>}
-    </div>
-    {action}
-  </div>;
-}
-
 /** Muted inset panel inside a card. */
 export function Panel({ className, ...rest }: ComponentProps<'div'>) {
   return <div className={cn('rounded-xl bg-muted/80 p-4 ring-1 ring-inset ring-foreground/[0.03]', className)} {...rest} />;
@@ -308,14 +376,39 @@ export function Panel({ className, ...rest }: ComponentProps<'div'>) {
 
 /**
  * Overlay taps, Escape and the header X all arrive as onOpenChange(false), so one guard covers them.
- * `busy` keeps the dialog open while a save is in flight; `dirty` asks before discarding a draft.
+ * `busy` keeps the dialog open while a save is in flight; `dirty` asks inside the dialog before discarding
+ * a draft (never the browser's unthemed confirm()), and further close requests wait for that answer.
  */
 export function Modal({ open, onClose, title, description, children, footer, wide, fullWidth, dirty, busy }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; fullWidth?: boolean; dirty?: boolean; busy?: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  // Where focus was when the prompt opened (usually the field being edited), so it can go back there.
+  const returnFocus = useRef<HTMLElement | null>(null);
+  // A prompt left over from an earlier opening, or for a draft that is no longer dirty, is dropped.
+  if (confirming && (!open || !dirty)) setConfirming(false);
+  // Once the prompt goes away with the dialog still open, focus returns to that element. Without this,
+  // unmounting the focused 'Keep editing' button leaves Radix to focus the dialog container instead.
+  // The frame lets Radix's own focus handling run first.
+  useEffect(() => {
+    if (confirming) return;
+    const target = returnFocus.current;
+    returnFocus.current = null;
+    if (!open || !target?.isConnected) return;
+    const frame = requestAnimationFrame(() => { if (target.isConnected) target.focus(); });
+    return () => cancelAnimationFrame(frame);
+  }, [confirming, open]);
   const requestClose = () => {
     if (busy) return;
-    if (dirty && !window.confirm('Discard your changes?')) return;
+    if (dirty) {
+      if (!confirming) {
+        const active = document.activeElement;
+        returnFocus.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      }
+      setConfirming(true);
+      return;
+    }
     onClose();
   };
+  const discard = () => { returnFocus.current = null; setConfirming(false); onClose(); };
   return <Dialog open={open} onOpenChange={(next) => { if (!next) requestClose(); }}>
     <DialogContent showCloseButton={false} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
       className={cn('flex max-h-[min(88dvh,940px)] flex-col gap-0 overflow-hidden rounded-3xl bg-card p-0 text-foreground shadow-pop ring-foreground/[0.08]',
@@ -325,10 +418,17 @@ export function Modal({ open, onClose, title, description, children, footer, wid
       <DialogHeader className="flex-row items-start justify-between gap-3 border-b px-5 py-4 text-left sm:px-6">
         <div className="min-w-0 grid gap-1">
           <DialogTitle className="text-[18px] font-bold leading-snug tracking-tight">{title}</DialogTitle>
-          {description ? <DialogDescription className="text-[13px]">{description}</DialogDescription> : <DialogDescription className="sr-only">Dialog</DialogDescription>}
+          {/* Radix sets aria-describedby only when a description is mounted, so a dialog without one has none. */}
+          {description && <DialogDescription className="text-[13px]">{description}</DialogDescription>}
         </div>
         <DialogClose asChild><ShadButton variant="ghost" size="icon-sm" aria-label="Close" title="Close" disabled={busy} className="rounded-full bg-muted text-muted-foreground hover:text-foreground"><Icon name="x" /></ShadButton></DialogClose>
       </DialogHeader>
+      {confirming && <div className="border-b px-5 py-3 sm:px-6">
+        <Callout tone="warning" icon="alert" role="alert" title="Discard your changes?" actions={<>
+          <Button size="sm" autoFocus onClick={() => setConfirming(false)}>Keep editing</Button>
+          <Button size="sm" variant="danger" disabled={busy} onClick={discard}>Discard</Button>
+        </>}>What you entered here will be lost.</Callout>
+      </div>}
       {/* auto-rows-max: cards hide their overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
       <div className={cn('grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto px-5 py-5 sm:px-6', !footer && 'max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]')}>{children}</div>
       {footer && <DialogFooter className="mx-0 mb-0 flex-row flex-wrap items-center gap-2 border-t bg-muted/60 px-5 py-3.5 max-sm:pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:justify-start sm:px-6">{footer}</DialogFooter>}

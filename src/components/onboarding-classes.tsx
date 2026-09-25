@@ -17,9 +17,9 @@ import { Toggle } from './ui/toggle';
  * meets in, so Today is populated before they ever see it. Everything here saves to the same
  * personal schedule the Classes view edits, so nothing is lost by skipping.
  */
-export function ClassesStep({ userId, schoolId, schedule, personal, online, disabled, onSave, onDone, footer }: {
+export function ClassesStep({ userId, schoolId, schedule, personal, online, disabled, onSave, onDone, footer, notice }: {
   userId: string; schoolId: string; schedule: Schedule; personal: PersonalSchedule; online: boolean; disabled?: boolean;
-  onSave: (next: PersonalSchedule) => Promise<void>; onDone: () => void; footer: React.ReactNode;
+  onSave: (next: PersonalSchedule) => Promise<void>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
 }) {
   const [name, setName] = useState('');
   const [room, setRoom] = useState('');
@@ -37,17 +37,18 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
   }, [online]);
   const scheduled = scheduledPeriodIds(schedule);
   const periods = schedule.periods.filter((period) => period.kind === 'class' && scheduled.has(period.id));
-  const run = async (next: PersonalSchedule) => {
+  /** Saves and reports whether it worked; a failure shows the error instead of throwing. */
+  const run = async (next: PersonalSchedule): Promise<boolean> => {
     setPending(true); setError('');
-    try { await onSave(next); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+    try { await onSave(next); return true; } catch (err) { setError(errorMessage(err)); return false; } finally { setPending(false); }
   };
   const addClass = async () => {
     const trimmed = name.trim();
     if (!trimmed) return;
     const id = slugId(trimmed, personal.classes.map((cls) => cls.id), 'class');
     const cls = classSchema.parse({ id, name: trimmed, ...(room.trim() ? { room: room.trim() } : {}), ...(teacher.trim() ? { teacher: teacher.trim() } : {}) });
-    await run({ ...personal, classes: [...personal.classes, cls] });
-    setName(''); setRoom(''); setTeacher('');
+    // A failed save keeps what the student typed, so they can retry without typing it again.
+    if (await run({ ...personal, classes: [...personal.classes, cls] })) { setName(''); setRoom(''); setTeacher(''); }
   };
   const toggle = (cls: StudentClass, periodId: string) => {
     const assignments = { ...personal.assignments };
@@ -57,7 +58,7 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
   const unplaced = personal.classes.filter((cls) => !Object.values(personal.assignments).includes(cls.id));
   const count = personal.classes.length;
 
-  return <Frame step={STEP_CLASSES} wide title="Add your classes" description="Then tap the periods each class meets in. Today fills itself in from there." footer={footer}>
+  return <Frame step={STEP_CLASSES} wide title="Add your classes" description="Then tap the periods each class meets in. Today fills itself in from there." notice={notice} footer={footer}>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {disabled && <Callout tone="warning" icon="alert">Your saved schedule could not be read. Retry sync before adding classes.</Callout>}
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">

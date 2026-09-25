@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { dateSchema, resolveDay, type ResolvedPeriod } from '@/domain/schedule';
+import { clampDate, dateSchema, describeDayIssues, FIRST_DATE, LAST_DATE, REMOVED_PERIOD_LABEL, resolveDay, resolveDayInRange, type ResolvedPeriod } from '@/domain/schedule';
 import { addDays, classColor, formatDate, formatRange, relativeDate, weekOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState } from '../app-state';
@@ -18,11 +18,15 @@ export function ScheduleView({ state }: { state: AppState }) {
   const { schedule: school, personal, now, today } = state;
   const schedule = effectiveSchedule(school, personal);
   const requested = state.params.get('date');
-  const [date, setDate] = useState(() => requested && dateSchema.safeParse(requested).success ? requested : today);
+  // Only an explicit pick is stored, so the default follows state.today when the app resumes on a later day.
+  const [picked, setPicked] = useState<string | null>(() => requested && dateSchema.safeParse(requested).success ? requested : null);
+  const date = picked ?? today;
+  // Every move goes through here: arrows can step past the ends of the range dateSchema accepts.
+  const setDate = (value: string) => setPicked(value === today ? null : clampDate(value));
   // Strip ?date= in place so Back does not land on it again and loop.
   useEffect(() => {
     if (!requested) return;
-    if (dateSchema.safeParse(requested).success) setDate(requested);
+    if (dateSchema.safeParse(requested).success) setPicked(requested);
     state.navigate('schedule', undefined, { replace: true });
   }, [requested, state]);
   const [adjustDate, setAdjustDate] = useState<string | null>(null);
@@ -30,7 +34,8 @@ export function ScheduleView({ state }: { state: AppState }) {
   const [changePeriod, setChangePeriod] = useState<ResolvedPeriod | null>(null);
   const { onComplete, undoBar } = useCompletionUndo(state);
 
-  const week = useMemo(() => weekOf(date).map((entry) => ({ date: entry, day: resolveDay(school, entry, personal) })), [school, date, personal]);
+  // A week at the edge of the range (2199-12-31 is a Tuesday) has days resolveDay rejects; they show as unavailable.
+  const week = useMemo(() => weekOf(date).map((entry) => ({ date: entry, day: resolveDayInRange(school, entry, personal) })), [school, date, personal]);
   const selected = useMemo(() => { try { return resolveDay(school, date, personal); } catch { return null; } }, [school, date, personal]);
   const override = personal.dateOverrides.find((entry) => entry.date === date);
   const rotation = schedule.cycleDays.length > 1;
@@ -45,27 +50,30 @@ export function ScheduleView({ state }: { state: AppState }) {
   }, [state.snapshot.entities, today]);
   const dueTitle = `Due ${isRelative ? relative.toLowerCase() : formatDate(date, { weekday: 'long' })}`;
   const pickDate = (value: string) => { if (value && dateSchema.safeParse(value).success) setDate(value); };
+  const issueText = selected ? describeDayIssues(selected.issues).join(' ') : '';
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'}
       actions={<div className="flex items-center gap-1.5">
         <div className="flex items-center rounded-xl bg-card p-1 shadow-card ring-1 ring-foreground/[0.06] max-sm:hidden">
           <IconButton label="Previous day" icon="chevronLeft" variant="ghost" size="sm" onClick={() => setDate(addDays(date, -1))} />
-          <Button size="sm" variant={date === today ? 'soft' : 'ghost'} onClick={() => setDate(today)}>Today</Button>
+          <Button size="sm" variant={date === today ? 'soft' : 'ghost'} onClick={() => setPicked(null)}>Today</Button>
           <IconButton label="Next day" icon="chevronRight" variant="ghost" size="sm" onClick={() => setDate(addDays(date, 1))} />
         </div>
-        <Button size="sm" variant={date === today ? 'soft' : 'ghost'} className="h-10 sm:hidden" onClick={() => setDate(today)}>Today</Button>
+        <Button size="sm" variant={date === today ? 'soft' : 'ghost'} className="h-10 sm:hidden" onClick={() => setPicked(null)}>Today</Button>
         <label className="sr-only" htmlFor="schedule-date">Go to date</label>
-        <Input id="schedule-date" type="date" value={date} min="1900-01-01" max="2199-12-31" className="h-10 max-w-[150px] font-semibold" onChange={(event) => pickDate(event.target.value)} />
+        <Input id="schedule-date" type="date" value={date} min={FIRST_DATE} max={LAST_DATE} className="h-10 max-w-[150px] font-semibold" onChange={(event) => pickDate(event.target.value)} />
       </div>} />
 
-    <Card aria-label="Week"><CardContent className="grid gap-3">
+    <Card role="region" aria-label="Week"><CardContent className="grid gap-3">
       <div className="flex items-center justify-between gap-2">
         <IconButton label="Previous week" icon="chevronLeft" size="lg" onClick={() => setDate(addDays(date, -7))} />
         <strong className="text-sm font-bold tracking-tight">{formatDate(week[0].date)} – {formatDate(week[6].date, { year: true })}</strong>
         <IconButton label="Next week" icon="chevronRight" size="lg" onClick={() => setDate(addDays(date, 7))} />
       </div>
-      <WeekStrip selected={date} today={today} onSelect={setDate} days={week.map(({ date: entry, day }) => ({ date: entry, closed: day.closed, caption: day.closed ? '-' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`, dot: dueCounts.has(entry), label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}${dueCounts.has(entry) ? `, ${dueCounts.get(entry)} due` : ''}` }))} />
+      <WeekStrip selected={date} today={today} onSelect={pickDate} days={week.map(({ date: entry, day }) => !day
+        ? { date: entry, closed: true, caption: '-', label: `${formatDate(entry, { weekday: 'long' })}: outside the supported dates` }
+        : { date: entry, closed: day.closed, caption: day.closed ? '-' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`, dot: dueCounts.has(entry), label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}${dueCounts.has(entry) ? `, ${dueCounts.get(entry)} due` : ''}` })} />
     </CardContent></Card>
 
     <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => setAdjustDate(date)}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
@@ -79,7 +87,7 @@ export function ScheduleView({ state }: { state: AppState }) {
       {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
       {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
       {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, period)} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} />}
-      {selected && selected.issues.length > 0 && <Hint tone="danger">{selected.issues.length} period(s) could not be placed on this date{selected.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' because a time shift moves them outside the day' : ''}. Edit the adjustment to fix this.</Hint>}
+      {issueText && <Hint tone="danger">{issueText}{override && selected?.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' Edit the adjustment to fix this.' : ''}</Hint>}
       {due.length > 0 && <section className="grid gap-2 border-t border-foreground/[0.06] pt-4" aria-labelledby="schedule-due-title">
         <h3 id="schedule-due-title" className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">{dueTitle}</h3>
         <ul className="grid gap-1">{due.map((item) => <TaskRow key={item.id} item={item} state={state} showDate={false} onComplete={onComplete} />)}</ul>
@@ -118,7 +126,8 @@ export function RotationOverview({ state, onAdjust, onJump }: { state: AppState;
     const found = new Map<string, string>();
     for (let offset = 0; offset < 90 && found.size < schedule.cycleDays.length; offset += 1) {
       const date = addDays(today, offset);
-      const day = resolveDay(school, date, personal);
+      const day = resolveDayInRange(school, date, personal);
+      if (!day) break;
       if (!day.closed && !found.has(day.cycleDayId)) found.set(day.cycleDayId, date);
     }
     return found;
@@ -142,14 +151,14 @@ export function RotationOverview({ state, onAdjust, onJump }: { state: AppState;
             <Icon name="chevronDown" size={16} className={cn('shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
           </button>
           {multi && onJump && !next && <span className="w-[5.75rem] shrink-0" aria-hidden="true" />}
-          {next && multi && onJump && <Button size="sm" variant={isToday ? 'soft' : 'ghost'} className="w-[5.75rem] shrink-0 justify-end whitespace-nowrap px-2 text-xs tabular-nums" onClick={() => onJump(next)} aria-label={`Show ${day.label} on ${formatDate(next)}`}>{nextLabel(next, today)}</Button>}
+          {next && multi && onJump && <Button size="sm" variant={isToday ? 'soft' : 'ghost'} className="w-[5.75rem] shrink-0 justify-end whitespace-nowrap px-2 text-xs tabular-nums" onClick={() => onJump(next)} aria-label={`${nextLabel(next, today)}: show ${day.label} on ${formatDate(next)}`}>{nextLabel(next, today)}</Button>}
           <IconButton size="sm" icon="edit" onClick={() => onAdjust(day.id)} label={`Adjust ${day.label}`} />
         </div>
         {expanded && <ul className="grid gap-1 border-t border-foreground/[0.05] px-3 py-3 text-sm">
           {slots.map((slot) => {
             const period = schedule.periods.find((entry) => entry.id === slot.periodId);
             const cls = personal.classes.find((entry) => entry.id === personal.assignments[slot.periodId]);
-            return <li key={slot.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1"><ColorDot color={classColor(cls?.id, period?.kind ?? 'other', cls?.color).dot} /><span className="min-w-0 flex-1 truncate font-medium">{cls?.name ?? period?.label ?? slot.periodId}{cls && period && cls.name !== period.label ? <span className="font-normal text-muted-foreground"> · {period.label}</span> : ''}</span><span className="text-xs tabular-nums text-muted-foreground">{formatRange(slot.start, slot.end)}</span></li>;
+            return <li key={slot.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1"><ColorDot color={classColor(cls?.id, period?.kind ?? 'other', cls?.color).dot} /><span className="min-w-0 flex-1 truncate font-medium">{cls?.name ?? period?.label ?? REMOVED_PERIOD_LABEL}{cls && period && cls.name !== period.label ? <span className="font-normal text-muted-foreground"> · {period.label}</span> : ''}</span><span className="text-xs tabular-nums text-muted-foreground">{formatRange(slot.start, slot.end)}</span></li>;
           })}
           {slots.length === 0 && <li className="text-xs text-muted-foreground">No periods on this day.</li>}
         </ul>}

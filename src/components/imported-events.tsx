@@ -43,7 +43,7 @@ export function ImportedEvents({ state, date }: { state: AppState; date: string 
   const [pending, setPending] = useState<string[]>([]);
   const [error, setError] = useState('');
   if (items.length === 0) return null;
-  return <div className="grid gap-2 border-t border-foreground/[0.06] pt-4" aria-label="Imported calendar entries">
+  return <div className="grid gap-2 border-t border-foreground/[0.06] pt-4" role="group" aria-label="Imported calendar entries">
     <h3 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">From your calendars</h3>
     <ul className="grid gap-2">{items.map((item) => {
       const source = item.task.imported!;

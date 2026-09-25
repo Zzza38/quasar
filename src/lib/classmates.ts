@@ -10,7 +10,7 @@ export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, peri
   if (!own?.name) return [];
   const key = classKey(own.name);
   return (context.community?.classmates ?? [])
-    .filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && (own.directoryId && cls.directoryId ? cls.directoryId === own.directoryId : cls.key === key)))
+    .filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && (own.directoryId && cls.directoryId ? cls.directoryId === own.directoryId : key !== '' && cls.key === key)))
     .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
 }
 

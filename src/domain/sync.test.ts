@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { mergeMutation, type Entity, type Mutation } from "./sync";
+import { mergeMutation, mergePreferringLocal, type Entity, type Mutation } from "./sync";
 
 const entity = (data: Record<string, unknown>, version = 1): Entity => ({ id: "task-1", kind: "task", version, data, deleted: false });
 const edit = (base: Entity | null, data: Record<string, unknown> | null): Mutation => ({ mutationId: "mutation-1", id: "task-1", kind: "task", base, data });
 
 describe("three-way entity synchronization", () => {
+  it("keeps local values only at conflicting paths when the student keeps their changes", () => {
+    const base = entity({ title: "Read", notes: "", completed: false });
+    const remote = entity({ title: "Write", notes: "Library copy, due Friday", completed: false }, 2);
+    expect(mergePreferringLocal(edit(base, { ...base.data, title: "Study", completed: true }), remote))
+      .toEqual({ title: "Study", notes: "Library copy, due Friday", completed: true });
+    expect(mergePreferringLocal(edit(base, null), remote)).toBeNull();
+    expect(mergePreferringLocal(edit(base, { ...base.data, title: "Study" }), { ...remote, data: {}, deleted: true })).toEqual({ ...base.data, title: "Study" });
+  });
+
   it("creates a record and merges independent task completion and note edits", () => {
     expect(mergeMutation(edit(null, { title: "Read" }), null)).toMatchObject({ status: "applied", entity: { version: 1, data: { title: "Read" } } });
     const base = entity({ title: "Read", completed: false, notes: "" });

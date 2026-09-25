@@ -18,7 +18,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 | `<select>` / `NativeSelect` | `Select` from `src/components/primitives.tsx` (wraps `ui/select`, the Radix popover select). It still accepts `<option>` children and `event.target.value`, so authoring is unchanged. |
 | `<textarea>` | `Textarea` from `src/components/primitives.tsx` |
 | `<input type="checkbox">` | `Checkbox` from `src/components/ui/checkbox.tsx`, or `Toggle` from primitives for on/off settings |
-| `<input type="radio">` | `ToggleGroup` / `OptionCard` from primitives |
+| `<input type="radio">` | `Segmented`, `ChoiceGroup` + `OptionCard`/`ChoiceItem` from primitives (Radix ToggleGroup, so arrow keys work) |
 | `<input type="range">` | `Slider` from `src/components/ui/slider.tsx` |
 | `<input type="color">` | `ColorPicker` from `src/components/ui/color-picker.tsx` |
 
