@@ -10,6 +10,7 @@ import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatReportSchema, pauseChatSchema } from './chat';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 export type Context = { userId: string | null; service: Service };
 /** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
 export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
@@ -127,7 +128,12 @@ export const appRouter = t.router({
     update: accountScoped.input(schoolUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input)),
     acknowledge: accountScoped.input(z.object({version: z.number().int().positive()})).mutation(({ctx, input}) => ctx.service.acknowledge(ctx.userId, input.version)),
     requestCorrection: accountScoped.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.requestCorrection(ctx.userId, input.message)),
-    feedback: accountScoped.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.feedback(ctx.userId, input.message))
+    feedback: accountScoped.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.feedback(ctx.userId, input.message)),
+    // The lunch menu (src/server/menu.ts): the week containing a date for the student's school, the menus a
+    // Nutrislice site publishes (for the picker), and pointing the school at one of them.
+    menu: authenticated.input(menuWeekSchema).query(({ctx, input}) => new MenuService(ctx.service).week(ctx.userId, input)),
+    menuSources: accountScoped.input(menuLookupSchema.extend({schoolId: z.uuid()})).query(({ctx, input}) => new MenuService(ctx.service).lookup(ctx.userId, input.schoolId, {url: input.url})),
+    setMenu: accountScoped.input(menuSetSchema).mutation(({ctx, input}) => new MenuService(ctx.service).set(ctx.userId, input))
   }),
   // Clients built before TASK_CLIENT_VERSION send no input here and no clientVersion with a sync; they get tasks shaped for them.
   workspace: authenticated.input(clientVersionSchema.optional()).query(({ctx, input}) => ctx.service.workspace(ctx.userId, clientOptions(input))),

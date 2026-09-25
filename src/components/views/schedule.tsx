@@ -12,6 +12,7 @@ import { Card, CardContent } from '../ui/card';
 import { classmatesTag, TaskRow, Timeline, useCompletionUndo } from './today';
 import { PeriodSheet } from '../period-sheet';
 import { CalendarFeeds } from '../calendar-feeds';
+import { LunchDay } from '../lunch-menu';
 import { ImportedEvents } from '../imported-events';
 
 export function ScheduleView({ state }: { state: AppState }) {
@@ -86,6 +87,7 @@ export function ScheduleView({ state }: { state: AppState }) {
       </span>}>
       {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
       {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
+      {selected && !selected.closed && <LunchDay state={state} date={date} />}
       {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, period)} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} />}
       {issueText && <Hint tone="danger">{issueText}{override && selected?.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' Edit the adjustment to fix this.' : ''}</Hint>}
       {due.length > 0 && <section className="grid gap-2 border-t border-foreground/[0.06] pt-4" aria-labelledby="schedule-due-title">
