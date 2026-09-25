@@ -1,4 +1,5 @@
-import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
+import { test, expect, hydrating } from './fixtures';
+import { type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
@@ -202,7 +203,7 @@ test('competing device edits require a visible choice and sign-out clears the ac
   await expect(saved(page)).toBeVisible();
   const laptop = await browser.newContext(); await authenticate(laptop, fixture.id);
   try {
-    const other = await laptop.newPage(); await other.goto('http://localhost:3100/tasks');
+    const other = hydrating(await laptop.newPage()); await other.goto('http://localhost:3100/tasks');
     await expect(other.getByRole('button', { name: 'Edit Original task' })).toBeVisible();
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Edit Original task' }).click();

@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { hydrating } from '../tests/e2e/fixtures';
 import { encode } from 'next-auth/jwt';
 import { openDatabase } from '../src/server/db';
 import { Service } from '../src/server/service';
@@ -189,7 +190,7 @@ async function newContext(browser: Browser, variant: Variant, userId: string | n
 }
 
 async function newPage(context: BrowserContext) {
-  const page = await context.newPage();
+  const page = hydrating(await context.newPage());
   await page.clock.setFixedTime(NOW);
   return page;
 }

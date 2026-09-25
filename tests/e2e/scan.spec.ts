@@ -1,4 +1,5 @@
-import { test, expect, type BrowserContext } from '@playwright/test';
+import { test, expect } from './fixtures';
+import { type BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
