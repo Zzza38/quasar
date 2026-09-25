@@ -5,7 +5,7 @@
  * Views import from here so the shadcn variant vocabulary stays in one place.
  */
 
-import { Children, createContext, Fragment, isValidElement, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { Children, createContext, Fragment, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon, Spinner, type IconName } from './icon';
@@ -22,6 +22,7 @@ import { Textarea as ShadTextarea } from './ui/textarea';
 import { Toggle as ShadToggle } from './ui/toggle';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
 import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui';
+import { Command, CommandInput, CommandItem, CommandList } from './ui/command';
 
 /* ---------- Buttons ---------- */
 
@@ -106,7 +107,7 @@ export function StatTile({ label, value, icon, tone = 'neutral', onClick, classN
  * and whether the control's value is invalid (an error about a failed save is not about the value).
  */
 export type FieldLink = { controlId: string; hintId?: string; errorId?: string; invalid?: boolean };
-const FieldContext = createContext<FieldLink | null>(null);
+const FieldContext = createContext<(FieldLink & { registerControl?: (id: string) => void }) | null>(null);
 
 /**
  * Ids Field gives its visible hint and error text. Only one is shown at a time, like the markup below.
@@ -140,9 +141,10 @@ function useFieldAria(id: string | undefined, own: AriaDescription) {
 /** `invalid={false}` shows `error` without marking the control invalid, for failures such as a save that did not go through. */
 export function Field({ label, hint, error, invalid, children, className, htmlFor }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; invalid?: boolean; children: ReactNode; className?: string; htmlFor?: string }) {
   const link = fieldLink(htmlFor, hint, error, invalid);
+  const [generatedId, registerControl] = useState<string>();
   return <div className={cn('grid gap-1.5', className)}>
-    <Label htmlFor={htmlFor} className="text-[13px] font-semibold text-foreground/80">{label}</Label>
-    <FieldContext.Provider value={link}>{children}</FieldContext.Provider>
+    <Label htmlFor={generatedId ?? htmlFor} className="text-[13px] font-semibold text-foreground/80">{label}</Label>
+    <FieldContext.Provider value={link ? { ...link, registerControl } : null}>{children}</FieldContext.Provider>
     {hint && !error ? <Hint id={link?.hintId}>{hint}</Hint> : null}
     {error ? <Hint id={link?.errorId} tone="danger" role="alert">{error}</Hint> : null}
   </div>;
@@ -151,6 +153,42 @@ export function Field({ label, hint, error, invalid, children, className, htmlFo
 export function Input({ className, small, ...rest }: ComponentProps<'input'> & { small?: boolean }) {
   const aria = useFieldAria(rest.id, { 'aria-describedby': rest['aria-describedby'], 'aria-invalid': rest['aria-invalid'] });
   return <ShadInput className={cn('h-10 rounded-xl bg-card px-3 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] placeholder:text-muted-foreground/80 dark:bg-input/20', small && 'h-8 rounded-lg px-2.5 text-base md:text-[13px]', className)} {...rest} {...aria} />;
+}
+
+/** An editable shadcn command combobox. Suggestions never replace text until chosen. */
+export function Autocomplete({ options, onSelect, value, onValueChange, small, className, ...props }: Omit<ComponentProps<typeof CommandInput>, 'value' | 'onValueChange'> & {
+  value: string; onValueChange: (value: string) => void; onSelect: (value: string) => void; small?: boolean;
+  options: { value: string; label: string; description?: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const expanded = open && !props.disabled && options.length > 0;
+  const field = useContext(FieldContext);
+  const registerControl = field?.controlId === props.id ? field?.registerControl : undefined;
+  // cmdk owns the input id and uses it to keep focus while results change.
+  // Link the visible Field label to that generated id instead of replacing it.
+  const inputRef = useCallback((node: HTMLInputElement | null) => {
+    if (node) registerControl?.(node.id);
+  }, [registerControl]);
+  const aria = useFieldAria(props.id, { 'aria-describedby': props['aria-describedby'], 'aria-invalid': props['aria-invalid'] });
+  return <Command shouldFilter={false} data-autocomplete-open={expanded} className={cn('relative size-auto overflow-visible bg-transparent p-0 [&_[data-slot=command-input-wrapper]]:p-0 [&_[data-slot=input-group]]:h-11! [&_[data-slot=input-group]]:rounded-xl! [&_[data-slot=input-group]]:border-control-border [&_[data-slot=input-group]]:bg-card [&_[data-slot=input-group]]:px-3 [&_[data-slot=input-group]]:focus-within:ring-2 [&_[data-slot=input-group]]:focus-within:ring-ring [&_[data-slot=input-group-addon]]:hidden', small && '[&_[data-slot=input-group]]:h-8!')}
+    onKeyDownCapture={event => {
+      if (event.key === 'Escape' && expanded) { event.preventDefault(); event.stopPropagation(); setOpen(false); }
+      if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !expanded && options.length) { event.preventDefault(); setOpen(true); }
+      if (event.key === 'Enter' && !expanded) event.stopPropagation();
+    }}>
+    <CommandInput asChild {...props} id={undefined} {...aria} value={value} onValueChange={next => { setOpen(true); onValueChange(next); }}
+      onFocus={event => { setOpen(true); props.onFocus?.(event); }} onBlur={event => { setOpen(false); props.onBlur?.(event); }}
+      className={cn('min-w-0 text-base', className)}>
+      <Input ref={inputRef} aria-labelledby={props['aria-labelledby']} aria-label={props['aria-label']} aria-expanded={expanded}
+        className="h-full! rounded-none! border-0! bg-transparent! px-0! shadow-none! focus-visible:ring-0!" />
+    </CommandInput>
+    <CommandList hidden={!expanded} className={cn('absolute inset-x-0 top-full z-50 mt-1 max-h-56 rounded-xl border border-border bg-popover p-1 shadow-lg', !expanded && 'hidden')}>
+      {expanded && options.map(option => <CommandItem key={option.value} value={option.value} onMouseDown={event => event.preventDefault()}
+        onSelect={() => { onSelect(option.value); setOpen(false); }} className="min-h-11 cursor-pointer">
+        <span className="grid min-w-0 gap-0.5"><span className="font-semibold">{option.label}</span>{option.description && <span className="text-xs text-muted-foreground">{option.description}</span>}</span>
+      </CommandItem>)}
+    </CommandList>
+  </Command>;
 }
 
 /**
@@ -411,6 +449,7 @@ export function Modal({ open, onClose, title, description, children, footer, wid
   const discard = () => { returnFocus.current = null; setConfirming(false); onClose(); };
   return <Dialog open={open} onOpenChange={(next) => { if (!next) requestClose(); }}>
     <DialogContent showCloseButton={false} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      onEscapeKeyDown={event => { if (event.target instanceof Element && event.target.closest('[data-autocomplete-open=true]')) event.preventDefault(); }}
       className={cn('flex max-h-[min(88dvh,940px)] flex-col gap-0 overflow-hidden rounded-3xl bg-card p-0 text-foreground shadow-pop ring-foreground/[0.08]',
         // Phones: rise from the bottom edge like a sheet.
         'max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-h-[92dvh] max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:data-open:slide-in-from-bottom-6 max-sm:data-open:zoom-in-100 max-sm:data-closed:zoom-out-100 max-sm:data-closed:slide-out-to-bottom-6',

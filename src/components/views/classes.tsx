@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { ChangedWhileEditing, type FieldSpec } from '../conflicts';
 import { ClassAssignmentGrid } from '../class-assignment-grid';
+import { ClassNameInput, useClassDirectory } from '../class-name-input';
 import { removeClass, useSchoolTimetable } from '../personal-timetable';
 import { Icon } from '../icon';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
@@ -141,7 +142,7 @@ export function ClassesView({ state }: { state: AppState }) {
       </Panel>
     </Section>
 
-    <ClassSheet key={editing ?? 'closed'} open={editing !== null} onClose={() => setEditing(null)} initial={editing === 'new' ? { id: '', name: '', room: '', teacher: '' } : current} current={editing === 'new' ? undefined : current} usedIds={personal.classes.map((cls) => cls.id)}
+    <ClassSheet key={editing ?? 'closed'} schoolId={state.context.school.id} online={state.online} personal={personal} open={editing !== null} onClose={() => setEditing(null)} initial={editing === 'new' ? { id: '', name: '', room: '', teacher: '' } : current} current={editing === 'new' ? undefined : current} usedIds={personal.classes.map((cls) => cls.id)}
       onSave={async (value) => {
         const exists = personal.classes.some((cls) => cls.id === value.id);
         await state.savePersonal({ ...personal, classes: exists ? personal.classes.map((cls) => cls.id === value.id ? value : cls) : [...personal.classes, value] });
@@ -153,7 +154,7 @@ export function ClassesView({ state }: { state: AppState }) {
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
-    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal} />
+    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schoolId={state.context.school.id} online={state.online} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
     <Modal open={resetOpen} onClose={() => setResetOpen(false)} busy={resetPending} title="Revert to the school timetable?"
       footer={<><Button variant="ghost" disabled={resetPending} onClick={() => setResetOpen(false)}>Keep my timetable</Button><Spacer /><Button variant="danger" busy={resetPending} onClick={async () => { setResetPending(true); setError(''); try { await state.savePersonal(useSchoolTimetable(school, personal)); setResetOpen(false); } catch (err) { setError(errorMessage(err)); } finally { setResetPending(false); } }}>Revert timetable</Button></>}>
@@ -163,7 +164,8 @@ export function ClassesView({ state }: { state: AppState }) {
   </div>;
 }
 
-function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete }: { open: boolean; onClose: () => void; initial: StudentClass | null; current?: StudentClass | null; usedIds: string[]; onSave: (value: StudentClass) => Promise<void>; onDelete?: () => Promise<void> }) {
+function ClassSheet({ schoolId, online, personal, open, onClose, initial, current, usedIds, onSave, onDelete }: { schoolId: string; online: boolean; personal: PersonalSchedule; open: boolean; onClose: () => void; initial: StudentClass | null; current?: StudentClass | null; usedIds: string[]; onSave: (value: StudentClass) => Promise<void>; onDelete?: () => Promise<void> }) {
+  const { directory } = useClassDirectory(schoolId, open && online);
   const [original, setOriginal] = useState<StudentClass>(initial ?? { id: '', name: '', room: '', teacher: '' });
   const [draft, setDraft] = useState<StudentClass>(original);
   const [pending, setPending] = useState(false);
@@ -190,7 +192,9 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
     <form id="class-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void submit(); }}>
       <div className="flex items-center gap-3">
         <span aria-hidden="true" className="grid size-12 shrink-0 place-items-center rounded-2xl text-lg font-extrabold text-white transition-colors" style={{ background: initialBackground(previewColor) }}>{draft.name.trim().slice(0, 1).toUpperCase() || '?'}</span>
-        <Field label="Class name" htmlFor="class-name" className="flex-1"><Input id="class-name" autoFocus={isNew} required maxLength={120} placeholder="Algebra II" value={draft.name} className="h-11 text-[16px] font-semibold" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+        <Field label="Class name" htmlFor="class-name" className="min-w-0 flex-1"><ClassNameInput id="class-name" autoFocus={isNew} required maxLength={120} placeholder="Algebra II" value={draft.name} className="font-semibold" disabled={pending || changed}
+          entries={directory?.classes ?? []} grade={personal.grade} onValueChange={name => setDraft({ ...draft, name, ...(isNew ? { directoryId: undefined } : {}) })}
+          onChoose={entry => setDraft({ ...draft, directoryId: entry.id, name: entry.name, room: entry.room ?? '', teacher: entry.teacher ?? '' })} /></Field>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Room (optional)" htmlFor="class-room"><Input id="class-room" maxLength={120} placeholder="204" value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} /></Field>

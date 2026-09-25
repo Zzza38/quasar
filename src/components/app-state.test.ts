@@ -30,7 +30,7 @@ describe('personalSaver', () => {
 });
 
 describe('persistedContext', () => {
-  const classmates = [{ id: 'friend-1', displayName: 'Maya Marker', classes: [{ periodId: 'A', name: 'zebra biology marker', key: 'biology marker zebra' }] }];
+  const classmates = [{ id: 'friend-1', displayName: 'Maya Marker', personal: { ...emptyPersonalSchedule(), classes: [{ id: 'biology', name: 'zebra biology marker' }], assignments: { A: 'biology' } } }];
   const workspace = {
     user: { id: 'me' }, school: null, entities: [{ id: 'task-1' }], review: null, isAdmin: false, subscriptions: [], importConflicts: [],
     community: { verification: { status: 'verified', method: 'domain' }, incomingRequests: 1, friendCount: 1, classmates, unreadChats: 0, unreadAt: '2026-09-01T00:00:00.000Z', chatPush: true },
