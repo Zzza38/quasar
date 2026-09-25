@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { Icon } from '../icon';
+import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
 import { PeriodSheet } from '../period-sheet';
 import { Button, Chip, ColorDot, EmptyState, Eyebrow, Hint, Input, Section, Select, StatTile } from '../primitives';
@@ -96,6 +97,7 @@ export function TodayView({ state }: { state: AppState }) {
         </div>}
         {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
         {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, period)} />}
+        {day && !day.closed && <LunchDay state={state} date={today} />}
         {day && day.issues.length > 0 && <Hint tone="danger">{describeDayIssues(day.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
 

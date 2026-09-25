@@ -380,6 +380,20 @@ function migrate(db: Db): void {
   if (!proposalColumns.some(column => column.name === 'tally_against')) db.exec('ALTER TABLE schedule_proposals ADD COLUMN tally_against INTEGER');
   if (!proposalColumns.some(column => column.name === 'tally_threshold')) db.exec('ALTER TABLE schedule_proposals ADD COLUMN tally_threshold INTEGER');
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(12, datetime('now'))");
+  // Migration 14: the school's lunch menu. `menu_source` is the Nutrislice menu the school follows as JSON
+  // (src/server/menu.ts, MenuSource) or '' for none; menu_weeks caches one fetched week per school so every
+  // student opening Today does not fetch the menu provider again (rows are refreshed after MENU_CACHE_MS and
+  // pruned once the week is two months old).
+  const menuColumns = db.pragma('table_info(schools)') as {name: string}[];
+  if (!menuColumns.some(column => column.name === 'menu_source')) db.exec("ALTER TABLE schools ADD COLUMN menu_source TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS menu_weeks (
+      school_id TEXT NOT NULL REFERENCES schools(id), week_start TEXT NOT NULL,
+      source TEXT NOT NULL, days TEXT NOT NULL, fetched_at TEXT NOT NULL,
+      PRIMARY KEY(school_id, week_start)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(14, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

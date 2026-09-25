@@ -45,6 +45,7 @@ Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existin
 - Member edits of unlocked schedules, permanent membership threshold lock at ten members, support locks, owner review/corrections and an internal correction-request inbox.
 - Persistent, account-scoped offline storage and edit queue (the first change saved on a page asks the browser for persistent storage; a browser that refuses may still evict it when space runs low, and the Account sheet says so), safe retries, automatic merges of independent changes, explicit conflict choices, shared correction review without deleting personal data.
 - Single-server container packaging, health endpoint, backup utility and deployment/pilot instructions.
+- The school lunch menu: connect the school's Nutrislice menu site (School → Lunch menu; the owner always, members while the shared schedule is open to member edits), and Today and Schedule show each day's lunch under the timeline, with the whole week and a link to the menu site in School. Weeks are fetched from the provider on demand and cached for three hours per school.
 
 Shared-school editing and joining require a connection. Saved personal classes, tasks, assignments, custom schedules and overrides can be edited offline after a successful signed-in load. The service worker requires HTTPS except on localhost. Sync resumes when the app is open and connectivity returns; it does not require browser background-sync support.
 
