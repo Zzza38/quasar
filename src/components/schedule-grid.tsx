@@ -6,7 +6,7 @@ import { scheduledPeriodIds } from '@/domain/period-status';
 import { cycleDaySchema, REMOVED_PERIOD_LABEL, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { Button, IconButton, Input } from './primitives';
+import { Button, IconButton, Input, Modal, Spacer } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { clockTime, minutes, placeTimedPeriod, type PeriodPlacement } from './schedule-placement';
 
@@ -31,6 +31,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const resizeRef = useRef<Resize | null>(null);
   // The last cleared block, so a stray tap on × can be undone.
   const [cleared, setCleared] = useState<{ dayId: string; slot: ScheduleSlot; keyboard: boolean } | null>(null);
+  const [removing, setRemoving] = useState<{ dayId: string; dayLabel: string; slot: ScheduleSlot; name: string; keyboard: boolean } | null>(null);
   // Roving tab stop per day column: one focusable time target instead of one per 15 minutes.
   const [targetFocus, setTargetFocus] = useState<Record<string, number>>({});
   const hintId = useId();
@@ -99,6 +100,16 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const saved = onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === restored.id ? restored : entry) }) !== false;
     setCleared(null); setMessage(saved ? `Restored ${formatRange(cleared.slot.start, cleared.slot.end)}.` : '');
   };
+  const clearBlock = () => {
+    if (!removing || disabled) return;
+    const { dayId, slot, name, keyboard } = removing;
+    const next = { ...value, cycleDays: value.cycleDays.map(entry => entry.id === dayId ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) };
+    if (onChange(next) === false) return;
+    if (selected?.slotId === slot.id) setSelected(null);
+    setCleared({ dayId, slot, keyboard });
+    setMessage(`Cleared ${name} from ${value.cycleDays.find(day => day.id === dayId)?.label ?? 'the timetable'}.`);
+    setRemoving(null);
+  };
   const timeAt = (y: number, top: number, duration: number) => Math.max(startMinute, Math.min(endMinute - duration, snap(axis.time(y - top))));
   const beginDrag = (event: DragEvent, source: PeriodPlacement) => {
     event.dataTransfer.setData(dragType, JSON.stringify(source));
@@ -120,7 +131,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const end = current.edge === 'end' ? Math.min(endMinute, Math.max(minutes(current.slot.start) + 5, minutes(current.slot.end) + delta)) : current.end;
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
-  return <div ref={workspaceRef} className="timetable-workspace">
+  return <><div ref={workspaceRef} className="timetable-workspace">
     <aside className="timetable-palette gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
       <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
       <div className="timetable-palette-items" role="group" aria-label="Available periods">
@@ -185,12 +196,12 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}${selected?.slotId === slot.id ? ' time-block-open' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, borderColor: color.dot, background: isGuide ? 'var(--muted)' : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
                   <button type="button" title={`${name} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} draggable={!disabled} disabled={disabled} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${name}`}
                     onDragStart={event => beginDrag(event, { periodId: slot.periodId, dayId: day.id, slotId: slot.id })} onDragEnd={() => setHover(null)} onClick={event => { if (selected && onAssign) { followWithFocus(event.detail, day.id, placeAt(selected, day.id, minutes(slot.start))); return; } if (isGuide) { setMessage('Select a class first, then tap this school block.'); return; } setSelected({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }); setMessage('Select another time to move this block.'); }}>
-                    <strong>{name}</strong>{isGuide && <span>School block · drop class here</span>}
+                    <strong>{name}</strong>{isGuide && <span>Unassigned block · drop class here</span>}
                     {/* The axis already says AM or PM; the full range stays in the tooltip, the hover card and the label. */}
                     <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
                   <div className="time-block-detail" aria-hidden="true"><strong>{name}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
-                  <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => { if (onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) }) === false) return; if (selected?.slotId === slot.id) setSelected(null); setCleared({ dayId: day.id, slot, keyboard: event.detail === 0 }); setMessage(`Cleared ${name} from ${day.label}.`); }}>×</button>
+                  <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => setRemoving({ dayId: day.id, dayLabel: day.label, slot, name, keyboard: event.detail === 0 })}>×</button>
                   {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled} aria-label={`Resize ${day.label} ${period?.label ?? name} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
                     onPointerDown={event => beginResize(event, day.id, slot, edge)} onPointerMove={moveResize}
                     onPointerUp={event => { const current = resizeRef.current; if (!current) return; event.stopPropagation(); if (current.start !== minutes(current.slot.start) || current.end !== minutes(current.slot.end)) commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
@@ -204,7 +215,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
         </div>
       </section>)}
     </div>
-  </div>;
+  </div>
+  <Modal open={!!removing} onClose={() => setRemoving(null)} title={`Remove ${removing?.name ?? 'time block'}?`}
+    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Keep block</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={clearBlock}>Remove time block</Button></>}>
+    <p className="text-sm text-muted-foreground">{removing && `${removing.dayLabel}, ${formatRange(removing.slot.start, removing.slot.end)}`}. This removes the time block from the timetable. The class stays saved.</p>
+  </Modal></>;
 }
 
 /** Saves the day name on blur or Enter rather than per keystroke, so typing never races a save. */
