@@ -7,6 +7,7 @@ import { pluralize } from '@/lib/format';
 import { cn, scrollToId } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon, type IconName } from '../icon';
+import { LunchMenuSection } from '../lunch-menu';
 import { PrivateScheduleSheet } from '../overrides';
 import { ProposalsSection } from '../proposals';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
@@ -107,6 +108,8 @@ export function SchoolView({ state }: { state: AppState }) {
       {showPreview && <Preview value={sharedSchedule} />}
       {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
     </Section>
+
+    <LunchMenuSection state={state} />
 
     {voting && <ProposalsSection state={state} />}
 
