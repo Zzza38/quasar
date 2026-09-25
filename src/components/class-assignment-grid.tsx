@@ -49,6 +49,7 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
   schedule: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean;
 }) {
   const [pending, setPending] = useState(false);
+  const [locked, setLocked] = useState(true);
   const saving = useRef(false);
   const queued = useRef<QueuedTimetableEdit | null>(null);
   const waiter = useRef<{ from: PersonalSchedule; resolve: () => void } | null>(null);
@@ -131,7 +132,11 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
       <Button size="sm" variant="danger" disabled={disabled || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
       <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
     </>}>{prompt.body}</Callout>}
-    <ScheduleGrid value={draft} personal={displayPersonal} personalClassesOnly onAssign={(periodId, classId) => enqueue({ assign: { [periodId]: classId } })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/60 px-3 py-2">
+      <span className="text-sm text-muted-foreground">{locked ? 'Timetable locked to prevent accidental changes.' : 'Timetable unlocked. You can move, resize, and remove blocks.'}</span>
+      <Button size="sm" icon={locked ? 'lock' : 'unlock'} aria-pressed={!locked} onClick={() => { setLocked(!locked); setEditing(null); }}>{locked ? 'Unlock timetable' : 'Lock timetable'}</Button>
+    </div>
+    <ScheduleGrid value={draft} personal={displayPersonal} personalClassesOnly onAssign={(periodId, classId) => enqueue({ assign: { [periodId]: classId } })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled || locked}
       onEditDay={id => { setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
         const days = draft.cycleDays.filter(day => day.id !== id);
         if (!days.length) return;
@@ -142,10 +147,10 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
         ask({ kind: 'remove', dayId: id, label, runs: [() => void remove()] });
       }} />
     {draft.cycleDays.filter(day => day.id === editing).map(day => <Panel key={day.id} className="grid gap-2 p-3"><strong className="text-sm">{day.label} times</strong>
-      <SlotsEditor slots={editedSlots} periods={draft.periods} disabled={disabled} onChange={setEditedSlots} />
-      <div><Button size="sm" disabled={disabled || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
+      <SlotsEditor slots={editedSlots} periods={draft.periods} disabled={disabled || locked} onChange={setEditedSlots} />
+      <div><Button size="sm" disabled={disabled || locked || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
     </Panel>)}
-    <div><Button size="sm" icon="plus" disabled={disabled || draft.cycleDays.length >= 366} onClick={() => {
+    <div><Button size="sm" icon="plus" disabled={disabled || locked || draft.cycleDays.length >= 366} onClick={() => {
       const id = slugId(`day-${draft.cycleDays.length + 1}`, draft.cycleDays.map(day => day.id));
       persist(withCycleDay(draft, { id, label: `Day ${draft.cycleDays.length + 1}`, slots: [] }), 'Adding a day');
     }}>Add rotation day</Button></div>
