@@ -340,6 +340,33 @@ test('collapsed navigation centers icons and retains accessible links', async ({
   await expect(sidebar.getByRole('link', { name: 'Classes', exact: true }).locator('span')).toBeVisible();
 });
 
+test('sidebar closes without an empty intermediate rail', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/classes');
+  await expect(page.getByRole('button', { name: 'Collapse navigation sidebar' })).toBeVisible();
+
+  const frame = await page.evaluate(async () => {
+    const sidebar = document.querySelector('.app-sidebar')!;
+    const center = (selector: string) => {
+      const rect = sidebar.querySelector(selector)!.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    };
+    (sidebar.querySelector('[data-slot="sidebar-trigger"]') as HTMLButtonElement).click();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    return {
+      width: sidebar.getBoundingClientRect().width,
+      nav: center('[data-slot="sidebar-content"] a svg'),
+      logo: center('[data-slot="sidebar-header"] button svg'),
+      status: center('[data-slot="sidebar-footer"] [role="status"] svg'),
+    };
+  });
+  expect(frame.width).toBe(56);
+  expect(Math.abs(frame.logo - frame.nav)).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.status - frame.nav)).toBeLessThanOrEqual(1);
+});
+
 test('empty tasks fill the available width with one responsive navigation shell', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
