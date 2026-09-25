@@ -36,6 +36,8 @@ Sources read before writing:
 
 **D6. Support sees chat text only through a report, and every view of it is audited.** A report freezes a snapshot of at most 30 messages from that one conversation. The owner has to press **Show messages** to see it. That button is a mutation, `admin.showEvidence`, which writes a `reports.view` row to `audit_log`. No admin procedure reads `chat_messages.body`. Support has no chat account and never sends messages. The owner's own Google account can chat like any student, and owner privileges add no chat reads. A router-shape test locks this in (§9).
 
+*Amended 2026-09-25:* the user console shows who a member chats with and how many messages each side sent (see §3.2), still never the text.
+
 *Amended 2026-09-24 by §11:* the guarantee for one-to-one chats is unchanged. The public Global chat room is the exception: the owner reads it in the app like any member and can edit or remove any room message there, with a visible reason and an audit row, without a report. Room messages live in `global_messages`, so still no admin procedure reads `chat_messages.body`.
 
 **D7. A closed chat leaves a report-only row for 30 days.** A chat can close by unfriending, a block in either direction, or support removal. Both participants then keep a row in their list until 30 days after the last message. The row shows only the other person's display name, the text "Chat closed", a **Report** button and, since `chat.reopen` (§3.2), an **Unblock** or **Add friend** button. It has no history and no composer. It looks the same whether the chat closed by unfriend, by block or by removal, so looking at it cannot tell "did they block me?". Its **Add friend** action can, exactly as People can: the friend request fails with "This member is not available." when the other person blocked the viewer, and succeeds after a plain unfriend. That probe was already possible from People, and after an unfriend it sends a real friend request. This closes the harass-then-leave escape. `community.profile` returns `NOT_FOUND` when the other person blocked the viewer, and also when the two are not friends and not at the same school. Without this row, a victim would have no route to the evidence. This is the one deliberate exception to the phase-3 rule "a block hides both people from each other". The row shows only a display name the viewer already chatted with. It never links to a profile, and it reveals nothing new. The blocked person also keeps a row. The judges raised retaliatory reports against the blocker. That risk is accepted, for three reasons:
@@ -189,8 +191,10 @@ Three checks are defined once in `src/server/chat.ts` and run inside the same tr
 
 **What the owner can never see:**
 - any message outside a report snapshot;
-- anyone's conversation list, who talks to whom, message counts, or read or unread state;
+- read or unread state;
 - a live thread.
+
+*Amended 2026-09-25 by the user console:* the owner's member record (`admin.users.view`, src/server/support.ts) lists that member's chats as metadata: the other person, when the chat started, when its last message was sent, and how many messages each side sent. Opening a record needs a reason and is audited. It never includes message text, and the Help page says so ("Can support read my messages?").
 
 Section intro copy says so. One caveat is stated honestly in `docs/OPERATIONS.md`: messages are stored unencrypted in SQLite and its backups. The operations rule is that nobody queries `chat_*` tables directly except for restores.
 
@@ -982,7 +986,8 @@ These are never cut:
    - A report on a thread with no messages (created by `mute`) gives `BAD_REQUEST` "This chat has no messages to report.", and no `reports` row is written.
    - A report whose `block: true` fails after the insert leaves neither the report nor the block (one transaction).
 10. **What the owner can see.**
-    - `Object.keys(appRouter._def.procedures).filter(k => k.startsWith('admin.'))` equals the expected list exactly: today's 11 (`schools`, `update`, `requests`, `resolveRequest`, `verificationRequests`, `decideVerification`, `reports`, `resolveReport`, `removeMember`, `proposals`, `decideProposal`) plus `showEvidence`, `redactMessage`, `pauseChat`, `liftChatPause` and `chatPauses`. This key shape was checked against tRPC 11.18 in this repo.
+    - `Object.keys(appRouter._def.procedures).filter(k => k.startsWith('admin.'))` equals the expected list exactly: today's 11 (`schools`, `update`, `requests`, `resolveRequest`, `verificationRequests`, `decideVerification`, `reports`, `resolveReport`, `removeMember`, `proposals`, `decideProposal`) plus `showEvidence`, `redactMessage`, `pauseChat`, `liftChatPause` and `chatPauses`, and since 2026-09-25 the user console's `security`, `renameSchool`, `auditLog` and `users.*`. This key shape was checked against tRPC 11.18 in this repo.
+    - The owner's member records for all three participants (`admin.users.view`), the member search and the audit log contain neither chat's text.
     - `admin.reports` output, serialized, contains no message text.
     - `admin.showEvidence` returns only the reported thread's snapshot and writes an `audit_log` `reports.view` row.
     - A second, unreported alice–cara chat's text (a marker string) appears in the serialized output of no admin procedure.

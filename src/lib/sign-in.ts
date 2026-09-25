@@ -1,12 +1,14 @@
 /**
  * What to tell a student NextAuth sent back to the landing page with `?error=<code>` (authOptions.pages in
  * src/server/auth.ts). AccessDenied is the signIn callback refusing a Google account whose email is not verified;
+ * Suspended is it refusing an account support suspended;
  * Configuration is a server setup fault; every other code is an OAuth round trip that failed or was cancelled on
  * Google's screen. Shared by the server-rendered page (src/app/page.tsx) and the landing component.
  */
 export function signInErrorMessage(code: string | null): string | null {
   if (!code) return null;
   if (code === 'AccessDenied') return 'Google hasn’t verified the email address on that account, so Quasar can’t sign you in with it. Verify it with Google, or continue with a different Google account.';
+  if (code === 'Suspended') return 'Support suspended this account. Contact support if you think this is a mistake.';
   if (code === 'Configuration') return 'Sign-in isn’t working right now. Please try again later.';
   return 'Sign-in didn’t finish. Try again, or continue with a different Google account.';
 }

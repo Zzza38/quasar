@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Manrope } from 'next/font/google';
-import { ThemeSync, themeBootScript } from '@/lib/theme';
+import { ThemeSync } from '@/lib/theme';
+import { themeBootScript } from '@/lib/theme-boot';
 import { SITE_DESCRIPTION, SITE_KEYWORDS, SITE_NAME, SITE_TITLE, siteOrigin, socialMetadata } from '@/server/site';
 import './globals.css';
 
