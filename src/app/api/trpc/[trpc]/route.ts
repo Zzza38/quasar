@@ -1,8 +1,8 @@
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { appRouter } from '@/server/router';
-import { Service } from '@/server/service';
+import { Service, type RequestInfo } from '@/server/service';
 import { getDb } from '@/server/db';
-import { getUserId } from '@/server/auth';
+import { getAuth } from '@/server/auth';
 import { logTrpcError } from '@/server/trpc-log';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,17 @@ async function readCappedBody(req: Request): Promise<Uint8Array<ArrayBuffer> | n
     chunks.push(value);
   }
 }
+/**
+ * Where the request came from, for the owner's audit rows. The server only listens behind Cloudflare Tunnel
+ * (docs/CLOUDFLARE.md), which sets CF-Connecting-IP; anything else (next dev, the tests) records no address.
+ */
+function requestInfo(req: Request): RequestInfo {
+  return { ip: req.headers.get('cf-connecting-ip')?.slice(0, 64) || null, userAgent: req.headers.get('user-agent')?.slice(0, 300) || null };
+}
 async function handler(req: Request) {
+  // Browsers mark a request another site started (a link, an <img>, a form) as cross-site. The app never does that to
+  // its own API, so such a request is refused before its cookies can authorize anything, queries included.
+  if (req.headers.get('sec-fetch-site') === 'cross-site') return new Response('Cross-site request', {status: 403});
   // Auth cookies must never authorize a cross-origin mutation.
   if (req.method !== 'GET') {
     const origin = req.headers.get('origin');
@@ -36,7 +46,12 @@ async function handler(req: Request) {
     req = new Request(req.url, {method: req.method, headers: req.headers, body, signal: req.signal});
   }
   return fetchRequestHandler({ endpoint: '/api/trpc', req, router: appRouter,
-    createContext: async () => ({ userId: await getUserId(), service: new Service(getDb()) }),
+    createContext: async () => {
+      const { userId, authAt } = await getAuth();
+      const service = new Service(getDb());
+      service.request = requestInfo(req);
+      return { userId, authAt, service };
+    },
     // Procedure name and error code only: inputs may hold private schedule data.
     onError: logTrpcError,
     responseMeta: () => ({ headers: { 'Cache-Control': 'no-store' } })
