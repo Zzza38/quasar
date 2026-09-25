@@ -3,6 +3,7 @@ import { signInErrorMessage, signInReturnPath } from '@/lib/sign-in';
 import { getUserId } from '@/server/auth';
 import { getDb } from '@/server/db';
 import { Service } from '@/server/service';
+import { siteOrigin } from '@/server/site';
 
 export type SearchParams = Record<string, string | string[] | undefined>;
 const first = (value: string | string[] | undefined): string | null => (Array.isArray(value) ? value[0] ?? null : value ?? null);
@@ -26,8 +27,7 @@ export async function initialBoot(searchParams: SearchParams): Promise<InitialBo
   try {
     const userId = await getUserId();
     if (!userId) {
-      const origin = process.env.NEXTAUTH_URL ? new URL(process.env.NEXTAUTH_URL).origin : 'http://localhost';
-      return { kind: 'signed-out', signInError: signInErrorMessage(first(searchParams.error)), callbackPath: signInReturnPath(first(searchParams.callbackUrl), origin), renderedAt };
+      return { kind: 'signed-out', signInError: signInErrorMessage(first(searchParams.error)), callbackPath: signInReturnPath(first(searchParams.callbackUrl), siteOrigin()), renderedAt };
     }
     return { kind: 'workspace', workspace: new Service(getDb()).workspace(userId, { legacyTasks: false }), renderedAt };
   } catch {
