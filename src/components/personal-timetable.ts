@@ -89,9 +89,10 @@ export function queueTimetableEdit(queued: QueuedTimetableEdit | null, edit: Que
  * unplaced class its own period (`class-<id>`, labelled with the class name); once placed, that period lives only
  * in the private timetable, so leaving it behind would keep showing the removed class's name. School periods,
  * and private periods the student made some other way, stay; only their assignment to this class is cleared.
+ * `school` is null for a student without one (the owner console), whose every period is then a private one.
  */
-export function removeClass(school: Schedule, personal: PersonalSchedule, classId: string): PersonalSchedule {
-  const schoolPeriods = new Set(scheduleForGrade(school, personal.grade).periods.map(period => period.id));
+export function removeClass(school: Schedule | null, personal: PersonalSchedule, classId: string): PersonalSchedule {
+  const schoolPeriods = new Set(school ? scheduleForGrade(school, personal.grade).periods.map(period => period.id) : []);
   const base = slugId(`class-${classId}`, []);
   const dropped = new Set((personal.customSchedule?.periods ?? [])
     .filter(period => !schoolPeriods.has(period.id) && personal.assignments[period.id] === classId && (period.id === base || period.id.startsWith(`${base}-`)))

@@ -23,7 +23,7 @@ function seed(email = `${randomUUID()}@example.com`, joined = true, schedule = e
 
 async function authenticate(context: BrowserContext, id: string) {
   // Test fixture issues a normal encrypted session. The application has no test-auth endpoint.
-  const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id }, maxAge: 3600 });
+  const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id, authAt: Date.now() }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
 
@@ -181,6 +181,7 @@ test('admin UI enforces owner authorization and publishes locked approved revisi
   await expect(page.getByText('This page is available to the project owner.')).toBeVisible();
   const owner = seed('browser-owner@example.com'); await authenticate(context, owner.id);
   await page.reload();
+  await page.getByRole('tab', { name: 'Schools' }).click();
   const schoolRow = page.getByRole('row').filter({ hasText: owner.school.name });
   await schoolRow.getByRole('button', { name: `Review ${owner.school.name}` }).click();
   const approved = dialog(page).getByRole('switch', { name: 'Approved default schedule' });
@@ -195,6 +196,68 @@ test('admin UI enforces owner authorization and publishes locked approved revisi
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try { expect(new Service(db).school(owner.school.id)).toMatchObject({ approved: true, supportLocked: true, version: 2 }); }
   finally { db.close(); }
+});
+
+test('the owner console opens a member with a reason, edits their classes and tasks, and logs it', async ({ page, context }, testInfo) => {
+  const student = seed();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db, 'browser-owner@example.com');
+    const personal = service.entity(student.id, 'personal')!;
+    service.sync(student.id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: personal, data: { ...personal.data, classes: [{ id: 'bio', name: 'Biology' }] } });
+    service.sync(student.id, { mutationId: randomUUID(), id: 'lab', kind: 'task', base: null, data: { title: 'Lab report', dueDate: null, dueTime: null, classId: null, notes: '', completed: false } });
+  } finally { db.close(); }
+  const owner = seed('browser-owner@example.com');
+  // A session whose Google sign-in is older than two hours must sign in again before the tools open.
+  const stale = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: owner.id, authAt: Date.now() - 3 * 3_600_000 }, maxAge: 3600 });
+  await context.addCookies([{ name: 'next-auth.session-token', value: stale, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
+  await page.goto('/admin');
+  await expect(page.getByRole('heading', { name: 'Confirm it’s you' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in again with Google' })).toBeVisible();
+  await authenticate(context, owner.id);
+  await page.reload();
+
+  await page.getByRole('tab', { name: 'People' }).click();
+  await page.getByRole('textbox', { name: 'Search members' }).fill(student.id);
+  await page.getByRole('row').filter({ hasText: student.school.name }).getByRole('button', { name: 'Open Browser Student' }).click();
+  await expect(dialog(page)).toContainText('Opening it is written to the audit log');
+  await dialog(page).getByRole('button', { name: 'Reviewing a report' }).click();
+  const record = page.getByRole('dialog', { name: 'Browser Student' });
+  await expect(record.getByRole('tab', { name: 'Classes · 1' })).toBeVisible();
+  await expect(record.getByRole('button', { name: 'Suspend account' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('admin-member-account.png') });
+  await record.getByRole('tab', { name: 'Friends & chats' }).click();
+  await expect(record.getByText('Message text stays private')).toBeVisible();
+
+  await record.getByRole('tab', { name: 'Classes · 1' }).click();
+  await record.getByRole('textbox', { name: 'Name' }).fill('AP Biology');
+  await page.screenshot({ path: testInfo.outputPath('admin-member-classes.png') });
+  await record.getByRole('button', { name: 'Save classes' }).click();
+  await expect(record.getByRole('button', { name: 'Save classes' })).toBeDisabled();
+  await record.getByRole('tab', { name: 'Tasks · 1' }).click();
+  await record.getByRole('button', { name: 'Edit Lab report' }).click();
+  const taskDialog = page.getByRole('dialog', { name: 'Edit task' });
+  await taskDialog.getByRole('textbox', { name: 'Title' }).fill('Lab report (final)');
+  await taskDialog.getByRole('button', { name: 'Save task' }).click();
+  await expect(record.getByRole('button', { name: 'Edit Lab report (final)' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('admin-member.png') });
+  await record.getByRole('tab', { name: 'Activity' }).click();
+  await expect(record.getByText('Edited classes')).toBeVisible();
+  await expect(record.getByText('“Reviewing a report”')).toBeVisible();
+  await record.getByRole('button', { name: 'Done', exact: true }).click();
+
+  const check = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(check);
+    expect(service.entity(student.id, 'personal')!.data).toMatchObject({ classes: [{ id: 'bio', name: 'AP Biology' }] });
+    expect(service.entity(student.id, 'lab')!.data).toMatchObject({ title: 'Lab report (final)' });
+  } finally { check.close(); }
+  await page.getByRole('tab', { name: 'Audit log' }).click();
+  const edited = page.getByRole('row').filter({ hasText: 'Edited a task' }).first();
+  await expect(edited).toContainText('about Browser Student');
+  // The name is a link back to the member's record; a member opened once this session needs no second reason.
+  await edited.getByRole('button', { name: 'Browser Student' }).click();
+  await expect(page.getByRole('dialog', { name: 'Browser Student' }).getByRole('tab', { name: 'Activity' })).toBeVisible();
 });
 
 test('competing device edits require a visible choice and sign-out clears the account cache', async ({ page, context, browser }) => {
@@ -419,6 +482,7 @@ test('remaining screens render without horizontal overflow on desktop and mobile
 
   const owner = seed('browser-owner@example.com'); await authenticate(context, owner.id);
   await page.goto('/admin');
+  await page.getByRole('tab', { name: 'Schools' }).click();
   await page.getByRole('button', { name: `Review ${owner.school.name}` }).click();
   await expect(dialog(page)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('admin-review.png') });

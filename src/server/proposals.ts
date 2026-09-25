@@ -156,7 +156,7 @@ export class ProposalService {
     this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, row.schedule, actorId, now());
     this.db.prepare("UPDATE schedule_proposals SET status='passed', closed_at=?, actor_id=? WHERE id=?").run(now(), actorId, row.id);
     this.db.prepare("UPDATE schedule_proposals SET status='superseded', closed_at=? WHERE school_id=? AND id<>? AND status IN ('open','awaiting-support')").run(now(), school.id, row.id);
-    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(actorId, 'school.proposalApplied', school.id, JSON.stringify({ proposalId: row.id, fromVersion: school.version }), now());
+    this.service.audit(actorId, 'school.proposalApplied', school.id, { proposalId: row.id, fromVersion: school.version });
   }
 
   /* ---------- Support ---------- */
@@ -180,8 +180,11 @@ export class ProposalService {
     this.db.transaction(() => {
       const row = this.db.prepare('SELECT * FROM schedule_proposals WHERE id=? AND status=?').get(proposalId, 'awaiting-support') as Row | undefined;
       if (!row) fail('NOT_FOUND', 'This proposal is no longer awaiting support.');
-      if (publish) this.apply(row, row.base_version, adminId, true);
-      else this.db.prepare("UPDATE schedule_proposals SET status='declined', closed_at=?, actor_id=? WHERE id=?").run(now(), adminId, proposalId);
+      if (publish) this.apply(row!, row!.base_version, adminId, true);
+      else {
+        this.db.prepare("UPDATE schedule_proposals SET status='declined', closed_at=?, actor_id=? WHERE id=?").run(now(), adminId, proposalId);
+        this.service.audit(adminId, 'proposal.decline', row!.school_id, { proposalId, userId: row!.proposer_id });
+      }
     }).immediate();
   }
 }

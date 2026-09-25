@@ -79,7 +79,7 @@ export class MenuService {
     if (n >= MENU_ACTION_LIMIT) fail('TOO_MANY_REQUESTS', 'Too many menu lookups for now. Try again in an hour.');
   }
   private audit(userId: string, action: string, schoolId: string, detail: unknown): void {
-    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(userId, action, schoolId, JSON.stringify(detail), this.clock().toISOString());
+    this.service.audit(userId, action, schoolId, detail, this.clock().toISOString());
   }
   private async choices(site: { org: string; domain: MenuSource['domain'] }): Promise<MenuChoice[]> {
     let payload: unknown;

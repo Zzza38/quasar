@@ -14,6 +14,9 @@ import { Brand, CenteredNotice } from './shell';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer, StatTile, Textarea, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
+import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -21,7 +24,22 @@ type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
+type Security = RouterOutput['admin']['security'];
 type PauseTarget = { userId: string; name: string };
+const TAB_CLASS = 'rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary';
+
+/** True when the server refused an owner tool because the owner's Google sign-in is too old (src/lib/admin-session.ts). */
+function needsSignIn(error: unknown): boolean {
+  return error instanceof Error && error.message === ADMIN_REAUTH_MESSAGE;
+}
+/**
+ * A fresh Google sign-in that returns to the console. Google shows its account chooser but reuses its own session
+ * (it ignores `max_age`, sent in case that changes), so this proves a live Google session in this browser, which a
+ * copied Quasar cookie alone does not give, rather than a fresh password check.
+ */
+function signInAgain(): void {
+  void signIn('google', { callbackUrl: '/admin' }, { prompt: 'select_account', max_age: '0' });
+}
 
 /** Admin has no AppState, so instants are shown in the browser's time zone. */
 function formatInstant(iso: string): string {
@@ -30,7 +48,7 @@ function formatInstant(iso: string): string {
 }
 
 /** What the server knows about the request's session (src/app/admin/page.tsx), so the page paints its verdict at once. */
-export type AdminBoot = { accountId: string | null; isAdmin: boolean };
+export type AdminBoot = { accountId: string | null; isAdmin: boolean; adminReady: boolean };
 
 export function Admin({ initial }: { initial?: AdminBoot }) {
   const [schools, setSchools] = useState<School[]>([]);
@@ -47,7 +65,17 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [opening, setOpening] = useState<string | null>(null);
   const [hiding, setHiding] = useState<string | null>(null);
   const [pauseTarget, setPauseTarget] = useState<PauseTarget | null>(null);
-  const [allowed, setAllowed] = useState(!!initial?.isAdmin);
+  const [allowed, setAllowed] = useState(!!initial?.adminReady);
+  // The owner is signed in, but not recently enough for the owner tools: the page offers a fresh Google sign-in.
+  const [reauth, setReauth] = useState(!!initial?.isAdmin && !initial.adminReady);
+  const [security, setSecurity] = useState<Security | null>(null);
+  const [tab, setTab] = useState('inbox');
+  // Opening a member asks for a reason once per member per page load (it goes into the audit log with the view).
+  const [openingMember, setOpeningMember] = useState<MemberTarget | null>(null);
+  const [member, setMember] = useState<(MemberTarget & { reason: string }) | null>(null);
+  const reasons = useRef(new Map<string, string>());
+  // Bumped when a change made outside the open record (a messaging pause) should reload it.
+  const [memberKey, setMemberKey] = useState(0);
   const [signedIn, setSignedIn] = useState(!!initial?.accountId);
   const [loading, setLoading] = useState(true);
   // Whether the page knows who is asking: from the server render, or after the first session check.
@@ -60,16 +88,20 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
     // Losing owner access drops everything support loaded, including student proofs and report snapshots.
-    const revoke = () => { setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setEvidence({}); };
+    const revoke = () => {
+      setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setEvidence({});
+      setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); reasons.current.clear();
+    };
     setLoading(true); setError(''); setFailed(false);
     try {
       const session = await api.session.query(); setSignedIn(Boolean(session));
       const nextAccount = session?.user.id ?? null;
       if (accountRef.current !== nextAccount) setEvidence({});
       accountRef.current = nextAccount; setAccountId(nextAccount);
-      if (!session?.isAdmin) { revoke(); return; }
-      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query()]);
-      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setAllowed(true);
+      setReauth(!!session?.isAdmin && !session.adminReady);
+      if (!session?.adminReady) { revoke(); return; }
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query(), api.admin.security.query()]);
+      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
       setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
@@ -77,15 +109,34 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       setError(errorMessage(err));
       // Only a refusal ends access. A network blip or one failing list keeps what is loaded (and any open sheet or
       // report snapshot) on screen with the error above it, so reopening evidence does not write another audit entry.
+      if (needsSignIn(err)) setReauth(true);
       if (isAccessDenied(err)) revoke(); else setFailed(true);
     }
     finally { setLoading(false); setDecided(true); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  // When the support session runs out, everything loaded leaves the screen at once rather than at the next click.
+  useEffect(() => {
+    if (!security) return;
+    const timer = setTimeout(() => void refresh(), Math.max(0, security.until - Date.now()) + 1000);
+    return () => clearTimeout(timer);
+  }, [security, refresh]);
+  const openMember = (target: MemberTarget) => {
+    const reason = reasons.current.get(target.userId);
+    if (reason) setMember({ ...target, reason }); else setOpeningMember(target);
+  };
   const school = schools.find((entry) => entry.id === selected);
 
   // Only a page the server could not decide waits for the session check, as a plain background rather than a loader.
   if (!decided) return <div className="min-h-dvh" aria-busy="true" />;
+  if (!allowed && reauth) {
+    return <CenteredNotice title="Confirm it’s you" action={<div className="grid justify-items-center gap-2">
+      <Button variant="primary" onClick={signInAgain}><GoogleLogo />Sign in again with Google</Button>
+      <div className="flex gap-2"><Button size="sm" onClick={() => void refresh()}>Retry</Button><Button size="sm" variant="ghost" onClick={() => window.location.assign('/')}>Back to my schedule</Button></div>
+    </div>}>
+      {ADMIN_REAUTH_MESSAGE} Support sessions last two hours from your last Google sign-in.
+    </CenteredNotice>;
+  }
   if (!allowed) {
     return <CenteredNotice title={failed ? 'Support tools could not load' : signedIn ? 'Owner access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
       {!signedIn && !failed && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}><GoogleLogo />Continue with Google</Button>}
@@ -101,6 +152,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     setError('');
     let failure: unknown = null;
     try { await action(); } catch (err) { failure = err; }
+    if (needsSignIn(failure)) { await refresh(); return; }
     // Reload after a refusal too: some commit first (a banned student's verification request is declined, a stale
     // proposal is superseded), so the list must drop them. refresh clears the error, so the action's shows after it.
     await refresh();
@@ -128,18 +180,29 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   return <div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
-        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip></div>
+        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip>{security && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
         <div className="flex shrink-0 items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => void refresh()}><span className="max-sm:sr-only">Refresh</span></Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
       </div>
     </header>
     <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
-      <PageHeader title="Support" eyebrow="Owner tools" description="Review shared schedules, publish corrections, verify members and handle reports." />
+      <PageHeader title="Support" eyebrow="Owner tools" description="Handle requests and reports, manage any member’s account, classes and tasks, and review shared schedules. Everything you open or change is written to the audit log." />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatTile icon="inbox" tone={openCount ? 'now' : 'success'} value={openCount} label="open items" />
         <StatTile icon="school" tone="accent" value={schools.length} label="schools" />
         <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
       </div>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+      {security && !security.pinned && <Callout tone="warning" icon="lock" title="Pin the owner account">
+        The owner is recognized by email alone. Add <code className="break-all font-mono text-[13px]">OWNER_GOOGLE_SUB={security.googleSub}</code> to the server’s .env.local and restart, so only this Google account can open these tools even if the address is ever given to someone else.
+      </Callout>}
+      <Tabs value={tab} onValueChange={setTab} className="gap-5">
+      <div className="overflow-x-auto"><TabsList aria-label="Support section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
+        <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
+        <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
+        <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
+        <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
+      </TabsList></div>
+      <TabsContent value="schools" className="grid gap-5">
       <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}
         {visible.length > 0 && <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/[0.06]"><Table>
@@ -153,13 +216,15 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           </TableRow>)}</TableBody>
         </Table></div>}
       </Section>
+      </TabsContent>
 
+      <TabsContent value="inbox" className="grid gap-5">
       <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
         {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.message}</p>
-          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
+          <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.email })}>Open member</Button><Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>Mark resolved</Button></div>
         </li>)}</ul>}
       </Section>
 
@@ -168,7 +233,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button></div>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button><Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName })}>Open member</Button></div>
         </li>)}</ul>}
       </Section>
 
@@ -201,6 +266,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
                 ? <Button size="sm" variant="soft" icon="x" onClick={() => closeEvidence(report.id)}>Close messages</Button>
                 : <Button size="sm" variant="soft" icon="message" busy={opening === report.id} disabled={!accountId} onClick={() => void showEvidence(report.id)}>Show messages ({report.evidenceCount})</Button>)}
               <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
+              <Button size="sm" onClick={() => openMember({ userId: report.reportedId, name: report.reportedName })}>Open member</Button>
               <Button size="sm" icon="lock" disabled={!accountId} onClick={() => setPauseTarget({ userId: report.reportedId, name: report.reportedName })}>Pause messaging</Button>
               {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason for the audit log.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
             </div>
@@ -224,10 +290,18 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
         </li>)}</ul>}
       </Section>
+      </TabsContent>
+      <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} onOpen={openMember} /></TabsContent>
+      <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>
+      </Tabs>
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
     {school && <ReviewSheet key={school.id} school={school} onClose={() => setSelected(null)} onSaved={refresh} />}
-    {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={refresh} />}
+    {openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
+      onOpen={(reason) => { reasons.current.set(openingMember.userId, reason); setMember({ ...openingMember, reason }); setOpeningMember(null); }} />}
+    {member && accountId && <MemberRecord key={member.userId} accountId={accountId} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
+      onClose={() => setMember(null)} onOpenMember={openMember} onPause={setPauseTarget} onChanged={refresh} />}
+    {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={async () => { await refresh(); setMemberKey((key) => key + 1); }} />}
   </div>;
 }
 

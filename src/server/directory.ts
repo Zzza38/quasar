@@ -58,7 +58,6 @@ export class DirectoryService {
     }).immediate();
   }
   private audit(actorId: string, schoolId: string, action: string, detail: unknown) {
-    this.service.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)')
-      .run(actorId, action, schoolId, JSON.stringify(detail), new Date().toISOString());
+    this.service.audit(actorId, action, schoolId, detail);
   }
 }

@@ -25,7 +25,7 @@ export default defineConfig({
     command: 'npx next start --hostname 127.0.0.1 --port 3100', url: 'http://127.0.0.1:3100/api/health', reuseExistingServer: false,
     // `next start` fills every key that is still undefined from .env.local, so production-only keys are blanked here to keep them out of the test server.
     env: { DATABASE_PATH: process.env.E2E_DATABASE_PATH, NEXTAUTH_SECRET:process.env.E2E_AUTH_SECRET,
-      NEXTAUTH_URL:'http://localhost:3100', OWNER_EMAIL:'browser-owner@example.com',
+      NEXTAUTH_URL:'http://localhost:3100', OWNER_EMAIL:'browser-owner@example.com', OWNER_GOOGLE_SUB:'',
       GOOGLE_CLIENT_ID:'test-client', GOOGLE_CLIENT_SECRET:'test-client-secret',
       SCAN_API_URL:'http://127.0.0.1:3199/v1', SCAN_MODEL:'mock-vision', SCAN_API_KEY:'', SCAN_MODEL_REASONING:'', SCAN_MODEL_TEMPERATURE:'',
       VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'' }
