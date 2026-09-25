@@ -56,7 +56,7 @@ function worker() {
         keys: async () => [...cache.keys()].map((url) => ({ url })),
         delete: async (key: string | { url: string }) => cache.delete(address(key)),
       }),
-      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "quasar-public-shell-v5", "unrelated-cache"],
+      keys: async () => ["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "quasar-public-shell-v5", "quasar-public-shell-v6", "unrelated-cache"],
       delete: async (name: string) => { deletedCaches.push(name); return true; },
     },
     self: {
@@ -113,7 +113,7 @@ describe("public offline service worker", () => {
   it("cleans up pre-rebrand and outdated shells while preserving current and unrelated caches", async () => {
     const sw = worker();
     await sw.dispatch("activate");
-    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4"]);
+    expect(sw.deletedCaches).toEqual(["whatsnext-public-shell-v3", "quasar-public-shell-v2", "quasar-public-shell-v3", "quasar-public-shell-v4", "quasar-public-shell-v5"]);
   });
 
   it("precaches the brand lockup so offline notices do not show an empty box", async () => {
@@ -131,13 +131,14 @@ describe("public offline service worker", () => {
     sw.breakBrand();
     await sw.dispatch("install");
     expect(sw.cache.has(address("/brand/quasar-full.svg"))).toBe(false);
-    expect(sw.cache.has(address("/"))).toBe(true);
+    expect(sw.cache.has(address("/offline"))).toBe(true);
   });
 
   it("prepares the shell and bundles for the first offline reload", async () => {
     const sw = worker();
     await sw.dispatch("install");
-    expect(sw.requests).toContainEqual({ path: "/", credentials: "omit" });
+    expect(sw.requests).toContainEqual({ path: "/offline", credentials: "omit" });
+    expect(sw.requests).not.toContainEqual({ path: "/", credentials: "omit" });
     expect(sw.requests).toContainEqual({ path: "/help", credentials: "omit" });
     expect(sw.cache.has(address("/_next/static/app.js"))).toBe(true);
     expect(sw.cache.has(address("/_next/static/app.css"))).toBe(true);
@@ -145,7 +146,7 @@ describe("public offline service worker", () => {
     expect(await (await sw.navigate("/"))?.text()).toContain("Public shell");
     expect(await (await sw.navigate("/admin"))?.text()).toContain("Public shell");
     expect(await (await sw.navigate("/help"))?.text()).toContain("Public shell");
-    // The views live at their own paths but are one app: the "/" shell opens any of them offline.
+    // The views live at their own paths but are one app: the neutral shell opens any of them offline.
     expect(await (await sw.navigate("/tasks"))?.text()).toContain("Public shell");
     expect(await (await sw.navigate("/messages"))?.text()).toContain("Public shell");
   });
@@ -208,7 +209,7 @@ describe("public offline service worker", () => {
     await sw.dispatch("install");
     sw.personalize();
     expect(await (await sw.navigate("/"))?.text()).toBe("PRIVATE ACCOUNT DATA");
-    expect(await sw.cache.get(address("/"))?.clone().text()).toContain("Public shell");
+    expect(await sw.cache.get(address("/offline"))?.clone().text()).toContain("Public shell");
     expect(await sw.navigate("/api/auth/signin")).toBeUndefined();
     expect(await sw.dispatch("fetch", { request: { method: "GET", url: address("/api/trpc/workspace"), mode: "cors" } })).toBeUndefined();
     expect(await sw.dispatch("fetch", { request: { method: "GET", url: address("/?_rsc=private"), mode: "cors" } })).toBeUndefined();
@@ -225,7 +226,7 @@ describe("public offline service worker", () => {
     let status: unknown;
     await sw.dispatch("message", { data: { type: "OFFLINE_STATUS" }, ports: [{ postMessage: (value: unknown) => { status = value; } }] });
     expect(status).toEqual({ ready: false, adminReady: false });
-    expect(sw.cache.has(address("/"))).toBe(false);
+    expect(sw.cache.has(address("/offline"))).toBe(false);
     sw.offline();
     expect((await sw.navigate("/"))?.status).toBe(503);
   });

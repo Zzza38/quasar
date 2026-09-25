@@ -146,11 +146,12 @@ test('explicit community choice, class and task persistence, offline reload and 
   await page.waitForFunction(async () => {
     if (!navigator.serviceWorker.controller) return false;
     const names = await caches.keys();
-    for (const name of names) if (name.startsWith('quasar-public-shell-') && await (await caches.open(name)).match('/')) return true;
+    for (const name of names) if (name.startsWith('quasar-public-shell-') && await (await caches.open(name)).match('/offline')) return true;
     return false;
   });
   await context.setOffline(true);
-  await page.goto('/tasks');
+  const offlineResponse = await page.goto('/tasks');
+  expect(await offlineResponse?.text()).not.toContain('Continue with Google');
   await page.reload();
   await expect(page.getByText('You’re offline.', { exact: false })).toBeVisible();
   // Completion moves the row into the collapsed completed section after IndexedDB commits.

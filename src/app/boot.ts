@@ -19,8 +19,8 @@ export function queryOf(searchParams: SearchParams): string {
  * The first paint is the real screen. The server reads the session cookie and renders either the landing page (with
  * NextAuth's `?error` and `?callbackUrl` already read) or the account's workspace, so no API round trip stands
  * between the HTML and the app. The client then opens its device store, which adds this device's waiting changes,
- * and keeps syncing as before (useWorkspace in src/components/use-workspace.ts). The service worker caches only its
- * own credentials-omitted fetch of the page, so the offline shell stays the public, signed-out one.
+ * and keeps syncing as before (useWorkspace in src/components/use-workspace.ts). The service worker caches a
+ * separate neutral offline shell, which restores the device copy without flashing the signed-out page.
  */
 export async function initialBoot(searchParams: SearchParams): Promise<InitialBoot> {
   const renderedAt = Date.now();

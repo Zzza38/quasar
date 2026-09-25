@@ -1,11 +1,12 @@
 /* This cache contains public application code only. Private data lives in the
  * account-scoped IndexedDB store; API responses and authentication never enter it. */
-const CACHE = "quasar-public-shell-v5";
-const SHELL_PATHS = new Set(["/", "/admin", "/help"]);
-// The app's views live at these paths, all served by the "/" shell: the page is one client app that reads the
-// address, so the offline copy of "/" opens any of them.
+const CACHE = "quasar-public-shell-v6";
+const OFFLINE_SHELL = "/offline";
+const SHELL_PATHS = new Set([OFFLINE_SHELL, "/admin", "/help"]);
+// The app's views share one client app. The neutral offline shell restores the saved account without first
+// painting the signed-out landing page.
 const VIEW_PATHS = new Set(["/today", "/schedule", "/tasks", "/classes", "/school", "/people", "/messages"]);
-const shellFor = (pathname) => (VIEW_PATHS.has(pathname) ? "/" : pathname);
+const shellFor = (pathname) => (pathname === "/" || VIEW_PATHS.has(pathname) ? OFFLINE_SHELL : pathname);
 // Public artwork under /brand is not content-hashed, so it is precached by name and served network first.
 const BRAND_ASSETS = ["/brand/quasar-full.svg", "/brand/quasar-full-dark.svg"];
 
@@ -110,7 +111,7 @@ self.addEventListener("message", (event) => {
     try {
       if (event.data.type === "PREPARE_OFFLINE") await refreshShells();
       const cache = await caches.open(CACHE);
-      event.ports[0]?.postMessage({ ready: !!await cache.match("/"), adminReady: !!await cache.match("/admin") });
+      event.ports[0]?.postMessage({ ready: !!await cache.match(OFFLINE_SHELL), adminReady: !!await cache.match("/admin") });
     } catch (error) {
       event.ports[0]?.postMessage({ ready: false, adminReady: false, error: error instanceof Error ? error.message : "Offline preparation failed" });
     }
@@ -122,7 +123,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  if (request.mode === "navigate" && (SHELL_PATHS.has(url.pathname) || VIEW_PATHS.has(url.pathname))) {
+  if (request.mode === "navigate" && (url.pathname === "/" || SHELL_PATHS.has(url.pathname) || VIEW_PATHS.has(url.pathname))) {
     event.respondWith((async () => {
       try {
         const response = await fetch(request);
@@ -131,7 +132,7 @@ self.addEventListener("fetch", (event) => {
         return response;
       } catch {
         const cache = await caches.open(CACHE);
-        return await cache.match(shellFor(url.pathname)) ?? await cache.match("/") ??
+        return await cache.match(shellFor(url.pathname)) ?? await cache.match(OFFLINE_SHELL) ??
           new Response("Connect to the internet once to save Quasar for offline use.", {
             status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
