@@ -38,6 +38,8 @@ Sources read before writing:
 
 **D6. Support sees chat text only through a report, and every view of it is audited.** A report freezes a snapshot of at most 30 messages from that one conversation. The owner has to press **Show messages** to see it. That button is a mutation, `admin.showEvidence`, which writes a `reports.view` row to `audit_log`. No admin procedure reads `chat_messages.body`. Support has no chat account and never sends messages. The owner's own Google account can chat like any student, and owner privileges add no chat reads. A router-shape test locks this in (§9).
 
+*Amended 2026-09-25:* the user console shows who a member chats with and how many messages each side sent (see §3.2), still never the text.
+
 *Amended 2026-09-24 by §11:* the guarantee for one-to-one chats is unchanged. The public Global chat room is the exception: the owner reads it in the app like any member and can edit or remove any room message there, with a visible reason and an audit row, without a report. Room messages live in `global_messages`, so still no admin procedure reads `chat_messages.body`.
 
 **D7. A closed chat leaves a report-only row for 30 days.** A chat can close by unfriending, a block in either direction, or support removal. Both participants then keep a row in their list until 30 days after the last message. The row shows only the other person's display name, the text "Chat closed", a **Report** button and, since `chat.reopen` (§3.2), an **Unblock** or **Add friend** button. It has no history and no composer. It looks the same whether the chat closed by unfriend, by block or by removal, so looking at it cannot tell "did they block me?". Its **Add friend** action can, exactly as People can: the friend request fails with "This member is not available." when the other person blocked the viewer, and succeeds after a plain unfriend. That probe was already possible from People, and after an unfriend it sends a real friend request. This closes the harass-then-leave escape. `community.profile` returns `NOT_FOUND` when the other person blocked the viewer, and also when the two are not friends and not at the same school. Without this row, a victim would have no route to the evidence. This is the one deliberate exception to the phase-3 rule "a block hides both people from each other". The row shows only a display name the viewer already chatted with. It never links to a profile, and it reveals nothing new. The blocked person also keeps a row. The judges raised retaliatory reports against the blocker. That risk is accepted, for three reasons:
@@ -193,8 +195,10 @@ Three checks are defined once in `src/server/chat.ts` and run inside the same tr
 
 **What the owner can never see:**
 - any message outside a report snapshot;
-- anyone's conversation list, who talks to whom, message counts, or read or unread state;
+- read or unread state;
 - a live thread.
+
+*Amended 2026-09-25 by the user console:* the owner's member record (`admin.users.view`, src/server/support.ts) lists that member's chats as metadata: the other person, when the chat started, when its last message was sent, and how many messages each side sent. Opening a record needs a reason and is audited. It never includes message text, and the Help page says so ("Can support read my messages?").
 
 Section intro copy says so. One caveat is stated honestly in `docs/OPERATIONS.md`: messages are stored unencrypted in SQLite and its backups. The operations rule is that nobody queries `chat_*` tables directly except for restores.
 
@@ -986,7 +990,8 @@ These are never cut:
    - A report on a thread with no messages (created by `mute`) gives `BAD_REQUEST` "This chat has no messages to report.", and no `reports` row is written.
    - A report whose `block: true` fails after the insert leaves neither the report nor the block (one transaction).
 10. **What the owner can see.**
-    - `Object.keys(appRouter._def.procedures).filter(k => k.startsWith('admin.'))` equals the expected list exactly: today's 11 (`schools`, `update`, `requests`, `resolveRequest`, `verificationRequests`, `decideVerification`, `reports`, `resolveReport`, `removeMember`, `proposals`, `decideProposal`) plus `showEvidence`, `redactMessage`, `pauseChat`, `liftChatPause` and `chatPauses`. This key shape was checked against tRPC 11.18 in this repo.
+    - `Object.keys(appRouter._def.procedures).filter(k => k.startsWith('admin.'))` equals the expected list exactly: today's 11 (`schools`, `update`, `requests`, `resolveRequest`, `verificationRequests`, `decideVerification`, `reports`, `resolveReport`, `removeMember`, `proposals`, `decideProposal`) plus `showEvidence`, `redactMessage`, `pauseChat`, `liftChatPause` and `chatPauses`, and since 2026-09-25 the user console's `security`, `renameSchool`, `auditLog` and `users.*`. This key shape was checked against tRPC 11.18 in this repo.
+    - The owner's member records for all three participants (`admin.users.view`), the member search and the audit log contain neither chat's text.
     - `admin.reports` output, serialized, contains no message text.
     - `admin.showEvidence` returns only the reported thread's snapshot and writes an `audit_log` `reports.view` row.
     - A second, unreported alice–cara chat's text (a marker string) appears in the serialized output of no admin procedure.
@@ -1124,7 +1129,7 @@ Added 2026-09-24. One room, **Global chat**, that every member with names entere
 
 **Tests.** `src/domain/chat-filter.test.ts` (swearing passes, slurs and obfuscations fail, innocent words pass), `src/server/global-chat.test.ts` (access, filter, delete and edit permissions with reasons and audit rows, revision polling, paging, unread and mute, limits and pauses, retry IDs, retention, account scoping) and the "global chat" test in `tests/e2e/chat.spec.ts`.
 
-## 12. Friend groups (migration 15)
+## 12. Friend groups (migration 17)
 
 Added 2026-09-25. A **group** is a named chat of up to `CHAT.groupMaxMembers` (20) people. The student who creates it is its **admin**: only they add people (their own accepted friends, with no block between the two of them), remove people and rename it; anyone can leave, and when the admin leaves the member who has been in the group longest becomes admin (the last member leaving deletes the group). A member sees the messages sent since they joined, so adding someone never exposes earlier chatter; someone removed and re-added starts again from that moment. Members can tap a name to open that person's profile, where Block and Report a member live as before.
 
@@ -1136,13 +1141,13 @@ Added 2026-09-25. A **group** is a named chat of up to `CHAT.groupMaxMembers` (2
 
 **Push and the badge.** `GROUP_CANDIDATES_SQL` in `notifications.ts` adds each unmuted group with an unread, unpushed message from someone else (not blocked, sent since the member joined) under the §6 rules; `chat_group_members.notified_seq` stops repeats. `countUnreadGroups` adds each such group to the badge (`countUnreadChats`), and a muted group is left out.
 
-**Data (migration 15).** `chat_groups` (`id`, `name`, `creator_id`, `revision`, `last_message_at`, `created_at`), `chat_group_members` (`group_id`, `user_id`, `role` in `admin|member`, `joined_at`, `left_at`, `last_read_seq`, `delivered_seq`, `notified_seq`, `muted`, `typing_until`) and `chat_group_messages` (`seq`, `id` unique across groups, `group_id`, `sender_id`, `body`, `created_at`, `deleted_at`, `deleted_by` in `sender|admin|support`, `revision`). Retention matches §3.5 (`pruneGroupChat`: messages after 180 days, deleted text after 30, idle groups after 180, members through the cascade).
+**Data (migration 17).** `chat_groups` (`id`, `name`, `creator_id`, `revision`, `last_message_at`, `created_at`), `chat_group_members` (`group_id`, `user_id`, `role` in `admin|member`, `joined_at`, `left_at`, `last_read_seq`, `delivered_seq`, `notified_seq`, `muted`, `typing_until`) and `chat_group_messages` (`seq`, `id` unique across groups, `group_id`, `sender_id`, `body`, `created_at`, `deleted_at`, `deleted_by` in `sender|admin|support`, `revision`). Retention matches §3.5 (`pruneGroupChat`: messages after 180 days, deleted text after 30, idle groups after 180, members through the cascade).
 
 **API (`group` router, all account-scoped).** `create({ name, memberIds })`, `rename`, `addMembers`, `removeMember`, `leave`, `thread({ groupId, after? | before? })` (the same page shape as `chat.thread`, with `group: { id, name, createdAt, role, members }` and `receipts`), `send`, `delete`, `read`, `mute`, `typing`, `report({ groupId, category, note, seq, block })`. `chat.inbox` gains `groups: GroupSummary[]`. Errors are fixed strings: "You are not in this group." (`NOT_FOUND`, for strangers and people who left), "Only the group admin can do that." (`FORBIDDEN`), "You can only add your friends to a group." (`BAD_REQUEST`, the same wording whether the person is not a friend or a block exists, so it is no probe), "A group can have up to 20 people.", "You created 5 groups today. Try again tomorrow.".
 
 **Tests.** `src/server/group-chat.test.ts` and the two group tests in `tests/e2e/chat.spec.ts`.
 
-## 13. Profile pictures, formatting, receipts and typing (migration 15)
+## 13. Profile pictures, formatting, receipts and typing (migration 17)
 
 Added 2026-09-25.
 
@@ -1154,7 +1159,7 @@ Added 2026-09-25.
 
 **Typing.** `chat.typing({ userId, typing })` and `group.typing` set `typing_until` to now + `CHAT.typingMs` (6 s) or clear it; the composer renews the signal every `CHAT.typingRenewMs` (2.5 s) while the draft is non-empty, clears it when the draft empties, on blur with an empty draft and on unmount; a send clears it on the server. Thread pages report `typing` per member, and the log shows a bouncing-dots row ("Bob is typing…", `role="status"`). Best effort, never queued or retried.
 
-## 14. Sanctions the student can see and appeal (migration 15)
+## 14. Sanctions the student can see and appeal (migration 17)
 
 Added 2026-09-25 at the owner's request: a student always sees why support paused their messaging or removed them from a school, and can appeal once per sanction.
 

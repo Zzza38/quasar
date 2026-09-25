@@ -38,7 +38,8 @@ function fixture() {
   const clock = { now: new Date() };
   const tick = (ms: number) => { clock.now = new Date(clock.now.getTime() + ms); };
   const chat = new ChatService(service, () => clock.now);
-  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id });
+  // A session from a Google sign-in just now, so owner tools accept it (recentSignIn in src/lib/admin-session.ts).
+  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id, authAt: Date.now() });
   const befriend = (a: string, b: string) => { community.request(a, b); community.respond(b, a, true); };
   const schoolmate = (name: string) => { const id = user(undefined, name); service.join(id, { schoolId: school.id, choice: 'community' }); return id; };
   /** Sends through ChatService with the test clock, stepping 4 s so the per-minute limit never interferes. */
@@ -519,6 +520,9 @@ describe('10. what the owner can see', () => {
     expect(Object.keys(appRouter._def.procedures).filter(key => key.startsWith('admin.')).sort()).toEqual([
       'schools', 'update', 'requests', 'resolveRequest', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport',
       'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses', 'bans', 'liftBan',
+      'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
+      'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
+      'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
     ].map(name => `admin.${name}`).sort());
   });
   it('shows chat text only through an audited report snapshot', async () => {
@@ -547,9 +551,14 @@ describe('10. what the owner can see', () => {
     expect(f.auditCount('reports.view')).toBe(1);
     expect(JSON.parse((f.db.prepare("SELECT detail FROM audit_log WHERE action='reports.view'").get() as { detail: string }).detail)).toEqual({ reportId });
 
-    // The unreported alice-cara chat appears in no admin output.
-    const outputs = await Promise.all([owner.admin.schools(), owner.admin.requests(), owner.admin.verificationRequests(), owner.admin.reports(), owner.admin.proposals(), owner.admin.chatPauses()]);
-    expect(JSON.stringify([...outputs, evidence])).not.toContain('ZX-PRIVATE-9');
+    // The unreported alice-cara chat appears in no admin output, the user console's records of all three included:
+    // they carry each chat's counts and times, never its text.
+    const records = await Promise.all([f.alice, f.bob, f.cara].map(userId => owner.admin.users.view({ accountId: ownerId, userId, reason: 'Reviewing a report' })));
+    expect(records[0]!.chats).toEqual(expect.arrayContaining([expect.objectContaining({ userId: f.cara, sent: 1, received: 1 })]));
+    const outputs = await Promise.all([owner.admin.schools(), owner.admin.requests(), owner.admin.verificationRequests(), owner.admin.reports(), owner.admin.proposals(), owner.admin.chatPauses(),
+      owner.admin.users.search({ query: '' }), owner.admin.auditLog({})]);
+    expect(JSON.stringify([...outputs, ...records, evidence])).not.toContain('ZX-PRIVATE-9');
+    expect(JSON.stringify(records)).not.toContain('ZX-REPORTED-1');
 
     // Hide message.
     await expect(owner.admin.showEvidence({ accountId: ownerId, reportId: randomUUID() })).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'This report has no messages.' });

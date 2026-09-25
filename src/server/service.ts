@@ -139,8 +139,18 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Where a request came from, recorded on the owner's audit rows (Service.audit). */
+export type RequestInfo = { ip: string | null; userAgent: string | null };
+
 export class Service {
-  constructor(readonly db: Db, readonly ownerEmail = process.env.OWNER_EMAIL || '') {}
+  /** Set per request by the tRPC route; absent in the worker and in tests. */
+  request: RequestInfo | null = null;
+  /**
+   * The owner is the account whose Google email is OWNER_EMAIL and, when OWNER_GOOGLE_SUB is set, whose Google
+   * account ID (the `sub` claim, users.google_sub) is that value too. The ID never changes or gets reissued, so it
+   * pins the owner even if the email address is ever given to a different Google account.
+   */
+  constructor(readonly db: Db, readonly ownerEmail = process.env.OWNER_EMAIL || '', readonly ownerSub = process.env.OWNER_GOOGLE_SUB || '') {}
   user(id: string | null): User {
     if (!id) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
     const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined;
@@ -234,7 +244,12 @@ export class Service {
     if (!user.displayName || !user.fullName) fail('BAD_REQUEST', 'Enter your display name and full name first.');
     return user;
   }
-  isAdmin(id: string): boolean { return !!this.ownerEmail && this.user(id).email.toLowerCase() === this.ownerEmail.trim().toLowerCase(); }
+  isAdmin(id: string): boolean {
+    if (!this.ownerEmail || this.user(id).email.toLowerCase() !== this.ownerEmail.trim().toLowerCase()) return false;
+    if (!this.ownerSub.trim()) return true;
+    const row = this.db.prepare('SELECT google_sub FROM users WHERE id=?').get(id) as { google_sub: string };
+    return row.google_sub === this.ownerSub.trim();
+  }
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
   profile(id: string, input: z.infer<typeof namesSchema>): User {
     const current = this.user(id);
@@ -266,8 +281,15 @@ export class Service {
     if (!row) return fail('NOT_FOUND', 'School not found.');
     return this.schoolFromRow(row);
   }
-  private audit(actorId: string, action: string, schoolId: string, detail: unknown) {
-    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(actorId, action, schoolId, JSON.stringify(detail), now());
+  /**
+   * Appends to audit_log (append-only: see migration 16 in src/server/db.ts). Rows written by the owner also keep
+   * the request's address and browser, and a copy goes to the server log (journald), which the database cannot rewrite.
+   */
+  audit(actorId: string, action: string, schoolId: string | null, detail: unknown, createdAt = now()): void {
+    const owner = this.request !== null && this.isAdmin(actorId);
+    const ip = owner ? this.request!.ip : null, userAgent = owner ? this.request!.userAgent : null;
+    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at,ip,user_agent) VALUES(?,?,?,?,?,?,?)').run(actorId, action, schoolId, JSON.stringify(detail), createdAt, ip, userAgent);
+    if (owner) console.info(`audit ${JSON.stringify({ actorId, action, schoolId, detail, createdAt, ip, userAgent })}`);
   }
   createSchool(id: string, raw: z.infer<typeof createSchoolSchema>): School {
     this.ready(id);
@@ -411,23 +433,27 @@ export class Service {
         // so every applied change is written and recorded in history.
         if (result.status === 'applied') {
           this.writeEntity(id, result.entity);
-          if (input.kind === 'task' && current && !current.deleted && !current.data.completed && !result.entity.deleted && result.entity.data.completed) {
-            // A successor the schema rejects (its date steps past 2199) would be stored but hidden everywhere, so the series ends instead.
-            const next = taskSchema.safeParse(nextRecurringTask(taskSchema.parse(result.entity.data)));
-            const existing = this.db.prepare('SELECT successor_id FROM recurring_successors WHERE owner_id=? AND parent_id=?').get(id, input.id);
-            if (next.success && !existing) {
-              const successorId = 'repeat_' + createHash('sha256').update(JSON.stringify([id, input.id, next.data.dueDate])).digest('hex');
-              if (this.entity(id, successorId)) fail('CONFLICT', 'The next repeating task ID is already in use.');
-              this.writeEntity(id, { id: successorId, kind: 'task', version: 1, data: next.data, deleted: false });
-              this.db.prepare('INSERT INTO recurring_successors(owner_id,parent_id,successor_id) VALUES(?,?,?)').run(id, input.id, successorId);
-            }
-          }
+          if (input.kind === 'task' && current && !current.deleted && !current.data.completed && !result.entity.deleted && result.entity.data.completed) this.addSuccessor(id, input.id, result.entity.data);
         }
       }
       // The receipt keeps the full result; a replay is shaped for whichever client asks.
       this.db.prepare('INSERT INTO mutation_receipts VALUES(?,?,?,?,?)').run(id, input.mutationId, fingerprint, JSON.stringify(result), now());
       return resultForClient(result, options);
     }).immediate();
+  }
+  /**
+   * The next task of a repeating series, once its current task is checked off (by a sync, or by support in the user
+   * console). Runs in the caller's transaction; a series only ever gets one successor per task.
+   */
+  addSuccessor(owner: string, taskId: string, completed: Record<string, unknown>): void {
+    // A successor the schema rejects (its date steps past 2199) would be stored but hidden everywhere, so the series ends instead.
+    const next = taskSchema.safeParse(nextRecurringTask(taskSchema.parse(completed)));
+    const existing = this.db.prepare('SELECT successor_id FROM recurring_successors WHERE owner_id=? AND parent_id=?').get(owner, taskId);
+    if (!next.success || existing) return;
+    const successorId = 'repeat_' + createHash('sha256').update(JSON.stringify([owner, taskId, next.data.dueDate])).digest('hex');
+    if (this.entity(owner, successorId)) fail('CONFLICT', 'The next repeating task ID is already in use.');
+    this.writeEntity(owner, { id: successorId, kind: 'task', version: 1, data: next.data, deleted: false });
+    this.db.prepare('INSERT INTO recurring_successors(owner_id,parent_id,successor_id) VALUES(?,?,?)').run(owner, taskId, successorId);
   }
   /** Replays of an existing receipt never reach this, so retries of applied changes always succeed. */
   private checkSyncQuota(id: string, input: Mutation, current: Entity | null): void {
@@ -475,12 +501,17 @@ export class Service {
   }
   requests(id: string) {
     this.admin(id);
-    return this.db.prepare(`SELECT r.id,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.user_id userId,r.kind
-      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; userId: string; kind: '' | 'appeal:pause' | 'appeal:ban'}[];
+    return this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban'}[];
   }
   resolveRequest(id: string, requestId: string) {
     this.admin(id);
-    this.db.prepare('UPDATE support_requests SET resolved_at=? WHERE id=?').run(now(), requestId);
+    this.db.transaction(() => {
+      const request = this.db.prepare('SELECT user_id, school_id FROM support_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string | null } | undefined;
+      if (!request) fail('NOT_FOUND', 'This request was already resolved.');
+      this.db.prepare('UPDATE support_requests SET resolved_at=? WHERE id=?').run(now(), requestId);
+      this.audit(id, 'support.resolveRequest', request!.school_id, { userId: request!.user_id, requestId });
+    }).immediate();
   }
 }
 /** The bytes really are the image type they claim: JPEG (FF D8 FF), PNG (89 50 4E 47) or WebP (RIFF....WEBP). */

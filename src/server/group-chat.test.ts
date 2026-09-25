@@ -35,7 +35,7 @@ function fixture() {
   const tick = (ms: number) => { clock.now = new Date(clock.now.getTime() + ms); };
   const groups = new GroupChatService(service, () => clock.now);
   const chat = new ChatService(service, () => clock.now);
-  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id });
+  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id, authAt: Date.now() });
   const send = (from: string, groupId: string, body = 'hello', clientId = randomUUID()) => { tick(4000); return groups.send(from, groupId, clientId, body).message; };
   const schoolmate = (name: string) => { const id = user(undefined, name); service.join(id, { schoolId: school.id, choice: 'community' }); return id; };
   return { db, service, community, user, owner, alice, bob, cara, dan, school, groups, chat, caller, clock, tick, send, befriend, schoolmate };

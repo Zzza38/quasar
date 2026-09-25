@@ -326,11 +326,15 @@ describe('timetable scanning', () => {
     for (let i = 0; i < SCAN_HOURLY_LIMIT; i++) await f.scan.scan(f.student, scans);
     await expect(f.scan.scan(f.student, scans)).rejects.toThrow(`You can scan up to ${SCAN_HOURLY_LIMIT} timetables per hour.`);
     expect(f.fetcher).toHaveBeenCalledTimes(SCAN_HOURLY_LIMIT);
-    // Age the hour's scans and top up the day so only the daily limit applies.
-    const earlier = new Date(Date.now() - 2 * 3_600_000).toISOString();
-    f.db.prepare("UPDATE audit_log SET created_at=? WHERE action='schedule.scan'").run(earlier);
-    const insert = f.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)');
-    for (let i = SCAN_HOURLY_LIMIT; i < SCAN_DAILY_LIMIT; i++) insert.run(f.student, 'schedule.scan', f.school.id, '{}', earlier);
-    await expect(f.scan.scan(f.student, scans)).rejects.toThrow(`You can scan up to ${SCAN_DAILY_LIMIT} timetables per day. Try again tomorrow.`);
+    // Two hours later the hour's scans have aged out (audit_log is append-only, so the clock moves instead of the
+    // rows); topping up the day leaves only the daily limit.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 3_600_000);
+      const earlier = new Date(Date.now() - 90 * 60_000).toISOString();
+      const insert = f.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)');
+      for (let i = SCAN_HOURLY_LIMIT; i < SCAN_DAILY_LIMIT; i++) insert.run(f.student, 'schedule.scan', f.school.id, '{}', earlier);
+      await expect(f.scan.scan(f.student, scans)).rejects.toThrow(`You can scan up to ${SCAN_DAILY_LIMIT} timetables per day. Try again tomorrow.`);
+    } finally { vi.useRealTimers(); }
   });
 });

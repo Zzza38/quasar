@@ -26,7 +26,7 @@ function fixture() {
   for (const id of [alice, bob, owner]) service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
   const community = new CommunityService(service);
   const chat = new ChatService(service);
-  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id });
+  const caller = (id: string | null) => appRouter.createCaller({ service, userId: id, authAt: Date.now() });
   return { db, service, owner, alice, bob, school, community, chat, caller };
 }
 

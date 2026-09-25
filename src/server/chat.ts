@@ -217,7 +217,7 @@ export class ChatService {
     return { rows: rows.slice(0, CHAT.page).reverse(), hasEarlier: rows.length > CHAT.page };
   }
   private audit(actorId: string, action: string, schoolId: string | null, detail: unknown): void {
-    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(actorId, action, schoolId, JSON.stringify(detail), this.iso());
+    this.service.audit(actorId, action, schoolId, detail, this.iso());
   }
 
   /* ---------- Student procedures ---------- */

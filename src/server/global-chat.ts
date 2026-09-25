@@ -154,7 +154,7 @@ export class GlobalChatService {
     return { unreadChats: countUnreadChats(this.db, viewerId), unreadAt: new Date().toISOString() };
   }
   private audit(actorId: string, action: string, detail: unknown): void {
-    this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,NULL,?,?)').run(actorId, action, JSON.stringify(detail), this.iso());
+    this.service.audit(actorId, action, null, detail, this.iso());
   }
 
   /* ---------- Member procedures ---------- */
