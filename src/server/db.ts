@@ -394,6 +394,26 @@ function migrate(db: Db): void {
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(14, datetime('now'));
   `);
+  // Migration 15: the owner's user console (src/server/support.ts). `session_epoch` is copied into each session token
+  // at sign-in and compared on every request (getAuth in src/server/auth.ts), so raising it signs the account out
+  // everywhere; `suspended_at` refuses the account until support lifts it. Owner actions record the request's
+  // address and browser in audit_log (`ip`, `user_agent`) so a session used from somewhere unexpected stands out.
+  const accountColumns = db.pragma('table_info(users)') as {name: string}[];
+  if (!accountColumns.some(column => column.name === 'session_epoch')) db.exec('ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0');
+  if (!accountColumns.some(column => column.name === 'suspended_at')) db.exec('ALTER TABLE users ADD COLUMN suspended_at TEXT');
+  if (!accountColumns.some(column => column.name === 'suspended_reason')) db.exec('ALTER TABLE users ADD COLUMN suspended_reason TEXT');
+  const auditColumns = db.pragma('table_info(audit_log)') as {name: string}[];
+  if (!auditColumns.some(column => column.name === 'ip')) db.exec('ALTER TABLE audit_log ADD COLUMN ip TEXT');
+  if (!auditColumns.some(column => column.name === 'user_agent')) db.exec('ALTER TABLE audit_log ADD COLUMN user_agent TEXT');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(15, datetime('now'))");
+  // Migration 16: audit_log is append-only. Nothing in the app updates or deletes it (the rate limits only count
+  // rows), so a bug or a future owner tool cannot quietly rewrite history. Someone with the database file can still
+  // drop the triggers; the server log's copy of each owner action (Service.audit) is the tamper evidence for that.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(16, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

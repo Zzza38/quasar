@@ -67,13 +67,15 @@ export class CommunityService {
     return { status: pending ? 'pending' : 'none', method: null };
   }
   /** Verifies by email domain when the school lists the student's Google domain. Safe to call repeatedly. */
-  verifyByDomain(userId: string, schoolId: string): boolean {
-    const user = this.service.user(userId);
+  /** True when the member's Google email is on one of the school's verification domains (exact or subdomain). */
+  domainMatches(userId: string, schoolId: string): boolean {
     const row = this.db.prepare('SELECT email_domains FROM schools WHERE id=?').get(schoolId) as { email_domains: string } | undefined;
     if (!row) return false;
-    const domains = parseEmailDomains(row.email_domains);
-    const domain = emailDomain(user.email);
-    if (!domain || !domains.some(entry => domain === entry || domain.endsWith(`.${entry}`))) return false;
+    const domain = emailDomain(this.service.user(userId).email);
+    return !!domain && parseEmailDomains(row.email_domains).some(entry => domain === entry || domain.endsWith(`.${entry}`));
+  }
+  verifyByDomain(userId: string, schoolId: string): boolean {
+    if (!this.domainMatches(userId, schoolId)) return false;
     this.db.transaction(() => {
       this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(userId, schoolId, 'domain', null, now());
       // A proof sent before support added the domain is settled by it, so it leaves the support queue.
@@ -279,7 +281,8 @@ export class CommunityService {
       // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
       const banned = approve && this.isBanned(request.user_id, request.school_id);
       this.db.prepare('UPDATE verification_requests SET resolved_at=?, decision=?, actor_id=? WHERE id=?').run(now(), approve && !banned ? 'approved' : 'declined', adminId, requestId);
-      if (approve && !banned) this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(request.user_id, request.school_id, 'support', adminId, now());
+      if (approve && !banned) this.db.prepare('INSERT OR IGNORE INTO school_verifications(user_id,school_id,method,actor_id,verified_at) VALUES(?,?,?,?,?)').run(request!.user_id, request!.school_id, 'support', adminId, now());
+      this.service.audit(adminId, approve && !banned ? 'verification.approve' : 'verification.decline', request!.school_id, { userId: request!.user_id, requestId });
       return banned;
     }).immediate();
     // Thrown after the commit, so the stale request stays closed.
@@ -290,6 +293,7 @@ export class CommunityService {
     this.db.transaction(() => {
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.withdrawProposals(userId, schoolId);
+      this.service.audit(adminId, 'support.unverify', schoolId, { userId });
     }).immediate();
   }
   /** Open reports, danger first, then oldest first. Chat reports carry a snapshot size but never message text. */
@@ -313,7 +317,12 @@ export class CommunityService {
   }
   resolveReport(adminId: string, reportId: string, outcome: 'dismissed' | 'removed'): void {
     this.service.admin(adminId);
-    this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=? AND resolved_at IS NULL').run(now(), adminId, outcome, reportId);
+    this.db.transaction(() => {
+      const report = this.db.prepare('SELECT reported_id, school_id FROM reports WHERE id=? AND resolved_at IS NULL').get(reportId) as { reported_id: string; school_id: string | null } | undefined;
+      if (!report) return;
+      this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=?').run(now(), adminId, outcome, reportId);
+      this.service.audit(adminId, 'report.resolve', report.school_id, { reportId, userId: report.reported_id, outcome });
+    }).immediate();
   }
   /**
    * Support removal: the member leaves the school, loses their verification and any open verification request there,
@@ -332,7 +341,7 @@ export class CommunityService {
       this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
       this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
       if (user.school_id === schoolId) this.db.prepare('UPDATE users SET school_id=NULL, reviewed_version=NULL WHERE id=?').run(userId);
-      this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(adminId, 'member.remove', schoolId, JSON.stringify({ userId, reason: text }), now());
+      this.service.audit(adminId, 'member.remove', schoolId, { userId, reason: text });
     }).immediate();
   }
   isBanned(userId: string, schoolId: string): boolean {

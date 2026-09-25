@@ -11,7 +11,19 @@ import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDele
 import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
-export type Context = { userId: string | null; service: Service };
+import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, recentSignIn } from '@/lib/admin-session';
+import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
+/**
+ * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
+ * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
+ */
+export type Context = { userId: string | null; service: Service; authAt?: number | null };
+/** A signed-in member calling an owner tool is recorded once a minute at most, so probing shows up in the audit log. */
+function recordDenied(service: Service, userId: string, path: string): void {
+  const since = new Date(Date.now() - 60_000).toISOString();
+  if (service.db.prepare("SELECT 1 FROM audit_log WHERE actor_id=? AND action='admin.denied' AND created_at>?").get(userId, since)) return;
+  service.audit(userId, 'admin.denied', null, { path, ip: service.request?.ip ?? null });
+}
 /** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
 export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
 /** Zod's built-in wording ("Invalid input", "Too small: …") is not written for students; custom refine messages are. */
@@ -32,11 +44,22 @@ const t = initTRPC.context<Context>().create({
     return { ...shape, message };
   },
 });
+/** Shown to a suspended account; the route already treats its session as signed out (getAuth), so this is a backstop. */
+export const SUSPENDED_MESSAGE = 'Support suspended this account. Contact support if you think this is a mistake.';
 const authenticated = t.procedure.use(({ ctx, next }) => {
   const user = ctx.service.user(ctx.userId);
+  if (ctx.service.db.prepare('SELECT 1 FROM users WHERE id=? AND suspended_at IS NOT NULL').get(user.id)) throw new TRPCError({ code: 'FORBIDDEN', message: SUSPENDED_MESSAGE });
   return next({ ctx: { ...ctx, userId: user.id } });
 });
-const admin = authenticated.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ctx}); });
+/**
+ * Owner tools. Besides the owner check, the session must come from a recent Google sign-in (ADMIN_SIGN_IN_MAX_AGE_MS),
+ * so a session cookie copied off a device is not enough to use them for its whole 30 days.
+ */
+const admin = authenticated.use(({ ctx, path, next }) => {
+  if (!ctx.service.isAdmin(ctx.userId)) { recordDenied(ctx.service, ctx.userId, path); ctx.service.admin(ctx.userId); }
+  if (!recentSignIn(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
+  return next({ ctx });
+});
 /**
  * Shown when a request is missing a field every current client sends: it comes from a tab still running a bundle
  * built before that field existed (an open tab or a resumed phone app keeps its old code across a deploy).
@@ -53,13 +76,25 @@ const accountScoped = authenticated.use(requiresField('accountId')).input(z.obje
   return next({ ctx });
 });
 /** Owner mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
-const adminScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
+const adminScoped = accountScoped.use(({ ctx, path, next }) => {
+  if (!ctx.service.isAdmin(ctx.userId)) { recordDenied(ctx.service, ctx.userId, path); ctx.service.admin(ctx.userId); }
+  if (!recentSignIn(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
+  return next({ ctx });
+});
+/** The owner moderating the public Global chat from the Messages view: an owner check without the recent sign-in. */
+const ownerScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
 const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional() });
 const clientOptions = (input: { clientVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
+const support = (service: Service) => new SupportService(service);
 export const appRouter = t.router({
-  session: t.procedure.query(({ ctx }) => ctx.userId ? { user: ctx.service.user(ctx.userId), isAdmin: ctx.service.isAdmin(ctx.userId) } : null),
+  // `adminReady`: the owner signed in recently enough to use the owner tools (see `admin` above).
+  session: t.procedure.query(({ ctx }) => {
+    if (!ctx.userId) return null;
+    const isAdmin = ctx.service.isAdmin(ctx.userId);
+    return { user: ctx.service.user(ctx.userId), isAdmin, adminReady: isAdmin && recentSignIn(ctx.authAt) };
+  }),
   profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
   directory: t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
@@ -97,7 +132,7 @@ export const appRouter = t.router({
     thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
     send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body)),
     delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
-    edit: adminScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
+    edit: ownerScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
     mute: accountScoped.input(globalMuteSchema).mutation(({ ctx, input }) => room(ctx.service).mute(ctx.userId, input.muted)),
   }),
@@ -161,7 +196,7 @@ export const appRouter = t.router({
     schools: admin.query(({ctx}) => ctx.service.schools('', -1)),
     update: admin.input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
     requests: admin.query(({ctx}) => ctx.service.requests(ctx.userId)),
-    resolveRequest: admin.input(z.object({id:z.string().uuid()})).mutation(({ctx,input}) => ctx.service.resolveRequest(ctx.userId,input.id)),
+    resolveRequest: adminScoped.input(z.object({id:z.string().uuid()})).mutation(({ctx,input}) => ctx.service.resolveRequest(ctx.userId,input.id)),
     verificationRequests: admin.query(({ ctx }) => new CommunityService(ctx.service).verificationRequests(ctx.userId)),
     decideVerification: admin.input(z.object({ id: z.uuid(), approve: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).decideVerification(ctx.userId, input.id, input.approve)),
     reports: admin.query(({ ctx }) => new CommunityService(ctx.service).reports(ctx.userId)),
@@ -175,6 +210,32 @@ export const appRouter = t.router({
     pauseChat: adminScoped.input(pauseChatSchema).mutation(({ ctx, input }) => { chat(ctx.service).pauseChat(ctx.userId, input); }),
     liftChatPause: adminScoped.input(chatUserSchema).mutation(({ ctx, input }) => { chat(ctx.service).liftChatPause(ctx.userId, input.userId); }),
     chatPauses: admin.query(({ ctx }) => chat(ctx.service).chatPauses(ctx.userId)),
+    // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
+    security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
+    renameSchool: adminScoped.input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),
+    // Whole-log view; each member's own rows come with admin.users.view.
+    auditLog: admin.input(auditQuerySchema).query(({ ctx, input }) => support(ctx.service).auditLog(ctx.userId, input)),
+    // The user console (src/server/support.ts). A member's record is a mutation because opening it is audited. It carries
+    // one-to-one chat metadata only: no procedure here reads chat_messages.body.
+    users: t.router({
+      search: admin.input(userSearchSchema).query(({ ctx, input }) => support(ctx.service).search(ctx.userId, input)),
+      view: adminScoped.input(supportViewSchema).mutation(({ ctx, input }) => support(ctx.service).view(ctx.userId, input)),
+      updateAccount: adminScoped.input(accountEditSchema).mutation(({ ctx, input }) => { support(ctx.service).updateAccount(ctx.userId, input); }),
+      suspend: adminScoped.input(suspendSchema).mutation(({ ctx, input }) => { support(ctx.service).setSuspended(ctx.userId, input); }),
+      signOut: adminScoped.input(reasonedUserSchema).mutation(({ ctx, input }) => { support(ctx.service).signOutEverywhere(ctx.userId, input); }),
+      removeBrowsers: adminScoped.input(reasonedUserSchema).mutation(({ ctx, input }) => support(ctx.service).removeBrowsers(ctx.userId, input)),
+      moveSchool: adminScoped.input(schoolMoveSchema).mutation(({ ctx, input }) => { support(ctx.service).moveSchool(ctx.userId, input); }),
+      setVerified: adminScoped.input(verificationSetSchema).mutation(({ ctx, input }) => { support(ctx.service).setVerified(ctx.userId, input); }),
+      unban: adminScoped.input(unbanSchema).mutation(({ ctx, input }) => { support(ctx.service).unban(ctx.userId, input); }),
+      savePersonal: adminScoped.input(personalEditSchema).mutation(({ ctx, input }) => support(ctx.service).savePersonal(ctx.userId, input)),
+      saveTask: adminScoped.input(taskEditSchema).mutation(({ ctx, input }) => support(ctx.service).saveTask(ctx.userId, input)),
+      deleteTask: adminScoped.input(taskDeleteSchema).mutation(({ ctx, input }) => { support(ctx.service).deleteTask(ctx.userId, input); }),
+      feed: adminScoped.input(feedActionSchema).mutation(({ ctx, input }) => { support(ctx.service).feedAction(ctx.userId, input); }),
+      removeFriendship: adminScoped.input(friendshipRemoveSchema).mutation(({ ctx, input }) => { support(ctx.service).removeFriendship(ctx.userId, input); }),
+      // The member's Global chat posts are public, so the owner edits and removes them with the room's own tools.
+      deleteGlobal: adminScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
+      editGlobal: adminScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
+    }),
   })
 });
 export type AppRouter = typeof appRouter;
