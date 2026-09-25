@@ -198,7 +198,7 @@ describe('global chat', () => {
     fails(() => f.room.send(f.alice, randomUUID(), 'one more'), 'TOO_MANY_REQUESTS');
     new ChatService(f.service).pauseChat(f.owner, { userId: f.bob, days: 1, reason: 'cool off' });
     fails(() => f.room.send(f.bob, randomUUID(), 'hey'), 'FORBIDDEN');
-    expect(f.room.thread(f.bob).pause).toEqual({ until: expect.any(String) });
+    expect(f.room.thread(f.bob).pause).toEqual({ until: expect.any(String), reason: 'cool off', appealed: false });
   });
 
   it('shares the per-minute and per-day limits with one-to-one chat', () => {

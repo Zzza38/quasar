@@ -6,6 +6,7 @@ import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { ChatService } from '../../src/server/chat';
 import { CommunityService } from '../../src/server/community';
+import { GroupChatService } from '../../src/server/group-chat';
 import { exampleSchedule } from '../../src/domain/example';
 
 // Chat is polled (4 s threads, 10 s lists, 15 s badge), so each scenario gets room for several cycles.
@@ -88,17 +89,23 @@ async function choose(select: Locator, option: string) {
 const badge = (page: Page) => page.getByRole('link', { name: 'Messages', exact: true }).filter({ visible: true }).first();
 
 /**
- * A closed row looks the same however the chat closed: the name, "Chat closed", a Report button and, for a
+ * A closed row looks the same however the chat closed: the name, "Chat closed", a menu with Report and, for a
  * schoolmate, one reopen button ("Add friend", or "Unblock" when the viewer blocked them). Nothing reveals the other side's block.
  */
 async function expectClosedRow(page: Page, name: string, reopen: 'Unblock' | 'Add friend' = 'Add friend') {
   const row = page.getByRole('list', { name: 'Chats', exact: true }).getByRole('listitem').filter({ hasText: name });
   await expect(row).toContainText('Chat closed', { timeout: 20_000 });
   await expect(row.getByRole('button')).toHaveCount(2);
-  await expect(row.getByRole('button', { name: `Report ${name}` })).toBeVisible();
+  await expect(row.getByRole('button', { name: `More options for ${name}` })).toBeVisible();
   await expect(row.getByRole('button', { name: reopen === 'Unblock' ? `Unblock ${name} and reopen the chat` : `Add friend: ${name}` })).toBeVisible();
   await expect(row.getByRole('link')).toHaveCount(0);
   return row;
+}
+
+/** Report and Block are tucked into the thread header's menu; this opens it and picks an item. */
+async function fromMenu(page: Page, item: string | RegExp) {
+  await page.getByRole('button', { name: 'More options', exact: true }).click();
+  await page.getByRole('menuitem', { name: item }).click();
 }
 
 /** A friend request answered from outside the browser. */
@@ -209,7 +216,7 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
   const f = seed();
   const alice = await signedIn(browser, f.alice);
   await alice.goto('/messages');
-  const groups = alice.getByRole('list', { name: 'Rooms' });
+  const groups = alice.getByRole('list', { name: 'Groups' });
   await expect(groups.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
   await groups.getByRole('button', { name: 'Open Global chat' }).click();
   await expect(alice.getByText('Everyone on Quasar can read and post here.')).toBeVisible();
@@ -296,7 +303,7 @@ test('a blocked chat can be reopened: unblock sends a request, and acceptance br
   const bob = await signedIn(browser, f.bob);
   await bob.goto(`/messages?with=${f.alice}`);
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('see you at practice');
-  await bob.getByRole('button', { name: 'Block', exact: true }).click();
+  await fromMenu(bob, 'Block Alice');
   await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
   const row = await expectClosedRow(bob, 'Alice', 'Unblock');
   await row.getByRole('button', { name: 'Unblock Alice and reopen the chat' }).click();
@@ -453,7 +460,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   const bob = await signedIn(browser, f.bob);
   await bob.goto(`/messages?with=${f.alice}`);
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('Watch out tomorrow');
-  await bob.getByRole('button', { name: 'Block', exact: true }).click();
+  await fromMenu(bob, 'Block Alice');
   await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'Alice is blocked.' })).toBeVisible();
   await expectClosedRow(bob, 'Alice', 'Unblock');
@@ -462,7 +469,8 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   const alice = await signedIn(browser, f.alice);
   await alice.goto('/messages');
   const closed = await expectClosedRow(alice, 'Bob');
-  await closed.getByRole('button', { name: 'Report Bob' }).click();
+  await closed.getByRole('button', { name: 'More options for Bob' }).click();
+  await alice.getByRole('menuitem', { name: 'Report Bob' }).click();
   const report = alice.getByRole('dialog', { name: 'Report Bob' });
   await expect(report.getByRole('button', { name: 'Send report' })).toBeDisabled();
   await report.getByRole('radiogroup', { name: 'What’s wrong?' }).getByRole('radio', { name: 'Someone may be in danger' }).click();
@@ -494,7 +502,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   await card.getByRole('button', { name: 'Pause messaging' }).click();
   const pause = owner.getByRole('dialog', { name: 'Pause Bob’s messaging' });
   await choose(pause.getByRole('combobox', { name: 'Pause length' }), '7 days');
-  await pause.getByRole('textbox', { name: 'Reason for the audit log' }).fill('Threats in chat, reported as danger.');
+  await pause.getByRole('textbox', { name: 'Reason (shown to the student)' }).fill('Threats in chat, reported as danger.');
   await pause.getByRole('button', { name: 'Pause messaging' }).click();
   await expect(pause).toHaveCount(0);
   await expect(owner.getByRole('heading', { name: 'Paused members' })).toBeVisible();
@@ -505,11 +513,140 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   await expect(bobPaused.getByRole('button', { name: 'Lift pause' })).toBeVisible();
   expect(await owner.content()).not.toContain('secret plans');
 
-  // Bob can still read, but cannot send, even to Cara.
+  // Bob can still read, but cannot send, even to Cara. He sees the reason and can appeal once (docs/CHAT.md §14).
   await bob.goto(`/messages?with=${f.cara}`);
-  await expect(bob.getByText(/^Support paused your messaging until [^.]+\.$/)).toBeVisible({ timeout: 20_000 });
+  await expect(bob.getByText(/^Support paused your messaging until [^.]+\. Reason: Threats in chat, reported as danger\.$/)).toBeVisible({ timeout: 20_000 });
   await expect(bob.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
   await expect(bob.getByRole('textbox', { name: 'Message Cara' })).toHaveCount(0);
+  // The list banner and the thread both offer it; either sends one appeal, after which both show it was sent.
+  await bob.getByRole('region', { name: 'Chat with Cara' }).getByRole('button', { name: 'Appeal' }).click();
+  const appeal = bob.getByRole('dialog', { name: 'Appeal your messaging pause' });
+  await appeal.getByRole('textbox', { name: 'Your appeal' }).fill('We sorted it out in person, it was a joke gone wrong.');
+  await appeal.getByRole('button', { name: 'Send appeal' }).click();
+  await expect(appeal).toHaveCount(0);
+  await expect(bob.getByText('Appeal sent. Support will review it.').first()).toBeVisible({ timeout: 20_000 });
+  await expect(bob.getByRole('button', { name: 'Appeal' })).toHaveCount(0, { timeout: 20_000 });
+
+  // The owner sees the appeal in the inbox and lifts the pause from it; Bob can send again.
+  await owner.reload();
+  const inbox = owner.locator('[data-slot="card"]').filter({ has: owner.getByRole('heading', { name: 'Correction requests and appeals' }) });
+  const appealCard = inbox.getByRole('listitem').filter({ hasText: 'We sorted it out in person' });
+  await expect(appealCard.getByText('Appeal: messaging pause')).toBeVisible();
+  await appealCard.getByRole('button', { name: 'Lift pause' }).click();
+  await expect(appealCard).toHaveCount(0);
+  await expect(owner.getByText('Nobody is paused.')).toBeVisible();
+  await expect(bob.getByRole('textbox', { name: 'Message Cara' })).toBeVisible({ timeout: 20_000 });
+});
+
+test('friend groups: creating, formatting, typing, read receipts and the admin removing someone', async ({ browser }, testInfo) => {
+  const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto('/messages');
+  await alice.getByRole('button', { name: 'New group' }).click();
+  const create = alice.getByRole('dialog', { name: 'New group' });
+  await create.getByRole('textbox', { name: 'Group name' }).fill('Bio lab crew');
+  await create.getByRole('checkbox', { name: 'Bob' }).check();
+  await create.getByRole('checkbox', { name: 'Cara' }).check();
+  await create.getByRole('button', { name: 'Create group' }).click();
+  await expect(create).toHaveCount(0);
+  await expect(alice.getByRole('status').filter({ hasText: 'Group “Bio lab crew” created.' })).toBeVisible();
+  const aliceLog = alice.getByRole('log', { name: 'Messages in Bio lab crew' });
+  await expect(alice.getByText('Only the people in Bio lab crew can read this.')).toBeVisible();
+  await expect(alice.getByText('You’re the admin')).toBeVisible();
+
+  // Formatting: the toolbar wraps the selection, and the bubble renders it (no raw asterisks).
+  const composer = alice.getByRole('textbox', { name: 'Message Bio lab crew' });
+  await alice.getByRole('button', { name: 'Formatting' }).click();
+  await composer.fill('bring goggles tomorrow');
+  await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(6, 13));
+  await alice.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Bold' }).click();
+  await expect(composer).toHaveValue('bring **goggles** tomorrow');
+  await composer.press('Enter');
+  const sent = aliceLog.getByRole('listitem').filter({ hasText: 'bring goggles tomorrow' });
+  await expect(sent.locator('strong', { hasText: 'goggles' })).toBeVisible();
+  await expect(sent).not.toContainText('**');
+  await expect(sent).toContainText('Sent', { timeout: 15_000 });
+
+  // Bob (phone) opens the group from the list: the message is delivered, then read once he sees it.
+  const bob = await phone(browser, f.bob);
+  await bob.goto('/messages');
+  await bob.getByRole('button', { name: 'Open group Bio lab crew' }).click();
+  const bobLog = bob.getByRole('log', { name: 'Messages in Bio lab crew' });
+  await expect(bobLog.locator('strong', { hasText: 'goggles' })).toBeVisible();
+  await expect(bobLog.getByText('Alice', { exact: true }).first()).toBeVisible();
+  await expect(sent).toContainText('Read by 1', { timeout: 20_000 });
+
+  // Typing: Bob starts a message and Alice sees it within a couple of polls; sending clears it.
+  const bobComposer = bob.getByRole('textbox', { name: 'Message Bio lab crew' });
+  await bobComposer.fill('on it');
+  await expect(alice.getByRole('status').filter({ hasText: 'Bob is typing…' })).toBeVisible({ timeout: 20_000 });
+  await bob.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(aliceLog.getByText('on it', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(alice.getByRole('status').filter({ hasText: 'Bob is typing…' })).toHaveCount(0, { timeout: 20_000 });
+
+  for (const scheme of ['light', 'dark'] as const) {
+    await bob.emulateMedia({ colorScheme: scheme });
+    await alice.emulateMedia({ colorScheme: scheme });
+    await bob.screenshot({ path: testInfo.outputPath(`group-phone-${scheme}.png`) });
+    await alice.screenshot({ path: testInfo.outputPath(`group-desktop-${scheme}.png`) });
+  }
+
+  // Cara can read but not manage; Alice removes her from the members sheet and Cara is told at the next poll.
+  const cara = await signedIn(browser, f.cara);
+  await cara.goto('/messages');
+  await cara.getByRole('button', { name: 'Open group Bio lab crew' }).click();
+  await expect(cara.getByRole('log', { name: 'Messages in Bio lab crew' })).toContainText('on it');
+  await cara.getByRole('button', { name: 'More options', exact: true }).click();
+  await expect(cara.getByRole('menuitem', { name: 'Rename group' })).toHaveCount(0);
+  await cara.keyboard.press('Escape');
+  await fromMenu(alice, /Members/);
+  const members = alice.getByRole('dialog', { name: 'Bio lab crew' });
+  await expect(members.getByRole('list', { name: 'Members' }).getByRole('listitem')).toHaveCount(3);
+  await members.getByRole('button', { name: 'Remove Cara from the group' }).click();
+  await expect(members.getByRole('list', { name: 'Members' }).getByRole('listitem')).toHaveCount(2);
+  await alice.keyboard.press('Escape');
+  await expect(cara.getByText('You’re not in this group anymore.')).toBeVisible({ timeout: 20_000 });
+  await expect(cara.getByRole('textbox', { name: 'Message Bio lab crew' })).toHaveCount(0);
+  await expect(alice.getByText('2 members')).toBeVisible();
+});
+
+test('a group message can be reported, and the snapshot names every sender', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let groupId: string;
+  try {
+    const groups = new GroupChatService(new Service(db, OWNER_EMAIL));
+    groupId = groups.create(f.alice, { name: 'Study crew', memberIds: [f.bob, f.cara] }).id;
+    groups.send(f.cara, groupId, randomUUID(), 'anyone have the notes?');
+    groups.send(f.bob, groupId, randomUUID(), 'nobody wants you here');
+  } finally { db.close(); }
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto(`/messages?group=${groupId}`);
+  const log = alice.getByRole('log', { name: 'Messages in Study crew' });
+  const nasty = log.getByRole('listitem').filter({ hasText: 'nobody wants you here' });
+  await nasty.hover();
+  await nasty.getByRole('button', { name: 'Message actions' }).click();
+  await nasty.getByRole('button', { name: 'Report message' }).click();
+  const report = alice.getByRole('dialog', { name: 'Report message' });
+  await expect(report).toContainText('from everyone in the group');
+  await report.getByRole('radiogroup', { name: 'What’s wrong?' }).getByRole('radio', { name: 'Bullying or harassment' }).click();
+  await report.getByRole('checkbox', { name: 'Also block Bob' }).uncheck();
+  await report.getByRole('button', { name: 'Send report' }).click();
+  await expect(report).toHaveCount(0);
+  await expect(alice.getByRole('status').filter({ hasText: 'Report sent to support.' })).toBeVisible();
+
+  const owner = await signedIn(browser, f.owner);
+  await owner.goto('/admin');
+  const card = owner.getByRole('listitem').filter({ hasText: f.emails.bob });
+  await expect(card.getByText('Chat', { exact: true })).toBeVisible();
+  await card.getByRole('button', { name: /^Show messages/ }).click();
+  const evidence = card.getByRole('list', { name: 'Reported messages' });
+  await expect(evidence.getByRole('listitem').filter({ hasText: 'anyone have the notes?' })).toContainText('Cara');
+  await expect(evidence.getByRole('listitem').filter({ hasText: 'nobody wants you here' })).toContainText('Reported message');
+  // Hide message asks with the browser's confirm() (the admin page is owner-only, docs/CHAT.md §3.2).
+  owner.on('dialog', (dialog) => void dialog.accept());
+  await evidence.getByRole('listitem').filter({ hasText: 'nobody wants you here' }).getByRole('button', { name: 'Hide message' }).click();
+  await expect(log.getByText('Hidden by support')).toBeVisible({ timeout: 20_000 });
 });
 
 test('reporting a message with block closes the chat identically for both', async ({ browser }) => {

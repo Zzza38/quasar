@@ -1,6 +1,7 @@
 import { getServerSession, type NextAuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 import { getDb } from './db';
+import { usableGooglePicture } from './avatars';
 import { randomUUID } from 'node:crypto';
 
 export const authOptions: NextAuthOptions = {
@@ -25,9 +26,12 @@ export const authOptions: NextAuthOptions = {
       if (account?.provider === 'google' && profile?.sub && profile.email) {
         const db = getDb();
         const googleName = typeof profile.name === 'string' ? profile.name.trim().slice(0, 160) : '';
-        db.prepare(`INSERT INTO users(id,google_sub,email,google_name,created_at) VALUES(?,?,?,?,?)
-          ON CONFLICT(google_sub) DO UPDATE SET email=excluded.email, google_name=excluded.google_name`)
-          .run(randomUUID(), profile.sub, profile.email.toLowerCase(), googleName, new Date().toISOString());
+        // The Google profile picture (docs/CHAT.md §13): kept only when it is an https URL on Google's CDN.
+        const claimed = (profile as { picture?: unknown }).picture;
+        const picture = typeof claimed === 'string' && claimed.length <= 1024 && usableGooglePicture(claimed) ? claimed : '';
+        db.prepare(`INSERT INTO users(id,google_sub,email,google_name,google_picture,created_at) VALUES(?,?,?,?,?,?)
+          ON CONFLICT(google_sub) DO UPDATE SET email=excluded.email, google_name=excluded.google_name, google_picture=excluded.google_picture`)
+          .run(randomUUID(), profile.sub, profile.email.toLowerCase(), googleName, picture, new Date().toISOString());
         const user = db.prepare('SELECT id FROM users WHERE google_sub = ?').get(profile.sub) as { id: string };
         token.userId = user.id;
       }

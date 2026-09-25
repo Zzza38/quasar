@@ -2,8 +2,9 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, bodyError, censorBody, normalizeBody, rawBodySchema } from '@/domain/chat';
 // A cycle with ./chat, safe because neither module uses the other's exports while it loads.
-import { countUnreadChats, listPreview } from './chat';
+import { activePause, countUnreadChats, listPreview, type ChatPause, type Receipt } from './chat';
 import type { Db } from './db';
+import { avatarUrl } from './avatars';
 import type { Service } from './service';
 
 /**
@@ -22,7 +23,7 @@ export const PAUSED = 'Support paused your messaging.';
 const MISSING = 'That message is gone.';
 
 export type GlobalDeletedBy = 'sender' | 'owner' | null;
-export type GlobalSender = { id: string; displayName: string; verified: boolean };
+export type GlobalSender = { id: string; displayName: string; verified: boolean; avatar: string | null };
 export type GlobalMessage = { id: string; seq: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: GlobalDeletedBy; editedAt: string | null;
   /** The owner's reason for editing or removing this message (may be empty); null when the owner didn't touch it. */
@@ -34,7 +35,8 @@ export type GlobalSummary = {
 };
 
 type MessageRow = { seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
-  deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number };
+  deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number;
+  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type MemberRow = { last_read_seq: number; muted: number };
 
 export const globalThreadSchema = z.object({
@@ -58,7 +60,7 @@ export function parseGlobalBody(raw: string): string {
   return body;
 }
 
-const MESSAGE_SQL = `SELECT c.*, u.display_name,
+const MESSAGE_SQL = `SELECT c.*, u.display_name, u.google_picture, u.avatar_version, u.avatar_hidden,
   EXISTS (SELECT 1 FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) AS verified
   FROM global_messages c JOIN users u ON u.id=c.sender_id`;
 
@@ -86,12 +88,13 @@ export function countUnreadGlobal(db: Db, userId: string): number {
 }
 
 /**
- * Messages a member sent after `since` (ISO), one-to-one and in the room together: the per-minute and per-day
- * limits (docs/CHAT.md §3.3, §11) are one budget per sender across every chat, not one per surface.
+ * Messages a member sent after `since` (ISO), one-to-one, in groups and in the room together: the per-minute and
+ * per-day limits (docs/CHAT.md §3.3, §11, §12) are one budget per sender across every chat, not one per surface.
  */
 export function countSentSince(db: Db, userId: string, since: string): number {
   const row = db.prepare(`SELECT (SELECT count(*) FROM chat_messages WHERE sender_id=@user AND created_at>@since)
-    + (SELECT count(*) FROM global_messages WHERE sender_id=@user AND created_at>@since) n`).get({ user: userId, since }) as { n: number };
+    + (SELECT count(*) FROM global_messages WHERE sender_id=@user AND created_at>@since)
+    + (SELECT count(*) FROM chat_group_messages WHERE sender_id=@user AND created_at>@since) n`).get({ user: userId, since }) as { n: number };
   return row.n;
 }
 
@@ -110,9 +113,8 @@ export class GlobalChatService {
   private notPaused(viewerId: string): void {
     if (this.db.prepare('SELECT 1 FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(viewerId, this.iso())) fail('FORBIDDEN', PAUSED);
   }
-  private pause(userId: string): { until: string | null } | null {
-    const row = this.db.prepare('SELECT until FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(userId, this.iso()) as { until: string | null } | undefined;
-    return row ? { until: row.until } : null;
+  private pause(userId: string): ChatPause | null {
+    return activePause(this.db, userId, this.iso());
   }
   private member(userId: string): MemberRow {
     return this.db.prepare(`SELECT ${GLOBAL_READ_SEQ_SQL('@user')} AS last_read_seq, coalesce((SELECT m.muted FROM global_members m WHERE m.user_id=@user), 0) AS muted`).get({ user: userId }) as MemberRow;
@@ -135,7 +137,7 @@ export class GlobalChatService {
       id: row.id, seq: row.seq, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at,
       reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null,
-      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified },
+      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
     };
   }
   /** The newest page the viewer can see (messages from members they blocked are left out). */
@@ -176,7 +178,8 @@ export class GlobalChatService {
       this.service.ready(viewerId);
       const member = this.member(viewerId);
       const revision = this.revision();
-      const base = { peer: null, room: this.room(viewerId), revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId) };
+      // The room has no read receipts or typing signals (§13): with hundreds of members they would mean nothing.
+      const base = { peer: null, room: this.room(viewerId), revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts: [] as Receipt[] };
       const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
       if (cursor.after !== undefined) {
         const changes = cursor.after > revision ? null

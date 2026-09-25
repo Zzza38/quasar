@@ -3,9 +3,12 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, REPORT_CATEGORIES, bodyError, censorBody, normalizeBody, rawBodySchema, reportCategorySchema, TOO_MANY_NEW_CHATS_MESSAGE, type ReportCategory } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
+import { plainText } from '@/domain/markdown';
 import { CommunityService } from './community';
 import { countSentSince, countUnreadGlobal } from './global-chat';
+import { countUnreadGroups } from './group-chat';
 import type { Db } from './db';
+import { AVATAR_COLUMNS, avatarUrl, type AvatarRow } from './avatars';
 import type { Service, User } from './service';
 
 /**
@@ -28,10 +31,16 @@ export const PAUSED = 'Support paused your messaging.';
 const SELF = 'You cannot message yourself.';
 const NOTHING_TO_REPORT = 'This chat has no messages to report.';
 
-export type ChatPeer = { id: string; displayName: string; fullName: string | null; verified: boolean };
+export type ChatPeer = { id: string; displayName: string; fullName: string | null; verified: boolean; avatar: string | null };
 export type ChatMessage = { id: string; seq: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: 'sender' | 'support' | null };
-export type ChatPause = { until: string | null };
+/** A messaging pause the student is under: when it ends (null: until lifted), support's reason, and whether they appealed (§14). */
+export type ChatPause = { until: string | null; reason: string; appealed: boolean };
+/**
+ * How far one other member of a conversation has got (docs/CHAT.md §13): `deliveredSeq` is the newest message their
+ * device has fetched, `readSeq` the newest they have marked read. `typing` is true while their typing signal is live.
+ */
+export type Receipt = { id: string; displayName: string; avatar: string | null; deliveredSeq: number; readSeq: number; typing: boolean };
 export type InboxRow =
   | { state: 'open'; peer: ChatPeer;
       lastMessage: { fromMe: boolean; preview: string | null; createdAt: string; deletedBy: 'sender' | 'support' | null } | null;
@@ -42,13 +51,17 @@ export type InboxRow =
 export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
 export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
   deletedBy: 'sender' | 'support' | null; anchor: boolean };
-/** Stored snapshot item. It holds no names; showEvidence derives them when the owner views it. */
-type StoredItem = { seq: number; fromReported: boolean; body: string; createdAt: string; deletedBy: 'sender' | 'support' | null; anchor: boolean };
+/**
+ * Stored snapshot item. It holds no names; showEvidence derives them when the owner views it: for a one-to-one chat from
+ * `fromReported`, for a group (§12) from `senderId`, since a group snapshot holds other members' messages too.
+ */
+export type StoredItem = { seq: number; fromReported: boolean; body: string; createdAt: string; deletedBy: 'sender' | 'support' | null; anchor: boolean; senderId?: string };
 
 type ThreadRow = { id: string; user_low: string; user_high: string; revision: number; last_message_at: string | null; created_at: string };
 type MessageRow = { seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
   deleted_at: string | null; deleted_by: 'sender' | 'support' | null; revision: number };
-type PeerRow = { id: string; display_name: string; full_name: string; school_id: string | null };
+type PeerRow = AvatarRow & { display_name: string; full_name: string; school_id: string | null };
+type MemberRow = { last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
 
 export const chatUserSchema = z.object({ userId: z.uuid() });
 export const chatThreadSchema = chatUserSchema.extend({
@@ -59,6 +72,7 @@ export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: 
 export const chatDeleteSchema = chatUserSchema.extend({ messageId: z.uuid() });
 export const chatReadSchema = chatUserSchema.extend({ seq: z.number().int().min(0) });
 export const chatMuteSchema = chatUserSchema.extend({ muted: z.boolean() });
+export const chatTypingSchema = chatUserSchema.extend({ typing: z.boolean() });
 export const chatReportSchema = chatUserSchema.extend({
   category: reportCategorySchema,
   note: z.string().trim().max(2000).default(''),
@@ -85,7 +99,15 @@ export function parseBody(raw: string): string {
  * slur split at the boundary.
  */
 export function listPreview(body: string): string {
-  return censorSlurs(body).replace(/\s+/g, ' ').trim().slice(0, 120);
+  return censorSlurs(plainText(body)).replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/** The student's active messaging pause with support's reason and whether an appeal is open (§3.4, §14), or null. */
+export function activePause(db: Db, userId: string, nowIso: string): ChatPause | null {
+  const row = db.prepare('SELECT until, reason FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(userId, nowIso) as { until: string | null; reason: string } | undefined;
+  if (!row) return null;
+  const appealed = !!db.prepare("SELECT 1 FROM support_requests WHERE user_id=? AND kind='appeal:pause' AND resolved_at IS NULL").get(userId);
+  return { until: row.until, reason: row.reason, appealed };
 }
 
 /**
@@ -109,7 +131,7 @@ export function countUnreadChats(db: Db, userId: string): number {
   const row = db.prepare(`SELECT count(*) n FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
     WHERE m.user_id=? AND m.muted=0 AND ${accessibleSql('t')}
     AND EXISTS (SELECT 1 FROM chat_messages c WHERE c.thread_id=t.id AND c.seq>m.last_read_seq AND c.sender_id<>? AND c.deleted_at IS NULL)`).get(userId, userId) as { n: number };
-  return row.n + (countUnreadGlobal(db, userId) > 0 ? 1 : 0);
+  return row.n + countUnreadGroups(db, userId) + (countUnreadGlobal(db, userId) > 0 ? 1 : 0);
 }
 
 export class ChatService {
@@ -142,8 +164,7 @@ export class ChatService {
     if (this.pause(viewerId)) fail('FORBIDDEN', PAUSED);
   }
   pause(userId: string): ChatPause | null {
-    const row = this.db.prepare('SELECT until FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(userId, this.iso()) as { until: string | null } | undefined;
-    return row ? { until: row.until } : null;
+    return activePause(this.db, userId, this.iso());
   }
 
   /* ---------- Helpers ---------- */
@@ -164,13 +185,27 @@ export class ChatService {
     return (this.db.prepare('UPDATE chat_threads SET revision=revision+1 WHERE id=? RETURNING revision').get(threadId) as { revision: number }).revision;
   }
   private peer(viewer: User, otherId: string): ChatPeer {
-    const row = this.db.prepare('SELECT id, display_name, full_name, school_id FROM users WHERE id=?').get(otherId) as PeerRow;
+    const row = this.db.prepare(`SELECT id, display_name, full_name, school_id, ${AVATAR_COLUMNS} FROM users WHERE id=?`).get(otherId) as PeerRow;
     return this.peerFromRow(viewer, row);
   }
   private peerFromRow(viewer: User, row: PeerRow): ChatPeer {
     const verified = this.community.isVerified(row.id, row.school_id);
     const viewerVerified = this.community.isVerified(viewer.id, viewer.schoolId);
-    return { id: row.id, displayName: row.display_name, fullName: verified && viewerVerified ? row.full_name : null, verified };
+    return { id: row.id, displayName: row.display_name, fullName: verified && viewerVerified ? row.full_name : null, verified, avatar: avatarUrl(row) };
+  }
+  private memberRow(threadId: string, userId: string): MemberRow | undefined {
+    return this.db.prepare('SELECT last_read_seq, delivered_seq, muted, typing_until FROM chat_members WHERE thread_id=? AND user_id=?').get(threadId, userId) as MemberRow | undefined;
+  }
+  /** The other person's markers for the thread page (§13). A pair with no thread yet has nothing delivered or read. */
+  private receipt(peer: ChatPeer, member: MemberRow | undefined): Receipt {
+    return { id: peer.id, displayName: peer.displayName, avatar: peer.avatar, deliveredSeq: member?.delivered_seq ?? 0, readSeq: member?.last_read_seq ?? 0, typing: !!member?.typing_until && member.typing_until > this.iso() };
+  }
+  /**
+   * Records that the viewer's device now holds every message up to `seq` (§13). A single statement outside the read
+   * transaction, run only when there is something newer than the stored marker, so an idle poll takes no write lock.
+   */
+  private markDelivered(threadId: string, viewerId: string, seq: number): void {
+    this.db.prepare('UPDATE chat_members SET delivered_seq=max(delivered_seq, ?) WHERE thread_id=? AND user_id=? AND delivered_seq<?').run(seq, threadId, viewerId, seq);
   }
   private message(viewerId: string, row: MessageRow): ChatMessage {
     return { id: row.id, seq: row.seq, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null };
@@ -191,21 +226,23 @@ export class ChatService {
     return { unreadChats: countUnreadChats(this.db, userId), unreadAt: new Date().toISOString() };
   }
 
-  inbox(viewerId: string): { rows: InboxRow[]; unreadChats: number; unreadAt: string; pause: ChatPause | null } {
+  private inboxPage(viewerId: string) {
     const viewer = this.service.ready(viewerId);
     return this.db.transaction(() => {
-      const friends = this.db.prepare(`SELECT u.id, u.display_name, u.full_name, u.school_id, t.id thread_id, t.last_message_at, m.last_read_seq, m.muted
+      const friends = this.db.prepare(`SELECT u.id, u.display_name, u.full_name, u.school_id, u.google_picture, u.avatar_version, u.avatar_hidden, t.id thread_id, t.last_message_at, m.last_read_seq, m.delivered_seq, m.muted
         FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
         LEFT JOIN chat_threads t ON t.user_low=f.user_low AND t.user_high=f.user_high
         LEFT JOIN chat_members m ON m.thread_id=t.id AND m.user_id=?
         WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?)
         AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id=f.user_low AND b.blocked_id=f.user_high) OR (b.blocker_id=f.user_high AND b.blocked_id=f.user_low))
         ORDER BY u.display_name COLLATE NOCASE, u.id`).all(viewerId, viewerId, viewerId, viewerId) as
-        (PeerRow & { thread_id: string | null; last_message_at: string | null; last_read_seq: number | null; muted: number | null })[];
+        (PeerRow & { thread_id: string | null; last_message_at: string | null; last_read_seq: number | null; delivered_seq: number | null; muted: number | null })[];
       const latest = this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? ORDER BY seq DESC LIMIT 1');
       const unread = this.db.prepare('SELECT count(*) n FROM chat_messages WHERE thread_id=? AND seq>? AND sender_id<>? AND deleted_at IS NULL');
       const open: { at: string; row: InboxRow }[] = [];
       const idle: InboxRow[] = [];
+      /** Threads whose newest incoming message this device has just fetched (marked delivered after the read, §13). */
+      const delivered: { threadId: string; seq: number }[] = [];
       for (const friend of friends) {
         if (CHAT.requiresVerification && !(this.community.isVerified(viewerId, viewer.schoolId) && this.community.isVerified(friend.id, friend.school_id))) continue;
         const peer = this.peerFromRow(viewer, friend);
@@ -216,6 +253,7 @@ export class ChatService {
           continue;
         }
         const deleted = !!last.deleted_at;
+        if (last.sender_id !== viewerId && last.seq > (friend.delivered_seq ?? 0)) delivered.push({ threadId: friend.thread_id, seq: last.seq });
         open.push({ at: friend.last_message_at, row: {
           state: 'open', peer, muted,
           lastMessage: { fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null },
@@ -238,37 +276,64 @@ export class ChatService {
         ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at, reopen: reopenOf(row) })),
         ...idle,
       ];
-      return { rows, ...this.unreadChats(viewerId), pause: this.pause(viewerId) };
+      return { rows, delivered, ...this.unreadChats(viewerId), pause: this.pause(viewerId) };
     })();
+  }
+  inbox(viewerId: string): { rows: InboxRow[]; unreadChats: number; unreadAt: string; pause: ChatPause | null } {
+    const { delivered, ...result } = this.inboxPage(viewerId);
+    for (const entry of delivered) this.markDelivered(entry.threadId, viewerId, entry.seq);
+    return result;
   }
 
   thread(viewerId: string, otherId: string, cursor: { after?: number; before?: number } = {}) {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
     if (cursor.after !== undefined && cursor.before !== undefined) fail('BAD_REQUEST', 'Use either after or before, not both.');
-    return this.db.transaction(() => {
+    const { deliver, ...result } = this.db.transaction(() => {
       const viewer = this.access(viewerId, otherId);
       const peer = this.peer(viewer, otherId);
       const pause = this.pause(viewerId);
       const thread = this.findThread(viewerId, otherId);
+      const none = { deliver: null as { threadId: string; seq: number } | null };
       if (!thread) {
-        return { peer, messages: [] as ChatMessage[], revision: 0, lastReadSeq: 0, hasEarlier: false, reset: cursor.after !== undefined && cursor.after > 0, muted: false, pause };
+        return { ...none, peer, messages: [] as ChatMessage[], revision: 0, lastReadSeq: 0, hasEarlier: false, reset: cursor.after !== undefined && cursor.after > 0, muted: false, pause, receipts: [this.receipt(peer, undefined)] };
       }
-      const member = this.db.prepare('SELECT last_read_seq, muted FROM chat_members WHERE thread_id=? AND user_id=?').get(thread.id, viewerId) as { last_read_seq: number; muted: number } | undefined;
-      const base = { peer, revision: thread.revision, lastReadSeq: member?.last_read_seq ?? 0, muted: !!member?.muted, pause };
+      const member = this.memberRow(thread.id, viewerId);
+      const base = { peer, revision: thread.revision, lastReadSeq: member?.last_read_seq ?? 0, muted: !!member?.muted, pause, receipts: [this.receipt(peer, this.memberRow(thread.id, otherId))] };
       const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
+      // The newest incoming message this response carries: the viewer's device holds it once the response lands (§13).
+      const newest = (rows: MessageRow[]) => {
+        const seq = rows.reduce((max, row) => (row.sender_id !== viewerId && row.seq > max ? row.seq : max), 0);
+        return seq > (member?.delivered_seq ?? 0) ? { threadId: thread.id, seq } : null;
+      };
       if (cursor.after !== undefined) {
         const changes = cursor.after > thread.revision ? null
           : this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? AND revision>? ORDER BY seq LIMIT ?').all(thread.id, cursor.after, CHAT.maxChanges + 1) as MessageRow[];
         if (changes && changes.length <= CHAT.maxChanges) {
           // hasEarlier describes a page; an `after` poll is not a page, so the client keeps its own value.
-          return { ...base, messages: toMessages(changes), hasEarlier: false, reset: false };
+          return { ...base, deliver: newest(changes), messages: toMessages(changes), hasEarlier: false, reset: false };
         }
         const page = this.latestPage(thread.id);
-        return { ...base, messages: toMessages(page.rows), hasEarlier: page.hasEarlier, reset: true };
+        return { ...base, deliver: newest(page.rows), messages: toMessages(page.rows), hasEarlier: page.hasEarlier, reset: true };
       }
       const page = this.latestPage(thread.id, cursor.before);
-      return { ...base, messages: toMessages(page.rows), hasEarlier: page.hasEarlier, reset: false };
+      return { ...base, deliver: newest(page.rows), messages: toMessages(page.rows), hasEarlier: page.hasEarlier, reset: false };
     })();
+    if (deliver) this.markDelivered(deliver.threadId, viewerId, deliver.seq);
+    return result;
+  }
+
+  /**
+   * The viewer's typing signal for the other person's thread page (§13): on, it lasts CHAT.typingMs unless renewed;
+   * off clears it at once. Sending a message clears it too. A pair with no thread yet gets one, as mute does.
+   */
+  typing(viewerId: string, otherId: string, typing: boolean): { typing: boolean } {
+    if (otherId === viewerId) fail('BAD_REQUEST', SELF);
+    return this.db.transaction(() => {
+      this.access(viewerId, otherId);
+      const thread = this.ensureThread(viewerId, otherId);
+      this.db.prepare('UPDATE chat_members SET typing_until=? WHERE thread_id=? AND user_id=?').run(typing ? this.iso(CHAT.typingMs) : null, thread.id, viewerId);
+      return { typing };
+    }).immediate();
   }
 
   send(viewerId: string, otherId: string, clientId: string, raw: string): { message: ChatMessage } {
@@ -297,7 +362,7 @@ export class ChatService {
       const createdAt = this.iso();
       const row = this.db.prepare('INSERT INTO chat_messages(id,thread_id,sender_id,body,created_at,revision) VALUES(?,?,?,?,?,?) RETURNING *').get(clientId, thread.id, viewerId, body, createdAt, revision) as MessageRow;
       this.db.prepare('UPDATE chat_threads SET last_message_at=? WHERE id=?').run(createdAt, thread.id);
-      this.db.prepare('UPDATE chat_members SET last_read_seq=max(last_read_seq, ?), first_sent_at=coalesce(first_sent_at, ?) WHERE thread_id=? AND user_id=?').run(row.seq, createdAt, thread.id, viewerId);
+      this.db.prepare('UPDATE chat_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), first_sent_at=coalesce(first_sent_at, ?), typing_until=NULL WHERE thread_id=? AND user_id=?').run(row.seq, row.seq, createdAt, thread.id, viewerId);
       return { message: this.message(viewerId, row) };
     }).immediate();
   }
@@ -400,9 +465,9 @@ export class ChatService {
   /* ---------- Support (owner only) ---------- */
 
   private evidenceReport(reportId: string) {
-    const report = this.db.prepare('SELECT id, reporter_id, reported_id, school_id, thread_id, evidence FROM reports WHERE id=?').get(reportId) as
-      { id: string; reporter_id: string; reported_id: string; school_id: string | null; thread_id: string | null; evidence: string | null } | undefined;
-    if (!report || !report.thread_id || !report.evidence) return fail('NOT_FOUND', 'This report has no messages.');
+    const report = this.db.prepare('SELECT id, reporter_id, reported_id, school_id, thread_id, group_id, evidence FROM reports WHERE id=?').get(reportId) as
+      { id: string; reporter_id: string; reported_id: string; school_id: string | null; thread_id: string | null; group_id: string | null; evidence: string | null } | undefined;
+    if (!report || (!report.thread_id && !report.group_id) || !report.evidence) return fail('NOT_FOUND', 'This report has no messages.');
     return { ...report, items: JSON.parse(report.evidence) as StoredItem[] };
   }
   /** The only path from chat text to the owner: a report's frozen snapshot, and every view is audited. */
@@ -413,7 +478,7 @@ export class ChatService {
       const name = (id: string) => (this.db.prepare('SELECT display_name FROM users WHERE id=?').get(id) as { display_name: string } | undefined)?.display_name ?? '';
       const reportedName = name(report.reported_id), reporterName = name(report.reporter_id);
       this.audit(adminId, 'reports.view', report.school_id, { reportId });
-      return { items: report.items.map(entry => ({ ...entry, senderName: entry.fromReported ? reportedName : reporterName })) };
+      return { items: report.items.map(({ senderId, ...entry }) => ({ ...entry, senderName: senderId ? name(senderId) : entry.fromReported ? reportedName : reporterName })) };
     }).immediate();
   }
   redactMessage(adminId: string, reportId: string, seq: number): void {
@@ -422,8 +487,13 @@ export class ChatService {
       const report = this.evidenceReport(reportId);
       const target = report.items.find(entry => entry.seq === seq);
       if (!target) fail('NOT_FOUND', 'This message is not in this report.');
-      const row = this.db.prepare('SELECT seq FROM chat_messages WHERE seq=? AND thread_id=?').get(seq, report.thread_id) as { seq: number } | undefined;
-      if (row) {
+      if (report.group_id) {
+        // A group message (§12): same hide, on the group's tables.
+        if (this.db.prepare('SELECT seq FROM chat_group_messages WHERE seq=? AND group_id=?').get(seq, report.group_id)) {
+          const revision = (this.db.prepare('UPDATE chat_groups SET revision=revision+1 WHERE id=? RETURNING revision').get(report.group_id) as { revision: number }).revision;
+          this.db.prepare("UPDATE chat_group_messages SET deleted_at=coalesce(deleted_at, ?), deleted_by='support', revision=? WHERE seq=?").run(this.iso(), revision, seq);
+        }
+      } else if (this.db.prepare('SELECT seq FROM chat_messages WHERE seq=? AND thread_id=?').get(seq, report.thread_id)) {
         const revision = this.bumpRevision(report.thread_id!);
         this.db.prepare("UPDATE chat_messages SET deleted_at=coalesce(deleted_at, ?), deleted_by='support', revision=? WHERE seq=?").run(this.iso(), revision, seq);
       }
@@ -450,6 +520,8 @@ export class ChatService {
       const user = this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined;
       if (!user) return fail('NOT_FOUND', 'Member not found.');
       this.db.prepare('DELETE FROM chat_pauses WHERE user_id=?').run(userId);
+      // An open appeal against the pause is answered by lifting it (§14).
+      this.db.prepare("UPDATE support_requests SET resolved_at=? WHERE user_id=? AND kind='appeal:pause' AND resolved_at IS NULL").run(this.iso(), userId);
       this.audit(adminId, 'chat.resume', user.school_id, { userId });
     }).immediate();
   }

@@ -8,12 +8,26 @@ import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/do
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
 import { CommunityService, emailDomainsSchema, parseEmailDomains } from './community';
 import { foldConfusables } from '@/domain/chat-filter';
+import { avatarUrl, usableGooglePicture } from './avatars';
+export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
 
-export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null; suggestedNames: { displayName: string; fullName: string } };
+/** `avatar` is the picture URL other members see (docs/CHAT.md §13): an uploaded picture, else the Google picture, else null for initials. */
+export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null; suggestedNames: { displayName: string; fullName: string }; avatar: string | null;
+  /** Which picture the account shows, for the account sheet's picture controls. */
+  avatarSource: 'upload' | 'google' | 'none'; hasGooglePicture: boolean };
+/** A support sanction the student can see and appeal (§14). */
+export type Ban = { schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean };
+export type Sanctions = { bans: Ban[]; pause: { until: string | null; reason: string; appealed: boolean } | null };
 export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[] };
 /** What a school search returns: enough to pick a school, without its schedule (fetch that with `school(id)`). */
 export type SchoolSummary = Omit<School, 'schedule' | 'emailDomains'>;
-type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null };
+type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null;
+  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null };
+/** Uploaded pictures are small: the client resizes to 256 px and encodes as JPEG or WebP before sending (§13). */
+export const AVATAR_MAX_BYTES = 200_000;
+export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const avatarUploadSchema = z.object({ mime: z.enum(AVATAR_MIMES), data: z.string().max(Math.ceil(AVATAR_MAX_BYTES * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Choose an image file.') });
+export const appealSchema = z.object({ kind: z.enum(['pause', 'ban']), schoolId: z.uuid().optional(), message: z.string().trim().min(10).max(2000) });
 type SchoolRow = { id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string };
 const fail = (code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'BAD_REQUEST' | 'TOO_MANY_REQUESTS', message: string): never => { throw new TRPCError({ code, message }); };
 const now = () => new Date().toISOString();
@@ -131,7 +145,89 @@ export class Service {
     if (!id) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
     const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined;
     if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
-    return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id, suggestedNames: suggestNames(row.google_name ?? '', row.email) };
+    return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id, suggestedNames: suggestNames(row.google_name ?? '', row.email),
+      avatar: avatarUrl(row), avatarSource: row.avatar_hidden ? 'none' : row.avatar_version ? 'upload' : usableGooglePicture(row.google_picture) ? 'google' : 'none', hasGooglePicture: usableGooglePicture(row.google_picture) };
+  }
+  /* ---------- Profile pictures (docs/CHAT.md §13) ---------- */
+
+  /** Stores an uploaded picture (already resized by the client) and shows it instead of the Google one. */
+  setAvatar(id: string, raw: z.infer<typeof avatarUploadSchema>): User {
+    this.user(id);
+    const input = avatarUploadSchema.parse(raw);
+    const bytes = Buffer.from(input.data, 'base64');
+    if (!bytes.length) fail('BAD_REQUEST', 'Choose an image file.');
+    if (bytes.length > AVATAR_MAX_BYTES) fail('BAD_REQUEST', 'That picture is too large. Choose a smaller one.');
+    if (!imageBytesMatch(bytes, input.mime)) fail('BAD_REQUEST', 'Choose an image file.');
+    this.db.prepare('UPDATE users SET avatar=?, avatar_mime=?, avatar_version=avatar_version+1, avatar_hidden=0 WHERE id=?').run(bytes, input.mime, id);
+    return this.user(id);
+  }
+  /** Drops the uploaded picture; `source` says what shows instead: the Google picture, or initials. */
+  clearAvatar(id: string, source: 'google' | 'none'): User {
+    this.user(id);
+    this.db.prepare('UPDATE users SET avatar=NULL, avatar_mime=\'\', avatar_version=0, avatar_hidden=? WHERE id=?').run(source === 'none' ? 1 : 0, id);
+    return this.user(id);
+  }
+  /** The uploaded picture's bytes for /api/avatars/<id>, or null when the member shows no uploaded picture. */
+  avatarImage(id: string): { bytes: Buffer; mime: string; version: number } | null {
+    const row = this.db.prepare('SELECT avatar, avatar_mime, avatar_version, avatar_hidden FROM users WHERE id=?').get(id) as { avatar: Buffer | null; avatar_mime: string; avatar_version: number; avatar_hidden: number } | undefined;
+    if (!row || !row.avatar || row.avatar_hidden || !row.avatar_version) return null;
+    return { bytes: row.avatar, mime: row.avatar_mime || 'image/jpeg', version: row.avatar_version };
+  }
+
+  /* ---------- Sanctions the student can see and appeal (docs/CHAT.md §14) ---------- */
+
+  sanctions(id: string): Sanctions {
+    // A removal's appeal belongs to that school; a pause is account-wide, so its appeal is found whatever school it names.
+    const openBanAppeal = this.db.prepare("SELECT 1 FROM support_requests WHERE user_id=? AND kind='appeal:ban' AND school_id=? AND resolved_at IS NULL");
+    const openPauseAppeal = this.db.prepare("SELECT 1 FROM support_requests WHERE user_id=? AND kind='appeal:pause' AND resolved_at IS NULL");
+    const bans = (this.db.prepare(`SELECT b.school_id schoolId, s.name schoolName, b.reason, b.created_at createdAt FROM school_bans b JOIN schools s ON s.id=b.school_id WHERE b.user_id=? ORDER BY b.created_at DESC`).all(id) as Omit<Ban, 'appealed'>[])
+      .map(ban => ({ ...ban, appealed: !!openBanAppeal.get(id, ban.schoolId) }));
+    const pause = this.db.prepare('SELECT until, reason FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(id, now()) as { until: string | null; reason: string } | undefined;
+    return { bans, pause: pause ? { until: pause.until, reason: pause.reason, appealed: !!openPauseAppeal.get(id) } : null };
+  }
+  /**
+   * An appeal against a messaging pause or a removal from a school. It lands in the owner's support inbox as a request
+   * of kind 'appeal:pause' or 'appeal:ban' (with the school), one open appeal per sanction; the owner answers with
+   * Lift pause or Lift removal on /admin.
+   */
+  appeal(id: string, raw: z.infer<typeof appealSchema>): void {
+    const user = this.user(id);
+    const input = appealSchema.parse(raw);
+    const sanctions = this.sanctions(id);
+    let schoolId: string | null = null;
+    if (input.kind === 'pause') {
+      if (!sanctions.pause) return fail('BAD_REQUEST', 'Your messaging is not paused.');
+      if (sanctions.pause.appealed) fail('CONFLICT', 'You already sent an appeal. Support will review it.');
+      schoolId = user.schoolId;
+    } else {
+      const ban = sanctions.bans.find(entry => entry.schoolId === input.schoolId);
+      if (!ban) return fail('BAD_REQUEST', 'You were not removed from that school.');
+      if (ban.appealed) fail('CONFLICT', 'You already sent an appeal. Support will review it.');
+      schoolId = ban.schoolId;
+    }
+    const open = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(id) as {n: number};
+    if (open.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
+    this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind) VALUES(?,?,?,?,?,?)').run(randomUUID(), schoolId, id, input.message, now(), `appeal:${input.kind}`);
+  }
+  /** Owner: lifts a removal so the student can join that school again. Audited. */
+  liftBan(adminId: string, userId: string, schoolId: string): void {
+    this.admin(adminId);
+    this.db.transaction(() => {
+      if (!this.db.prepare('SELECT 1 FROM school_bans WHERE user_id=? AND school_id=?').get(userId, schoolId)) fail('NOT_FOUND', 'This student is not removed from that school.');
+      this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(userId, schoolId);
+      this.db.prepare("UPDATE support_requests SET resolved_at=? WHERE user_id=? AND school_id=? AND kind='appeal:ban' AND resolved_at IS NULL").run(now(), userId, schoolId);
+      this.audit(adminId, 'member.restore', schoolId, { userId });
+    }).immediate();
+  }
+  /** Owner: every current removal, for the "Removed members" section. */
+  bans(adminId: string): { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean }[] {
+    this.admin(adminId);
+    return this.db.prepare(`SELECT b.user_id userId, u.display_name displayName, u.email, b.school_id schoolId, s.name schoolName, b.reason, b.created_at createdAt,
+        EXISTS (SELECT 1 FROM support_requests r WHERE r.user_id=b.user_id AND r.school_id=b.school_id AND r.kind='appeal:ban' AND r.resolved_at IS NULL) appealed
+      FROM school_bans b JOIN users u ON u.id=b.user_id JOIN schools s ON s.id=b.school_id ORDER BY b.created_at DESC`).all().map((row) => {
+      const entry = row as { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: number };
+      return { ...entry, appealed: !!entry.appealed };
+    });
   }
   ready(id: string): User {
     const user = this.user(id);
@@ -193,7 +289,7 @@ export class Service {
     this.db.transaction(() => {
       const school = this.school(input.schoolId);
       const community = new CommunityService(this);
-      if (community.isBanned(id, school.id)) fail('FORBIDDEN', 'Support removed you from this school. Contact support if you think this is a mistake.');
+      if (community.isBanned(id, school.id)) fail('FORBIDDEN', 'Support removed you from this school. You can read the reason and appeal on the school step.');
       if (input.choice === 'approved' && !school.approved) fail('BAD_REQUEST', 'Choose the community schedule explicitly, or build your own.');
       if (input.choice === 'personal' && !input.personalSchedule) fail('BAD_REQUEST', 'Provide your personal schedule.');
       const existing = this.entity(id, 'personal');
@@ -257,7 +353,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
@@ -379,13 +475,20 @@ export class Service {
   }
   requests(id: string) {
     this.admin(id);
-    return this.db.prepare(`SELECT r.id,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email
-      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string}[];
+    return this.db.prepare(`SELECT r.id,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.user_id userId,r.kind
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; userId: string; kind: '' | 'appeal:pause' | 'appeal:ban'}[];
   }
   resolveRequest(id: string, requestId: string) {
     this.admin(id);
     this.db.prepare('UPDATE support_requests SET resolved_at=? WHERE id=?').run(now(), requestId);
   }
+}
+/** The bytes really are the image type they claim: JPEG (FF D8 FF), PNG (89 50 4E 47) or WebP (RIFF....WEBP). */
+export function imageBytesMatch(bytes: Buffer, mime: string): boolean {
+  if (mime === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (mime === 'image/png') return bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  if (mime === 'image/webp') return bytes.length > 12 && bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP';
+  return false;
 }
 type EntityRow = { id: string; kind: Entity['kind']; version: number; data: string; deleted: number };
 function entityFromRow(row: EntityRow): Entity { return { id: row.id, kind: row.kind, version: row.version, data: JSON.parse(row.data), deleted: !!row.deleted }; }

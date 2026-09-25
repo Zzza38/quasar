@@ -17,7 +17,8 @@ export const contentSecurityPolicy = [
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   // data: covers the timetable scan previews (canvas.toDataURL in scan-schedule.tsx) and inline SVG/icon data URLs.
-  "img-src 'self' data:",
+  // Google profile pictures (docs/CHAT.md §13) are served from Google's CDN; uploaded ones from /api/avatars.
+  "img-src 'self' data: https://*.googleusercontent.com",
   "font-src 'self'",
   "connect-src 'self'",
   "worker-src 'self'",
@@ -71,7 +72,9 @@ const config: NextConfig = {
       { source: "/", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/(today|schedule|tasks|classes|school|people|messages)", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/admin", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
-      { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
+      // Every API response but a profile picture: /api/avatars sets its own headers (a year for a found picture, since
+      // the URL carries its version; no-store for a miss or a signed-out request), which a rule here would override.
+      { source: "/api/:path((?!avatars/).*)", headers: [{ key: "Cache-Control", value: "no-store" }] },
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] }
     ];
   }
