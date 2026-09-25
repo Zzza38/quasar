@@ -271,6 +271,7 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   await dialog(page).getByLabel('Class name').fill('Biology');
   await dialog(page).getByLabel('Room').fill('Lab 2');
   await dialog(page).getByRole('button', { name: 'Add class' }).click();
+  await page.getByRole('button', { name: 'Unlock timetable' }).click();
   await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
   await page.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
   await expect(saved(page)).toBeVisible();
@@ -799,6 +800,7 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await dialog(page).getByLabel('Class color', { exact: true }).fill('#cc3366');
   await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
   await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Unlock timetable' }).click();
   const palette = page.getByRole('button', { name: 'Place Spanish 2H', exact: true });
   const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
   await palette.dragTo(day, { targetPosition: { x: 35, y: 40 } });
@@ -810,6 +812,7 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await expect(saved(page)).toBeVisible();
   await page.reload();
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Spanish 2H', exact: true })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Unlock timetable' }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await palette.click();
   await page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true }).click();
@@ -894,6 +897,7 @@ test('school directory selection, personal edits, shared edits and period placem
   await dialog(page).getByRole('button', { name: 'Add selected classes (1)' }).click();
   await expect(page.getByRole('button', { name: 'Edit Directory Biology' })).toBeVisible();
   await expect(saved(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Unlock timetable' }).click();
   const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
   await page.getByRole('button', { name: 'Place Directory Biology', exact: true }).dragTo(day, { targetPosition: { x: 35, y: 40 } });
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Directory Biology', exact: true })).toBeVisible();
