@@ -8,7 +8,7 @@ import { Service } from '@/server/service';
 export const dynamic = 'force-dynamic';
 
 /** Support tools for the owner: nothing a search engine should list. */
-export const metadata: Metadata = { title: 'Support', robots: { index: false, follow: false }, alternates: { canonical: '/admin' } };
+export const metadata: Metadata = { robots: { index: false, follow: false }, alternates: { canonical: '/admin' } };
 
 export default async function AdminPage() {
   let initial: AdminBoot | undefined;
