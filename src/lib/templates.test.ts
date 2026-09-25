@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scheduleSchema } from '@/domain/schedule';
-import { applyTypicalDay, buildStarter, nextSchoolDay, starterDays, starterPeriods, typicalDaySlots } from './templates';
+import { applyTypicalDay, buildStarter, nextSchoolDay, parseCycleLength, starterDays, starterPeriods, typicalDaySlots, upcomingSchoolDays } from './templates';
 
 describe('guided school setup', () => {
   const options = { timeZone: 'America/New_York', today: '2026-09-22' }; // a Tuesday
@@ -43,5 +43,23 @@ describe('guided school setup', () => {
   it('moves the anchor question to the next school day when today is a weekend', () => {
     expect(nextSchoolDay('2026-09-26', [1, 2, 3, 4, 5])).toBe('2026-09-28');
     expect(nextSchoolDay('2026-09-22', [1, 2, 3, 4, 5])).toBe('2026-09-22');
+  });
+
+  it('lists upcoming school days without the weekend in between', () => {
+    // 2026-09-24 is a Thursday.
+    expect(upcomingSchoolDays('2026-09-24', [1, 2, 3, 4, 5], 5)).toEqual(['2026-09-24', '2026-09-25', '2026-09-28', '2026-09-29', '2026-09-30']);
+    expect(upcomingSchoolDays('2026-09-26', [1, 3], 3)).toEqual(['2026-09-28', '2026-09-30', '2026-10-05']);
+    expect(upcomingSchoolDays('2026-09-24', [], 5)).toEqual([]);
+  });
+
+  it('accepts only whole cycle lengths from 2 to 60, so partial typing is never clamped', () => {
+    expect(parseCycleLength('8')).toBe(8);
+    expect(parseCycleLength(' 12 ')).toBe(12);
+    expect(parseCycleLength('60')).toBe(60);
+    expect(parseCycleLength('')).toBeNull();
+    expect(parseCycleLength('1')).toBeNull();
+    expect(parseCycleLength('61')).toBeNull();
+    expect(parseCycleLength('2.5')).toBeNull();
+    expect(parseCycleLength('-4')).toBeNull();
   });
 });

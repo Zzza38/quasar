@@ -9,6 +9,15 @@ export const dateSchema = z.string().regex(/^(19|20|21)\d{2}-\d{2}-\d{2}$/).refi
   try { Temporal.PlainDate.from(value, { overflow: "reject" }); return true; } catch { return false; }
 }, "Use a real date between 1900 and 2199 in YYYY-MM-DD format");
 
+/** The range dateSchema accepts. Date navigation clamps to it so resolveDay never sees a date it rejects. */
+export const FIRST_DATE = "1900-01-01";
+export const LAST_DATE = "2199-12-31";
+
+/** Clamps a YYYY-MM-DD date into FIRST_DATE..LAST_DATE (ISO strings with four-digit years compare in date order). */
+export function clampDate(value: string): string {
+  return value < FIRST_DATE ? FIRST_DATE : value > LAST_DATE ? LAST_DATE : value;
+}
+
 export const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time in HH:mm format");
 
 export const periodSchema = z.strictObject({
@@ -97,6 +106,16 @@ export function effectiveSchedule(schedule: Schedule, personal: PersonalSchedule
   return personal.customSchedule ?? scheduleForGrade(schedule, personal.grade);
 }
 
+/** A rotation day's slots for this student: their cycle-day override when they saved one, else the day's own. */
+export function cycleDaySlots(day: Schedule["cycleDays"][number], personal: Pick<PersonalSchedule, "cycleDayOverrides">): ScheduleSlot[] {
+  return personal.cycleDayOverrides.find((entry) => entry.cycleDayId === day.id)?.slots ?? day.slots;
+}
+
+/** Labels of the rotation days on which `periodId` meets for this student, cycle-day overrides included. */
+export function cycleDaysWithPeriod(schedule: Schedule, personal: Pick<PersonalSchedule, "cycleDayOverrides">, periodId: string): string[] {
+  return schedule.cycleDays.filter((day) => cycleDaySlots(day, personal).some((slot) => slot.periodId === periodId)).map((day) => day.label);
+}
+
 export function applyScheduleToGrades(current: Schedule, draft: Schedule, grades: Grade[]): Schedule {
   gradesSchema.parse(grades);
   const { gradeSchedules: _variants, ...base } = draft;
@@ -143,6 +162,26 @@ export type SchoolPeriod = z.infer<typeof periodSchema>;
 export type ScheduleSlot = z.infer<typeof slotSchema>;
 export type StudentClass = z.infer<typeof classSchema>;
 
+/**
+ * Adds a rotation day at the end. A one-day schedule has no reason to advance, so its advance days are often
+ * empty, and a rotation with no advance days never leaves its anchor day. Growing past one day therefore
+ * starts advancing on school days, so the new day actually comes up.
+ */
+export function withCycleDay(schedule: Schedule, day: Schedule["cycleDays"][number]): Schedule {
+  const grows = schedule.cycleDays.length <= 1 && schedule.advanceWeekdays.length === 0;
+  return {
+    ...schedule,
+    cycleDays: [...schedule.cycleDays, day],
+    ...(schedule.cycleDays.length === 0 ? { anchorCycleDayId: day.id } : {}),
+    ...(grows ? { advanceWeekdays: [...schedule.schoolWeekdays] } : {}),
+  };
+}
+
+/** A rotation of several days with no advance days: only the anchor day (or a reset exception's day) ever comes up. */
+export function rotationNeverAdvances(schedule: Schedule): boolean {
+  return schedule.cycleDays.length > 1 && schedule.advanceWeekdays.length === 0;
+}
+
 export function emptyPersonalSchedule(): PersonalSchedule {
   return { classes: [], assignments: {}, cycleDayOverrides: [], dateOverrides: [], customSchedule: null };
 }
@@ -164,6 +203,24 @@ export interface ScheduleIssue {
   reason: "missing-period" | "shift-outside-day" | "nonexistent-time";
 }
 
+/**
+ * One sentence per issue reason. Only shifted and daylight-saving-gap periods are left out of the day; a slot whose
+ * period the school removed is still shown (as REMOVED_PERIOD_LABEL). `preview` words it for an unsaved adjustment.
+ */
+export function describeDayIssues(issues: ScheduleIssue[], preview = false): string[] {
+  const count = (reason: ScheduleIssue["reason"]) => issues.filter((issue) => issue.reason === reason).length;
+  const periods = (n: number) => (n === 1 ? "1 period" : `${n} periods`);
+  const be = (n: number) => (preview ? "would be" : n === 1 ? "is" : "are");
+  const shifted = count("shift-outside-day");
+  const skipped = count("nonexistent-time");
+  const removed = count("missing-period");
+  const lines: string[] = [];
+  if (shifted) lines.push(`${periods(shifted)} ${be(shifted)} left out because the time shift moves ${shifted === 1 ? "it" : "them"} outside the day.`);
+  if (skipped) lines.push(`${periods(skipped)} ${be(skipped)} skipped because ${skipped === 1 ? "its time does" : "their times do"} not exist on this date (daylight-saving change).`);
+  if (removed) lines.push(`${periods(removed)} ${preview ? "would use" : removed === 1 ? "uses" : "use"} a period the school removed.`);
+  return lines;
+}
+
 export interface ResolvedDay {
   date: string;
   cycleDayId: string;
@@ -177,38 +234,89 @@ const modulo = (value: number, base: number) => ((value % base) + base) % base;
 const toMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
 const toTime = (value: number) => `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 
+type Exception = Schedule["exceptions"][number];
+type ResetException = Extract<Exception, { kind: "reset" }>;
+
+/**
+ * Exceptions sorted by date with prefix sums of how far each one moves the rotation compared with a normal
+ * day, so a resolveDay call costs a few binary searches instead of a Temporal date per exception. Views
+ * resolve hundreds of days per render (nextClass looks a year ahead) and a schedule may hold 5000 exceptions.
+ * Cached per exceptions array; schedules are replaced rather than mutated, and a new advanceWeekdays array
+ * (which changes the deltas) rebuilds the index.
+ */
+interface ExceptionIndex {
+  advanceWeekdays: readonly number[];
+  size: number;
+  sorted: Exception[];
+  dates: string[];
+  /** deltas[i] = sum of the advance deltas of sorted[0..i). */
+  deltas: number[];
+  resets: ResetException[];
+  resetDates: string[];
+}
+const exceptionIndexes = new WeakMap<Schedule["exceptions"], ExceptionIndex>();
+
+function exceptionIndex(schedule: Schedule): ExceptionIndex {
+  const cached = exceptionIndexes.get(schedule.exceptions);
+  if (cached && cached.advanceWeekdays === schedule.advanceWeekdays && cached.size === schedule.exceptions.length) return cached;
+  // A stable sort keeps same-date entries in their saved order, matching the order a linear scan would see.
+  const sorted = [...schedule.exceptions].sort((left, right) => left.date.localeCompare(right.date));
+  const deltas = [0];
+  for (const exception of sorted) {
+    const normallyAdvances = schedule.advanceWeekdays.includes(Temporal.PlainDate.from(exception.date).dayOfWeek);
+    deltas.push(deltas[deltas.length - 1] + Number(exception.advanceCycle) - Number(normallyAdvances));
+  }
+  const resets = sorted.filter((entry): entry is ResetException => entry.kind === "reset");
+  const index: ExceptionIndex = {
+    advanceWeekdays: schedule.advanceWeekdays, size: schedule.exceptions.length, sorted, dates: sorted.map((entry) => entry.date), deltas,
+    resets, resetDates: resets.map((entry) => entry.date),
+  };
+  exceptionIndexes.set(schedule.exceptions, index);
+  return index;
+}
+
+/** First index whose value is >= target (or > target when `after`). */
+function searchDates(dates: string[], target: string, after = false): number {
+  let low = 0;
+  let high = dates.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (dates[middle] < target || (after && dates[middle] === target)) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 /** Count advances in [start, end), using whole weeks instead of iterating every date. */
-function advancesBetween(schedule: Schedule, start: Temporal.PlainDate, end: Temporal.PlainDate): number {
+function advancesBetween(schedule: Schedule, index: ExceptionIndex, start: Temporal.PlainDate, end: Temporal.PlainDate): number {
   const days = start.until(end).days;
   let count = Math.floor(days / 7) * schedule.advanceWeekdays.length;
   for (let offset = 0; offset < days % 7; offset += 1) {
     if (schedule.advanceWeekdays.includes(modulo(start.dayOfWeek - 1 + offset, 7) + 1)) count += 1;
   }
-  const first = start.toString();
-  const last = end.toString();
-  for (const exception of schedule.exceptions) {
-    if (exception.date < first || exception.date >= last) continue;
-    const normallyAdvances = schedule.advanceWeekdays.includes(Temporal.PlainDate.from(exception.date).dayOfWeek);
-    count += Number(exception.advanceCycle) - Number(normallyAdvances);
-  }
-  return count;
+  return count + index.deltas[searchDates(index.dates, end.toString())] - index.deltas[searchDates(index.dates, start.toString())];
 }
 
-function cycleDayForDate(schedule: Schedule, date: Temporal.PlainDate) {
+function cycleDayForDate(schedule: Schedule, index: ExceptionIndex, date: Temporal.PlainDate) {
   const dateString = date.toString();
-  // An anchor is a reset too. The most recent reset determines the phase.
-  const boundaries = [
-    { date: schedule.anchorDate, cycleDayId: schedule.anchorCycleDayId },
-    ...schedule.exceptions.filter((entry) => entry.kind === "reset"),
-  ].sort((left, right) => left.date.localeCompare(right.date));
-  const boundary = boundaries.findLast((entry) => entry.date <= dateString) ?? boundaries[0];
+  // An anchor is a reset too. The most recent reset determines the phase; on the anchor's own date a reset wins.
+  // Before every boundary, the earliest one is used (the anchor when it shares that date).
+  const anchor = { date: schedule.anchorDate, cycleDayId: schedule.anchorCycleDayId };
+  const reset = index.resets[searchDates(index.resetDates, dateString, true) - 1];
+  const earliest = index.resets[0] && index.resets[0].date < anchor.date ? index.resets[0] : anchor;
+  const boundary = anchor.date <= dateString
+    ? (reset && reset.date >= anchor.date ? reset : anchor)
+    : reset ?? earliest;
   const origin = Temporal.PlainDate.from(boundary.date);
   const distance = dateString >= boundary.date
-    ? advancesBetween(schedule, origin, date)
-    : -advancesBetween(schedule, date, origin);
+    ? advancesBetween(schedule, index, origin, date)
+    : -advancesBetween(schedule, index, date, origin);
   const startIndex = schedule.cycleDays.findIndex((entry) => entry.id === boundary.cycleDayId);
   return schedule.cycleDays[modulo(startIndex + distance, schedule.cycleDays.length)];
 }
+
+/** Shown for a slot whose period is gone (a personal override kept after the school removed it); never the raw id. */
+export const REMOVED_PERIOD_LABEL = "Removed period";
 
 /**
  * Precedence: school rotation -> school exception -> personal cycle override -> personal date override.
@@ -216,11 +324,18 @@ function cycleDayForDate(schedule: Schedule, date: Temporal.PlainDate) {
  * DST uses the earlier offset for repeated times. Nonexistent local times during a DST gap
  * are reported in issues and skipped, leaving the saved edit intact for the student to adjust.
  */
+/** resolveDay for dates that may fall outside FIRST_DATE..LAST_DATE (a week or preview strip at the edge): null there. */
+export function resolveDayInRange(schoolSchedule: Schedule, dateString: string, personal: PersonalSchedule = emptyPersonalSchedule()): ResolvedDay | null {
+  return dateSchema.safeParse(dateString).success ? resolveDay(schoolSchedule, dateString, personal) : null;
+}
+
 export function resolveDay(schoolSchedule: Schedule, dateString: string, personal: PersonalSchedule = emptyPersonalSchedule()): ResolvedDay {
   const schedule = effectiveSchedule(schoolSchedule, personal);
   const date = Temporal.PlainDate.from(dateSchema.parse(dateString));
-  const cycleDay = cycleDayForDate(schedule, date);
-  const exception = schedule.exceptions.find((entry) => entry.date === dateString);
+  const index = exceptionIndex(schedule);
+  const cycleDay = cycleDayForDate(schedule, index, date);
+  const found = searchDates(index.dates, dateString);
+  const exception = index.dates[found] === dateString ? index.sorted[found] : undefined;
   const cycleOverride = personal.cycleDayOverrides.find((entry) => entry.cycleDayId === cycleDay.id);
   const dateOverride = personal.dateOverrides.find((entry) => entry.date === dateString);
   let closed = !schedule.schoolWeekdays.includes(date.dayOfWeek);
@@ -262,7 +377,7 @@ export function resolveDay(schoolSchedule: Schedule, dateString: string, persona
     result.periods.push({
       slotId: slot.id,
       periodId: slot.periodId,
-      label: period?.label ?? slot.periodId,
+      label: period?.label ?? assignedClass?.name ?? REMOVED_PERIOD_LABEL,
       kind: period?.kind ?? "other",
       start,
       end,

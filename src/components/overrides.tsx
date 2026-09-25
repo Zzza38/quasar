@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
-import { effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
+import { describeDayIssues, effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
 import { Icon } from './icon';
 import { ScheduleEditor, SlotsEditor, describeIssues } from './schedule-editor';
@@ -18,6 +18,26 @@ function schoolOnly(personal: PersonalSchedule): PersonalSchedule {
 
 type DateMode = 'default' | 'closed' | 'open' | 'custom';
 
+/**
+ * The shift field's text as whole minutes, clamped to ±720, or null while it is not a number yet (empty, a lone
+ * '-', a decimal). The typed text is never rewritten from a null, so a partial entry does not snap to 0
+ * mid-typing; committedShift decides which shift that text saves.
+ */
+export function parseShift(text: string): number | null {
+  const trimmed = text.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  return Math.max(-720, Math.min(720, Number(trimmed))) || 0;
+}
+
+/**
+ * The shift to commit for the field's text. An emptied field means no shift, so clearing it and pressing Save
+ * removes the shift. Browsers report a lone '-' in a number field as '' too, which is harmless: the field keeps
+ * showing what was typed, and finishing the number ('-5') commits it. Any other partial entry keeps `current`.
+ */
+export function committedShift(text: string, current: number): number {
+  return parseShift(text) ?? (text.trim() ? current : 0);
+}
+
 export function DateAdjustmentSheet({ open, onClose, date, school, personal, save }: { open: boolean; onClose: () => void; date: string; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
   return open ? <DateAdjustmentBody key={date} onClose={onClose} date={date} school={school} personal={personal} save={save} /> : null;
 }
@@ -28,7 +48,11 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
   const schoolDay = useMemo(() => resolveDay(school, date, schoolOnly(personal)), [school, date, personal]);
   const schoolSlots: ScheduleSlot[] = schoolDay.periods.map((period) => ({ id: period.slotId, periodId: period.periodId, start: period.start, end: period.end }));
   const [mode, setMode] = useState<DateMode>(existing?.closed === true ? 'closed' : existing?.slots ? 'custom' : existing?.closed === false ? 'open' : 'default');
-  const [shift, setShift] = useState(existing?.shiftMinutes ?? 0);
+  const [shift, setShiftMinutes] = useState(existing?.shiftMinutes ?? 0);
+  // The typed text is kept apart from the committed shift (as ScheduleTimeInput does), so clearing the field or
+  // starting with '-' is not snapped back to '0'. Blur shows the committed value again.
+  const [shiftText, setShiftText] = useState(String(shift));
+  const setShift = (minutes: number) => { setShiftMinutes(minutes); setShiftText(String(minutes)); };
   const [slots, setSlots] = useState<ScheduleSlot[]>(existing?.slots ?? schoolSlots);
   const [initial] = useState(() => JSON.stringify({ mode, shift, slots }));
   const dirty = JSON.stringify({ mode, shift, slots }) !== initial;
@@ -63,7 +87,7 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
     {mode !== 'closed' && <div className="grid gap-2">
       <Field label="Shift all times" hint="Positive numbers move periods later." htmlFor="shift">
         <div className="flex flex-wrap items-center gap-2">
-          <Input id="shift" small type="number" min={-720} max={720} step={5} value={shift} onChange={(event) => setShift(Math.max(-720, Math.min(720, Number(event.target.value) || 0)))} className="max-w-[110px]" />
+          <Input id="shift" small type="number" min={-720} max={720} step={5} value={shiftText} onChange={(event) => { const text = event.target.value; setShiftText(text); setShiftMinutes(committedShift(text, shift)); }} onBlur={() => setShiftText(String(shift))} className="max-w-[110px]" />
           <Hint>minutes</Hint>
           {[-60, -30, 30, 60, 120].map((preset) => <Button key={preset} size="sm" variant="ghost" onClick={() => setShift(preset)}>{preset > 0 ? '+' : ''}{preset}</Button>)}
           {shift !== 0 && <Button size="sm" variant="ghost" onClick={() => setShift(0)}>Reset</Button>}
@@ -74,7 +98,7 @@ function DateAdjustmentBody({ onClose, date, school, personal, save }: { onClose
       <div className="flex items-center justify-between"><strong className="text-sm font-bold">Preview</strong>{preview?.closed ? <Chip>No school</Chip> : preview ? <Chip tone="accent">{preview.cycleDayLabel}</Chip> : null}</div>
       {preview && !preview.closed && preview.periods.length === 0 && <Hint>No periods.</Hint>}
       {preview && preview.periods.length > 0 && <ul className="grid gap-1 text-sm">{preview.periods.map((period) => <li key={period.slotId} className="flex justify-between gap-3 rounded-lg bg-card px-3 py-1.5 ring-1 ring-foreground/[0.05]"><span className="font-medium">{period.class?.name ?? period.label}</span><span className="tabular-nums text-muted-foreground">{formatRange(period.start, period.end)}</span></li>)}</ul>}
-      {preview && preview.issues.length > 0 && <Hint tone="danger">{preview.issues.length} period(s) would fall outside this day with the current shift.</Hint>}
+      {preview && preview.issues.length > 0 && <Hint tone="danger">{describeDayIssues(preview.issues, true).join(' ')}</Hint>}
     </Panel>
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
   </Modal>;
@@ -127,14 +151,19 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     setError(''); setPending(true);
     try { await save({ ...personal, customSchedule: scheduleSchema.parse(draft) }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
+  // The in-place confirmation for going back to the school schedule (docs/CHAT.md §Dialogs: no native confirm()).
+  const [stopping, setStopping] = useState(false);
   const stop = async () => {
-    if (!confirm('Go back to the school schedule? Your private schedule will be deleted. Classes, assignments and date adjustments are kept.')) return;
     setError(''); setPending(true);
     try { await save({ ...personal, customSchedule: null }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending} onClick={() => void stop()}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending || stopping} onClick={() => setStopping(true)}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
     <ScheduleEditor value={draft} onChange={setDraft} personal={personal} disabled={pending} />
+    {stopping && personal.customSchedule && <Callout tone="warning" icon="alert" role="alert" title="Go back to the school schedule?" actions={<>
+      <Button size="sm" variant="danger" busy={pending} onClick={() => void stop()}>Use the school schedule</Button>
+      <Button size="sm" autoFocus disabled={pending} onClick={() => setStopping(false)}>Keep my private schedule</Button>
+    </>}>Your private schedule will be deleted. Classes, assignments and date adjustments are kept.</Callout>}
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
   </Modal>;
 }

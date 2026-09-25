@@ -31,17 +31,22 @@ async function authenticate(context: BrowserContext, id: string) {
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
+const contexts: BrowserContext[] = [];
+// `browser` outlives each test, so these hand-made profiles (and their background syncs) must be closed here.
+test.afterEach(async () => { await Promise.all(contexts.splice(0).map((context) => context.close())); });
+
 /** Each student gets their own browser profile, like separate phones. */
 async function signedIn(browser: Browser, id: string): Promise<Page> {
   const context = await browser.newContext();
+  contexts.push(context);
   await authenticate(context, id);
   return context.newPage();
 }
 
-test('friends share classes only after acceptance, and removal revokes access', async ({ browser }) => {
+test('friends share classes only after acceptance, and removal revokes access', async ({ browser }, testInfo) => {
   const f = seed();
   const page = await signedIn(browser, f.alice);
-  await page.goto('/#people');
+  await page.goto('/people');
   await expect(page.getByRole('heading', { name: 'People', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'School verification' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Verify my school' })).toBeVisible();
@@ -51,14 +56,14 @@ test('friends share classes only after acceptance, and removal revokes access', 
   await bobRow.getByRole('button', { name: 'Add friend' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Request sent to Bob.' })).toBeVisible();
   await expect(page.getByRole('list', { name: 'Sent friend requests' })).toContainText('Bob');
-  await page.screenshot({ path: 'test-results/people-alice-requested.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('people-alice-requested.png'), fullPage: true });
 
   // Bob sees the request badge and accepts.
   const bob = await signedIn(browser, f.bob);
-  await bob.goto('/#today');
+  await bob.goto('/');
   // The badge is decorative; the People link carries the count as its description.
   await expect(bob.getByRole('link', { name: 'People', exact: true }).filter({ visible: true }).first()).toHaveAccessibleDescription('1 friend request');
-  await bob.goto('/#people');
+  await bob.goto('/people');
   const incoming = bob.getByRole('list', { name: 'Incoming friend requests' }).getByRole('listitem').filter({ hasText: 'Alice' });
   await incoming.getByRole('button', { name: 'Accept' }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'You and Alice are now friends.' })).toBeVisible();
@@ -72,9 +77,14 @@ test('friends share classes only after acceptance, and removal revokes access', 
   await expect(dialog).toContainText('Algebra II');
   await expect(dialog).toContainText('Ms. Rivera');
   await expect(dialog.getByRole('heading', { name: 'Bob’s day' })).toBeVisible();
-  await page.screenshot({ path: 'test-results/people-friend-profile.png', fullPage: true });
-  page.once('dialog', (d) => void d.accept());
+  await page.screenshot({ path: testInfo.outputPath('people-friend-profile.png'), fullPage: true });
+  // Cancel on the in-place confirmation leaves the friendship alone.
   await dialog.getByRole('button', { name: 'Remove friend' }).click();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Remove Bob', exact: true })).toBeHidden();
+  await expect(dialog).toContainText('Algebra II');
+  await dialog.getByRole('button', { name: 'Remove friend' }).click();
+  await dialog.getByRole('button', { name: 'Remove Bob', exact: true }).click();
   await expect(dialog.getByRole('status').filter({ hasText: 'Friend removed.' })).toBeVisible();
   await expect(dialog).not.toContainText('Algebra II');
   await expect(dialog).toContainText('shared between friends only');
@@ -83,30 +93,30 @@ test('friends share classes only after acceptance, and removal revokes access', 
 test('blocking hides both members and reports reach support', async ({ browser }) => {
   const f = seed();
   const page = await signedIn(browser, f.alice);
-  await page.goto('/#people');
+  await page.goto('/people');
   await page.getByRole('list', { name: 'Schoolmates' }).getByRole('button', { name: 'Open Bob’s profile' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Report' }).click();
   await dialog.getByLabel('What happened?').fill('This account is pretending to be a teacher.');
   await dialog.getByRole('button', { name: 'Send report' }).click();
   await expect(dialog.getByRole('status').filter({ hasText: 'Report sent to support.' })).toBeVisible();
-  page.once('dialog', (d) => void d.accept());
   await dialog.getByRole('button', { name: 'Block', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Block Bob', exact: true }).click();
   await expect(dialog.getByRole('button', { name: 'Unblock' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
   await expect(page.getByRole('list', { name: 'Schoolmates' })).toHaveCount(0);
   await expect(page.getByText('Blocked (1)')).toBeVisible();
   const bob = await signedIn(browser, f.bob);
-  await bob.goto('/#people');
+  await bob.goto('/people');
   await expect(bob.getByRole('heading', { name: 'People', exact: true })).toBeVisible();
   await expect(bob.getByRole('list', { name: 'Schoolmates' })).toHaveCount(0);
   await expect(bob.getByText('Nobody else has joined yet')).toBeVisible();
 });
 
-test('verified members of a locked school propose and vote on schedule changes', async ({ browser }) => {
+test('verified members of a locked school propose and vote on schedule changes', async ({ browser }, testInfo) => {
   const f = seed(true);
   const page = await signedIn(browser, f.alice);
-  await page.goto('/#school');
+  await page.goto('/school');
   await expect(page.getByRole('heading', { name: 'Proposed changes' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit shared schedule' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Propose a change' }).click();
@@ -122,10 +132,10 @@ test('verified members of a locked school propose and vote on schedule changes',
   await expect(card).toContainText('Voting open');
   await expect(card).toContainText('1 for · 0 against');
   await expect(card.getByRole('button', { name: 'For' })).toHaveAttribute('aria-pressed', 'true');
-  await page.screenshot({ path: 'test-results/school-proposal-open.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('school-proposal-open.png'), fullPage: true });
 
   const bob = await signedIn(browser, f.bob);
-  await bob.goto('/#school');
+  await bob.goto('/school');
   const bobCard = bob.getByRole('listitem').filter({ hasText: 'Rename period A to Block A' });
   await bobCard.getByRole('button', { name: 'See proposed schedule' }).click();
   await expect(bobCard).toContainText('Proposed');

@@ -41,7 +41,7 @@ test('countdown reveals live seconds on hover and keyboard focus', async ({ page
   const countdown = page.getByRole('button', { name: /^Ends in/ });
   const tails = countdown.locator(':scope > span').filter({ has: page.locator('span') });
   await expect(countdown).toBeVisible();
-  await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+  await expect(countdown).toHaveAccessibleName('Ends in 9 min');
   await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
   await countdown.hover();
   await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
@@ -67,13 +67,13 @@ test.describe('touch countdown', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
     const countdown = page.getByRole('button', { name: /^Ends in/ });
-    await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+    await expect(countdown).toHaveAccessibleName('Ends in 9 min');
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
     await expect(countdown).toHaveAttribute('aria-pressed', 'true');
     await expect(countdown.locator(':scope > span').last()).toHaveCSS('transition-duration', '0s');
     await countdown.tap();
-    await expect(countdown).toHaveAccessibleName('Ends in 8 min');
+    await expect(countdown).toHaveAccessibleName('Ends in 9 min');
     await expect(countdown).toHaveAttribute('aria-pressed', 'false');
   });
 });
@@ -103,6 +103,9 @@ test('explicit community choice, class and task persistence, offline reload and 
   const join = page.getByRole('button', { name: `Join ${fixture.school.name}` });
   await expect(join).toBeDisabled();
   await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
+  // The unreviewed community schedule is not preselected, so Join stays disabled until it is picked.
+  await expect(page.getByRole('radio', { name: /Use the community schedule/ })).toHaveAttribute('aria-checked', 'false');
+  await expect(join).toBeDisabled();
   await page.getByRole('radio', { name: /Use the community schedule/ }).click();
   await join.click();
   // The wizard continues with the classes step; adding one here proves it lands in the synced personal schedule.
@@ -146,7 +149,7 @@ test('explicit community choice, class and task persistence, offline reload and 
     return false;
   });
   await context.setOffline(true);
-  await page.goto('/#tasks');
+  await page.goto('/tasks');
   await page.reload();
   await expect(page.getByText('You’re offline.', { exact: false })).toBeVisible();
   // Completion moves the row into the collapsed completed section after IndexedDB commits.
@@ -194,12 +197,12 @@ test('admin UI enforces owner authorization and publishes locked approved revisi
 
 test('competing device edits require a visible choice and sign-out clears the account cache', async ({ page, context, browser }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#tasks');
+  await page.goto('/tasks');
   await quickAdd(page, 'Original task');
   await expect(saved(page)).toBeVisible();
   const laptop = await browser.newContext(); await authenticate(laptop, fixture.id);
   try {
-    const other = await laptop.newPage(); await other.goto('http://localhost:3100/#tasks');
+    const other = await laptop.newPage(); await other.goto('http://localhost:3100/tasks');
     await expect(other.getByRole('button', { name: 'Edit Original task' })).toBeVisible();
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Edit Original task' }).click();
@@ -219,9 +222,14 @@ test('competing device edits require a visible choice and sign-out clears the ac
     const db = openDatabase(process.env.E2E_DATABASE_PATH!);
     try { expect(new Service(db).workspace(fixture.id).entities.find((e) => e.kind === 'task')?.data.title).toBe('Phone title'); }
     finally { db.close(); }
+    // A per-device setup flag keyed by the account id, as the setup checklist writes it.
+    await page.evaluate((accountId) => localStorage.setItem(`quasar.setup.tick-verify.${accountId}`, '1'), fixture.id);
     await page.getByRole('button', { name: /Browser Student/ }).click();
     await dialog(page).getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+    // Nothing in localStorage reveals which account used this browser.
+    const storedKeys = await page.evaluate(() => Object.keys(localStorage));
+    expect(storedKeys.filter((name) => name.includes(fixture.id))).toEqual([]);
     const cached = await page.evaluate(async (accountId) => {
       return await new Promise<boolean>((resolve, reject) => {
         const request = indexedDB.open('whatsnext-offline-v1');
@@ -241,7 +249,7 @@ test('competing device edits require a visible choice and sign-out clears the ac
 
 test('shared schedule edits use the structured editor and appear as a reviewable correction', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /^Periods/ }).click();
   await dialog(page).getByLabel('Period 1 name').fill('Advisory');
@@ -257,7 +265,7 @@ test('planner navigation, date browsing and mobile layout remain usable', async 
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
   await dialog(page).getByLabel('Class name').fill('Biology');
   await dialog(page).getByLabel('Room').fill('Lab 2');
@@ -295,7 +303,7 @@ test('collapsed navigation centers icons and retains accessible links', async ({
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await page.getByRole('button', { name: 'Collapse navigation sidebar' }).click();
   const sidebar = page.locator('.app-sidebar');
   const verify = async () => {
@@ -333,7 +341,7 @@ test('collapsed navigation centers icons and retains accessible links', async ({
 test('empty tasks fill the available width with one responsive navigation shell', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
-  await page.goto('/#tasks');
+  await page.goto('/tasks');
   await expect(page.getByRole('heading', { name: 'All clear', exact: true })).toBeVisible();
   for (const width of [2048, 1280, 1024, 1023, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -355,7 +363,7 @@ test('remaining screens render without horizontal overflow on desktop and mobile
   const fits = async () => expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   for (const [name, width] of [['desktop', 1280], ['mobile', 390]] as const) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto('/#classes');
+    await page.goto('/classes');
     await expect(page.getByRole('heading', { name: 'Classes', exact: true })).toBeVisible();
     await fits();
     await page.screenshot({ path: testInfo.outputPath(`classes-${name}.png`), fullPage: true });
@@ -370,7 +378,7 @@ test('remaining screens render without horizontal overflow on desktop and mobile
   }
   // Theme preferences: chosen in the account sheet, applied immediately, and persisted across reloads.
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto('/#today');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: /Browser Student/ })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'ocean');
   await page.getByRole('button', { name: /Browser Student/ }).click();
@@ -428,7 +436,7 @@ test('sign-in page fits desktop and mobile screens', async ({ page }, testInfo) 
 
 test('rich tasks persist and completing a recurring checklist creates one fresh occurrence', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#tasks');
+  await page.goto('/tasks');
   await page.getByRole('button', { name: 'New task', exact: true }).click();
   await dialog(page).getByLabel('Task', { exact: true }).fill('Weekly lab preparation');
   await dialog(page).getByLabel('Due date', { exact: true }).fill('2026-09-14');
@@ -474,6 +482,27 @@ test('rich tasks persist and completing a recurring checklist creates one fresh 
   } finally { db.close(); }
 });
 
+test('closing a dialog with unsaved changes asks inside the dialog before discarding', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/tasks');
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  const title = dialog(page).getByLabel('Task', { exact: true });
+  await title.fill('Draft that should survive');
+  await title.press('Escape');
+  const prompt = dialog(page).getByRole('alert').filter({ hasText: 'Discard your changes?' });
+  await expect(prompt).toBeVisible();
+  // Keeping the draft closes the prompt and returns focus to the field, not to the dialog container.
+  await prompt.getByRole('button', { name: 'Keep editing', exact: true }).click();
+  await expect(prompt).toBeHidden();
+  await expect(title).toHaveValue('Draft that should survive');
+  await expect(title).toBeFocused();
+  // The header X asks too, and Discard closes the dialog without saving.
+  await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
+  await prompt.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(dialog(page)).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Edit Draft that should survive', exact: true })).toHaveCount(0);
+});
+
 test('imported homework stays visible and grayed in the calendar after completion and refresh', async ({ page, context }) => {
   const fixture = seed();
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -491,7 +520,7 @@ test('imported homework stays visible and grayed in the calendar after completio
     const feed = await calendars.subscribe(fixture.id, { name: 'Biology calendar', url: 'https://calendar.example.com/private-test-feed.ics', timeZone: 'America/New_York' });
     expect(feed.lastError).toBeNull();
     await authenticate(context, fixture.id);
-    await page.goto('/#schedule');
+    await page.goto('/schedule');
     await page.getByLabel('Go to date').fill('2026-09-14');
     const entry = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Imported biology worksheet', exact: true }) });
     await expect(entry).toContainText('Biology calendar');
@@ -516,7 +545,7 @@ test('imported homework stays visible and grayed in the calendar after completio
 
 test('edits one high-school grade and copies its schedule to other grades', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   const grades = dialog(page).getByRole('radiogroup', { name: 'Grade to edit', exact: true });
   await expect(grades.getByRole('radio', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-checked', 'true');
@@ -561,7 +590,7 @@ test('edits one high-school grade and copies its schedule to other grades', asyn
 
 test('schedule times infer AM and PM while typing and allow manual overrides', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await dialog(page).getByRole('button', { name: `Edit times for ${fixture.school.schedule.cycleDays[0].label}`, exact: true }).click();
@@ -603,7 +632,7 @@ test('schedule times infer AM and PM while typing and allow manual overrides', a
 
 test('exception stays open while its date is typed and rejects a duplicate date', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Exceptions ·/ }).click();
   await dialog(page).getByRole('button', { name: 'Add exception' }).click();
@@ -630,7 +659,7 @@ test('exception stays open while its date is typed and rejects a duplicate date'
 test('time canvas fits desktop, groups weeks, and drags and resizes freely timed blocks', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('group', { name: 'School days', exact: true }).getByRole('button', { name: 'Sat', exact: true }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
@@ -659,7 +688,7 @@ test('time canvas fits desktop, groups weeks, and drags and resizes freely timed
 
 test('custom class color persists and appears on the class card', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
   await dialog(page).getByLabel('Class name').fill('Biology');
   await dialog(page).getByLabel('Class color', { exact: true }).fill('#ff0088');
@@ -682,7 +711,7 @@ test.describe('class color bar', () => {
   test('hover, keyboard and touch expose persistent color controls', async ({ page, context }, testInfo) => {
     const fixture = seed(); await authenticate(context, fixture.id);
     await page.emulateMedia({ colorScheme: 'dark' });
-    await page.goto('/#classes');
+    await page.goto('/classes');
     await page.getByRole('button', { name: 'Add class', exact: true }).click();
     await dialog(page).getByLabel('Class name').fill('Spanish 2H');
     await dialog(page).getByLabel('Room (optional)').fill('214');
@@ -763,7 +792,7 @@ test.describe('class color bar', () => {
 
 test('Classes page drops and resizes actual classes with persistence and touch alternative', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
   await dialog(page).getByLabel('Class name').fill('Spanish 2H');
   await dialog(page).getByLabel('Class color', { exact: true }).fill('#cc3366');
@@ -802,12 +831,12 @@ test('Classes page drops and resizes actual classes with persistence and touch a
 });
 
 
-test('large period palette stays beside the canvas on desktop', async ({ page, context }) => {
+test('large period palette stays beside the canvas on desktop', async ({ page, context }, testInfo) => {
   const schedule = structuredClone(exampleSchedule);
   schedule.periods.push(...Array.from({ length: 22 }, (_, index) => ({ id: `extra-${index}`, label: `Long class name ${index + 1} / Study Hall`, kind: 'class' as const })));
   const fixture = seed(undefined, true, schedule); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   const palette = dialog(page).locator('.timetable-palette');
@@ -817,11 +846,11 @@ test('large period palette stays beside the canvas on desktop', async ({ page, c
   expect(paletteBox.x + paletteBox.width).toBeLessThan(canvasBox.x);
   expect(paletteBox.height).toBeLessThan(600);
   expect(await canvas.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-  await page.screenshot({ path: '/tmp/quasar-time-canvas-desktop.png' });
+  await page.screenshot({ path: testInfo.outputPath('time-canvas-desktop.png') });
 });
 
 
-test('short adjacent blocks have readable compact labels and full details', async ({ page, context }) => {
+test('short adjacent blocks have readable compact labels and full details', async ({ page, context }, testInfo) => {
   const schedule = structuredClone(exampleSchedule);
   schedule.periods[0].label = 'Morning advisory and announcements';
   schedule.cycleDays[0].slots[0].end = '08:05';
@@ -829,7 +858,7 @@ test('short adjacent blocks have readable compact labels and full details', asyn
   schedule.cycleDays[0].slots[1].end = '08:10';
   const fixture = seed(undefined, true, schedule); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/#school');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
@@ -843,7 +872,7 @@ test('short adjacent blocks have readable compact labels and full details', asyn
   await expect(first.locator('strong')).toHaveCSS('white-space', 'nowrap');
   await first.focus();
   await expect(day.locator('.time-block-detail').filter({ hasText: 'Morning advisory and announcements' })).toBeVisible();
-  await page.screenshot({ path: '/tmp/quasar-short-blocks.png' });
+  await page.screenshot({ path: testInfo.outputPath('short-blocks.png') });
 });
 
 
@@ -855,7 +884,7 @@ test('school directory selection, personal edits, shared edits and period placem
     const directory = new DirectoryService(new Service(db, 'browser-owner@example.com'));
     directoryId = directory.save(fixture.id, { schoolId: fixture.school.id, details: { name: 'Directory Biology', teacher: 'Dr Example', room: '204', grades: ['9'] } }).id;
   } finally { db.close(); }
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
   await expect(saved(page)).toBeVisible();
   await page.getByRole('button', { name: 'Browse school classes' }).click();
@@ -895,7 +924,7 @@ test('existing students choose their grade and see lunch throughout the second r
   const ninthGrade = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.map(slot => slot.periodId === 'lunch' ? { ...slot, start: '12:00', end: '12:40' } : slot).sort((a,b) => a.start.localeCompare(b.start)) })) };
   const fixture = seed(undefined, true, { ...defaultSchedule, gradeSchedules: { '9': ninthGrade, '10': exampleSchedule } });
   await authenticate(context, fixture.id);
-  await page.goto('/#classes');
+  await page.goto('/classes');
   await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 9');
   await expect(saved(page)).toBeVisible();
   for (let day = 6; day <= 10; day++) {
@@ -953,9 +982,15 @@ test('guided school creation asks one question at a time and never saves example
   await page.getByRole('button', { name: 'Create school' }).click();
 
   await expect(page.getByRole('heading', { name: 'Which schedule should Quasar follow?' })).toBeVisible();
-  await expect(page.getByRole('radio', { name: /Use the community schedule/ })).toHaveAttribute('aria-checked', 'true');
+  // A new school's schedule is unreviewed, so it is never preselected: Join waits for an explicit choice.
+  const community = page.getByRole('radio', { name: /Use the community schedule/ });
+  await expect(community).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByText('Choose your grade to continue.')).toBeVisible();
   await choose(page.getByLabel('Your grade', { exact: true }), 'Grade 10');
+  await expect(page.getByText('Choose which schedule to follow.')).toBeVisible();
+  await expect(page.getByRole('button', { name: `Join ${name}` })).toBeDisabled();
+  await community.click();
+  await expect(community).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: `Join ${name}` }).click();
   await expect(page.getByRole('heading', { name: 'Add your classes' })).toBeVisible();
   await page.getByRole('button', { name: 'Skip for now' }).click();

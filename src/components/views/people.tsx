@@ -4,7 +4,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import { sameClass, type ClassLike } from '@/domain/class-match';
-import { addDays, classColor, formatDate, formatRange, formatRoom, pluralize, relativeDate } from '@/lib/format';
+import { CHAT } from '@/domain/chat';
+import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
@@ -76,7 +77,7 @@ export function PeopleView({ state }: { state: AppState }) {
   const loadMembers = useCallback(async (text: string) => {
     const ticket = ++searchTicket.current;
     try {
-      const result = await api.community.members.query({ query: text.trim() });
+      const result = await api.community.members.query({ query: text.trim().slice(0, 80) });
       if (ticket === searchTicket.current) { setMembers(result.members); setFailed(current => ({ ...current, members: '' })); }
     } catch (err) {
       if (ticket !== searchTicket.current) return; // A newer search replaced this one.
@@ -103,7 +104,11 @@ export function PeopleView({ state }: { state: AppState }) {
   }, [online, loadFriends, loadMembers]);
   const run = async (action: () => Promise<void>, done?: string) => {
     setPending(true); setError(''); setNotice('');
-    try { await action(); await refresh(); await state.refresh(); if (done) setNotice(done); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+    let failure: unknown = null;
+    try { await action(); } catch (err) { failure = err; }
+    // Reload after a refusal too: some commit first (accepting a request from someone who has since changed schools
+    // deletes it), so the lists and badges must drop what is gone.
+    try { await refresh(); await state.refresh(); if (failure) setError(errorMessage(failure)); else if (done) setNotice(done); } catch (err) { setError(errorMessage(failure ?? err)); } finally { setPending(false); }
   };
   // Friends and both request lists have their own sections, so Schoolmates lists only everyone else.
   const directory = (members ?? []).filter(member => member.friendState === 'none');
@@ -157,7 +162,7 @@ export function PeopleView({ state }: { state: AppState }) {
     </Section>
 
     <Section id="members-title" title="Schoolmates" icon="search" description="Everyone at this school on Quasar. Full names show only when you are both verified."
-      action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Search schoolmates" placeholder="Search by name" value={query} onChange={event => setQuery(event.target.value)} /></div>}>
+      action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Search schoolmates" placeholder="Search by name" maxLength={80} value={query} onChange={event => setQuery(event.target.value)} /></div>}>
       {membersLoading && <LoadingRows count={3} />}
       {members && directory.length === 0 && <Hint>{query.trim() ? 'No other schoolmates match that name.' : members.length ? 'Everyone here is already a friend or has a pending request.' : 'Nobody else has joined yet. Invite your schoolmates.'}</Hint>}
       {directory.length > 0 && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Schoolmates">{directory.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
@@ -169,18 +174,29 @@ export function PeopleView({ state }: { state: AppState }) {
     </Section>
 
     {profileId && <ProfileSheet key={profileId} userId={profileId} state={state} onClose={closeProfile} onChanged={refresh} />}
-    {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async () => { setProofOpen(false); await state.refresh(); setNotice('Sent to support.'); }} />}
+    {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async result => { setProofOpen(false); await state.refresh(); setNotice(verificationNotice(result)); }} />}
   </div>;
 }
 
-function ProofSheet({ accountId, onClose, onSent }: { accountId: string; onClose: () => void; onSent: () => Promise<void> }) {
+type Verification = RouterOutput['community']['requestVerification'];
+
+/**
+ * What sending proof did. An already verified student (support approved an earlier request, or a school email now
+ * matches) is verified at once, and the notice names how, the same way the verification section does.
+ */
+export function verificationNotice(result: Verification): string {
+  if (result.status !== 'verified') return 'Sent to support.';
+  return result.method === 'domain' ? 'You are verified through your school email address.' : 'You are already verified by support.';
+}
+
+function ProofSheet({ accountId, onClose, onSent }: { accountId: string; onClose: () => void; onSent: (result: Verification) => Promise<void> }) {
   const [proof, setProof] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   return <Modal open onClose={onClose} busy={pending} dirty={proof.trim().length > 0} title="Verify your school" description="Support checks your proof by hand. Do not include passwords or full ID numbers."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={proof.trim().length < 10} onClick={async () => {
       setPending(true); setError('');
-      try { const result = await api.community.requestVerification.mutate({ accountId, proof: proof.trim() }); await onSent(); if (result.status === 'verified') return; }
+      try { const result = await api.community.requestVerification.mutate({ accountId, proof: proof.trim() }); await onSent(result); }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Send to support</Button></>}>
     <Field label="Your proof" htmlFor="proof" hint="A link to a photo of your student ID (cover the number), a schedule printout with your name, or your school email address if support can reach you there."><Textarea id="proof" minLength={10} maxLength={2000} rows={5} value={proof} onChange={event => setProof(event.target.value)} /></Field>
@@ -219,17 +235,22 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const [pending, setPending] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [reason, setReason] = useState('');
-  /** Attach the chat's last 30 messages to the report (only offered when the two of you have chatted). */
+  /** Attach the chat's last CHAT.evidence messages to the report (only offered when the two of you have chatted). */
   const [includeChat, setIncludeChat] = useState(true);
   const [notice, setNotice] = useState('');
   /** Where the last action's result shows: at the top, or next to the Manage buttons that started it. */
   const [resultAt, setResultAt] = useState<'top' | 'manage'>('top');
   const [pickedDate, setPickedDate] = useState<string | null>(null);
+  /** The in-place confirmation for Block or Remove friend (docs/CHAT.md §Dialogs: no native confirm()). */
+  const [confirming, setConfirming] = useState<'block' | 'remove' | null>(null);
   const load = useCallback(async () => { try { setProfile(await api.community.profile.query({ userId })); } catch (err) { setError(errorMessage(err)); } }, [userId]);
   useEffect(() => { void load(); }, [load]);
   const run = async (action: () => Promise<unknown>, done?: string, at: 'top' | 'manage' = 'top') => {
     setPending(true); setError(''); setNotice(''); setResultAt(at);
-    try { await action(); await load(); await onChanged(); await state.refresh(); if (done) setNotice(done); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+    let failure: unknown = null;
+    try { await action(); } catch (err) { failure = err; }
+    // Reload after a refusal too, since some commit first (see the list's run); the action's error shows last.
+    try { await load(); await onChanged(); await state.refresh(); if (failure) setError(errorMessage(failure)); else if (done) setNotice(done); } catch (err) { setError(errorMessage(failure ?? err)); } finally { setPending(false); }
   };
   const theirSchedule = useMemo(() => profile?.shared ? scheduleForGrade(profile.school.schedule, profile.shared.personal.grade) : null, [profile]);
   const defaultDate = useMemo(() => theirSchedule && profile?.shared ? nextSchoolDay(theirSchedule, profile.shared.personal, state.today, state.now) : state.today,
@@ -240,9 +261,12 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     try { return resolveDay(theirSchedule, date, profile.shared.personal); } catch { return null; }
   }, [theirSchedule, profile, date]);
   const mine = state.personal;
-  /** True when I have a class with this name in this period. */
-  /** True when I have the same class in this period (same directory entry, or the same words in any order). */
+  /**
+   * True when I have the same class in this period (same directory entry, or the same words in any order). Only at
+   * the same school: a friend who moved keeps the friendship, but their period ids belong to another timetable.
+   */
   const togetherIn = (periodId: string, theirs: ClassLike) => {
+    if (!profile?.sameSchool) return false;
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
     return !!own && sameClass(own, theirs);
   };
@@ -270,7 +294,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     setReporting(false); setReason(''); setIncludeChat(true);
   };
   const cancelReport = () => { setReporting(false); setReason(''); setIncludeChat(true); };
-  return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(profile.joinedAt.slice(0, 10), { year: true })}`].filter(Boolean).join(' · ') : undefined}
+  return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(instantParts(profile.joinedAt, state.timeZone).date, { year: true })}`].filter(Boolean).join(' · ') : undefined}
     footer={nextStep ? <><Spacer />{nextStep}</> : undefined}>
     {(!profile || resultAt === 'top') && result}
     {!profile && !error && <Hint role="status">Loading profile…</Hint>}
@@ -285,7 +309,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </div>
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
-        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? `${pluralize(profile.shared.classes.length, 'class', 'classes')} · ${profile.shared.classes.filter(sharedClass).length} in common with you` : undefined}>
+        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? [pluralize(profile.shared.classes.length, 'class', 'classes'), profile.sameSchool ? `${profile.shared.classes.filter(sharedClass).length} in common with you` : null].filter(Boolean).join(' · ') : undefined}>
           {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
           {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
             const color = classColor(cls.id, 'class', cls.color);
@@ -311,13 +335,24 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
         <Eyebrow>Manage</Eyebrow>
         <div className="flex flex-wrap items-center gap-2">
           {!reporting && <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => { setReporting(true); setNotice(''); }}>Report</Button>}
-          <Button size="sm" variant="ghost" disabled={!state.online || pending} onClick={() => { if (profile.blocked || confirm(`Block ${name}? You will not see each other in the directory, and any friendship ends.`)) void run(() => api.community.block.mutate({ accountId, userId, blocked: !profile.blocked }), profile.blocked ? 'Unblocked.' : 'Blocked.', 'manage'); }}>{profile.blocked ? 'Unblock' : 'Block'}</Button>
-          {profile.friendState === 'friends' && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={!state.online || pending} onClick={() => { if (confirm(`Remove ${name} as a friend? They will no longer see your classes, and you will not see theirs.`)) void run(() => api.community.remove.mutate({ accountId, userId }), 'Friend removed.', 'manage'); }}>Remove friend</Button>}
+          <Button size="sm" variant="ghost" disabled={!state.online || pending} aria-expanded={profile.blocked ? undefined : confirming === 'block'} onClick={() => {
+            if (profile.blocked) void run(() => api.community.block.mutate({ accountId, userId, blocked: false }), 'Unblocked.', 'manage');
+            else { setConfirming('block'); setNotice(''); }
+          }}>{profile.blocked ? 'Unblock' : 'Block'}</Button>
+          {profile.friendState === 'friends' && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={!state.online || pending} aria-expanded={confirming === 'remove'} onClick={() => { setConfirming('remove'); setNotice(''); }}>Remove friend</Button>}
         </div>
+        {confirming === 'block' && !profile.blocked && <Callout tone="warning" icon="alert" role="alert" title={`Block ${name}?`} actions={<>
+          <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.block.mutate({ accountId, userId, blocked: true }); setConfirming(null); }, 'Blocked.', 'manage')}>Block {name}</Button>
+          <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
+        </>}>You will not see each other in the directory, their Global chat messages are hidden from you, and any friendship ends.</Callout>}
+        {confirming === 'remove' && profile.friendState === 'friends' && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${name} as a friend?`} actions={<>
+          <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.remove.mutate({ accountId, userId }); setConfirming(null); }, 'Friend removed.', 'manage')}>Remove {name}</Button>
+          <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
+        </>}>They will no longer see your classes, and you will not see theirs.</Callout>}
         {reporting && <Panel className="grid gap-3 bg-card ring-2 ring-destructive/30">
           <strong className="text-sm font-bold">Report {name} to support</strong>
           <Field label="What happened?" htmlFor="report-reason" hint="Support reads every report. Reports are private."><Textarea id="report-reason" autoFocus minLength={10} maxLength={2000} rows={4} value={reason} onChange={event => setReason(event.target.value)} /></Field>
-          {profile.hasChat && <div className="flex items-center gap-2"><Checkbox id="report-include-chat" checked={includeChat} disabled={pending} onCheckedChange={checked => setIncludeChat(checked === true)} /><Label htmlFor="report-include-chat" className="text-sm font-semibold">Include our last 30 messages</Label></div>}
+          {profile.hasChat && <div className="flex items-center gap-2"><Checkbox id="report-include-chat" checked={includeChat} disabled={pending} onCheckedChange={checked => setIncludeChat(checked === true)} /><Label htmlFor="report-include-chat" className="text-sm font-semibold">Include our last {CHAT.evidence} messages</Label></div>}
           <div className="flex gap-2"><Button size="sm" variant="danger" busy={pending} disabled={reason.trim().length < 10} onClick={() => void run(sendReport, 'Report sent to support.', 'manage')}>Send report</Button><Button size="sm" variant="ghost" disabled={pending} onClick={cancelReport}>Cancel</Button></div>
         </Panel>}
         {resultAt === 'manage' && result}

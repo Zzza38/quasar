@@ -27,8 +27,11 @@ describe('feedback before a school is chosen', () => {
     const owner = add('owner@example.com');
     const newcomer = add('maya@example.com');
     expect(service.user(newcomer).suggestedNames).toEqual({ displayName: 'Maya', fullName: 'Maya Chen' });
-    expect(() => service.requestCorrection(newcomer, 'The rotation is off by one day.')).toThrow();
+    expect(() => service.requestCorrection(newcomer, 'The rotation is off by one day.')).toThrow('Enter your display name and full name first.');
+    // Feedback must work while the student is still on the names step.
     service.feedback(newcomer, 'I cannot find my school and the add flow asks for Day 1.');
+    service.profile(newcomer, { displayName: 'Maya', fullName: 'Maya Chen' });
+    expect(() => service.requestCorrection(newcomer, 'The rotation is off by one day.')).toThrow('Join a school first.');
     const requests = service.requests(owner);
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ schoolId: null, schoolName: null, email: 'maya@example.com' });

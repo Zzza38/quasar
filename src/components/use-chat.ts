@@ -52,7 +52,7 @@ export type Outgoing = {
 
 /* ---------- Module memory: pending sends and drafts, keyed by `${accountId}:${userId}` (or `:global`) ---------- */
 
-interface ThreadMemory {
+export interface ThreadMemory {
   key: string;
   accountId: string;
   target: ChatTarget;
@@ -65,7 +65,7 @@ interface ThreadMemory {
   /** Set when the thread should poll at once (a send succeeded, or was refused because of a pause). */
   pollRequested: boolean;
   sending: boolean;
-  refresh: (() => Promise<void>) | null;
+  refresh: (() => Promise<unknown>) | null;
   listeners: Set<() => void>;
 }
 
@@ -84,7 +84,8 @@ export function clearChatMemory(): void {
   memory.accountId = null;
 }
 
-function threadMemory(accountId: string, target: ChatTarget): ThreadMemory {
+/** This account's memory for one conversation, created on first use. Exported for tests. */
+export function threadMemory(accountId: string, target: ChatTarget): ThreadMemory {
   claimAccount(accountId);
   const key = `${accountId}:${targetKey(target)}`;
   let entry = memory.threads.get(key);
@@ -123,10 +124,10 @@ function aborted(error: unknown): boolean {
   return names.includes(error.name) || (cause instanceof Error && names.includes(cause.name)) || (typeof DOMException !== 'undefined' && cause instanceof DOMException && names.includes(cause.name));
 }
 
-type Failure = { retryable: boolean; network: boolean; error?: string; code?: string };
+export type Failure = { retryable: boolean; network: boolean; error?: string; code?: string };
 
 /** §6 failure table: network, timeout and 5xx retry; rate limits offer Retry; everything else is Discard only. */
-function classifySendError(error: unknown): Failure {
+export function classifySendError(error: unknown): Failure {
   const data = errorData(error);
   if (aborted(error) || isTransportFailure(error) || (data?.httpStatus ?? 0) >= 500) return { retryable: true, network: true };
   const code = data?.code;
@@ -159,7 +160,7 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
 }
 
 /** Sends queued messages one at a time, in order. A failure fails everything queued behind it. */
-async function pump(entry: ThreadMemory): Promise<void> {
+export async function pump(entry: ThreadMemory): Promise<void> {
   if (entry.sending) return;
   entry.sending = true;
   try {
@@ -195,7 +196,7 @@ async function pump(entry: ThreadMemory): Promise<void> {
 }
 
 /** Requeues failed messages in their original order. `networkOnly` is the automatic retry on reconnect. */
-function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
+export function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
   let changed = false;
   const next = entry.outgoing.map((item): Outgoing => {
     if (item.status !== 'failed' || !item.retryable || (networkOnly && !item.network)) return item;
@@ -206,7 +207,8 @@ function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
   return changed;
 }
 
-function enqueue(entry: ThreadMemory, body: string) {
+/** Queues a new message behind any unsent ones and starts sending when nothing ahead of it failed. */
+export function enqueue(entry: ThreadMemory, body: string) {
   // Only Retry (or reconnecting, for network failures) resends a failed message, so a new message never
   // sends one the student left at "Not sent.". To keep the order, the new message waits behind them as
   // failed too, and Retry sends them all in order. It joins the automatic reconnect retry only when
@@ -229,7 +231,7 @@ export function resumeChatSends(accountId: string): void {
 }
 
 /** Lost response: a polled message whose id matches an unconfirmed clientId means it was stored. */
-function reconcile(entry: ThreadMemory, messages: ChatMessage[]) {
+export function reconcile(entry: ThreadMemory, messages: ChatMessage[]) {
   if (!entry.outgoing.length) return;
   const stored = new Set(messages.filter((message) => message.fromMe).map((message) => message.id));
   if (entry.outgoing.some((item) => stored.has(item.clientId))) setOutgoing(entry, entry.outgoing.filter((item) => !stored.has(item.clientId)));
@@ -376,7 +378,7 @@ export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
  * order. With earlier pages still unloaded, a change older than the oldest loaded message is
  * dropped; it arrives fresh with its page.
  */
-function mergeMessages(current: ChatMessage[], changes: ChatMessage[], hasEarlier: boolean): ChatMessage[] {
+export function mergeMessages(current: ChatMessage[], changes: ChatMessage[], hasEarlier: boolean): ChatMessage[] {
   if (!changes.length) return current;
   const lowest = current.length ? current[0]!.seq : null;
   const bySeq = new Map(current.map((message) => [message.seq, message]));
@@ -385,6 +387,17 @@ function mergeMessages(current: ChatMessage[], changes: ChatMessage[], hasEarlie
     bySeq.set(message.seq, message);
   }
   return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
+}
+
+/**
+ * Adds an older page under the loaded messages, but only while the page still sits right under them: when a
+ * reset poll replaced the list while the request was out (the oldest loaded seq is no longer `anchorSeq`),
+ * the page is dropped, because merging it would leave a gap between it and the new latest page that no later
+ * "Load earlier" could fill.
+ */
+export function prependEarlier<T extends { messages: ChatMessage[]; hasEarlier: boolean }>(previous: T | null, anchorSeq: number, page: { messages: ChatMessage[]; hasEarlier: boolean }): T | null {
+  if (!previous || previous.messages[0]?.seq !== anchorSeq) return previous;
+  return { ...previous, hasEarlier: page.hasEarlier, messages: mergeMessages(page.messages, previous.messages, false) };
 }
 
 /**
@@ -481,7 +494,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     try {
       const result = await queryThread(accountId, entry.target, { before: first.seq });
       // An older page never moves the revision cursor, so no change can be skipped.
-      setData((previous) => previous && { ...previous, hasEarlier: result.hasEarlier, messages: mergeMessages(result.messages, previous.messages, false) });
+      setData((previous) => prependEarlier(previous, first.seq, result));
     } catch (err) {
       if (errorCode(err) === 'NOT_FOUND') { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
@@ -496,12 +509,9 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     if (!latest.current.online || seq <= Math.max(lastReadRef.current, readRequested.current)) return;
     readRequested.current = seq;
     try {
-      if (userId) {
-        const result = await api.chat.read.mutate({ accountId, userId, seq });
-        latest.current.setChatUnread(result.unreadChats, result.unreadAt);
-      } else {
-        await api.global.read.mutate({ accountId, seq });
-      }
+      // Both answer with the server-stamped badge count, so the badge updates even while the list is unmounted (phones).
+      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : await api.global.read.mutate({ accountId, seq });
+      latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
     } catch (err) {
@@ -517,6 +527,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
       setData((previous) => previous && { ...previous, muted: result.muted });
+      // Muted chats are left out of the badge (§3.4), so the new count comes back with the answer.
+      latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       onChangeRef.current?.();
     } catch (err) {
       if (errorCode(err) === 'NOT_FOUND') { setStatus('closed'); return; }

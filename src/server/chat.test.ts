@@ -251,6 +251,25 @@ describe('5b. slur filter', () => {
     expect(f.db.prepare('SELECT body FROM chat_messages').get()).toEqual({ body: 'you ******' });
     expect(f.send(f.alice, f.bob, 'this test is bullshit').body).toBe('this test is bullshit');
   });
+
+  it('keeps https links whole, so a slur-shaped path segment or host label does not break the link', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    expect(f.send(f.alice, f.bob, 'read https://en.wikipedia.org/wiki/Coon_Rapids,_Minnesota you f4ggot').body)
+      .toBe('read https://en.wikipedia.org/wiki/Coon_Rapids,_Minnesota you ******');
+    expect(f.send(f.alice, f.bob, 'https://www.paki.example.com/w0p/').body).toBe('https://www.paki.example.com/w0p/');
+    // Not a link (http, or credentials), so censored like any other text.
+    expect(f.send(f.alice, f.bob, 'http://example.com/coon').body).toBe('http://example.com/****');
+  });
+
+  it('censors the list preview before cutting it, so a stored slur split at 120 characters never shows', () => {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    f.send(f.alice, f.bob, 'placeholder');
+    // A row stored before the filter existed: the slur straddles the 120-character cut.
+    f.db.prepare('UPDATE chat_messages SET body=?').run(`${'x'.repeat(116)} retard`);
+    expect(f.inboxRow(f.bob, f.alice)).toMatchObject({ lastMessage: { preview: `${'x'.repeat(116)} ***` } });
+  });
 });
 
 describe('6b. reopening a closed chat', () => {
@@ -359,7 +378,8 @@ describe('7. unread and read', () => {
     // Muted: out of the badge, but the row keeps its count.
     f.send(f.bob, f.alice, 'new');
     expect(f.chat.unreadChats(f.alice).unreadChats).toBe(1);
-    f.chat.mute(f.alice, f.bob, true);
+    // The answer carries the new badge count, so the client updates the badge at once.
+    expect(f.chat.mute(f.alice, f.bob, true)).toEqual({ muted: true, unreadChats: 0, unreadAt: expect.any(String) });
     expect(f.chat.unreadChats(f.alice).unreadChats).toBe(0);
     expect(f.inboxRow(f.alice, f.bob)).toMatchObject({ unread: 1, muted: true });
   });
@@ -573,7 +593,7 @@ describe('11. pause', () => {
     const until = new Date(f.clock.now.getTime() + 7 * DAY).toISOString();
     expect(f.chat.inbox(f.bob).pause).toEqual({ until });
     expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until });
-    expect(f.chat.mute(f.bob, f.alice, true)).toEqual({ muted: true });
+    expect(f.chat.mute(f.bob, f.alice, true)).toMatchObject({ muted: true });
     expect(f.chat.report(f.bob, f.alice, { category: 'other', block: false })).toEqual({ blocked: false });
     f.community.block(f.bob, f.cara, true);
     expect(f.send(f.alice, f.bob, 'friends can still write').body).toBe('friends can still write');
@@ -644,12 +664,20 @@ describe('14. reserved names', () => {
   it('rejects new names that mention Quasar or support, and keeps stored ones', async () => {
     const f = fixture();
     const alice = f.caller(f.alice);
-    for (const displayName of ['Quasar Support', 's.u.p.p.o.r.t', 'Admin Team', 'Quasar-Official', 'ＳＴＡＦＦ']) {
-      await expect(alice.profile.save({ displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose a display name that doesn’t mention Quasar or support.' });
+    // Cyrillic and Greek lookalikes, digit swaps, accents, spaced-out letters and joined reserved words are caught too.
+    for (const displayName of ['Quasar Support', 's.u.p.p.o.r.t', 'Admin Team', 'Quasar-Official', 'ＳＴＡＦＦ',
+      '\u0405u\u0440\u0440ort', 'Qu\u0430sar', '\u0405taff', 'Supp0rt', 'Suppórt', 'S u p p o r t', 'QuasarSupport', 'Admin!']) {
+      await expect(alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose a display name that doesn’t mention Quasar or support.' });
     }
-    for (const displayName of ['Stafford', 'Badminton Bob']) expect((await alice.profile.save({ displayName, fullName: 'Alice Fullname' })).displayName).toBe(displayName);
+    for (const displayName of ['Stafford', 'Badminton Bob', 'Staff0rd', 'Jo 5', 'Zoë 👨\u200D👩\u200D👧']) expect((await alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).displayName).toBe(displayName);
+    // Bidi overrides and zero-width characters are removed, so a name cannot read backwards or render blank.
+    expect((await alice.profile.save({ accountId: f.alice, displayName: '\u202Etroppus', fullName: 'Alice\u200B Fullname\u00AD' }))).toMatchObject({ displayName: 'troppus', fullName: 'Alice Fullname' });
+    for (const displayName of ['\u200B', '\u200B\u202E\u2060', '...']) {
+      await expect(alice.profile.save({ accountId: f.alice, displayName, fullName: 'Alice Fullname' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    await expect(alice.profile.save({ accountId: f.alice, displayName: 'Alice', fullName: '\u200B\u200B' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     f.db.prepare('UPDATE users SET display_name=? WHERE id=?').run('Support', f.bob);
-    expect((await f.caller(f.bob).profile.save({ displayName: 'Support', fullName: 'Bob New Fullname' })).fullName).toBe('Bob New Fullname');
+    expect((await f.caller(f.bob).profile.save({ accountId: f.bob, displayName: 'Support', fullName: 'Bob New Fullname' })).fullName).toBe('Bob New Fullname');
   });
 });
 

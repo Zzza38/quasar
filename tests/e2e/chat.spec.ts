@@ -95,7 +95,7 @@ async function expectClosedRow(page: Page, name: string, reopen: 'Unblock' | 'Ad
   await expect(row).toContainText('Chat closed', { timeout: 20_000 });
   await expect(row.getByRole('button')).toHaveCount(2);
   await expect(row.getByRole('button', { name: `Report ${name}` })).toBeVisible();
-  await expect(row.getByRole('button', { name: reopen === 'Unblock' ? `Unblock ${name} and reopen the chat` : `Add ${name} as a friend` })).toBeVisible();
+  await expect(row.getByRole('button', { name: reopen === 'Unblock' ? `Unblock ${name} and reopen the chat` : `Add friend: ${name}` })).toBeVisible();
   await expect(row.getByRole('link')).toHaveCount(0);
   return row;
 }
@@ -112,12 +112,12 @@ const notSent = (log: Locator) => log.getByText(/^Not sent\./);
 test('friends chat, the badge counts unread chats, and deletion reaches both sides', async ({ browser }, testInfo) => {
   const f = seed({ friends: [['alice', 'bob'], ['bob', 'cara'], ['alice', 'cara']] });
   const bob = await phone(browser, f.bob);
-  await bob.goto('/#today');
+  await bob.goto('/');
   await expect(bob.locator('.tabbar a')).toHaveCount(6);
   await expect(badge(bob)).toHaveAccessibleDescription('');
 
   const alice = await signedIn(browser, f.alice);
-  await alice.goto('/#messages');
+  await alice.goto('/messages');
   await expect(alice.getByRole('heading', { name: 'Messages', exact: true })).toBeVisible();
   const start = alice.getByRole('list', { name: 'Start a chat' });
   await expect(start).toContainText('Bob');
@@ -185,7 +185,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
     await alice.screenshot({ path: testInfo.outputPath(`chat-thread-desktop-${scheme}.png`) });
   }
   await bob.getByRole('button', { name: 'Back to chats' }).click();
-  await alice.goto('/#messages');
+  await alice.goto('/messages');
   await expect(bob.getByRole('list', { name: 'Chats' })).toBeVisible();
   await expect(alice.getByRole('list', { name: 'Chats' })).toBeVisible();
   for (const scheme of ['light', 'dark'] as const) {
@@ -199,7 +199,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await bob.emulateMedia({ colorScheme: 'light' });
 
   // The task came from the message, and reading the chat cleared the badge.
-  await bob.goto('/#tasks');
+  await bob.goto('/tasks');
   await expect(bob.getByRole('button', { name: 'Edit Hi Bob' })).toBeVisible();
   await expect(badge(bob)).toHaveAccessibleDescription('');
 });
@@ -207,7 +207,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
 test('global chat: everyone posts, slurs are censored, the owner edits and removes with reasons, and the ICE line is a joke', async ({ browser }, testInfo) => {
   const f = seed();
   const alice = await signedIn(browser, f.alice);
-  await alice.goto('/#messages');
+  await alice.goto('/messages');
   const groups = alice.getByRole('list', { name: 'Rooms' });
   await expect(groups.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
   await groups.getByRole('button', { name: 'Open Global chat' }).click();
@@ -231,9 +231,9 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
 
   // Bob (never a friend of Alice) reads the room with names, and the room counts as one unread chat.
   const bob = await phone(browser, f.bob);
-  await bob.goto('/#today');
+  await bob.goto('/');
   await expect(badge(bob)).toHaveAccessibleDescription('1 unread chat', { timeout: 20_000 });
-  await bob.goto('/#messages?room=global');
+  await bob.goto('/messages?room=global');
   const bobLog = bob.getByRole('log', { name: 'Global chat messages' });
   await expect(bobLog).toContainText('this homework is bullshit');
   await expect(bobLog.getByText('Alice', { exact: true }).first()).toBeVisible();
@@ -252,7 +252,7 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
 
   // The owner edits Bob's message and removes Alice's, each with a reason everyone sees.
   const owner = await signedIn(browser, f.owner);
-  await owner.goto('/#messages?room=global');
+  await owner.goto('/messages?room=global');
   const ownerLog = owner.getByRole('log', { name: 'Global chat messages' });
   await expect(owner.getByText('You moderate this room')).toBeVisible();
   const bobsMessage = ownerLog.getByRole('listitem').filter({ hasText: 'hi from bob' });
@@ -293,7 +293,7 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
 test('a blocked chat can be reopened: unblock sends a request, and acceptance brings the history back', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob']], messages: [['alice', 'bob', 'see you at practice']] });
   const bob = await signedIn(browser, f.bob);
-  await bob.goto(`/#messages?with=${f.alice}`);
+  await bob.goto(`/messages?with=${f.alice}`);
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('see you at practice');
   await bob.getByRole('button', { name: 'Block', exact: true }).click();
   await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
@@ -312,7 +312,7 @@ test('a blocked chat can be reopened: unblock sends a request, and acceptance br
 test('a failed send keeps the text and retries without duplicating', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob']] });
   const page = await signedIn(browser, f.alice);
-  await page.goto(`/#messages?with=${f.bob}`);
+  await page.goto(`/messages?with=${f.bob}`);
   const composer = page.getByRole('textbox', { name: 'Message Bob' });
   const log = page.getByRole('log', { name: 'Messages with Bob' });
   const thread = page.getByRole('region', { name: 'Chat with Bob' });
@@ -348,7 +348,7 @@ test('a failed send keeps the text and retries without duplicating', async ({ br
   finally { db.close(); }
 
   const bob = await signedIn(browser, f.bob);
-  await bob.goto(`/#messages?with=${f.alice}`);
+  await bob.goto(`/messages?with=${f.alice}`);
   const bobLog = bob.getByRole('log', { name: 'Messages with Alice' });
   await expect(bobLog.getByText('Math at 3?', { exact: true })).toHaveCount(1);
   await expect(bobLog.getByText('See you there', { exact: true })).toHaveCount(1);
@@ -358,7 +358,7 @@ test('offline shows the connect state and recovers', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']], messages: [['cara', 'alice', 'Are you going to practice?']] });
   const page = await signedIn(browser, f.alice);
   const context = page.context();
-  await page.goto(`/#messages?with=${f.bob}`);
+  await page.goto(`/messages?with=${f.bob}`);
   const composer = page.getByRole('textbox', { name: 'Message Bob' });
   const log = page.getByRole('log', { name: 'Messages with Bob' });
   const thread = page.getByRole('region', { name: 'Chat with Bob' });
@@ -450,7 +450,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
 
   // Bob blocks Alice first.
   const bob = await signedIn(browser, f.bob);
-  await bob.goto(`/#messages?with=${f.alice}`);
+  await bob.goto(`/messages?with=${f.alice}`);
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('Watch out tomorrow');
   await bob.getByRole('button', { name: 'Block', exact: true }).click();
   await bob.getByRole('dialog', { name: 'Block Alice?' }).getByRole('button', { name: 'Block', exact: true }).click();
@@ -459,7 +459,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
 
   // Alice keeps a closed row with Report, and the report holds Bob's messages.
   const alice = await signedIn(browser, f.alice);
-  await alice.goto('/#messages');
+  await alice.goto('/messages');
   const closed = await expectClosedRow(alice, 'Bob');
   await closed.getByRole('button', { name: 'Report Bob' }).click();
   const report = alice.getByRole('dialog', { name: 'Report Bob' });
@@ -505,7 +505,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   expect(await owner.content()).not.toContain('secret plans');
 
   // Bob can still read, but cannot send, even to Cara.
-  await bob.goto(`/#messages?with=${f.cara}`);
+  await bob.goto(`/messages?with=${f.cara}`);
   await expect(bob.getByText(/^Support paused your messaging until [^.]+\.$/)).toBeVisible({ timeout: 20_000 });
   await expect(bob.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
   await expect(bob.getByRole('textbox', { name: 'Message Cara' })).toHaveCount(0);
@@ -514,12 +514,12 @@ test('the harasser blocking first still leaves the victim a report path, and sup
 test('reporting a message with block closes the chat identically for both', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob']], messages: [['bob', 'alice', 'You are so annoying'], ['bob', 'alice', 'Nobody wants you at lunch']] });
   const bob = await signedIn(browser, f.bob);
-  await bob.goto(`/#messages?with=${f.alice}`);
+  await bob.goto(`/messages?with=${f.alice}`);
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('Nobody wants you at lunch');
   await expect(bob.getByRole('textbox', { name: 'Message Alice' })).toBeVisible();
 
   const alice = await signedIn(browser, f.alice);
-  await alice.goto(`/#messages?with=${f.bob}`);
+  await alice.goto(`/messages?with=${f.bob}`);
   const second = alice.getByRole('log', { name: 'Messages with Bob' }).getByRole('listitem').filter({ hasText: 'Nobody wants you at lunch' });
   await second.hover();
   await second.getByRole('button', { name: 'Message actions' }).click();

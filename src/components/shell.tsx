@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { PanelLeft } from 'lucide-react';
 import { cn, scrollToId } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
+import { viewPath } from '@/lib/routes';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
@@ -38,6 +39,11 @@ function scrollTopIfActive(active: boolean) {
   if (active) window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
 }
 
+/** A plain left click on a view link changes the view in place; modified clicks and middle clicks keep the browser's own behavior (a new tab). */
+function followsInPage(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+}
+
 /** The Quasar mark: a flat Q that takes the current text colour, with the sparkle in the theme's primary colour. */
 export function BrandMark({ size = 32, className }: { size?: number; className?: string }) {
   return <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true" focusable="false" className={cn('shrink-0 select-none', className)} style={{ width: size, height: size }}>
@@ -57,8 +63,8 @@ export function BrandLockup({ height = 120, className }: { height?: number; clas
   </span>;
 }
 
-export function Brand({ compact, className, href = '#today' }: { compact?: boolean; className?: string; href?: string }) {
-  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href={href} aria-label="Quasar home">
+export function Brand({ compact, className, href = '/', onClick }: { compact?: boolean; className?: string; href?: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void }) {
+  return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href={href} onClick={onClick} aria-label="Quasar home">
     <BrandMark />
     {!compact && <span>Quasar</span>}
   </a>;
@@ -122,7 +128,7 @@ function badgeCount(id: View, { taskCount, requestCount, chatCount }: NavCounts)
 }
 
 /** The six-tab phone dock. Messages lives in the top bar instead (`dock: false`). */
-function TabBar({ view, counts }: { view: View; counts: NavCounts }) {
+function TabBar({ view, counts, navigate }: { view: View; counts: NavCounts; navigate: (view: View) => void }) {
   return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }} aria-label="Main">
     <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
       {VIEWS.filter((entry) => entry.dock !== false).map((entry) => {
@@ -141,8 +147,10 @@ function TabBar({ view, counts }: { view: View; counts: NavCounts }) {
 }
 
 function useNavigationOpen(): [boolean, (open: boolean) => void] {
+  // The server renders the sidebar open (it cannot see this device's preference); the saved choice is applied in a
+  // layout effect, before the first interactive frame, so the HTML and its hydration agree.
   const [open, setOpen] = useState(true);
-  useEffect(() => {
+  useLayoutEffect(() => {
     try { setOpen(localStorage.getItem(NAV_KEY) !== 'true'); } catch { /* Storage may be unavailable. */ }
   }, []);
   const update = useCallback((next: boolean) => {
@@ -158,6 +166,7 @@ export interface ShellProps {
   session: WorkspaceSession;
   context: WorkspaceContext;
   view: View;
+  navigate: (view: View) => void;
   taskCount: number;
   /** Unread chats for the Messages badges; null while offline, which hides both badges. */
   chatUnread: number | null;
@@ -170,7 +179,8 @@ export interface ShellProps {
   gradeSettings?: ReactNode;
 }
 
-export function Shell({ session, context, view, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings }: ShellProps) {
+export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings }: ShellProps) {
+  const home = (event: MouseEvent<HTMLAnchorElement>) => { if (!followsInPage(event)) return; event.preventDefault(); if (view === 'today') scrollTopIfActive(true); else navigate('today'); };
   const [account, setAccount] = useState(false);
   useEffect(() => {
     const open = () => setAccount(true);
@@ -229,7 +239,7 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
     <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
         {navOpen ? <>
-          <Brand />
+          <Brand onClick={home} />
           <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="rounded-lg text-muted-foreground hover:bg-sidebar-accent" />
         </> : <Tooltip>
           <TooltipTrigger asChild>
@@ -282,7 +292,7 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
 
     <SidebarInset className="min-w-0 bg-transparent">
       <header className="app-topbar glass sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-foreground/[0.06] pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:hidden">
-        <Brand />
+        <Brand onClick={home} />
         <div className="flex items-center gap-2">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="hidden min-[480px]:inline" />
           {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
@@ -292,7 +302,7 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
             <Icon name="message" size={21} strokeWidth={onMessages ? 2.4 : 2} />
             {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
           </a>
-          <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
+          <button type="button" className="grid size-10 shrink-0 place-items-center rounded-full outline-none pointer-coarse:size-11 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar initials={initials} />
           </button>
         </div>
@@ -311,7 +321,7 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
         </div>
         {children}
       </div>
-      {!immersive && <TabBar view={view} counts={counts} />}
+      {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
     </SidebarInset>
 
     <Sheet open={account} onOpenChange={setAccount}>
@@ -332,6 +342,7 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
             {context.school && <div><dt className="text-muted-foreground">Verification</dt><dd className="text-right font-semibold">{context.community?.verification.status === 'verified' ? 'Verified' : context.community?.verification.status === 'pending' ? 'Under review' : 'Not verified'}</dd></div>}
             <div><dt className="text-muted-foreground">Sync</dt><dd className="text-right font-semibold">{statusLabel(sync)}</dd></div>
             <div><dt className="text-muted-foreground">Works offline</dt><dd className="text-right font-semibold">{session.offlineReady === true ? 'Yes, on this device' : session.offlineReady === null ? 'Getting ready…' : session.offlineSupported ? 'Not yet' : 'Not in this browser'}</dd></div>
+            {session.storagePersistent === false && <div><dt className="text-muted-foreground">Device storage</dt><dd className="text-right font-semibold">The browser may clear it if space runs low</dd></div>}
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
           <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
@@ -347,13 +358,22 @@ export function Shell({ session, context, view, taskCount, chatUnread, immersive
       </SheetContent>
     </Sheet>
 
-    <Modal open={session.logout.asking} onClose={session.cancelLogout} busy={session.logout.pending} title="Sync before signing out?" description="Signing out removes this account’s saved data from this device."
-      footer={<><Button variant="ghost" disabled={session.logout.pending} onClick={session.cancelLogout}>Cancel</Button><Spacer /><Button variant="danger" disabled={session.logout.pending || !online} onClick={() => void session.finishLogout(true)}>Discard and sign out</Button><Button variant="primary" busy={session.logout.pending} disabled={!online || (snapshot?.conflicts.length ?? 0) > 0} onClick={() => void session.finishLogout(false)}>Sync and sign out</Button></>}>
-      <p className="text-sm">{snapshot?.pending === 1 ? '1 change is' : `${snapshot?.pending ?? 0} changes are`} still waiting to sync.</p>
-      {(snapshot?.conflicts.length ?? 0) > 0 && <Callout tone="warning" icon="alert">Some changes need a choice first. Resolve them, or discard everything waiting.</Callout>}
-      {session.error && <Callout tone="danger" role="alert">{session.error}</Callout>}
-    </Modal>
+    <LogoutDialog session={session} />
   </SidebarProvider></TooltipProvider>;
+}
+
+/**
+ * "Sync before signing out?" for a sign-out requested while changes are waiting. Every signed-in
+ * screen renders it (the shell and each setup step), so requestLogout never sets a flag nothing shows.
+ */
+export function LogoutDialog({ session }: { session: WorkspaceSession }) {
+  const { online, snapshot } = session;
+  return <Modal open={session.logout.asking} onClose={session.cancelLogout} busy={session.logout.pending} title="Sync before signing out?" description="Signing out removes this account’s saved data from this device."
+    footer={<><Button variant="ghost" disabled={session.logout.pending} onClick={session.cancelLogout}>Cancel</Button><Spacer /><Button variant="danger" disabled={session.logout.pending || !online} onClick={() => void session.finishLogout(true)}>Discard and sign out</Button><Button variant="primary" busy={session.logout.pending} disabled={!online || (snapshot?.conflicts.length ?? 0) > 0} onClick={() => void session.finishLogout(false)}>Sync and sign out</Button></>}>
+    <p className="text-sm">{snapshot?.pending === 1 ? '1 change is' : `${snapshot?.pending ?? 0} changes are`} still waiting to sync.</p>
+    {(snapshot?.conflicts.length ?? 0) > 0 && <Callout tone="warning" icon="alert">Some changes need a choice first. Resolve them, or discard everything waiting.</Callout>}
+    {session.error && <Callout tone="danger" role="alert">{session.error}</Callout>}
+  </Modal>;
 }
 
 /* ---------- Loading / disconnected ---------- */

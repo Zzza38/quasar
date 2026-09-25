@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { classSchema, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
+import { classSchema, cycleDaysWithPeriod, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
+import { heroBase } from '@/lib/color';
 import { classColor, formatDate, formatRoom, slugId, todayIn } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { ChangedWhileEditing, type FieldSpec } from '../conflicts';
 import { ClassAssignmentGrid } from '../class-assignment-grid';
+import { removeClass } from '../personal-timetable';
 import { Icon } from '../icon';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer } from '../primitives';
@@ -17,6 +19,9 @@ import { ClassColorPicker } from '../class-color-picker';
 import { ColorPicker } from '../ui/color-picker';
 import { SchoolDirectory } from '../school-directory';
 import { ScanScheduleSheet } from '../scan-schedule';
+
+/** The white initial on a class avatar: light class colours are darkened just enough for 4.5:1, as on the Now card. */
+const initialBackground = (dot: string) => { const base = heroBase(dot); return `linear-gradient(135deg, ${base}, color-mix(in srgb, ${base} 75%, #0b1020))`; };
 
 const classFields: FieldSpec<Record<string, unknown>>[] = [
   { key: 'name', label: 'Name', render: (value) => (value.name as string) || null },
@@ -33,7 +38,13 @@ export function ClassesView({ state }: { state: AppState }) {
   const [adjustDate, setAdjustDate] = useState<string | null>(null);
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
   const [privateOpen, setPrivateOpen] = useState(false);
-  const [directoryOpen, setDirectoryOpen] = useState(state.params.get('directory') === 'open');
+  // "Wrong time?" links (openBellTimes) arrive with ?private=open; open the sheet once and drop the param.
+  const privateParam = state.params.get('private');
+  useEffect(() => { if (privateParam === 'open') { setPrivateOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [privateParam, state]);
+  // ?directory=open (School → Browse school classes) is one-shot too: open the directory and drop the param, so Back or a reload does not reopen it.
+  const directoryParam = state.params.get('directory');
+  const [directoryOpen, setDirectoryOpen] = useState(directoryParam === 'open');
+  useEffect(() => { if (directoryParam === 'open') { setDirectoryOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [directoryParam, state]);
   const [scanOpen, setScanOpen] = useState(false);
   const [scanEnabled, setScanEnabled] = useState(false);
   useEffect(() => {
@@ -42,14 +53,16 @@ export function ClassesView({ state }: { state: AppState }) {
     api.scan.status.query().then(result => { if (active) setScanEnabled(result.enabled); }).catch(() => {});
     return () => { active = false; };
   }, [state.online]);
-  const [pickDate, setPickDate] = useState(() => todayIn(schedule.timeZone, state.now));
+  // Only an explicit pick is stored, so the default follows today when the app resumes on a later day.
+  const [pickedDate, setPickDate] = useState<string | null>(null);
+  const pickDate = pickedDate ?? todayIn(schedule.timeZone, state.now);
 
-  /** Which rotation days each period appears on. */
+  /** Which rotation days each period appears on for this student, cycle-day adjustments included. */
   const meets = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const period of schedule.periods) map.set(period.id, schedule.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === period.id)).map((day) => day.label));
+    for (const period of schedule.periods) map.set(period.id, cycleDaysWithPeriod(schedule, personal, period.id));
     return map;
-  }, [schedule]);
+  }, [schedule, personal]);
   const knownPeriods = [...schedule.periods, ...school.periods.filter(period => !schedule.periods.some(entry => entry.id === period.id))];
   const scheduled = scheduledPeriodIds(schedule, personal);
   const stale = Object.keys(personal.assignments).filter((periodId) => !knownPeriods.some((period) => period.id === periodId));
@@ -77,7 +90,7 @@ export function ClassesView({ state }: { state: AppState }) {
         return <li key={cls.id} className="relative grid grid-cols-[minmax(0,1fr)] content-start gap-3 rounded-2xl border-t-4 bg-card px-4 pt-3.5 pb-4 text-sm text-card-foreground shadow-card ring-1 ring-foreground/[0.06] transition-shadow hover:shadow-float has-[[data-color-picker-open=true]]:border-t-transparent! dark:ring-foreground/[0.09]" style={{ borderTopColor: color.dot }}>
           <ClassColorPicker cls={cls} disabled={!state.personalValid} onSave={(color) => state.savePersonal({ ...personal, classes: personal.classes.map((entry) => entry.id === cls.id ? { ...entry, color } : entry) })}>{(colorButton) => <>
           <div className="flex items-start gap-3">
-            <span aria-hidden="true" className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25)]" style={{ background: `linear-gradient(135deg, ${color.dot}, color-mix(in srgb, ${color.dot} 75%, #0b1020))` }}>{cls.name.trim().slice(0, 1).toUpperCase()}</span>
+            <span aria-hidden="true" className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25)]" style={{ background: initialBackground(color.dot) }}>{cls.name.trim().slice(0, 1).toUpperCase()}</span>
             <div className="grid min-w-0 flex-1 gap-1">
               <strong className="line-clamp-3 text-[16px] leading-snug font-bold tracking-tight break-words" title={cls.name}>{cls.name}</strong>
               <span className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
@@ -130,7 +143,7 @@ export function ClassesView({ state }: { state: AppState }) {
         setEditing(null);
       }}
       onDelete={current ? async () => {
-        await state.savePersonal({ ...personal, classes: personal.classes.filter((cls) => cls.id !== current.id), assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([, classId]) => classId !== current.id)) });
+        await state.savePersonal(removeClass(school, personal, current.id));
         setEditing(null);
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
@@ -154,6 +167,8 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
   const removed = current === null;
   const dirty = JSON.stringify(draft) !== JSON.stringify(original);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
+  // The in-place confirmation for removing the class (docs/CHAT.md §Dialogs: no native confirm()).
+  const [removing, setRemoving] = useState(false);
   if (open && missingAtOpen) return <Modal open onClose={onClose} title="Class not found"><p className="text-sm text-muted-foreground">This class was removed on another device.</p></Modal>;
   const submit = () => run(async () => {
     const id = draft.id || slugId(draft.name, usedIds, 'class');
@@ -162,10 +177,10 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
   });
   const previewColor = draft.color ?? classColor(draft.id || slugId(draft.name, usedIds, 'class')).dot;
   return <Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'Add a class' : 'Edit class'}
-    footer={<>{onDelete && !removed && <Button variant="danger" disabled={pending || changed} onClick={() => { if (confirm(`Remove ${draft.name || 'this class'}? Its period assignments are cleared. Tasks keep their notes.`)) void run(onDelete); }}>Remove</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="class-form" type="submit" busy={pending} disabled={changed || !draft.name.trim()}>{isNew || removed ? 'Add class' : 'Save'}</Button></>}>
+    footer={<>{onDelete && !removed && <Button variant="danger" disabled={pending || changed} onClick={() => setRemoving(true)}>Remove</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="class-form" type="submit" busy={pending} disabled={changed || !draft.name.trim()}>{isNew || removed ? 'Add class' : 'Save'}</Button></>}>
     <form id="class-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void submit(); }}>
       <div className="flex items-center gap-3">
-        <span aria-hidden="true" className="grid size-12 shrink-0 place-items-center rounded-2xl text-lg font-extrabold text-white transition-colors" style={{ background: `linear-gradient(135deg, ${previewColor}, color-mix(in srgb, ${previewColor} 75%, #0b1020))` }}>{draft.name.trim().slice(0, 1).toUpperCase() || '?'}</span>
+        <span aria-hidden="true" className="grid size-12 shrink-0 place-items-center rounded-2xl text-lg font-extrabold text-white transition-colors" style={{ background: initialBackground(previewColor) }}>{draft.name.trim().slice(0, 1).toUpperCase() || '?'}</span>
         <Field label="Class name" htmlFor="class-name" className="flex-1"><Input id="class-name" autoFocus={isNew} required maxLength={120} placeholder="Algebra II" value={draft.name} className="h-11 text-[16px] font-semibold" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -179,6 +194,10 @@ function ClassSheet({ open, onClose, initial, current, usedIds, onSave, onDelete
         </div>
       </Field>
       {changed && !pending && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={classFields} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setOriginal(current); setAcknowledged(serialized); } else onClose(); }} />}
+      {removing && onDelete && !removed && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${draft.name.trim() || 'this class'}?`} actions={<>
+        <Button size="sm" variant="danger" busy={pending} disabled={changed} onClick={() => void run(onDelete)}>Remove class</Button>
+        <Button size="sm" autoFocus disabled={pending} onClick={() => setRemoving(false)}>Keep it</Button>
+      </>}>Its period assignments and the timetable blocks made for it are cleared. Tasks keep their notes.</Callout>}
       {error && <Callout tone="danger" role="alert">{error}</Callout>}
     </form>
   </Modal>;

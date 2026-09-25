@@ -1,13 +1,20 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import { mergeMutation, type Entity, type EntityKind, type Mutation, type SyncResult } from "../domain/sync";
+import { mergeMutation, mergePreferringLocal, type Entity, type EntityKind, type Mutation, type SyncResult } from "../domain/sync";
 import { personalScheduleSchema } from "../domain/schedule";
-import { taskSchema } from "../domain/task";
-import { errorMessage, isTransportFailure } from "./api";
+import { completionTime, stampCompletion, taskSchema, withoutCompletionEdit } from "../domain/task";
+import { errorMessage, isPermanentRejection, isTransportFailure } from "./api";
+
+interface ConflictInfo {
+  current: Entity | null;
+  paths: string[];
+  /** Set when the server refused the change itself; the student retries it against `current` or discards it. */
+  rejected?: string;
+}
 
 interface QueuedMutation {
   mutation: Mutation;
   state: "queued" | "sending" | "conflict";
-  conflict?: { current: Entity | null; paths: string[] };
+  conflict?: ConflictInfo;
 }
 
 interface StoredWorkspace {
@@ -17,6 +24,11 @@ interface StoredWorkspace {
   context: Record<string, unknown> | null;
   lastError: string | null;
   lease: { owner: string; until: number } | null;
+  /**
+   * Set by the tab that is signing out, so other tabs of the same account stop queueing and uploading
+   * until it finishes. Missing in records written before this field existed.
+   */
+  signingOut?: { owner: string; until: number } | null;
 }
 
 interface OfflineDatabase extends DBSchema {
@@ -30,7 +42,7 @@ export interface WorkspaceSnapshot {
   entities: Entity[];
   /** Includes mutations waiting for conflict resolution. */
   pending: number;
-  conflicts: Array<{ mutation: Mutation; current: Entity | null; paths: string[] }>;
+  conflicts: Array<{ mutation: Mutation; current: Entity | null; paths: string[]; rejected?: string }>;
   context: Record<string, unknown> | null;
   lastError: string | null;
 }
@@ -38,6 +50,9 @@ export interface WorkspaceSnapshot {
 // Keep the persisted legacy key so Quasar retains existing unsynced edits.
 const DATABASE = "whatsnext-offline-v1";
 const LEASE_MS = 30_000;
+/** A crashed or closed tab's sign-out marker stops blocking the other tabs after this long. */
+const SIGN_OUT_MS = 120_000;
+const SIGNING_OUT_ELSEWHERE = "Signing out in another tab. Wait for it to finish, then try again.";
 const keyOf = (value: { kind: EntityKind; id: string }) => `${value.kind}:${value.id}`;
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -51,7 +66,7 @@ function connect(): Promise<IDBPDatabase<OfflineDatabase>> {
 }
 
 function empty(accountId: string): StoredWorkspace {
-  return { accountId, server: [], queue: [], context: null, lastError: null, lease: null };
+  return { accountId, server: [], queue: [], context: null, lastError: null, lease: null, signingOut: null };
 }
 
 function optimistic(state: StoredWorkspace): Entity[] {
@@ -69,6 +84,54 @@ function optimistic(state: StoredWorkspace): Entity[] {
   return [...entities.values()];
 }
 
+const schemaFor = (kind: EntityKind) => kind === "task" ? taskSchema : personalScheduleSchema;
+
+/**
+ * A task's `imported` calendar metadata belongs to the server's calendar refresh, which the server enforces
+ * against the mutation's base. Every payload built against a base carries that base's value (or none).
+ */
+function withServerImported(kind: EntityKind, data: Record<string, unknown>, source: Entity | null): Record<string, unknown>;
+function withServerImported(kind: EntityKind, data: Record<string, unknown> | null, source: Entity | null): Record<string, unknown> | null;
+function withServerImported(kind: EntityKind, data: Record<string, unknown> | null, source: Entity | null) {
+  if (kind !== "task" || data === null) return data;
+  const next = { ...data };
+  if (source && !source.deleted && Object.hasOwn(source.data, "imported")) next.imported = clone(source.data.imported);
+  else delete next.imported;
+  return next;
+}
+
+/**
+ * A task's completedAt is server-owned too (the server restamps it), so a local stamp is never an edit that
+ * could conflict with the time another device completed the same task.
+ */
+function withoutServerFields(kind: EntityKind, data: Record<string, unknown> | null, base: Entity | null): Record<string, unknown> | null {
+  const next = withServerImported(kind, data, base);
+  return kind === "task" && next ? withoutCompletionEdit(next, base) : next;
+}
+
+/** Restamps a rebased task against the latest server copy, keeping the local stamp when this edit completes it. */
+function withLocalCompletion(kind: EntityKind, data: Record<string, unknown>, sent: Record<string, unknown> | null, current: Entity | null): Record<string, unknown> {
+  if (kind !== "task") return data;
+  const now = new Date();
+  return stampCompletion(data, current && !current.deleted ? current.data : null, completionTime(sent?.completedAt, now));
+}
+
+/**
+ * "Keep my changes": the local value wins only where the edits actually compete, so the other side's
+ * independent edits survive. A combination that breaks a cross-field invariant (the conflict itself came
+ * from validation) falls back to the whole local version, which was valid when it was saved.
+ */
+function keepLocal(conflicted: Mutation, local: Entity, current: Entity | null): Record<string, unknown> | null {
+  if (local.deleted) return null;
+  const desired = withServerImported(local.kind, local.data, conflicted.base);
+  let data = desired;
+  if (!conflicted.base || !current || conflicted.base.version <= current.version) {
+    const merged = mergePreferringLocal({ ...conflicted, data: desired }, current);
+    if (merged && schemaFor(local.kind).safeParse(withServerImported(local.kind, merged, current)).success) data = merged;
+  }
+  return withServerImported(local.kind, data, current);
+}
+
 function snapshot(state: StoredWorkspace): WorkspaceSnapshot {
   return {
     accountId: state.accountId,
@@ -78,6 +141,7 @@ function snapshot(state: StoredWorkspace): WorkspaceSnapshot {
       mutation: item.mutation,
       current: item.conflict!.current,
       paths: item.conflict!.paths,
+      ...(item.conflict!.rejected ? { rejected: item.conflict!.rejected } : {}),
     })),
     context: state.context,
     lastError: state.lastError,
@@ -97,6 +161,37 @@ export async function openWorkspace(accountId: string): Promise<OfflineWorkspace
   return new OfflineWorkspace(database, accountId);
 }
 
+/**
+ * Whether the browser already keeps this origin's storage, without asking for it (so it never shows a prompt).
+ * Resolves true when storage is persistent, false when it is best-effort, and null when it cannot tell. Never throws.
+ */
+export async function storagePersistence(): Promise<boolean | null> {
+  try {
+    const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+    return storage?.persisted ? await storage.persisted() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Asks the browser to keep this origin's storage, so the queue of unsynced edits is not evicted silently
+ * when the device runs low on space. Best effort: browsers grant it by their own heuristics (an installed
+ * app, engagement), and some may still clear storage for sites that go unused. Firefox asks the student with a
+ * permission prompt, so call this only after the student acted (a save), never on a routine load. Resolves true
+ * when storage is persistent, false when the browser keeps it best-effort, and null when it cannot tell. Never throws.
+ */
+export async function requestPersistentStorage(): Promise<boolean | null> {
+  try {
+    const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+    if (!storage?.persisted || !storage.persist) return null;
+    if (await storage.persisted()) return true;
+    return await storage.persist();
+  } catch {
+    return null;
+  }
+}
+
 /** Only use this fallback for a network failure, never for an authentication rejection. */
 export async function getLastAccountId(): Promise<string | null> {
   const database = await connect();
@@ -107,12 +202,25 @@ export async function getLastAccountId(): Promise<string | null> {
   }
 }
 
-/** Explicit sign-out removes this device's private cache, including queued changes. */
-export async function clearOfflineAccount(accountId: string): Promise<void> {
+/**
+ * Explicit sign-out removes this device's private cache, including queued changes. With `requireEmptyQueue`
+ * (a sign-out that did not choose to discard changes) it refuses, keeping the cache, when a change was queued
+ * after the caller last checked, for example by another tab; the check and the delete are one transaction.
+ */
+export async function clearOfflineAccount(accountId: string, { requireEmptyQueue = false }: { requireEmptyQueue?: boolean } = {}): Promise<void> {
   const database = await connect();
   try {
     const transaction = database.transaction(["workspaces", "meta"], "readwrite");
-    await transaction.objectStore("workspaces").delete(accountId);
+    const workspaces = transaction.objectStore("workspaces");
+    const state = requireEmptyQueue ? await workspaces.get(accountId) : undefined;
+    if (state?.queue.length) {
+      // The sign-out stops here, so release the other tabs.
+      state.signingOut = null;
+      await workspaces.put(state);
+      await transaction.done;
+      throw new Error("A change was saved while signing out, so it was kept on this device. Sign in again to sync it, or sign out and discard it.");
+    }
+    await workspaces.delete(accountId);
     if (await transaction.objectStore("meta").get("lastAccountId") === accountId) {
       await transaction.objectStore("meta").delete("lastAccountId");
     }
@@ -127,11 +235,35 @@ export async function clearOfflineAccount(accountId: string): Promise<void> {
   }
 }
 
+/** Clears a sign-out marker owned by `token`, for a handle that was closed before it could release its own. */
+async function releaseSignOut(accountId: string, token: string): Promise<void> {
+  const database = await connect();
+  try {
+    const transaction = database.transaction("workspaces", "readwrite");
+    const state = await transaction.store.get(accountId);
+    const owned = state?.signingOut?.owner === token;
+    if (state && owned) {
+      state.signingOut = null;
+      await transaction.store.put(state);
+    }
+    await transaction.done;
+    if (owned && typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(DATABASE);
+      channel.postMessage({ accountId });
+      channel.close();
+    }
+  } finally {
+    database.close();
+  }
+}
+
 export class OfflineWorkspace {
   private readonly listeners = new Set<() => void>();
   private readonly channel: BroadcastChannel | null;
   private syncing: Promise<void> | null = null;
   private closed = false;
+  /** This handle's sign-out marker, which lets its own final sync run while other tabs wait. */
+  private signOutToken: string | null = null;
 
   constructor(private readonly database: IDBPDatabase<OfflineDatabase>, readonly accountId: string) {
     this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(DATABASE) : null;
@@ -174,6 +306,39 @@ export class OfflineWorkspace {
     return result;
   }
 
+  /** True while another tab's unexpired sign-out marker is set. */
+  private signingOutElsewhere(state: StoredWorkspace): boolean {
+    return !!state.signingOut && state.signingOut.until > Date.now() && state.signingOut.owner !== this.signOutToken;
+  }
+
+  /**
+   * Marks the account as signing out, so every other tab refuses to queue or upload changes until
+   * `endSignOut` or the marker expires. Refuses while another tab is already signing out.
+   */
+  async beginSignOut(): Promise<void> {
+    const token = crypto.randomUUID();
+    await this.update((state) => {
+      if (this.signingOutElsewhere(state)) throw new Error(SIGNING_OUT_ELSEWHERE);
+      state.signingOut = { owner: token, until: Date.now() + SIGN_OUT_MS };
+    });
+    this.signOutToken = token;
+  }
+
+  /**
+   * Releases this handle's sign-out marker. Best effort: a cleared account has nothing to release. A handle closed
+   * mid-sign-out (detached when the session changed during the final sync) still owns its marker, so it is released
+   * through a fresh connection; otherwise the student's next session here would be blocked until it expired.
+   */
+  async endSignOut(): Promise<void> {
+    const token = this.signOutToken;
+    this.signOutToken = null;
+    if (!token) return;
+    if (this.closed) { await releaseSignOut(this.accountId, token).catch(() => undefined); return; }
+    await this.update((state) => {
+      if (state.signingOut?.owner === token) state.signingOut = null;
+    }).catch(() => undefined);
+  }
+
   async read(): Promise<WorkspaceSnapshot> {
     this.assertOpen();
     const state = await this.database.get("workspaces", this.accountId);
@@ -189,6 +354,17 @@ export class OfflineWorkspace {
   async setContext(context: Record<string, unknown>): Promise<void> {
     const saved = clone(context);
     await this.update((state) => { state.context = saved; });
+  }
+
+  /**
+   * Replaces the saved context with `upgrade(saved)` in one transaction, so a newer context another tab or a network
+   * load wrote meanwhile is never overwritten by the upgraded old one. `upgrade` returns null to leave it unchanged.
+   */
+  async upgradeContext(upgrade: (context: Record<string, unknown> | null) => Record<string, unknown> | null): Promise<void> {
+    await this.update((state) => {
+      const next = upgrade(state.context);
+      if (next) state.context = clone(next);
+    });
   }
 
   /** A complete authenticated server snapshot; local work always stays queued. */
@@ -212,10 +388,13 @@ export class OfflineWorkspace {
   async save(kind: EntityKind, id: string, data: Record<string, unknown> | null): Promise<void> {
     const desired = clone(data);
     await this.update((state) => {
+      if (this.signingOutElsewhere(state)) throw new Error(SIGNING_OUT_ELSEWHERE);
       const base = optimistic(state).find((entity) => entity.id === id && entity.kind === kind) ?? null;
       state.queue.push({
         state: "queued",
-        mutation: { mutationId: crypto.randomUUID(), kind, id, base, data: desired },
+        // A draft or undo snapshot may predate a calendar refresh; its stale metadata is not an edit.
+        // completedAt is stamped here only so a task checked off offline sorts as just done; the server restamps it.
+        mutation: { mutationId: crypto.randomUUID(), kind, id, base, data: withServerImported(kind, kind === "task" && desired ? stampCompletion(desired, base && !base.deleted ? base.data : null, new Date()) : desired, base) },
       });
       state.lastError = null;
     });
@@ -238,6 +417,8 @@ export class OfflineWorkspace {
       while (!this.closed) {
         const claimed = await this.update((state): Mutation | null => {
           if (state.lease && state.lease.owner !== owner && state.lease.until > Date.now()) return null;
+          // Another tab is signing out: a change it chose to discard must not be uploaded from here.
+          if (this.signingOutElsewhere(state)) return null;
           state.lease = { owner, until: Date.now() + LEASE_MS };
           const blocked = new Set<string>();
           for (const item of state.queue) {
@@ -246,16 +427,16 @@ export class OfflineWorkspace {
             if (blocked.has(key)) continue;
             if (item.state === "queued") {
               const current = state.server.find((entity) => keyOf(entity) === key) ?? null;
-              const rebased = mergeMutation(item.mutation, current);
+              const rebased = mergeMutation({ ...item.mutation, data: withoutServerFields(item.mutation.kind, item.mutation.data, item.mutation.base) }, current);
               if (rebased.status === "conflict") {
                 item.state = "conflict";
                 item.conflict = { current: rebased.current, paths: rebased.paths };
                 blocked.add(key);
                 continue;
               }
-              if (!rebased.entity.deleted) {
-                const schema = item.mutation.kind === "task" ? taskSchema : personalScheduleSchema;
-                const validation = schema.safeParse(rebased.entity.data);
+              const data = rebased.entity.deleted ? null : withLocalCompletion(item.mutation.kind, withServerImported(item.mutation.kind, rebased.entity.data, current), item.mutation.data, current);
+              if (data) {
+                const validation = schemaFor(item.mutation.kind).safeParse(data);
                 if (!validation.success) {
                   // Individually valid edits can break a cross-field invariant
                   // together (for example assigning a remotely deleted class).
@@ -272,7 +453,7 @@ export class OfflineWorkspace {
                 }
               }
               item.mutation.base = current;
-              item.mutation.data = rebased.entity.deleted ? null : rebased.entity.data;
+              item.mutation.data = data;
               item.state = "sending";
             }
             return clone(item.mutation);
@@ -280,7 +461,23 @@ export class OfflineWorkspace {
           return null;
         });
         if (!claimed) return;
-        const result = await sendMutation(claimed);
+        let result: SyncResult;
+        try {
+          result = await sendMutation(claimed);
+        } catch (error) {
+          if (!isPermanentRejection(error)) throw error;
+          // The frozen payload would fail identically forever and hold up every later upload.
+          // Park it as a choice for this entity only, keeping the server's reason, and go on.
+          const reason = errorMessage(error);
+          await this.update((state) => {
+            const item = state.queue.find((entry) => entry.mutation.mutationId === claimed.mutationId);
+            if (!item || item.state !== "sending") return;
+            item.state = "conflict";
+            item.conflict = { current: state.server.find((entity) => keyOf(entity) === keyOf(claimed)) ?? null, paths: ["/"], rejected: reason };
+            state.lastError = null;
+          });
+          continue;
+        }
         if (result.status === "applied" && (keyOf(result.entity) !== keyOf(claimed) || !Number.isInteger(result.entity.version))) {
           throw new Error("The server returned an invalid sync response");
         }
@@ -321,6 +518,7 @@ export class OfflineWorkspace {
   /** Explicit choice resolves this entity, including later edits made locally. */
   async resolve(mutationId: string, choice: "local" | "remote"): Promise<void> {
     await this.update((state) => {
+      if (this.signingOutElsewhere(state)) throw new Error(SIGNING_OUT_ELSEWHERE);
       const item = state.queue.find((entry) => entry.mutation.mutationId === mutationId);
       if (!item || item.state !== "conflict" || !item.conflict) throw new Error("This conflict is no longer available");
       const key = keyOf(item.mutation);
@@ -339,7 +537,7 @@ export class OfflineWorkspace {
           state: "queued",
           mutation: {
             mutationId: crypto.randomUUID(), id: local.id, kind: local.kind,
-            base: current, data: local.deleted ? null : local.data,
+            base: current, data: keepLocal(item.mutation, local, current),
           },
         });
       }

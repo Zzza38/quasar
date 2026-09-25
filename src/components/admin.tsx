@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { GoogleLogo } from './google-logo';
 import { SchoolDirectory } from './school-directory';
-import { api, errorMessage, type RouterOutput, type School } from '@/client/api';
+import { api, errorMessage, isAccessDenied, type RouterOutput, type School } from '@/client/api';
 import { scheduleSchema, type Schedule } from '@/domain/schedule';
 import { REPORT_CATEGORIES } from '@/domain/chat';
 import { browserTimeZone, formatDate, formatTime, instantParts, pluralize } from '@/lib/format';
-import { Icon, Spinner } from './icon';
+import { Icon } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
 import { Brand, CenteredNotice } from './shell';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer, StatTile, Textarea, Toggle } from './primitives';
@@ -29,7 +29,10 @@ function formatInstant(iso: string): string {
   return `${formatDate(date, { weekday: 'short' })}, ${formatTime(time)}`;
 }
 
-export function Admin() {
+/** What the server knows about the request's session (src/app/admin/page.tsx), so the page paints its verdict at once. */
+export type AdminBoot = { accountId: string | null; isAdmin: boolean };
+
+export function Admin({ initial }: { initial?: AdminBoot }) {
   const [schools, setSchools] = useState<School[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [verifications, setVerifications] = useState<VerificationRequest[]>([]);
@@ -37,43 +40,55 @@ export function Admin() {
   const [proposals, setProposals] = useState<PendingProposal[]>([]);
   const [pauses, setPauses] = useState<ChatPauseRow[]>([]);
   // adminScoped mutations carry the signed-in account, so a switch in another tab can't write under the wrong one.
-  const [accountId, setAccountId] = useState<string | null>(null);
-  const accountRef = useRef<string | null>(null);
+  const [accountId, setAccountId] = useState<string | null>(initial?.accountId ?? null);
+  const accountRef = useRef<string | null>(initial?.accountId ?? null);
   // Report snapshots stay in memory only, and only while their card is open.
   const [evidence, setEvidence] = useState<Record<string, EvidenceItem[]>>({});
   const [opening, setOpening] = useState<string | null>(null);
   const [hiding, setHiding] = useState<string | null>(null);
   const [pauseTarget, setPauseTarget] = useState<PauseTarget | null>(null);
-  const [allowed, setAllowed] = useState(false);
-  const [signedIn, setSignedIn] = useState(false);
+  const [allowed, setAllowed] = useState(!!initial?.isAdmin);
+  const [signedIn, setSignedIn] = useState(!!initial?.accountId);
   const [loading, setLoading] = useState(true);
+  // Whether the page knows who is asking: from the server render, or after the first session check.
+  const [decided, setDecided] = useState(!!initial);
   const [error, setError] = useState('');
+  // The last refresh failed for a reason other than access (offline, a server error), so the notice says so.
+  const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [directorySchool, setDirectorySchool] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
-    setLoading(true); setError('');
+    // Losing owner access drops everything support loaded, including student proofs and report snapshots.
+    const revoke = () => { setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setEvidence({}); };
+    setLoading(true); setError(''); setFailed(false);
     try {
       const session = await api.session.query(); setSignedIn(Boolean(session));
       const nextAccount = session?.user.id ?? null;
       if (accountRef.current !== nextAccount) setEvidence({});
       accountRef.current = nextAccount; setAccountId(nextAccount);
-      if (!session?.isAdmin) { setAllowed(false); setSchools([]); setRequests([]); setReports([]); setPauses([]); setEvidence({}); return; }
+      if (!session?.isAdmin) { revoke(); return; }
       const [schoolList, requestList, verificationList, reportList, proposalList, pauseList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query()]);
       setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
       setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
-    } catch (err) { setError(errorMessage(err)); setAllowed(false); setSchools([]); setRequests([]); setReports([]); setPauses([]); setEvidence({}); }
-    finally { setLoading(false); }
+    } catch (err) {
+      setError(errorMessage(err));
+      // Only a refusal ends access. A network blip or one failing list keeps what is loaded (and any open sheet or
+      // report snapshot) on screen with the error above it, so reopening evidence does not write another audit entry.
+      if (isAccessDenied(err)) revoke(); else setFailed(true);
+    }
+    finally { setLoading(false); setDecided(true); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   const school = schools.find((entry) => entry.id === selected);
 
-  if (loading && !allowed) return <CenteredNotice title="Loading support tools…"><Spinner className="inline-block text-primary" size={20} /></CenteredNotice>;
+  // Only a page the server could not decide waits for the session check, as a plain background rather than a loader.
+  if (!decided) return <div className="min-h-dvh" aria-busy="true" />;
   if (!allowed) {
-    return <CenteredNotice title={signedIn ? 'Owner access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
-      {!signedIn && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}><GoogleLogo />Continue with Google</Button>}
+    return <CenteredNotice title={failed ? 'Support tools could not load' : signedIn ? 'Owner access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
+      {!signedIn && !failed && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}><GoogleLogo />Continue with Google</Button>}
       <div className="flex gap-2"><Button size="sm" onClick={() => void refresh()}>Retry</Button><Button size="sm" variant="ghost" onClick={() => window.location.assign('/')}>Back to my schedule</Button></div>
     </div>}>
       {error || (signedIn ? 'This page is available to the project owner.' : 'Sign in with the owner account to review school schedules.')}
@@ -82,7 +97,15 @@ export function Admin() {
 
   const visible = filter ? schools.filter((entry) => `${entry.name} ${entry.location}`.toLowerCase().includes(filter.toLowerCase())) : schools;
   const approved = schools.filter((entry) => entry.approved).length;
-  const act = async (action: () => Promise<unknown>) => { setError(''); try { await action(); await refresh(); } catch (err) { setError(errorMessage(err)); } };
+  const act = async (action: () => Promise<unknown>) => {
+    setError('');
+    let failure: unknown = null;
+    try { await action(); } catch (err) { failure = err; }
+    // Reload after a refusal too: some commit first (a banned student's verification request is declined, a stale
+    // proposal is superseded), so the list must drop them. refresh clears the error, so the action's shows after it.
+    await refresh();
+    if (failure) setError(errorMessage(failure));
+  };
   const openCount = requests.length + verifications.length + reports.length + proposals.length;
   const showEvidence = async (reportId: string) => {
     if (!accountId) return;
@@ -132,30 +155,30 @@ export function Admin() {
       </Section>
 
       <Section id="inbox-title" title="Correction requests" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review.` : 'Students send correction requests from their School view.'}>
-        {requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
+        {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.message}</p>
           <div className="flex flex-wrap gap-2">{request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}<Button size="sm" variant="ghost" icon="check" onClick={async () => { setError(''); try { await api.admin.resolveRequest.mutate({ id: request.id }); await refresh(); } catch (err) { setError(errorMessage(err)); } }}>Mark resolved</Button></div>
         </li>)}</ul>}
       </Section>
 
       <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
-        {verifications.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing to verify</Hint>}
+        {!loading && verifications.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing to verify</Hint>}
         {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(request.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button></div>
         </li>)}</ul>}
       </Section>
 
-      <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, ends their friendships there and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
-        {reports.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open reports</Hint>}
+      <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, closes their verification request, ends all of their friendships and chats (at any school) and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
+        {!loading && reports.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open reports</Hint>}
         {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => {
           const items = evidence[report.id];
           return <li key={report.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
             {report.isChat && <div className="flex flex-wrap gap-1.5"><Chip tone="accent" icon="message">Chat</Chip>{report.category && <Chip tone={report.category === 'danger' ? 'danger' : 'neutral'} icon={report.category === 'danger' ? 'alert' : undefined}>{REPORT_CATEGORIES[report.category].short}</Chip>}</div>}
-            <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{report.reportedName}</strong> <Hint className="inline">({report.reportedEmail})</Hint><Hint>Reported by {report.reporterName}{report.schoolName ? ` · ${report.schoolName}` : ''}</Hint></span><Hint>{formatDate(report.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+            <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{report.reportedName}</strong> <Hint className="inline">({report.reportedEmail})</Hint><Hint>Reported by {report.reporterName}{report.schoolName ? ` · ${report.schoolName}` : ''}</Hint></span><Hint>{formatDate(instantParts(report.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
             <p className="whitespace-pre-wrap break-words text-sm">{report.reason}</p>
             {report.isChat && <Hint>{pluralize(report.history.reports, 'report')} · {pluralize(report.history.removals, 'removal')} · {pluralize(report.history.pauses, 'pause')}</Hint>}
             {report.pause && <Hint className="flex items-center gap-1.5"><Icon name="lock" size={14} />{report.pause.until ? `Messaging paused until ${formatInstant(report.pause.until)}` : 'Messaging paused until lifted'}</Hint>}
@@ -186,7 +209,7 @@ export function Admin() {
       </Section>
 
       <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages.">
-        {pauses.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is paused.</Hint>}
+        {!loading && pauses.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is paused.</Hint>}
         {pauses.length > 0 && <ul className="grid gap-2">{pauses.map((pause) => <li key={pause.userId} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="min-w-0"><p className="text-sm"><strong className="font-bold">{pause.displayName}</strong> · until {pause.until ? formatInstant(pause.until) : 'lifted'}</p><Hint>{pause.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {pause.reason}</Hint></div>
           <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift pause for ${pause.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: pause.userId })); }}>Lift pause</Button>
@@ -194,9 +217,9 @@ export function Admin() {
       </Section>
 
       <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
-        {proposals.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
+        {!loading && proposals.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
         {proposals.length > 0 && <ul className="grid gap-2">{proposals.map((proposal) => <li key={proposal.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(proposal.createdAt.slice(0, 10), { weekday: 'short', year: true })}</Hint></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(instantParts(proposal.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <Panel><ScheduleSummary schedule={proposal.schedule} /></Panel>
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
         </li>)}</ul>}
@@ -231,7 +254,7 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
         <Toggle label="Approved default schedule" checked={approved} onChange={setApproved} description="New members get this schedule by default." />
         <Toggle label="Lock shared edits to support" checked={supportLocked} onChange={setSupportLocked} description={school.memberLocked ? 'The 10-member editing lock is also in effect.' : 'Members can no longer publish revisions.'} />
       </div>
-      <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
+      <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically, including current members the next time they open Quasar. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
     </Panel>
     <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}

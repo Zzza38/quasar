@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { Temporal } from "@js-temporal/polyfill";
+import { describe, expect, it, vi } from "vitest";
 import { examplePersonalSchedule, exampleSchedule } from "./example";
 import {
+  clampDate,
+  cycleDaysWithPeriod,
+  describeDayIssues,
   detectOverrideConflicts,
   emptyPersonalSchedule,
   nextClass,
   personalScheduleSchema,
+  REMOVED_PERIOD_LABEL,
   resolveDay,
+  resolveDayInRange,
+  rotationNeverAdvances,
   scheduleSchema,
+  withCycleDay,
   type Schedule,
 } from "./schedule";
 
@@ -95,12 +103,42 @@ describe("rotation and calendar exceptions", () => {
     expect(resolveDay(school, "2026-08-25").cycleDayId).toBe("day-2");
   });
 
+  it("counts an advancing weekend closure or weekend replacement when working back from the anchor", () => {
+    // Without exceptions Friday 2026-09-04 is day-9: only Friday and Monday advance before the Tuesday anchor.
+    expect(resolveDay(schedule(), "2026-09-04").cycleDayId).toBe("day-9");
+    const closure = schedule({ exceptions: [{ date: "2026-09-05", kind: "closure", advanceCycle: true }] });
+    expect(resolveDay(closure, "2026-09-04").cycleDayId).toBe("day-8");
+    expect(resolveDay(closure, "2026-09-05")).toMatchObject({ closed: true, cycleDayId: "day-9" });
+    expect(resolveDay(closure, "2026-09-07").cycleDayId).toBe("day-10");
+    expect(resolveDay(closure, "2026-09-08").cycleDayId).toBe("day-1");
+    const replacement = schedule({ exceptions: [{ date: "2026-09-06", kind: "replacement", advanceCycle: true, slots: [{ id: "assembly", periodId: "A", start: "12:00", end: "13:00" }] }] });
+    expect(resolveDay(replacement, "2026-09-04").cycleDayId).toBe("day-8");
+    expect(resolveDay(replacement, "2026-09-05")).toMatchObject({ closed: true, cycleDayId: "day-9" });
+    expect(resolveDay(replacement, "2026-09-06")).toMatchObject({ closed: false, cycleDayId: "day-9", periods: [{ slotId: "assembly" }] });
+    expect(resolveDay(replacement, "2026-09-07").cycleDayId).toBe("day-10");
+  });
+
   it("separates school attendance weekdays from rotation advancement weekdays", () => {
     const calendarRotation = schedule({ advanceWeekdays: [1, 2, 3, 4, 5, 6, 7] });
     expect(resolveDay(calendarRotation, "2026-09-12").closed).toBe(true);
     expect(resolveDay(calendarRotation, "2026-09-14").cycleDayId).toBe("day-7");
     expect(resolveDay(schedule(), "2026-09-14").cycleDayId).toBe("day-5");
     expect(resolveDay(schedule({ advanceWeekdays: [] }), "2026-12-14").cycleDayId).toBe("day-1");
+  });
+
+  it("starts advancing on school days when a one-day schedule gets a second day", () => {
+    const single = schedule({ cycleDays: [{ id: "day-1", label: "Every day", slots: [] }], anchorCycleDayId: "day-1", advanceWeekdays: [], exceptions: [] });
+    expect(rotationNeverAdvances(single)).toBe(false);
+    const grown = scheduleSchema.parse(withCycleDay(single, { id: "day-2", label: "Day 2", slots: [] }));
+    expect(grown.advanceWeekdays).toEqual(single.schoolWeekdays);
+    expect(rotationNeverAdvances(grown)).toBe(false);
+    expect(resolveDay(grown, "2026-09-08").cycleDayId).toBe("day-1");
+    expect(resolveDay(grown, "2026-09-09").cycleDayId).toBe("day-2");
+    // An existing rotation keeps the advance days it chose, even an empty list.
+    const stuck = schedule({ advanceWeekdays: [] });
+    expect(rotationNeverAdvances(stuck)).toBe(true);
+    expect(withCycleDay(stuck, { id: "day-extra", label: "Extra", slots: [] }).advanceWeekdays).toEqual([]);
+    expect(withCycleDay(schedule(), { id: "day-extra", label: "Extra", slots: [] }).advanceWeekdays).toEqual(schedule().advanceWeekdays);
   });
 
   it("pauses or advances rotation on closures according to the explicit exception", () => {
@@ -191,6 +229,26 @@ describe("next class and time zones", () => {
     expect(resolveDay(school, "2026-11-01").periods[0]).toMatchObject({ startAt: "2026-11-01T05:00:00Z", endAt: "2026-11-01T05:30:00Z" });
   });
 
+  it("resolves a period that ends inside the fall-back fold with the start's earlier offset", () => {
+    // 01:30 happens twice and takes the earlier (EDT) instant; 02:00 happens once (EST). The documented rule
+    // gives this 30-minute slot 90 minutes of real time on the night the clocks go back.
+    const school = schedule({ schoolWeekdays: [7], cycleDays: [{ id: "day-1", label: "Sunday", slots: [{ id: "fold", periodId: "A", start: "01:30", end: "02:00" }] }] });
+    const day = resolveDay(school, "2026-11-01");
+    expect(day.issues).toEqual([]);
+    expect(day.periods[0]).toMatchObject({ start: "01:30", end: "02:00", startAt: "2026-11-01T05:30:00Z", endAt: "2026-11-01T07:00:00Z" });
+    expect(resolveDay(school, "2026-11-08").periods[0]).toMatchObject({ startAt: "2026-11-08T06:30:00Z", endAt: "2026-11-08T07:00:00Z" });
+  });
+
+  it("looks 370 days ahead by default and no further", () => {
+    const special = (date: string) => schedule({ cycleDays: [{ id: "day-1", label: "Day 1", slots: [] }], anchorCycleDayId: "day-1", exceptions: [
+      { date, kind: "replacement", advanceCycle: false, slots: [{ id: "far", periodId: "A", start: "08:00", end: "09:00" }] },
+    ] });
+    // Offsets 0..369 from 2026-09-08 reach 2027-09-12.
+    expect(nextClass(special("2027-09-12"), "2026-09-08T10:00:00Z")).toMatchObject({ date: "2027-09-12", slotId: "far" });
+    expect(nextClass(special("2027-09-13"), "2026-09-08T10:00:00Z")).toBeNull();
+    expect(nextClass(special("2027-09-13"), "2026-09-08T10:00:00Z", emptyPersonalSchedule(), 371)).toMatchObject({ date: "2027-09-13" });
+  });
+
   it("skips closures and returns null when no period exists in the look-ahead window", () => {
     const school = schedule({ exceptions: [{ date: "2026-09-08", kind: "closure", advanceCycle: false }] });
     expect(nextClass(school, new Date("2026-09-08T10:00:00Z"), emptyPersonalSchedule(), 1)).toBeNull();
@@ -209,6 +267,51 @@ describe("personal overrides and shared corrections", () => {
     expect(resolveDay(school, "2026-09-08", personal).periods).toMatchObject([{ slotId: "my-first", start: "09:30", class: { name: "History" } }]);
     expect(resolveDay(school, "2026-09-09", personal).cycleDayId).toBe("day-2");
     expect(resolveDay(school, "2026-09-08").periods[0].start).toBe("08:00");
+  });
+
+  it("lets a personal cycle override replace school replacement and special-bell slots, but not reopen a closed reset", () => {
+    const mine = [{ id: "mine", periodId: "D", start: "09:00", end: "10:00" }];
+    const school = schedule({ exceptions: [
+      { date: "2026-09-08", kind: "replacement", advanceCycle: true, slots: [{ id: "assembly", periodId: "A", start: "12:00", end: "13:00" }] },
+      { date: "2026-09-10", kind: "reset", cycleDayId: "day-7", advanceCycle: true, slots: [{ id: "short-day", periodId: "B", start: "08:00", end: "08:30" }] },
+      { date: "2026-09-11", kind: "reset", cycleDayId: "day-2", advanceCycle: true, closed: true },
+      { date: "2026-09-12", kind: "replacement", advanceCycle: true, slots: [{ id: "saturday", periodId: "A", start: "10:00", end: "11:00" }] },
+    ] });
+    const personal = personalScheduleSchema.parse({ ...emptyPersonalSchedule(), cycleDayOverrides: [
+      { cycleDayId: "day-1", slots: mine }, { cycleDayId: "day-7", slots: mine }, { cycleDayId: "day-2", slots: mine }, { cycleDayId: "day-3", slots: mine },
+    ] });
+    expect(resolveDay(school, "2026-09-08", personal)).toMatchObject({ cycleDayId: "day-1", closed: false, periods: [{ slotId: "mine" }] });
+    expect(resolveDay(school, "2026-09-10", personal)).toMatchObject({ cycleDayId: "day-7", closed: false, periods: [{ slotId: "mine" }] });
+    expect(resolveDay(school, "2026-09-11", personal)).toMatchObject({ cycleDayId: "day-2", closed: true, periods: [] });
+    // The weekend replacement is day-3 (the closed reset advanced) and opens with the student's own day-3 slots.
+    expect(resolveDay(school, "2026-09-12", personal)).toMatchObject({ cycleDayId: "day-3", closed: false, periods: [{ slotId: "mine" }] });
+    expect(resolveDay(school, "2026-09-12").periods).toMatchObject([{ slotId: "saturday" }]);
+  });
+
+  it("applies personal date overrides on top of a private schedule", () => {
+    const personal = personalScheduleSchema.parse({
+      ...examplePersonalSchedule,
+      customSchedule: schedule({ timeZone: "America/Chicago", anchorCycleDayId: "day-5" }),
+      dateOverrides: [{ date: "2026-09-08", shiftMinutes: 30 }, { date: "2026-09-09", closed: true }],
+    });
+    expect(nextClass(schedule(), "2026-09-08T12:00:00Z", personal)).toMatchObject({ date: "2026-09-08", cycleDayId: "day-5", periodId: "A", start: "08:30", startAt: "2026-09-08T13:30:00Z", class: { name: "Algebra" } });
+    expect(resolveDay(schedule(), "2026-09-09", personal)).toMatchObject({ cycleDayId: "day-6", closed: true, periods: [] });
+    expect(nextClass(schedule(), "2026-09-08T18:00:00Z", personal)).toMatchObject({ date: "2026-09-10", cycleDayId: "day-7" });
+  });
+
+  it("lists the rotation days a period meets on with the student's cycle-day overrides", () => {
+    const school = schedule({ cycleDays: [
+      { id: "day-1", label: "Day 1", slots: [{ id: "first", periodId: "A", start: "08:00", end: "09:00" }] },
+      { id: "day-2", label: "Day 2", slots: [{ id: "first", periodId: "B", start: "08:00", end: "09:00" }] },
+      { id: "day-3", label: "Day 3", slots: [{ id: "first", periodId: "A", start: "08:00", end: "09:00" }] },
+    ], anchorCycleDayId: "day-1" });
+    expect(cycleDaysWithPeriod(school, emptyPersonalSchedule(), "A")).toEqual(["Day 1", "Day 3"]);
+    const moved = { ...emptyPersonalSchedule(), cycleDayOverrides: [
+      { cycleDayId: "day-3", slots: [{ id: "first", periodId: "B", start: "08:00", end: "09:00" }] },
+      { cycleDayId: "day-2", slots: [{ id: "first", periodId: "A", start: "08:00", end: "09:00" }] },
+    ] };
+    expect(cycleDaysWithPeriod(school, moved, "A")).toEqual(["Day 1", "Day 2"]);
+    expect(cycleDaysWithPeriod(school, moved, "B")).toEqual(["Day 3"]);
   });
 
   it("preserves a school closure unless a personal date explicitly reopens it", () => {
@@ -232,6 +335,11 @@ describe("personal overrides and shared corrections", () => {
     const day = resolveDay(changed, "2026-09-08", personal);
     expect(day.periods[0].class?.name).toBe("Algebra");
     expect(day.issues).toContainEqual({ slotId: "first", reason: "missing-period" });
+    // The removed period's internal id never becomes the label students see.
+    expect(day.periods[0].label).toBe("Algebra");
+    const unassigned = resolveDay(changed, "2026-09-08", { ...personal, assignments: {} });
+    expect(unassigned.periods[0]).toMatchObject({ periodId: "A", label: REMOVED_PERIOD_LABEL });
+    expect(unassigned.periods.map((period) => period.label)).not.toContain("A");
   });
 
   it("flags removed cycle overrides and schedule changes beneath date overrides", () => {
@@ -260,5 +368,119 @@ describe("personal overrides and shared corrections", () => {
     expect(resolveDay(changed, "2026-09-08", personal).cycleDayId).toBe("day-5");
     expect(nextClass(changed, "2026-09-08T12:00:00Z", personal)?.startAt).toBe("2026-09-08T13:00:00Z");
     expect(detectOverrideConflicts(original, changed, personal)).toEqual([]);
+  });
+});
+
+describe("exception lookups", () => {
+  /** The rotation rule written out directly: the latest boundary (anchor or reset) and a walk over every exception. */
+  function referenceCycleDayId(school: Schedule, dateString: string): string {
+    const boundaries = [{ date: school.anchorDate, cycleDayId: school.anchorCycleDayId }, ...school.exceptions.flatMap((entry) => entry.kind === "reset" ? [entry] : [])]
+      .sort((left, right) => left.date.localeCompare(right.date));
+    const boundary = boundaries.findLast((entry) => entry.date <= dateString) ?? boundaries[0];
+    const [from, to, sign] = dateString >= boundary.date ? [boundary.date, dateString, 1] : [dateString, boundary.date, -1];
+    let count = 0;
+    for (let day = Temporal.PlainDate.from(from); day.toString() < to; day = day.add({ days: 1 })) {
+      const exception = school.exceptions.find((entry) => entry.date === day.toString());
+      count += exception ? Number(exception.advanceCycle) : Number(school.advanceWeekdays.includes(day.dayOfWeek));
+    }
+    const start = school.cycleDays.findIndex((entry) => entry.id === boundary.cycleDayId);
+    return school.cycleDays[(((start + sign * count) % school.cycleDays.length) + school.cycleDays.length) % school.cycleDays.length].id;
+  }
+
+  it("matches a day-by-day walk around resets before, on and after the anchor", () => {
+    const school = schedule({ exceptions: [
+      { date: "2026-08-20", kind: "reset", cycleDayId: "day-4", advanceCycle: true },
+      { date: "2026-09-08", kind: "reset", cycleDayId: "day-9", advanceCycle: false },
+      { date: "2026-09-12", kind: "closure", advanceCycle: true },
+      { date: "2026-09-15", kind: "closure", advanceCycle: false },
+      { date: "2026-09-21", kind: "reset", cycleDayId: "day-2", advanceCycle: true },
+      { date: "2026-10-01", kind: "replacement", advanceCycle: false, slots: [] },
+    ] });
+    for (let day = Temporal.PlainDate.from("2026-08-01"); day.toString() < "2026-10-20"; day = day.add({ days: 1 })) {
+      expect(resolveDay(school, day.toString()).cycleDayId, day.toString()).toBe(referenceCycleDayId(school, day.toString()));
+    }
+    expect(resolveDay(school, "2026-09-15").closed).toBe(true);
+    expect(resolveDay(school, "2026-10-01")).toMatchObject({ closed: false, periods: [] });
+  });
+
+  it("does not scale each resolved day with the number of exceptions", () => {
+    const first = Temporal.PlainDate.from("2013-01-01");
+    const exceptions = Array.from({ length: 5000 }, (_, offset) => ({ date: first.add({ days: offset }).toString(), kind: "closure" as const, advanceCycle: false }));
+    const school = schedule({ anchorDate: "2013-01-01", exceptions });
+    expect(resolveDay(school, "2026-09-08").cycleDayId).toBe(referenceCycleDayId(school, "2026-09-08"));
+    const days = Array.from({ length: 90 }, (_, offset) => Temporal.PlainDate.from("2026-09-01").add({ days: offset }).toString());
+    // Date parsing is the dominant cost; reading every exception date again for each day would take 90 × 5000
+    // parses. The bound is the size of one pass over the exceptions for all 90 days together, so a few extra
+    // parses per day in a refactor still pass while per-exception work per day does not.
+    const from = vi.spyOn(Temporal.PlainDate, "from");
+    try {
+      for (const day of days) resolveDay(school, day);
+      expect(from.mock.calls.length).toBeLessThan(exceptions.length);
+    } finally {
+      from.mockRestore();
+    }
+  });
+
+  describe("after the schedule changes", () => {
+    const exceptions: Schedule["exceptions"] = [
+      { date: "2026-09-09", kind: "closure", advanceCycle: false },
+      { date: "2026-09-16", kind: "replacement", advanceCycle: true, slots: [] },
+      { date: "2026-09-22", kind: "closure", advanceCycle: false },
+    ];
+    const days = Array.from({ length: 40 }, (_, offset) => Temporal.PlainDate.from("2026-09-01").add({ days: offset }).toString());
+    const expectReference = (school: Schedule) => {
+      for (const day of days) expect(resolveDay(school, day).cycleDayId, day).toBe(referenceCycleDayId(school, day));
+    };
+
+    it("follows new advance days even when the exceptions array is reused", () => {
+      const before = schedule({ exceptions });
+      expectReference(before);
+      const after: Schedule = { ...before, advanceWeekdays: [1, 3, 5] };
+      expect(after.exceptions).toBe(before.exceptions);
+      expectReference(after);
+      expect(days.map((day) => resolveDay(after, day).cycleDayId)).not.toEqual(days.map((day) => resolveDay(before, day).cycleDayId));
+      expectReference(before);
+    });
+
+    it("follows a replaced exceptions array", () => {
+      const before = schedule({ exceptions });
+      expectReference(before);
+      const after: Schedule = { ...before, exceptions: [...before.exceptions, { date: "2026-09-14", kind: "reset", cycleDayId: "day-7", advanceCycle: true }] };
+      expectReference(after);
+      expect(resolveDay(after, "2026-09-14").cycleDayId).toBe("day-7");
+      expect(resolveDay(before, "2026-09-14").cycleDayId).not.toBe("day-7");
+    });
+
+    it("follows an exception pushed onto the same array", () => {
+      const school = schedule({ exceptions: structuredClone(exceptions) });
+      expectReference(school);
+      school.exceptions.push({ date: "2026-09-28", kind: "closure", advanceCycle: false });
+      expectReference(school);
+      expect(resolveDay(school, "2026-09-28").closed).toBe(true);
+    });
+  });
+});
+
+describe("date range edges", () => {
+  it("clamps navigation into the range resolveDay accepts", () => {
+    expect(clampDate("1899-12-31")).toBe("1900-01-01");
+    expect(clampDate("2200-01-05")).toBe("2199-12-31");
+    expect(clampDate("2026-09-24")).toBe("2026-09-24");
+  });
+
+  it("resolves a week that runs past 2199 without throwing", () => {
+    // 2199-12-31 is a Tuesday, so its Monday-to-Sunday week ends on 2200-01-05.
+    expect(() => resolveDay(schedule(), "2200-01-01")).toThrow();
+    expect(resolveDayInRange(schedule(), "2200-01-01")).toBeNull();
+    expect(resolveDayInRange(schedule(), "2199-12-31")?.date).toBe("2199-12-31");
+  });
+});
+
+describe("describeDayIssues", () => {
+  it("words each reason separately and does not call a shown removed period hidden", () => {
+    expect(describeDayIssues([{ slotId: "a", reason: "missing-period" }])).toEqual(["1 period uses a period the school removed."]);
+    expect(describeDayIssues([{ slotId: "a", reason: "nonexistent-time" }, { slotId: "b", reason: "nonexistent-time" }])).toEqual(["2 periods are skipped because their times do not exist on this date (daylight-saving change)."]);
+    expect(describeDayIssues([{ slotId: "a", reason: "shift-outside-day" }], true)).toEqual(["1 period would be left out because the time shift moves it outside the day."]);
+    expect(describeDayIssues([])).toEqual([]);
   });
 });

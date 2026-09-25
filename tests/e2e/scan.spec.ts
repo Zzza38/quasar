@@ -57,7 +57,7 @@ async function authenticate(context: BrowserContext, id: string) {
 
 test('scans a two-photo timetable, lets the student review it, and places the classes', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  await page.goto('/#classes');
+  await page.goto('/classes');
   // A real PNG for the browser's image decoder: a screenshot of the page itself.
   const PNG = await page.screenshot({ type: 'png' });
   await page.getByRole('button', { name: 'Scan timetable' }).click();

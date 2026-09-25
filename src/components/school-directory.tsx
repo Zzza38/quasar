@@ -4,13 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { formatRoom } from '@/lib/format';
 import { GRADES, gradeLabel, type Grade, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
-import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer } from './primitives';
+import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer, Textarea } from './primitives';
 import { Checkbox } from './ui/checkbox';
 import { Toggle } from './ui/toggle';
 
 type Directory = RouterOutput['directory']['list'];
 type Entry = Directory['classes'][number];
 type Details = Pick<Entry, 'name' | 'teacher' | 'room' | 'grades'>;
+/** requestCorrection accepts 10 to 5000 characters; the class reference is prepended to what the student writes. */
+const CORRECTION_MIN = 10;
+const CORRECTION_MAX = 5000;
+const correctionPrefix = (entry: Entry) => `Class directory: ${entry.name} (${entry.id}). `;
 const isCopy = (cls: StudentClass, entry: Entry) => cls.directoryId === entry.id || (!cls.directoryId && cls.name.toLowerCase() === entry.name.toLowerCase() && (cls.teacher ?? '').toLowerCase() === (entry.teacher ?? '').toLowerCase() && (cls.room ?? '').toLowerCase() === (entry.room ?? '').toLowerCase());
 
 export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: {
@@ -21,6 +25,9 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
   const [grade, setGrade] = useState<Grade | ''>(personal?.grade ?? '');
   const [selected, setSelected] = useState<string[]>([]);
   const [editing, setEditing] = useState<Entry | 'new' | null>(null);
+  // The in-place confirmation for a directory removal and the correction form, one entry at a time.
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [correction, setCorrection] = useState<{ id: string; message: string } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -37,7 +44,7 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
   };
   const entries = (directory?.classes ?? []).filter(entry => (!grade || entry.grades.includes(grade)) && `${entry.name} ${entry.teacher ?? ''} ${entry.room ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()));
   const selectedEntries = (directory?.classes ?? []).filter(entry => selected.includes(entry.id) && !personal?.classes.some(cls => isCopy(cls, entry)));
-  return <Modal open onClose={onClose} dirty={selectedEntries.length > 0} busy={pending} wide title="School class directory" description="Search your school’s classes, select yours, then place them into periods in your class timetable."
+  return <Modal open onClose={onClose} dirty={selectedEntries.length > 0 || !!correction?.message.trim()} busy={pending} wide title="School class directory" description="Search your school’s classes, select yours, then place them into periods in your class timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{onAdd && <Button variant="primary" busy={pending} disabled={!online || selectedEntries.length === 0 || editing !== null} onClick={() => void run(async () => {
       await onAdd(selectedEntries.map(({ id, name, room, teacher }) => ({ id, directoryId: id, name, room, teacher }))); onClose();
     })}>Add selected classes{selectedEntries.length ? ` (${selectedEntries.length})` : ''}</Button>}</>}>
@@ -67,20 +74,43 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
           return <li key={entry.id} className={`flex flex-wrap items-center gap-3 rounded-2xl p-3 ring-1 ring-inset transition-colors ${selected.includes(entry.id) && !added ? 'bg-primary-soft/60 ring-primary/40' : 'bg-muted/60 ring-foreground/[0.04]'}`}>
             {onAdd && <Checkbox className="size-5 shrink-0" aria-label={`Select ${entry.name}`} checked={added || selected.includes(entry.id)} disabled={added || !online || pending} onCheckedChange={checked => setSelected(checked === true ? [...selected, entry.id] : selected.filter(id => id !== entry.id))} />}
             <div className="min-w-0 flex-1 basis-[180px]"><strong className="block text-sm font-bold">{entry.name}</strong><Hint>{[entry.room && formatRoom(entry.room), entry.teacher].filter(Boolean).join(' · ')}</Hint><Hint>{entry.grades.map(gradeLabel).join(', ')}{added ? ' · Added to your classes' : ''}</Hint></div>
-            {directory.canEdit ? <div className="flex gap-1"><Button size="sm" disabled={!online || pending} onClick={() => setEditing(entry)}>Edit shared</Button><Button size="sm" variant="ghost" disabled={!online || pending} aria-label={`Remove ${entry.name} from directory`} onClick={() => {
-              if (confirm(`Remove ${entry.name} from the shared directory? Existing personal copies stay saved.`)) void run(async () => { await api.directory.remove.mutate({ accountId: directory.accountId, schoolId, id: entry.id, expectedVersion: entry.version }); await refresh(); setSelected(ids => ids.filter(id => id !== entry.id)); });
-            }}>Remove</Button></div> : <Button size="sm" disabled={!online || pending} onClick={() => void run(async () => {
-              const message = prompt(`What needs correcting in ${entry.name}?`);
-              if (!message?.trim()) return;
-              await api.school.requestCorrection.mutate({ message: `Class directory: ${entry.name} (${entry.id}). ${message.trim()}` });
-              setNotice('Correction request sent to support.');
-            })}>Request correction</Button>}
+            {directory.canEdit ? <div className="flex gap-1"><Button size="sm" disabled={!online || pending} onClick={() => setEditing(entry)}>Edit shared</Button><Button size="sm" variant="ghost" disabled={!online || pending} aria-label={`Remove ${entry.name} from directory`} onClick={() => setRemoving(entry.id)}>Remove</Button></div> : <Button size="sm" disabled={!online || pending || correction?.id === entry.id} onClick={() => { setCorrection({ id: entry.id, message: '' }); setNotice(''); }}>Request correction</Button>}
+            {removing === entry.id && <Callout tone="warning" icon="alert" role="alert" className="basis-full" title={`Remove ${entry.name} from the shared directory?`} actions={<>
+              <Button size="sm" variant="danger" busy={pending} disabled={!online} onClick={() => void run(async () => {
+                await api.directory.remove.mutate({ accountId: directory.accountId, schoolId, id: entry.id, expectedVersion: entry.version });
+                await refresh(); setSelected(ids => ids.filter(id => id !== entry.id)); setRemoving(null);
+              })}>Remove from directory</Button>
+              <Button size="sm" autoFocus disabled={pending} onClick={() => setRemoving(null)}>Keep it</Button>
+            </>}>Existing personal copies stay saved.</Callout>}
+            {correction?.id === entry.id && <CorrectionForm entry={entry} message={correction.message} pending={pending} online={online}
+              onChange={message => setCorrection({ id: entry.id, message })} onCancel={() => setCorrection(null)}
+              onSend={message => run(async () => {
+                await api.school.requestCorrection.mutate({ accountId: directory.accountId, message: `${correctionPrefix(entry)}${message}` });
+                setCorrection(null); setNotice('Correction request sent to support.');
+              })} />}
           </li>;
         })}
       </ul>
       {!entries.length && <Hint>{directory.classes.length ? 'No matching classes. Try another search or choose All grades.' : 'No shared classes yet. Add classes to help schoolmates build their schedules.'}</Hint>}
     </>}
   </Modal>;
+}
+
+/** What a student without edit rights sends support about one directory class, in place of an unthemed prompt(). */
+function CorrectionForm({ entry, message, pending, online, onChange, onSend, onCancel }: {
+  entry: Entry; message: string; pending: boolean; online: boolean; onChange: (message: string) => void; onSend: (message: string) => Promise<void>; onCancel: () => void;
+}) {
+  const text = message.trim();
+  const id = `directory-correction-${entry.id}`;
+  return <form className="grid basis-full gap-2" onSubmit={event => { event.preventDefault(); if (text.length >= CORRECTION_MIN) void onSend(text); }}>
+    <Field label={`What needs correcting in ${entry.name}?`} htmlFor={id} hint="For example the right teacher, room or grades. Support reviews every request.">
+      <Textarea id={id} required autoFocus rows={3} minLength={CORRECTION_MIN} maxLength={CORRECTION_MAX - correctionPrefix(entry).length} value={message} disabled={pending} onChange={event => onChange(event.target.value)} />
+    </Field>
+    <div className="flex gap-2">
+      <Button size="sm" variant="primary" type="submit" busy={pending} disabled={!online || text.length < CORRECTION_MIN}>Send to support</Button>
+      <Button size="sm" variant="ghost" disabled={pending} onClick={onCancel}>Cancel</Button>
+    </div>
+  </form>;
 }
 
 function DirectoryEditor({ initial, pending, onSave, onCancel }: { initial: Details; pending: boolean; onSave: (details: Details) => Promise<void>; onCancel: () => void }) {
