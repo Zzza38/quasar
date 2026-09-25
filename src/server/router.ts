@@ -1,22 +1,31 @@
 import { initTRPC, StandardSchemaV1Error, TRPCError } from '@trpc/server';
 import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
-import { Service, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
+import { Service, type ClientOptions, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatReportSchema, pauseChatSchema } from './chat';
+import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 export type Context = { userId: string | null; service: Service };
 /** Shown instead of a serialized issue list when input fails validation. Keeps the code and data. */
 export const INVALID_INPUT_MESSAGE = "Some of this doesn't look right. Check the fields and try again.";
 /** Zod's built-in wording ("Invalid input", "Too small: …") is not written for students; custom refine messages are. */
 const DEFAULT_ISSUE = /^(Invalid\b|Too (small|big)\b|Unrecognized key)/;
+/**
+ * Shown for any unexpected server failure. tRPC wraps a plain Error (a SqliteError, a library bug) as
+ * INTERNAL_SERVER_ERROR carrying its raw message, which can name tables and columns; messages meant for
+ * students are thrown as a TRPCError with another code instead.
+ */
+export const SERVER_ERROR_MESSAGE = 'Something went wrong. Please try again.';
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
-    if (!(error.cause instanceof ZodError || error.cause instanceof StandardSchemaV1Error)) return shape;
+    if (!(error.cause instanceof ZodError || error.cause instanceof StandardSchemaV1Error)) {
+      return error.code === 'INTERNAL_SERVER_ERROR' ? { ...shape, message: SERVER_ERROR_MESSAGE } : shape;
+    }
     const first = (error.cause as { issues?: readonly { message?: unknown }[] }).issues?.[0]?.message;
     const message = typeof first === 'string' && first.trim() && !DEFAULT_ISSUE.test(first) ? first : INVALID_INPUT_MESSAGE;
     return { ...shape, message };
@@ -27,17 +36,30 @@ const authenticated = t.procedure.use(({ ctx, next }) => {
   return next({ ctx: { ...ctx, userId: user.id } });
 });
 const admin = authenticated.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ctx}); });
-const accountScoped = authenticated.input(z.object({ accountId: z.uuid() })).use(({ ctx, input, next }) => {
+/**
+ * Shown when a request is missing a field every current client sends: it comes from a tab still running a bundle
+ * built before that field existed (an open tab or a resumed phone app keeps its old code across a deploy).
+ */
+export const OUTDATED_CLIENT_MESSAGE = 'Quasar has been updated. Reload the page, or close and reopen the app, to continue.';
+/** Refuses a request without `field` with OUTDATED_CLIENT_MESSAGE, before input validation would give a vaguer one. */
+const requiresField = (field: string) => t.middleware(async ({ getRawInput, next }) => {
+  const raw = await getRawInput();
+  if (!raw || typeof raw !== 'object' || !(field in raw)) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: OUTDATED_CLIENT_MESSAGE });
+  return next();
+});
+const accountScoped = authenticated.use(requiresField('accountId')).input(z.object({ accountId: z.uuid() })).use(({ ctx, input, next }) => {
   if (input.accountId !== ctx.userId) throw new TRPCError({ code: 'UNAUTHORIZED', message: 'The signed-in account changed. Sign in to the original account to manage its data.' });
   return next({ ctx });
 });
 /** Owner mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
 const adminScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
+const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional() });
+const clientOptions = (input: { clientVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 export const appRouter = t.router({
   session: t.procedure.query(({ ctx }) => ctx.userId ? { user: ctx.service.user(ctx.userId), isAdmin: ctx.service.isAdmin(ctx.userId) } : null),
-  profile: t.router({save: authenticated.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
+  profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
   directory: t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
     save: accountScoped.input(directorySaveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).save(ctx.userId, input)),
@@ -90,24 +112,28 @@ export const appRouter = t.router({
   calendar: t.router({
     list: authenticated.query(({ ctx }) => listSubscriptions(ctx.service.db, ctx.userId)),
     subscribe: accountScoped.input(subscribeSchema).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).subscribe(ctx.userId, input)),
-    refresh: accountScoped.input(z.object({ id: z.uuid() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).refresh(ctx.userId, input.id)),
+    refresh: accountScoped.input(z.object({ id: z.uuid() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).refreshNow(ctx.userId, input.id)),
     setEnabled: accountScoped.input(z.object({ id: z.uuid(), enabled: z.boolean() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).setEnabled(ctx.userId, input.id, input.enabled)),
     remove: accountScoped.input(z.object({ id: z.uuid() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).remove(ctx.userId, input.id)),
-    resolve: accountScoped.input(z.object({ entityId: z.string().min(1).max(100), expectedVersion: z.number().int().positive(), choice: z.enum(['local', 'source']) })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).resolve(ctx.userId, input.entityId, input.expectedVersion, input.choice)),
+    resolve: accountScoped.input(z.object({ entityId: z.string().min(1).max(100), expectedVersion: z.number().int().positive(), choice: z.enum(['local', 'source']), revision: z.string().max(100).optional() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).resolve(ctx.userId, input.entityId, input.expectedVersion, input.choice, input.revision)),
   }),
   school: t.router({
-    list: authenticated.input(z.object({query: z.string().max(200)})).query(({ctx, input}) => ctx.service.schools(input.query)),
-    create: authenticated.input(createSchoolSchema).mutation(({ctx, input}) => ctx.service.createSchool(ctx.userId, input)),
-    join: authenticated.input(joinSchema).mutation(({ctx, input}) => ctx.service.join(ctx.userId, input)),
-    update: authenticated.input(schoolUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input)),
-    acknowledge: authenticated.input(z.object({version: z.number().int().positive()})).mutation(({ctx, input}) => ctx.service.acknowledge(ctx.userId, input.version)),
-    requestCorrection: authenticated.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.requestCorrection(ctx.userId, input.message)),
-    feedback: authenticated.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.feedback(ctx.userId, input.message))
+    // Summaries only, without schedules (school.get serves the chosen one). The flag marks a client that expects
+    // that: an older bundle reads `schedule` from each result, so it is asked to reload instead.
+    list: authenticated.use(requiresField('summaries')).input(z.object({query: z.string().max(200), summaries: z.literal(true)})).query(({ctx, input}) => ctx.service.schoolSummaries(input.query)),
+    get: authenticated.input(z.object({id: z.string().uuid()})).query(({ctx, input}) => ctx.service.school(input.id)),
+    create: accountScoped.input(createSchoolSchema).mutation(({ctx, input}) => ctx.service.createSchool(ctx.userId, input)),
+    join: accountScoped.input(joinSchema).mutation(({ctx, input}) => ctx.service.join(ctx.userId, input)),
+    update: accountScoped.input(schoolUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input)),
+    acknowledge: accountScoped.input(z.object({version: z.number().int().positive()})).mutation(({ctx, input}) => ctx.service.acknowledge(ctx.userId, input.version)),
+    requestCorrection: accountScoped.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.requestCorrection(ctx.userId, input.message)),
+    feedback: accountScoped.input(z.object({message: z.string().trim().min(10).max(5000)})).mutation(({ctx, input}) => ctx.service.feedback(ctx.userId, input.message))
   }),
-  workspace: authenticated.query(({ctx}) => ctx.service.workspace(ctx.userId)),
-  sync: authenticated.input(mutationSchema.extend({accountId: z.string().uuid()})).mutation(({ctx, input}) => {
+  // Clients built before TASK_CLIENT_VERSION send no input here and no clientVersion with a sync; they get tasks shaped for them.
+  workspace: authenticated.input(clientVersionSchema.optional()).query(({ctx, input}) => ctx.service.workspace(ctx.userId, clientOptions(input))),
+  sync: authenticated.input(mutationSchema.extend({accountId: z.string().uuid()}).extend(clientVersionSchema.shape)).mutation(({ctx, input}) => {
     if (input.accountId !== ctx.userId) throw new TRPCError({code: 'UNAUTHORIZED', message: 'The signed-in account changed. Sign in to the original account to sync these changes.'});
-    return ctx.service.sync(ctx.userId, input);
+    return ctx.service.sync(ctx.userId, input, clientOptions(input));
   }),
   notifications: t.router({
     config: authenticated.query(({ctx}) => new NotificationService(ctx.service.db).config()),

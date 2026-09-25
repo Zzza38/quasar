@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent } from 'react';
 import { buildTimeAxis } from './time-axis';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { cycleDaySchema, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
+import { cycleDaySchema, REMOVED_PERIOD_LABEL, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Button, IconButton, Input } from './primitives';
@@ -15,7 +15,13 @@ const snap = (value: number) => Math.round(value / 5) * 5;
 type Resize = { dayId: string; slot: ScheduleSlot; edge: 'start' | 'end'; y: number; start: number; end: number };
 
 export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay }: {
-  onAssign?: (periodId: string, classId: string) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; onChange: (value: Schedule) => void; disabled?: boolean;
+  onAssign?: (periodId: string, classId: string) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
+  /**
+   * Called once per edit. Returning false means the edit was not saved yet (the caller is asking the student
+   * first, in place, and saves it itself once they agree), so the grid shows the timetable as it was: a renamed
+   * day gets its old name back and no "Saved" or "Cleared" message appears.
+   */
+  onChange: (value: Schedule) => boolean | void;
   onEditDay: (id: string) => void; onRemoveDay: (id: string) => void;
 }) {
   const [selected, setSelected] = useState<PeriodPlacement | null>(null);
@@ -56,8 +62,10 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     }) }) } : value;
     const next = placeTimedPeriod(editable, source, dayId, { start: clockTime(start), end: clockTime(end) }, randomId());
     if (typeof next === 'string') { setMessage(next); return false; }
-    onChange(next); setSelected(null); setCleared(null); setMessage(`Saved ${formatRange(clockTime(start), clockTime(end))} in this draft.`);
-    return true;
+    const saved = onChange(next) !== false;
+    // The Classes page saves each change straight to the personal timetable; the school editors keep a draft until Save.
+    setSelected(null); setCleared(null); setMessage(saved ? `Saved ${formatRange(clockTime(start), clockTime(end))}${personalClassesOnly ? '' : ' in this draft'}.` : '');
+    return saved;
   };
   const sourceDuration = (source: PeriodPlacement | null) => {
     const slot = value.cycleDays.find(day => day.id === source?.dayId)?.slots.find(slot => slot.id === source?.slotId);
@@ -88,8 +96,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const day = value.cycleDays.find(entry => entry.id === cleared.dayId);
     const restored = day && { ...day, slots: [...day.slots, cleared.slot].sort((a, b) => a.start.localeCompare(b.start)) };
     if (!restored || !value.periods.some(period => period.id === cleared.slot.periodId) || !cycleDaySchema.safeParse(restored).success) { setCleared(null); setMessage('That time is taken now, so the block was not restored.'); return; }
-    onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === restored.id ? restored : entry) });
-    setCleared(null); setMessage(`Restored ${formatRange(cleared.slot.start, cleared.slot.end)}.`);
+    const saved = onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === restored.id ? restored : entry) }) !== false;
+    setCleared(null); setMessage(saved ? `Restored ${formatRange(cleared.slot.start, cleared.slot.end)}.` : '');
   };
   const timeAt = (y: number, top: number, duration: number) => Math.max(startMinute, Math.min(endMinute - duration, snap(axis.time(y - top))));
   const beginDrag = (event: DragEvent, source: PeriodPlacement) => {
@@ -115,7 +123,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   return <div ref={workspaceRef} className="timetable-workspace">
     <aside className="timetable-palette gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
       <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
-      <div className="timetable-palette-items" aria-label="Available periods">
+      <div className="timetable-palette-items" role="group" aria-label="Available periods">
         {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
           const cls = clsFor(period.id);
           const label = cls ? (personalClassesOnly ? cls.name : `${cls.name} · ${period.label}`) : period.label;
@@ -141,7 +149,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
             <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>
             {days.map((day, index) => <div key={day.id} className="time-canvas-heading">
-              <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} />
+              <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} />
               <div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => onEditDay(day.id)}>Edit times<span className="sr-only"> for {day.label}</span></Button><IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => onRemoveDay(day.id)} /></div>
             </div>)}
             <div className="time-axis" style={{ height }}>{Array.from({ length: Math.ceil((endMinute - startMinute) / 60) }, (_, index) => <span key={index} style={{ top: axis.y(startMinute + index * 60) }}>{formatTime(clockTime(startMinute + index * 60))}</span>)}</div>
@@ -165,6 +173,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const period = value.periods.find(entry => entry.id === slot.periodId);
                 const cls = clsFor(slot.periodId);
                 const isGuide = personalClassesOnly && period?.kind === 'class' && !cls;
+                // A slot can outlive its period (a school removed it under a student's day override); never show the raw ID.
+                const name = cls?.name ?? period?.label ?? REMOVED_PERIOD_LABEL;
                 const color = classColor(cls?.id ?? period?.id, period?.kind, cls?.color);
                 const active = resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
                 const start = active?.start ?? minutes(slot.start); const end = active?.end ?? minutes(slot.end);
@@ -173,17 +183,17 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 // Whole title lines that fit above the time label: 14px of padding, a 17px time row, 14.5px per line.
                 const titleLines = Math.max(1, Math.min(4, Math.floor((blockHeight - 31) / 14.5)));
                 return <div key={slot.id} className={`time-block${isGuide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}${selected?.slotId === slot.id ? ' time-block-open' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, borderColor: color.dot, background: isGuide ? 'var(--muted)' : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
-                  <button type="button" title={`${cls?.name ?? period?.label ?? slot.periodId} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} draggable={!disabled} disabled={disabled} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${cls?.name ?? period?.label ?? slot.periodId}`}
+                  <button type="button" title={`${name} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} draggable={!disabled} disabled={disabled} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${name}`}
                     onDragStart={event => beginDrag(event, { periodId: slot.periodId, dayId: day.id, slotId: slot.id })} onDragEnd={() => setHover(null)} onClick={event => { if (selected && onAssign) { followWithFocus(event.detail, day.id, placeAt(selected, day.id, minutes(slot.start))); return; } if (isGuide) { setMessage('Select a class first, then tap this school block.'); return; } setSelected({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }); setMessage('Select another time to move this block.'); }}>
-                    <strong>{cls?.name ?? period?.label ?? slot.periodId}</strong>{isGuide && <span>School block · drop class here</span>}
+                    <strong>{name}</strong>{isGuide && <span>School block · drop class here</span>}
                     {/* The axis already says AM or PM; the full range stays in the tooltip, the hover card and the label. */}
                     <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
-                  <div className="time-block-detail" aria-hidden="true"><strong>{cls?.name ?? period?.label ?? slot.periodId}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
-                  <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => { onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) }); if (selected?.slotId === slot.id) setSelected(null); setCleared({ dayId: day.id, slot, keyboard: event.detail === 0 }); setMessage(`Cleared ${cls?.name ?? period?.label ?? slot.periodId} from ${day.label}.`); }}>×</button>
-                  {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled} aria-label={`Resize ${day.label} ${period?.label ?? slot.periodId} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
+                  <div className="time-block-detail" aria-hidden="true"><strong>{name}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
+                  <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => { if (onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) }) === false) return; if (selected?.slotId === slot.id) setSelected(null); setCleared({ dayId: day.id, slot, keyboard: event.detail === 0 }); setMessage(`Cleared ${name} from ${day.label}.`); }}>×</button>
+                  {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled} aria-label={`Resize ${day.label} ${period?.label ?? name} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
                     onPointerDown={event => beginResize(event, day.id, slot, edge)} onPointerMove={moveResize}
-                    onPointerUp={event => { const current = resizeRef.current; if (!current) return; event.stopPropagation(); commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
+                    onPointerUp={event => { const current = resizeRef.current; if (!current) return; event.stopPropagation(); if (current.start !== minutes(current.slot.start) || current.end !== minutes(current.slot.end)) commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
                     onPointerCancel={() => { resizeRef.current = null; setResizing(null); }} onClick={event => event.stopPropagation()}
                     onKeyDown={event => { if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const delta = event.key === 'ArrowUp' ? -5 : 5; commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, minutes(slot.start) + (edge === 'start' ? delta : 0), minutes(slot.end) + (edge === 'end' ? delta : 0)); }} />)}
                 </div>;
@@ -198,13 +208,13 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
 }
 
 /** Saves the day name on blur or Enter rather than per keystroke, so typing never races a save. */
-function DayNameInput({ name, label, disabled, onCommit }: { name: string; label: string; disabled?: boolean; onCommit: (label: string) => void }) {
+function DayNameInput({ name, label, disabled, onCommit }: { name: string; label: string; disabled?: boolean; onCommit: (label: string) => boolean | void }) {
   const [text, setText] = useState(label);
   const [shown, setShown] = useState(label);
   if (shown !== label) { setShown(label); setText(label); }
   const commit = () => {
     if (!text.trim()) { setText(label); return; }
-    if (text !== label) onCommit(text);
+    if (text !== label && onCommit(text) === false) setText(label);
   };
   return <Input small aria-label={name} value={text} maxLength={120} disabled={disabled} enterKeyHint="done"
     onChange={event => setText(event.target.value)} onBlur={commit}

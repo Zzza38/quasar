@@ -45,7 +45,7 @@ export class DirectoryService {
         .run(id, input.schoolId, JSON.stringify(input.details), version, now);
       this.audit(accountId, input.schoolId, existing ? 'directory.update' : 'directory.create', { id, version, details: input.details });
       return { ...input.details, id, version };
-    })();
+    }).immediate();
   }
   remove(accountId: string, raw: z.infer<typeof directoryRemoveSchema>) {
     const input = directoryRemoveSchema.parse(raw);
@@ -55,7 +55,7 @@ export class DirectoryService {
         .run(new Date().toISOString(), input.id, input.schoolId, input.expectedVersion);
       if (!result.changes) throw new TRPCError({ code: 'CONFLICT', message: 'This directory class changed or was removed. Reload the directory.' });
       this.audit(accountId, input.schoolId, 'directory.remove', { id: input.id, version: input.expectedVersion + 1 });
-    })();
+    }).immediate();
   }
   private audit(actorId: string, schoolId: string, action: string, detail: unknown) {
     this.service.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)')

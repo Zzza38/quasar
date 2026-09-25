@@ -47,6 +47,28 @@ describe('classmates on the timetable', () => {
     expect(classmatesFor({ community: community.summary(me) }, { periodId: 'A', class: cs })).toEqual([{ id: evan, displayName: 'Evan' }]);
     expect(classmatesFor({ community: community.summary(me) }, { periodId: 'B', class: cs })).toEqual([{ id: maya, displayName: 'Maya' }]);
   });
+  it('never tags a friend who has moved to another school, even when the period ids collide', () => {
+    const db = openDatabase(':memory:'); databases.push(db);
+    const service = new Service(db, 'owner@example.com');
+    const add = (name: string) => { const id = randomUUID(); db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${id}@example.com`, name, `${name} P`, new Date().toISOString()); return id; };
+    const me = add('Me'), maya = add('Maya');
+    const first = service.createSchool(me, { name: 'Community High', location: 'Boston, MA', schedule: exampleSchedule });
+    const second = service.createSchool(maya, { name: 'Other High', location: 'Boston, MA', schedule: exampleSchedule });
+    for (const id of [me, maya]) service.join(id, { schoolId: first.id, choice: 'community', grade: '9' });
+    const classes = [{ id: 'c0', name: 'Biology' }];
+    service.sync(maya, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(maya, 'personal'), data: { grade: '9', classes, assignments: { A: 'c0' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const community = new CommunityService(service);
+    community.request(me, maya); community.respond(maya, me, true);
+    const biology = { periodId: 'A', class: { id: 'b', name: 'Biology' } };
+    expect(classmatesFor({ community: community.summary(me) }, biology)).toEqual([{ id: maya, displayName: 'Maya' }]);
+    // Maya moves; the friendship and her period A Biology survive, but Other High's period A is not mine.
+    service.join(maya, { schoolId: second.id, choice: 'community', grade: '9' });
+    const summary = community.summary(me);
+    expect(summary.friendCount).toBe(1);
+    expect(summary.classmates).toEqual([]);
+    expect(classmatesFor({ community: summary }, biology)).toEqual([]);
+    expect(community.summary(maya).classmates).toEqual([]);
+  });
   it('phrases the label naturally', () => {
     expect(withLabel([])).toBeNull();
     expect(withLabel(['Evan'])).toBe('With Evan');

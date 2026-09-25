@@ -1,6 +1,6 @@
 # Quasar phase 4: chat implementation spec
 
-**Status (2026-09-24):** Implemented in full (no §8 scope cuts), and this document now describes the shipped behavior; the review round's clarifications are folded in below. It started as the final phase-4 design. It starts from the winning "reliability" draft and adds the judges' grafts from the "safety" and "ux" drafts. Where the judges disagreed, the spec picks one answer and gives the reason in a sentence. Every number and switch is a default the owner can change later. The constants live in one `CHAT` object at the top of `src/domain/chat.ts`. The phase-4 exit gate is "messaging scope and abuse-handling behavior are specified and verified". Sections 2, 3 and 9 cover it. A completeness review against the code (same day) fixed the places where an implementer would have had to guess. The main changes: body validation now happens in the service, so errors are fixed strings and not zod JSON. The unread count uses server-stamped newest-wins, with no `use-workspace` change. Thread sizing uses a scoped `visualViewport` hook, which also covers iOS. Admin chat mutations are account-bound. The retention SQL is indexable. The racy lost-response e2e step is gone.
+**Status (2026-09-24):** Implemented in full (no §8 scope cuts), and this document now describes the shipped behavior; the review round's clarifications are folded in below. It started as the final phase-4 design. It starts from the winning "reliability" draft and adds the judges' grafts from the "safety" and "ux" drafts. Where the judges disagreed, the spec picks one answer and gives the reason in a sentence. Every number and switch is a default the owner can change later. The constants live in one `CHAT` object at the top of `src/domain/chat.ts`, and the user-facing copy that states a limit (the length and new-chat errors, the composer `maxLength`, the "last 30 messages" report text, the retention and deleted-text days) is built from it, so editing `CHAT` is enough. The phase-4 exit gate is "messaging scope and abuse-handling behavior are specified and verified". Sections 2, 3 and 9 cover it. A completeness review against the code (same day) fixed the places where an implementer would have had to guess. The main changes: body validation now happens in the service, so errors are fixed strings and not zod JSON. The unread count uses server-stamped newest-wins, with no `use-workspace` change. Thread sizing uses a scoped `visualViewport` hook, which also covers iOS. Admin chat mutations are account-bound. The retention SQL is indexable. The racy lost-response e2e step is gone.
 
 Sources read before writing:
 - `PLAN.md`, `docs/ARCHITECTURE.md`, `docs/FABLE_HANDOFF.md`, `AGENTS.md`
@@ -22,7 +22,11 @@ Sources read before writing:
 
 *Owner can change:* allow message requests from verified schoolmates. That needs its own consent step and is not in this phase.
 
+*Amended 2026-09-24 by §11:* the single public Global chat room is the exception. Any member with names entered can post there, across schools and without a friendship. Private one-to-one chats still need an accepted friendship.
+
 **D2. There are no class groups, school rooms or friend groups in this phase.** Class membership is self-declared free text, so anyone can type "Algebra II, period A" and join. A class room would let people scout and harass minors. The ux draft tried a room where each person sees only their friends' messages, which splits one room into different views ("Cara sees the question but not Bob's answer"). A school-wide room needs moderation that one owner cannot give. Groups would also roughly double the permission surface. *Owner can change:* a later phase can add friend groups of up to 10, where every member is friends with the creator and nobody in the group has blocked anyone else.
+
+*Amended 2026-09-24 by §11:* the owner added one public Global chat room across schools and moderates it directly (edit or remove any message with a visible reason, audited), with slurs censored. Class groups, school rooms and friend groups are still out.
 
 **D3. Verification is shown, not required.** Many pilot schools have no email domain, so requiring verification would leave chat empty. Every thread header shows the other person's "Verified" or "Not verified" chip. It also shows their full name under the phase-3 rule: only when both people are verified. *Owner can change:* set `CHAT.requiresVerification = true`. Both people must then be verified at their current schools to read or send.
 
@@ -32,7 +36,9 @@ Sources read before writing:
 
 **D6. Support sees chat text only through a report, and every view of it is audited.** A report freezes a snapshot of at most 30 messages from that one conversation. The owner has to press **Show messages** to see it. That button is a mutation, `admin.showEvidence`, which writes a `reports.view` row to `audit_log`. No admin procedure reads `chat_messages.body`. Support has no chat account and never sends messages. The owner's own Google account can chat like any student, and owner privileges add no chat reads. A router-shape test locks this in (§9).
 
-**D7. A closed chat leaves a report-only row for 30 days.** A chat can close by unfriending, a block in either direction, or support removal. Both participants then keep a row in their list until 30 days after the last message. The row shows only the other person's display name, the text "Chat closed" and one **Report** button. It has no history and no composer. It looks the same whether the chat closed by unfriend, by block or by removal, so it cannot be used to check "did they block me?". This closes the harass-then-leave escape. `community.profile` returns `NOT_FOUND` when the other person blocked the viewer, and also when the two are not friends and not at the same school. Without this row, a victim would have no route to the evidence. This is the one deliberate exception to the phase-3 rule "a block hides both people from each other". The row shows only a display name the viewer already chatted with. It never links to a profile, and it reveals nothing new. The blocked person also keeps a row. The judges raised retaliatory reports against the blocker. That risk is accepted, for three reasons:
+*Amended 2026-09-24 by §11:* the guarantee for one-to-one chats is unchanged. The public Global chat room is the exception: the owner reads it in the app like any member and can edit or remove any room message there, with a visible reason and an audit row, without a report. Room messages live in `global_messages`, so still no admin procedure reads `chat_messages.body`.
+
+**D7. A closed chat leaves a report-only row for 30 days.** A chat can close by unfriending, a block in either direction, or support removal. Both participants then keep a row in their list until 30 days after the last message. The row shows only the other person's display name, the text "Chat closed", a **Report** button and, since `chat.reopen` (§3.2), an **Unblock** or **Add friend** button. It has no history and no composer. It looks the same whether the chat closed by unfriend, by block or by removal, so looking at it cannot tell "did they block me?". Its **Add friend** action can, exactly as People can: the friend request fails with "This member is not available." when the other person blocked the viewer, and succeeds after a plain unfriend. That probe was already possible from People, and after an unfriend it sends a real friend request. This closes the harass-then-leave escape. `community.profile` returns `NOT_FOUND` when the other person blocked the viewer, and also when the two are not friends and not at the same school. Without this row, a victim would have no route to the evidence. This is the one deliberate exception to the phase-3 rule "a block hides both people from each other". The row shows only a display name the viewer already chatted with. It never links to a profile, and it reveals nothing new. The blocked person also keeps a row. The judges raised retaliatory reports against the blocker. That risk is accepted, for three reasons:
 - the snapshot contains both sides, so the owner sees who started it;
 - the report-history line flags people who report a lot;
 - the per-thread and per-reporter report caps apply.
@@ -41,7 +47,7 @@ Sources read before writing:
 
 **D8. Delete hides a message from both people at once, but the text is kept 30 days for reports.** This stops someone from sending a threat and deleting it before anyone reports it. The delete dialog says so. *Owner can change:* `CHAT.deletedTextDays`.
 
-**D9. Messages are text only. `https://` links are clickable. Nothing is ever fetched.** There are no images, files, reactions or previews. An `https://` URL renders as `<a href target="_blank" rel="noopener noreferrer nofollow ugc">`, and the link text is always the full URL, so the host is always visible. `http://`, `javascript:`, `data:` and every other scheme stay plain text. The server never fetches a URL from a message. This follows two of the three judges. Copying Google Docs links by long-press is the kind of friction students leave apps over. *Owner can change:* `CHAT.linkify = false` renders links as plain text.
+**D9. Messages are text only. `https://` links are clickable. Nothing is ever fetched.** There are no images, files, reactions or previews. An `https://` URL renders as `<a href target="_blank" rel="noopener noreferrer nofollow ugc">`, and the link text is always the full URL, so the host is always visible (only a slur-shaped word in it shows as asterisks, while the `href` keeps the real address; §11). `http://`, `javascript:`, `data:` and every other scheme stay plain text. The server never fetches a URL from a message. This follows two of the three judges. Copying Google Docs links by long-press is the kind of friction students leave apps over. *Owner can change:* `CHAT.linkify = false` renders links as plain text.
 
 **D10. There is no presence, no typing indicator and no read receipts.** "Online now", "typing…" and "seen" tell a stalker or a pressuring friend exactly when a student is active. A schedule app gains nothing from them.
 
@@ -99,7 +105,7 @@ Three checks are defined once in `src/server/chat.ts` and run inside the same tr
 | Leave | Not a separate action for one-to-one chats | "Leaving" means Remove friend or Block. Both end `access` for both people at once and leave closed rows (D7). |
 | Report a chat or a message | Either member, whether the chat is open or closed | Requires `member`, not `access`, so a student who blocked, was blocked or was unfriended can still report. A student removed by support can report too once they join another school, because the app shows onboarding to anyone with no school. The snapshot must hold at least one message with text; otherwise `BAD_REQUEST` "This chat has no messages to report.". Limits: 1 open chat report per (reporter, thread), which gives `CONFLICT`, and the existing 10 open reports per reporter, which gives `TOO_MANY_REQUESTS`. A message report's anchor must be the other person's message and must still have text. `block: true` also blocks, in the same transaction. |
 | Block effects | Either person | The phase-3 `block` deletes the friendship, so `access` fails for both at once. The open row leaves both lists and the unread counts, and the worker's recheck drops pending pushes. Both people see a closed row (D7). Phase-3 `request` refuses to re-friend while the block exists. Unblocking alone does not reopen the chat; `chat.reopen` (added 2026-09-24) lifts the viewer's own block and sends the friend request in one step, and accepts a waiting request at once. After a new friendship, the old history (within retention) comes back. |
-| Reopen | The viewer of a closed row | `chat.reopen({ userId })` → `{ unblocked, friendState: 'friends' \| 'requested' }`. Closed rows carry `reopen: 'unblock' \| 'friend' \| null`, computed only from the viewer's own block and the two schools, so a row never reveals whether the other person blocked the viewer; if they did, the request fails with the phase-3 "This member is not available." (the same answer People gives). The row shows "Unblock" or "Add friend" beside Report; the closed thread view shows the same button with an explanation. |
+| Reopen | The viewer of a closed row | `chat.reopen({ userId })` → `{ unblocked, friendState: 'friends' \| 'requested' }`. Closed rows carry `reopen: 'unblock' \| 'friend' \| null`, computed only from the viewer's own block and the two schools, so the row's rendering never reveals whether the other person blocked the viewer. Its action can: if they did, the request fails with the phase-3 "This member is not available.", the same answer People gives, so the action is no new probe (D7). The row shows "Unblock" or "Add friend" beside Report; the closed thread view shows the same button with an explanation. |
 | Support removal effects | Owner | `removeFromSchool` deletes all of the student's friendships, so every one of their chats fails `access`. It already resolves every open report against them, chat reports included, as `removed`. Their messages stay until retention clears them, and their former friends keep closed rows for 30 days. |
 | School change effects | Automatic | None on access (D4). The verified chip reflects the other person's current school. |
 | Verification effects | Automatic | Display only: the chip and the full-name rule. With `CHAT.requiresVerification` on, losing verification ends `access` at once. |
@@ -193,15 +199,15 @@ Section intro copy says so. One caveat is stated honestly in `docs/OPERATIONS.md
 | Limit | Value | Enforcement / error |
 | --- | --- | --- |
 | Message length | 1–1000 characters after normalization | `BAD_REQUEST` "Write a message first." / "Messages can be up to 1,000 characters." |
-| Send rate | 20 per rolling minute per sender, across all chats | `count(*)` on `chat_messages(sender_id, created_at)`. `TOO_MANY_REQUESTS` "You’re sending messages too fast. Wait a minute and try again." |
-| Daily volume | 500 per rolling 24 h per sender | Same index. `TOO_MANY_REQUESTS` "You reached today’s message limit. Try again tomorrow." |
+| Send rate | 20 per rolling minute per sender, across all chats (one-to-one and the Global room share one budget, §11) | `countSentSince` in `global-chat.ts`: `count(*)` on `chat_messages(sender_id, created_at)` plus `global_messages(sender_id, created_at)`. `TOO_MANY_REQUESTS` "You’re sending messages too fast. Wait a minute and try again." |
+| Daily volume | 500 per rolling 24 h per sender, across all chats | Same count over both tables. `TOO_MANY_REQUESTS` "You reached today’s message limit. Try again tomorrow." |
 | New conversations | 20 per rolling 24 h per sender (threads where this is the sender's first message ever) | `chat_members(user_id, first_sent_at)`. `TOO_MANY_REQUESTS` "You started 20 new chats today. Try again tomorrow." |
 | Retrying a send | Never counts | The idempotency lookup runs before every limit |
 | Chat reports | 1 open per (reporter, thread); 10 open per reporter across all report kinds | `CONFLICT` "You already reported this chat. Support will review it." / existing `TOO_MANY_REQUESTS` "You already have ten open reports. Wait for support to review them." |
 | Friend requests (existing) | 30 pending | Limits how many people one account can reach |
 | Push | 60 s delay; 1 per recipient per 10 min; 20 per recipient per 24 h; none 22:00–07:00; none for muted chats or `chat_push=0`; nothing older than 24 h | Worker (§6); skipped silently |
 
-**Normalization** is `normalizeBody` in `src/domain/chat.ts`. `ChatService.send` applies it through `bodyError`/`parseBody` (§5), not through a zod transform. When tRPC rejects input, its message is the `ZodError` JSON. On `master` that reaches the student as raw JSON. The uncommitted UI sweep's `errorFormatter` replaces it with the generic "Some of this doesn't look right…". Neither is the specific fixed string the composer needs. The router input is only `body: z.string().max(4000)`. The composer calls the same `bodyError` to disable **Send**. The steps are:
+**Normalization** is `normalizeBody` in `src/domain/chat.ts`. `ChatService.send` applies it through `bodyError`/`parseBody` (§5), not through a zod transform. When tRPC rejects input, the router's `errorFormatter` (and the same fallback in `src/client/api.ts`) shows a custom refine message as written and replaces zod's built-in wording with the generic "Some of this doesn't look right…" (`INVALID_INPUT_MESSAGE`). That is not the specific fixed string the composer needs. The router input is only `body: z.string().max(4000)`. The composer calls the same `bodyError` to disable **Send**. The steps are:
 1. Convert to NFC.
 2. Convert `\r\n` and `\r` to `\n`.
 3. Strip C0/C1 control characters except `\n` and `\t`.
@@ -210,9 +216,9 @@ Section intro copy says so. One caveat is stated honestly in `docs/OPERATIONS.md
 6. Trim.
 7. Treat a message that is empty once zero-width characters (U+200B–200D, U+2060, U+FEFF) are ignored as empty.
 
-**Error messages never echo message text.** The tRPC `onError` handler logs `error.message`. So every chat error message is a fixed string from the table in §5. The only zod-level body check is `max(4000)`. A zod 4 `too_big` issue carries no input, but it would show as JSON, and the composer's `maxLength={1100}` makes it unreachable from the UI. The handler's `onError` body moves unchanged into an exported `logTrpcError({ path, error })` in `src/server/trpc-log.ts`, so a test can call it. A test sends invalid bodies that contain a marker string and asserts that the marker is absent from the error message and from the logged line (§9).
+**Error messages never echo message text.** The tRPC `onError` handler logs `error.message`. So every chat error message is a fixed string from the table in §5. The only zod-level body check is `max(4000)`. A zod 4 `too_big` issue carries no input and shows as the generic `INVALID_INPUT_MESSAGE`, and the composer's `maxLength={COMPOSER_MAX_LENGTH}` (`CHAT.maxLength + 100`, 1100 by default; the zod cap is `max(4000, CHAT.maxLength + 100)`) makes it unreachable from the UI. The handler's `onError` body moves unchanged into an exported `logTrpcError({ path, error })` in `src/server/trpc-log.ts`, so a test can call it. A test sends invalid bodies that contain a marker string and asserts that the marker is absent from the error message and from the logged line (§9).
 
-**Reserved display names.** `Service.profile` rejects a display name that is new or changed if any of its words, after lowercasing and removing punctuation inside the word (so "s.u.p.p.o.r.t" becomes "support"), is one of `quasar`, `support`, `admin`, `administrator`, `moderator`, `staff` or `official`. The error is `BAD_REQUEST` "Choose a display name that doesn’t mention Quasar or support." A name that is already stored and unchanged is never rejected, so existing students can still save their full name. "Stafford" and "Badminton" pass, because only whole words are checked. This is the second scope cut (§8).
+**Reserved display names.** Names first lose control and format characters (bidi overrides, zero-width spaces including U+FEFF, soft hyphens) before spaces are collapsed, so no double or stray space is left; tabs and line breaks become spaces. Kept are a zero-width joiner or non-joiner after a letter of a non-Latin script (Persian, Urdu, Hindi and Malayalam names need them), a zero-width joiner inside an emoji sequence (skin tones included), and a subdivision flag's tag characters. Each name must keep at least one letter or number, so a name cannot read backwards or render blank. `Service.profile` then rejects a display name that is new or changed if any of its words, after folding (NFKD, lowercase, accents removed, Cyrillic and Greek lookalikes mapped to Latin with `foldConfusables` from `chat-filter.ts`, and, in a second pass, digits standing in for letters) and removing punctuation inside the word (so "s.u.p.p.o.r.t", "Ѕuррort" and "Supp0rt" become "support"), is one of `quasar`, `support`, `admin`, `administrator`, `moderator`, `staff` or `official`, or splits exactly into those words ("QuasarSupport"), including with digits stuck to either end ("Support2", "QuasarSupport1", "Staff99"). Runs of single spaced-out letters ("S u p p o r t") are read together. The error is `BAD_REQUEST` "Choose a display name that doesn’t mention Quasar or support." A name that is already stored and unchanged is never rejected, so existing students can still save their full name. "Stafford" and "Badminton" pass, because only whole words are checked. This is the second scope cut (§8).
 
 ### 3.4 Mute and pause
 
@@ -231,7 +237,7 @@ Section intro copy says so. One caveat is stated honestly in `docs/OPERATIONS.md
 
 ### 3.5 Retention and deletion
 
-The worker step `pruneChat(db, now)` runs every 60 s cycle, in one transaction. The first four statements use the indexes in §4 (`chat_messages_created`, `chat_messages_deleted`, the existing `reports_open(resolved_at, …)` and `chat_threads_last`). The last one scans `notification_deliveries`, which is small, because it holds only 2 days of chat rows plus reminder rows:
+The worker step `pruneChat(db, now)` runs every 60 s cycle, in one transaction. The first four statements use the indexes in §4 (`chat_messages_created`, `chat_messages_deleted`, the existing `reports_open(resolved_at, …)` and `chat_threads_last`). The last one uses `notification_deliveries_entity_updated(entity_id, updated_at)` (migration 9). `deliverDue` deletes reminder rows more than 2 days past their instant and `deliverSupport` deletes support rows after 7 days, both through `notification_deliveries_reminder_at`, so the table stays small:
 
 ```sql
 DELETE FROM chat_messages WHERE created_at < :now_minus_180d;
@@ -256,11 +262,11 @@ DELETE FROM notification_deliveries WHERE entity_id='chat:messages' AND updated_
 
 | Case | Handling |
 | --- | --- |
-| A stranger or adult cold-messages a minor | Impossible without an accepted friendship. Requests go only to schoolmates, with a cap of 30 pending. The "Not verified" chip shows in every thread. There is no presence data (D10). |
+| A stranger or adult cold-messages a minor | Impossible in one-to-one chat without an accepted friendship. Requests go only to schoolmates, with a cap of 30 pending. The "Not verified" chip shows in every thread. There is no presence data (D10). The Global chat room (§11) is the exception: anyone with names can post where every member reads, across schools, but cannot open a private chat from it. The owner can edit or remove room messages, slurs are censored, and a member can mute the room. |
 | Harass, then block or unfriend the victim | The victim keeps a closed row with Report for 30 days (D7). The report needs only `member`. |
 | Harass, then delete | The text is kept 30 days, and the snapshot includes it marked "Deleted by sender". A snapshot taken before the deletion is frozen. |
 | Harassment after a block | `access` fails on every read and write. Phase-3 `request` refuses re-friending. |
-| Block probing ("did they block me?") | Unfriend, block and removal all give "This chat is closed." and an identical closed row. |
+| Block probing ("did they block me?") | Unfriend, block and removal all give "This chat is closed." and an identical closed row. The row's **Add friend** action, like a friend request from People, fails with "This member is not available." when the other person blocked the viewer; this is accepted, because People already answers the same way (D7). |
 | Flooding one person | 20/minute and 500/day. Pushes collapse to 1 per 10 minutes and 20 a day, and none at night. Mute. |
 | Spraying many friends | 20 new conversations per day. |
 | Retry storms or double taps creating duplicates | `UNIQUE(sender_id, id)` with client IDs. A retry returns the original message. |
@@ -280,7 +286,7 @@ DELETE FROM notification_deliveries WHERE entity_id='chat:messages' AND updated_
 
 ## 4. Data model (migration 6)
 
-Migration 6 goes in `openDatabase` right after migration 5, inside `db.transaction(() => { ... })()`. It is additive and safe to run twice (`IF NOT EXISTS`, plus `ALTER`s guarded by `pragma table_info`, as in migrations 4 and 5). It runs as three steps in this order, because the indexes on `reports` need the new columns:
+Migration 6 goes in `migrate` (called by `openDatabase`) right after migration 5. Every step of `migrate` runs inside one `BEGIN IMMEDIATE` transaction (see [ARCHITECTURE.md](ARCHITECTURE.md#persistence-and-authorization)), so a second process opening the file at the same time waits instead of racing the guarded `ALTER`s. It is additive and safe to run twice (`IF NOT EXISTS`, plus `ALTER`s guarded by `pragma table_info`, as in migrations 4 and 5). It runs as three steps in this order, because the indexes on `reports` need the new columns:
 1. `db.exec` the four `CREATE TABLE` statements and their indexes.
 2. Run the guarded `ALTER`s.
 3. `db.exec` the two `reports` indexes and the `schema_migrations` insert.
@@ -388,14 +394,18 @@ export const CHAT = {
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
   fallbackTimeZone: 'America/New_York', requiresVerification: false, linkify: true,
 } as const;
+// Limit copy built from CHAT, so changing a number changes what users read:
+export const TOO_LONG_MESSAGE: string;            // `Messages can be up to ${CHAT.maxLength.toLocaleString('en-US')} characters.`
+export const TOO_MANY_NEW_CHATS_MESSAGE: string;  // `You started ${CHAT.newChatsPerDay} new chats today. Try again tomorrow.`
+export const COMPOSER_MAX_LENGTH: number;         // CHAT.maxLength + 100, the composer and global-edit Textarea maxLength
 export function normalizeBody(raw: string): string;          // §3.3
 export function linkParts(text: string): Array<{ text: string; href?: string }>;  // §3.6
 /** Fixed-string problem for a normalized body, or null. Used by the composer (disable Send) and by ChatService. */
-export function bodyError(normalized: string): 'Write a message first.' | 'Messages can be up to 1,000 characters.' | null;
-  // empty after ignoring U+200B–200D, U+2060, U+FEFF → 'Write a message first.'; length > CHAT.maxLength → the 1,000 message
+export function bodyError(normalized: string): 'Write a message first.' | typeof TOO_LONG_MESSAGE | null;
+  // empty after ignoring U+200B–200D, U+2060, U+FEFF → 'Write a message first.'; length > CHAT.maxLength → TOO_LONG_MESSAGE
 /** Server side: normalizeBody + bodyError, throwing TRPCError BAD_REQUEST with the fixed string. Never echoes input. */
 export function parseBody(raw: string): string;                   // lives in src/server/chat.ts (needs TRPCError)
-export const rawBodySchema = z.string().max(4000);                // the only zod check on the body
+export const rawBodySchema = z.string().max(Math.max(4000, CHAT.maxLength + 100)); // the only zod check on the body
 export const reportCategorySchema = z.enum(['danger', 'bullying', 'sexual', 'spam', 'other']);
 export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: string }> = {
   danger: { label: 'Someone may be in danger', short: 'Danger' },
@@ -417,7 +427,9 @@ export type InboxRow =
   | { state: 'open'; peer: ChatPeer; lastMessage: { fromMe: boolean; preview: string | null; createdAt: string;
       deletedBy: 'sender' | 'support' | null } | null;             // deletedBy picks "Message deleted" or "Hidden by support"
       unread: number; muted: boolean }                             // preview ≤ 120 chars, null when deleted
-  | { state: 'closed'; userId: string; displayName: string; lastAt: string };
+  | { state: 'closed'; userId: string; displayName: string; lastAt: string;
+      reopen: 'unblock' | 'friend' | null };                       // how the viewer can reopen it (§2 Reopen)
+export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
 export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
   deletedBy: 'sender' | 'support' | null; anchor: boolean };
 ```
@@ -430,13 +442,14 @@ Every `chat.*` procedure is **`accountScoped`**, so every input also carries `ac
 
 | Procedure | Kind | Input (plus `accountId`) | Returns |
 | --- | --- | --- | --- |
-| `chat.inbox` | query | none | `{ rows: InboxRow[]; unreadChats: number; unreadAt: string; pause: ChatPause \| null }`. `unreadAt` is the server's ISO time when the count was computed (§6). `rows` holds, in order: open rows with messages, newest first; closed rows (`last_message_at` within 30 days), newest first; then friends with no messages, by name. A thread with `last_message_at IS NULL`, created by `mute`, counts as "no messages" and never becomes a closed row. |
+| `chat.inbox` | query | none | `{ rows: InboxRow[]; unreadChats: number; unreadAt: string; pause: ChatPause \| null; global: GlobalSummary }`. `global` is the global room's `{ lastMessage, unread, muted }` summary (§11), added by the router. `unreadAt` is the server's ISO time when the count was computed (§6). `rows` holds, in order: open rows with messages, newest first; closed rows (`last_message_at` within 30 days), newest first; then friends with no messages, by name. A thread with `last_message_at IS NULL`, created by `mute`, counts as "no messages" and never becomes a closed row. |
 | `chat.thread` | query | `{ userId, after?: z.number().int().min(0), before?: z.number().int().positive() }`, with a refine that forbids both | `{ peer: ChatPeer; messages: ChatMessage[] /* ascending seq */; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause \| null }`. See the cursor rules after this table. |
 | `chat.send` | mutation | `{ userId, clientId: z.uuid(), body: rawBodySchema }`, then `parseBody` in the service | `{ message: ChatMessage }`. **It deliberately returns no revision.** The client advances its cursor only from polls, so it can never skip the other person's messages. |
 | `chat.delete` | mutation | `{ userId, messageId: z.uuid() }` | `{ deleted: true }` |
 | `chat.read` | mutation | `{ userId, seq: z.number().int().min(0) }` | `{ unreadChats: number; unreadAt: string }` |
-| `chat.mute` | mutation | `{ userId, muted: z.boolean() }` | `{ muted: boolean }` |
+| `chat.mute` | mutation | `{ userId, muted: z.boolean() }` | `{ muted: boolean; unreadChats: number; unreadAt: string }`. Muted chats are left out of the badge, so the new count comes back with the answer (§6). |
 | `chat.report` | mutation | `{ userId, category: reportCategorySchema, note: z.string().trim().max(2000).default(''), seq: z.number().int().positive().optional(), block: z.boolean() }` | `{ blocked: boolean }`. With `seq`, the snapshot is the anchored window. Without it, the latest 30. |
+| `chat.reopen` | mutation | `{ userId }` | `ReopenResult` (`{ unblocked, friendState: 'friends' \| 'requested' }`). Lifts the viewer's own block, then sends a friend request or accepts a waiting one (§2 Reopen). |
 | `chat.setPush` | mutation | `{ enabled: z.boolean() }` | `{ enabled: boolean }` |
 | `admin.reports` | query (extended) | none | Each row gains `isChat: boolean; category: ReportCategory \| null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause \| null`. Rows sort `danger` first, then by `createdAt`. **It contains no message text.** |
 | `admin.showEvidence` | mutation (`adminScoped`) | `{ reportId: z.uuid() }` | `{ items: EvidenceItem[] }`. Writes `audit_log` `reports.view`. Returns `NOT_FOUND` "This report has no messages." for non-chat or purged reports. |
@@ -509,7 +522,9 @@ links: [splitLink({
 
 A send is never batched with a poll. With `httpBatchLink` alone, the URL could be `/api/trpc/workspace,chat.send?batch=1`. With the split, the send's `AbortSignal.timeout(15_000)` and Playwright's `page.route('**/api/trpc/chat.send*')` both hit exactly one request.
 
-**Through the Cloudflare tunnel and the service worker.** Queries stay GET requests through `httpBatchLink`. Each poll is one short request, and there is no long-lived connection for the tunnel's idle timeout to cut. `route.ts` already sends `Cache-Control: no-store` on every tRPC response, so neither Cloudflare nor the browser HTTP cache stores chat data. `public/sw.js` never intercepts `/api/` (its fetch handler only touches navigations to `/` and `/admin` and public static assets), and that stays unchanged.
+Every link also wraps `fetch` in `timedFetch` (`api.ts`): a request that has no answer after `REQUEST_TIMEOUT_MS` (30 s) aborts with a `TimeoutError`, which `isTransportFailure` treats as a transport failure. Without it, a request stuck on a half-open connection would hold the workspace sync lock and the pollers' in-flight guard until the browser gave up, minutes later. `scan.schedule` travels alone through its own `httpLink` with `SCAN_TIMEOUT_MS` (120 s), because the server waits up to 90 s for the model.
+
+**Through the Cloudflare tunnel and the service worker.** Queries stay GET requests through `httpBatchLink`. Each poll is one short request, and there is no long-lived connection for the tunnel's idle timeout to cut. `route.ts` already sends `Cache-Control: no-store` on every tRPC response, so neither Cloudflare nor the browser HTTP cache stores chat data. `public/sw.js` never intercepts `/api/` (its fetch handler only touches navigations to the shell paths `/`, `/admin` and `/help`, which it pre-caches, and public static assets), and that stays unchanged.
 
 ---
 
@@ -582,7 +597,7 @@ The `revision` cursor is already the right shape for `Last-Event-ID`. If streami
 **Sources.** Tracker keeps `chatUnread = { n, at }` and takes the one with the latest `at` from three sources:
 - the workspace context (`context.community.unreadChats` / `context.community.unreadAt`);
 - `chat.inbox` (`unreadChats` / `unreadAt`);
-- `chat.read`'s return value (`unreadChats` / `unreadAt`).
+- `chat.read`'s return value (`unreadChats` / `unreadAt`), and the same pair from `global.read`, `chat.mute` and `global.mute`, so reading the room or muting a chat updates the badge at once, even on a phone where the list is unmounted.
 
 Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when it computes the count. There is one server and one SQLite writer, so a later stamp always reflects every write committed before it. A workspace response computed before a newer `chat.read` cannot bring back a stale count, whatever order the responses arrive in. `use-workspace.ts` needs no change. Equal stamps keep the current value.
 
@@ -592,7 +607,7 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
 
 ### Push notifications (inside the existing single worker cycle)
 
-`jobs.ts` stays **one sequential loop**: `calendar.refreshDue` → `notifications.deliverDue` → `notifications.deliverChat` → `notifications.deliverSupport` → `chat.prune`. Each step is wrapped in its own `try`, and the last two report `onError('chat')`. The `Jobs` type gains `notifications.deliverChat` and `chat.prune`, and `startJobs`' default wires in `new NotificationService(db)` and `{ prune: now => pruneChat(db, now) }`. There is no second loop and no `stop()` change.
+`jobs.ts` stays **one sequential loop**: `calendar.refreshDue` → `notifications.deliverDue` → `notifications.deliverChat` → `notifications.deliverSupport` → `chat.prune`. Each step is wrapped in its own `try`: `deliverChat` and `chat.prune` report `onError('chat')`, and `deliverSupport` reports `onError('support')` (so the worker logs "Quasar support background job failed"). The `Jobs` type gains `notifications.deliverChat`, `notifications.deliverSupport` and `chat.prune`, and `startJobs`' default wires in `new NotificationService(db)` and `{ prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); } }`. There is no second loop and no `stop()` change.
 
 `NotificationService.deliverChat(now = new Date())` reuses VAPID, `sendPush`, `push_subscriptions`, the claim SQL and the 404/410 cleanup. It returns `{ sent, failed }` and does nothing when VAPID is off. For each recipient R with at least one subscription and `users.chat_push = 1`:
 
@@ -606,7 +621,7 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
    If there are none, skip R.
 
    Muted threads, a recipient with no school (quiet hours use the fallback zone) and a recipient with no `chat_members` row (no thread yet) are all simply absent from this query.
-4. **Claim.** Per subscription, claim `(R, 'chat:messages', windowStart = floor(now / 10 min) as ISO, subscription_id)` with the exact existing `INSERT … ON CONFLICT DO UPDATE … WHERE status!='sent' AND attempts<5 AND updated_at<leaseCutoff` statement. If the claim is not granted, skip that subscription, because another worker has it or it was already sent in this window.
+4. **Claim.** Per subscription, claim `(R, 'chat:messages', windowStart = floor(now / 10 min) as ISO, subscription_id)` with the exact existing `INSERT … ON CONFLICT DO UPDATE … WHERE status!='sent' AND attempts<5 AND updated_at<leaseCutoff` statement. If the claim is not granted, skip that subscription, because another worker has it or it was already sent in this window. Because each window starts a fresh row, the per-row cap alone would let a failing browser retry in every window. So before the claim, `CHAT_FAILED_ATTEMPTS_SQL` adds up the subscription's unsuccessful `chat:messages` attempts from the last 24 h, counting only those after its latest `sent` row. If 5 or more of them ended in a permanent refusal (HTTP 400, 401, 403 or 413, for example a 403 after a VAPID rotation), the subscription is skipped until those rows leave the 24 h window or it gets a successful push. If 5 or more failed for any other reason (a 5xx, a 429, or a network error or timeout on the server), it is skipped only while its latest failure is less than 30 minutes old (`CHAT_TRANSIENT_BACKOFF_MS`). A provider or network outage therefore costs one retry every half hour, and pushes resume within about 30 minutes of the outage ending.
 5. **Recheck, then send.** Re-run the candidate query so that a read, mute, unfriend or block that happened meanwhile wins. Then send `{"kind":"chat","tag":"quasar-chat"}` with `TTL: 3600`, `urgency: 'normal'` and `timeout: 15_000`. Mark the row `sent`, or `failed` with an error code but no text. If the recheck finds no candidates, delete the claimed row, so an empty window never counts toward the 10-minute or 20-a-day caps. A 404/410 deletes the subscription, as `deliverDue` does.
 6. **Record.** After at least one successful send to R, set `notified_seq` to the highest candidate `seq` in each candidate thread, so the same messages are never pushed twice, even after a restart.
 
@@ -616,10 +631,11 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
   | `kind` | Title | Body | Tag | URL |
   | --- | --- | --- | --- | --- |
   | `chat` | "Quasar" | "You have new messages. Open Quasar to read them." | `quasar-chat`, with `renotify: true`, so a push that replaces an older one still alerts. The server already limits pushes to one per 10 minutes. | `/#messages` |
+  | `support` (owner only) | "Quasar support" | "A new support request is waiting. Open the support page to review it." | payload tag, falling back to `quasar-support`, with `renotify: true` | `/admin` |
   | reminder (unchanged) | "Quasar reminder" | "You have a task reminder. Open Quasar to view it." | payload tag | `/#tasks` |
 
 - On a `chat` push, the worker also runs `clients.matchAll({ type: 'window' })` and sends `postMessage({ type: 'CHAT_ACTIVITY' })` to each client, so an open tab refreshes the badge at once (`session.synchronize()`). The thread and list pollers also poll at once, but only if the tab is visible. The notification is still shown, because `userVisibleOnly` requires it. Tracker listens with `navigator.serviceWorker?.addEventListener('message', …)` only when `serviceWorkerEnabled` (as `use-workspace` does). Without a service worker, the badge simply waits for the 15 s poll.
-- `notificationclick` opens `event.notification.data.url` only if it is in `['/#tasks', '/#messages']`. Otherwise it opens `/#tasks`.
+- `notificationclick` opens `event.notification.data.url` only if it is in `['/#tasks', '/#messages', '/admin']`. Otherwise it opens `/#tasks`. It focuses and navigates an open Quasar tab that the worker controls. A tab it does not control (one opened with a hard reload) cannot be navigated, so it is skipped, and when there is no usable tab or navigating fails, a new window opens at the target.
 
 **End-to-end latency:**
 - inside an open thread: about 4 s;
@@ -634,9 +650,7 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
 
 **Phone (below `lg`).** A **Messages** icon link (icon `message`, a 40 px circle) sits in the sticky top bar between the status pill and the account avatar. The unread badge sits on its top-right corner: `absolute -right-0.5 -top-0.5`, the same pill classes as the dock badges. The link gets `bg-primary-soft` and `aria-current="page"` while on Messages. The 6-tab dock is unchanged.
 
-**Badge accessibility** copies whatever the Tasks and People badges do when this is implemented, so all three read the same way.
-- On `master`, the badge span carries `aria-label="1 unread chat"`.
-- The uncommitted UI sweep in this worktree moves counts into hidden spans referenced by `aria-describedby` (`COUNT_IDS`). With that, add `messages: 'nav-chat-count'` to `COUNT_IDS`, render one hidden `<span id="nav-chat-count" hidden>` with "1 unread chat" / "{n} unread chats" beside the existing ones, and have both the top-bar link and the sidebar link point at it.
+**Badge accessibility** matches the Tasks and People badges, so all three read the same way. Counts live in hidden spans referenced by `aria-describedby` (`COUNT_IDS` in `shell.tsx`, which includes `messages: 'nav-chat-count'`): one hidden `<span id="nav-chat-count" hidden>` holds "1 unread chat" / "{n} unread chats" beside the existing ones, and both the top-bar link and the sidebar link point at it.
 
 The Playwright locator follows the same choice (§7, Accessible names).
 
@@ -649,21 +663,21 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 
 **Desktop (`lg` and up).** Messages is a 7th sidebar item after People (`VIEW_ICONS.messages = 'message'`), with a `SidebarMenuBadge` like the ones on Tasks and People.
 
-**Routing.** The `View` union gains `'messages'`. The `VIEWS` element type gains an optional `dock?: boolean`, and `VIEWS` gains `{ id: 'messages', label: 'Messages', dock: false }` last. `TabBar` renders `VIEWS.filter(v => v.dock !== false)`, and the sidebar still maps all of `VIEWS`. `parseHash` already resolves any `VIEWS` id, so no routing code changes. `Shell` gains the props `chatUnread: number | null` (`null` while offline, which hides both badges), `immersive: boolean` and `chatPush: boolean`. The routes are `#messages` (the list) and `#messages?with=<userId>` (a thread).
+**Routing.** The `View` union gains `'messages'`. The `VIEWS` element type gains an optional `dock?: boolean`, and `VIEWS` gains `{ id: 'messages', label: 'Messages', dock: false }` last. `TabBar` renders `VIEWS.filter(v => v.dock !== false)`, and the sidebar still maps all of `VIEWS`. `parseHash` already resolves any `VIEWS` id, so no routing code changes. `Shell` gains the props `chatUnread: number | null` (`null` while offline, which hides both badges), `immersive: boolean` and `chatPush: boolean`. The routes are `/messages` (the list), `/messages?with=<userId>` (a thread) and, since §11, `/messages?room=global` (the Global chat room).
 
-**Inside a thread on the phone.** The dock is hidden. Tracker passes `immersive = view === 'messages' && params.has('with')`, and `TabBar` isn't rendered then.
+**Inside a thread on the phone.** The dock is hidden. Tracker passes `immersive = view === 'messages' && (params.has('with') || params.get('room') === 'global')`, so the Global chat room (§11) hides it too, and `TabBar` isn't rendered then.
 - `app-main` becomes `flex flex-col pb-0` with `height: var(--chat-h, calc(100dvh - 3.5rem))`. Shell's own banners (session error, sync failure) stay first in the column. The thread is `min-h-0 flex-1`, so a banner shrinks the log instead of pushing the composer off screen.
-- `--chat-h` is set on `document.documentElement` by `useChatViewport()` in `use-chat.ts`, only while a phone thread is mounted. It holds `visualViewport.height − document.querySelector('.app-topbar').offsetHeight` in px. The top bar's height includes `env(safe-area-inset-top)` once `viewportFit: 'cover'` is on, so it is measured instead of hard-coded. The value is updated on `visualViewport` `resize` and `scroll`, and the property is removed on unmount. iOS Safari ignores the `interactive-widget` viewport key, so this hook is what keeps the composer above the iOS keyboard. On Android it is harmless either way. `layout.tsx` needs no chat change. (An uncommitted UI sweep in this worktree adds `interactiveWidget: 'resizes-content'` and `viewportFit: 'cover'` globally. Chat neither depends on that nor conflicts with it.)
+- `--chat-h` is set on `document.documentElement` by `useChatViewport()` in `use-chat.ts`, only while a phone thread is mounted. It holds `visualViewport.height − document.querySelector('.app-topbar').offsetHeight` in px. The top bar's height includes `env(safe-area-inset-top)` once `viewportFit: 'cover'` is on, so it is measured instead of hard-coded. The value is updated on `visualViewport` `resize` and `scroll`, and the property is removed on unmount. iOS Safari ignores the `interactive-widget` viewport key, so this hook is what keeps the composer above the iOS keyboard. On Android it is harmless either way. `layout.tsx` needs no chat change. (Its viewport sets `interactiveWidget: 'resizes-content'` and `viewportFit: 'cover'` globally. Chat neither depends on that nor conflicts with it.)
 - The composer sits at the bottom with `pb-[max(8px,env(safe-area-inset-bottom))]`.
 - On the Messages view (list or thread, any width), Shell hides its generic offline callout ("Schedule and task changes stay saved…"), because the chat view shows its own offline callout (§7 States). That avoids two stacked offline banners in a small viewport.
 
 **Desktop layout.** Two panes inside `app-main`, which on the Messages view is `lg:flex lg:h-dvh lg:flex-col lg:pb-8`. The pane grid is `min-h-0 flex-1 lg:grid lg:grid-cols-[320px_1fr]`. Only the message log and the list scroll.
 
-**Other entry points.** Both navigate to `#messages?with=<id>`:
+**Other entry points.** Both navigate to `/messages?with=<id>`:
 - a **Message** button (icon `message`) on each People → Friends row, before "See day";
 - a primary **Message** button in the profile-sheet footer for friends.
 
-### Chat list (`#messages`)
+### Chat list (`/messages`)
 
 - `h1` "Messages".
 - **Section "Recent"**, `ul aria-label="Chats"`, holds open rows with messages and closed rows.
@@ -680,11 +694,11 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 - **Section "Friends"**, `ul aria-label="Start a chat"`, holds friends with no messages yet. Each row is a button `aria-label="Open chat with {name}"` with the preview "No messages yet".
 - **Desktop right pane with nothing selected:** "Pick a chat."
 
-### Thread (`#messages?with=<userId>`)
+### Thread (`/messages?with=<userId>`)
 
 **Header:**
 - IconButton "Back to chats" (phone only, icon `arrowLeft`).
-- The name is a button, `aria-label="Open {name}’s profile"`, that goes to `#people?member={id}`. Under it, a small line with the Chip "Verified" (success) or "Not verified" (outline), plus the full name when the phase-3 rule allows.
+- The name is a button, `aria-label="Open {name}’s profile"`, that goes to `/people?member={id}`. Under it, a small line with the Chip "Verified" (success) or "Not verified" (outline), plus the full name when the phase-3 rule allows.
 - IconButton "Mute notifications" / "Unmute notifications" (icon `bellOff` / `bell`).
 - Ghost Buttons "Report" and "Block". "Report" is hidden while the thread has no messages (§3.1).
 - While polling fails: Hint `role="status"` "Reconnecting…".
@@ -731,16 +745,16 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 **Composer:**
 - `Textarea` from primitives, `aria-label="Message {name}"`, `rows={1}`, `className="min-h-10 resize-none"`, which overrides the primitive's `min-h-24` through `cn`/tailwind-merge. It grows to 5 lines (`max-h-[7.5rem]`, auto-height from `scrollHeight` on input).
 - `text-base` (16 px) so iOS doesn't zoom on focus.
-- `autoComplete="off"`, `maxLength={1100}`. The server enforces 1000 after normalization.
+- `autoComplete="off"`, `maxLength={COMPOSER_MAX_LENGTH}` (`CHAT.maxLength + 100`, so 1100). The server enforces `CHAT.maxLength` (1000) after normalization.
 - Placeholder: "Message", or "Offline" when offline, where the composer is also disabled.
 - **Enter:** Enter sends only when `matchMedia('(pointer: fine)').matches`, `!event.nativeEvent.isComposing`, `event.keyCode !== 229` and `!event.shiftKey`. Otherwise Enter inserts a newline. `enterKeyHint` is `"send"` on fine pointers and `"enter"` on coarse pointers, because on a phone a key labelled Send that inserts a newline would be wrong. Phone users send with the button, as the student judge asked.
 - IconButton "Send" (icon `send`, filled primary, 40 px circle). It is disabled when `bodyError(normalizeBody(draft))` is not null (empty, zero-width only, or over 1,000), offline, or paused.
-- Counter at 100 or fewer characters left: "{n} left".
+- Counter at 100 or fewer characters left: "{n} left", or the over-limit error once past 1,000. It shows alongside the slur notice, so a too-long draft with a slur still says why Send is disabled.
 - **Drafts** are kept per thread in the `use-chat` module map, in memory only, so switching threads doesn't lose them. After a send, the draft clears and focus stays in the textarea.
 
 ### Dialogs
 
-Student-facing confirmations use `Modal`, not `confirm()`.
+Student-facing confirmations are asked inside the app, never with the browser's `confirm()`: either a `Modal` or an in-place warning `Callout` (role=alert) with the confirming button and an autofocused Keep it/Cancel button. The in-place form is used for removing a class, deleting a task, removing a period or rotation day, copying a day's times to all days, going back to the school schedule, making a private copy of the timetable on the Classes page, removing a calendar feed and removing a shared directory entry. Only the owner-only admin page may use `window.confirm()`. Dismissing a `Modal` with a `dirty` draft (Escape, an overlay tap or the X) shows an in-dialog "Discard your changes?" prompt with "Keep editing" and "Discard", not the browser's confirm; "Keep editing" returns focus to the field that was being edited.
 
 **Delete:**
 - Title "Delete for both of you?"
@@ -749,7 +763,7 @@ Student-facing confirmations use `Modal`, not `confirm()`.
 
 **Block:**
 - Title "Block {name}?"
-- Body "You won’t see each other anywhere in Quasar, and this chat closes."
+- Body "You won’t see each other in People, their Global chat messages are hidden from you, and this chat closes." (The room is filtered one way only; see §11.)
 - Buttons "Cancel", "Block" (danger).
 - Afterwards the app returns to the list with the success status "{name} is blocked."
 
@@ -776,7 +790,7 @@ Student-facing confirmations use `Modal`, not `confirm()`.
 | Offline (list and thread) | Neutral Callout, icon `cloudOff`, `role="status"`: "You’re offline. Messages load when you reconnect." Loaded messages stay visible, the composer is disabled with placeholder "Offline", and drafts are kept. The badge is hidden. |
 | Loading | Hint `role="status"` "Loading chats…" (list) / "Loading messages…" (thread) |
 | Load error | Danger Callout `role="alert"` with the server message, and Button "Try again" |
-| No friends | EmptyState, icon `users`, title "No friends to message yet", body "Chats open once a schoolmate accepts your friend request.", action Button "Find friends", which goes to `#people` |
+| No friends | EmptyState, icon `users`, title "No friends to message yet", body "Chats open once a schoolmate accepts your friend request.", action Button "Find friends", which goes to `/people` |
 | Paused (list banner) | Warning Callout: "Support paused your messaging until {date}. You can still read your chats." / "Support paused your messaging. You can still read your chats." |
 | Buttons in flight | `busy`, and disabled offline, as in people.tsx |
 
@@ -798,8 +812,10 @@ Background polls never reset an open composer, the report form, or scroll positi
 
 | Question | Answer |
 | --- | --- |
-| "Who can message me?" | "Only friends. Removing a friend or blocking closes the chat for both of you." |
-| "Can support read my messages?" | "Only messages attached to a report. A report shares up to 30 messages from that one chat with support. Nobody at Quasar browses chats." |
+| "Who can message me?" | "Only friends can send you private messages. Removing a friend or blocking closes the chat for both of you. The global chat is different: everyone on Quasar can post there, and you can mute it." |
+| "Can support read my messages?" | "Your private chats, only through a report. A report shares up to 30 messages from that one chat with support, and nobody at Quasar browses private chats. The global chat is public: the owner can read, edit and remove any post there." |
+
+The global room (§11) shipped after this table, so both answers are scoped to one-to-one chats and name the room as the exception. "Who can see my name?" likewise says the display name reaches everyone on Quasar when you post in the global chat. "How do I sign out or delete my data?" states the 180-day message retention and says messages copied into a report are kept until 180 days after the report is closed.
 
 ### Admin (`/admin`)
 
@@ -827,7 +843,7 @@ Add `message: MessageCircle`, `send: SendHorizontal` and `bellOff: BellOff`.
 | Element | Locator |
 | --- | --- |
 | Nav (top bar on phone, sidebar on desktop) | `getByRole('link', { name: 'Messages' })` |
-| Badge | `master` pattern: `getByLabel('1 unread chat', { exact: true })`. `aria-describedby` pattern: `expect(getByRole('link', { name: 'Messages' })).toHaveAccessibleDescription('1 unread chat')`. The "badge is gone" checks then assert an empty description. Use whichever matches the Tasks and People badges in `community.spec.ts` at the time. |
+| Badge | `expect(getByRole('link', { name: 'Messages' })).toHaveAccessibleDescription('1 unread chat')`, the same `aria-describedby` pattern as the Tasks and People badges. The "badge is gone" checks assert an empty description. |
 | Heading | `getByRole('heading', { name: 'Messages', exact: true })` |
 | Lists | `getByRole('list', { name: 'Chats' })`, `getByRole('list', { name: 'Start a chat' })` |
 | Rows | `getByRole('button', { name: 'Open chat with Bob' })`, closed row `getByRole('button', { name: 'Report Bob' })`, text "Chat closed" |
@@ -985,7 +1001,7 @@ These are never cut:
     - clears the evidence of a report resolved 181 days ago, while the report row stays;
     - deletes a thread idle for 181 days, along with its members;
     - removes chat delivery rows older than 2 days.
-14. **Reserved names.** `profile.save` rejects "Quasar Support", "s.u.p.p.o.r.t" and "Admin Team". It accepts "Stafford" and "Badminton Bob". A stored reserved name that stays unchanged can still be saved with a new full name.
+14. **Reserved names.** `profile.save` rejects "Quasar Support", "s.u.p.p.o.r.t", "Admin Team", Cyrillic lookalikes ("Ѕuррort"), "Supp0rt", "S u p p o r t", "QuasarSupport", "Support2" and "Staff99". It accepts "Stafford" and "Badminton Bob". It strips bidi overrides and zero-width characters (keeping the joiners Persian and Indic names and skin-toned emoji need) and refuses a name left with no letter or number. A stored reserved name that stays unchanged can still be saved with a new full name.
 15. **Migration.** Opening the same database file twice is safe. `schema_migrations` contains 6. `reports` has `thread_id`, `evidence` and `category`, and `users` has `chat_push`.
 
 ### Vitest: `src/server/notifications.test.ts` (`deliverChat`)
@@ -1005,8 +1021,8 @@ These are never cut:
 
 ### Vitest: `src/server/jobs.test.ts`
 
-- The existing tests' fakes gain `deliverChat` and `prune`.
-- One cycle runs `refreshDue` → `deliverDue` → `deliverChat` → `prune` in order, with no overlap.
+- The existing tests' fakes gain `deliverChat`, `deliverSupport` and `prune`.
+- One cycle runs `refreshDue` → `deliverDue` → `deliverChat` → `deliverSupport` → `prune` in order, with no overlap.
 - A failing `deliverChat` reports `onError('chat')`, `prune` still runs, and the next cycle retries.
 
 ### Playwright: `tests/e2e/chat.spec.ts`
@@ -1021,15 +1037,15 @@ These are never cut:
 There is no worker in the e2e server, so push is covered by Vitest only.
 
 1. **"friends chat, the badge counts unread chats, and deletion reaches both sides."**
-   - Alice (desktop) opens `#messages`. `list 'Start a chat'` contains Bob. She clicks "Open chat with Bob" and sees the privacy hint "Only you and Bob can read this chat."
+   - Alice (desktop) opens `/messages`. `list 'Start a chat'` contains Bob. She clicks "Open chat with Bob" and sees the privacy hint "Only you and Bob can read this chat."
    - She fills `Message Bob` with "Hi Bob", presses Enter, and "Sending…" appears and then clears.
-   - Bob (phone) is on `#today`. `.tabbar a` has count 6. The Messages badge reads "1 unread chat" within 20 s (`badge(page)`).
+   - Bob (phone) is on `/` (Today). `.tabbar a` has count 6. The Messages badge reads "1 unread chat" within 20 s (`badge(page)`).
    - He taps link "Messages" and then "Open chat with Alice". `log 'Messages with Alice'` contains "Hi Bob", `.tabbar` is hidden, and `Message Alice` is inside the viewport.
    - He opens "Message actions" on "Hi Bob" and taps "Add as task". "Added to Tasks." appears.
    - He types "Hey" and presses Enter; the textbox value contains a newline, because the pointer is coarse. He taps "Send".
    - Alice sees "Hey" within 10 s without reloading.
    - Alice uses "Delete message" and then "Delete" in `dialog 'Delete for both of you?'`. Bob sees "Message deleted" within 10 s.
-   - Bob goes back to `#tasks`, where a task "Hi Bob" exists, and the badge is gone.
+   - Bob goes back to `/tasks`, where a task "Hi Bob" exists, and the badge is gone.
    - Screenshots of the list and the thread at 390×844 and at desktop size, in light and dark (`emulateMedia({ colorScheme: 'dark' })`).
    - At 390 px there is no horizontal overflow.
 2. **"a failed send keeps the text and retries without duplicating."**
@@ -1086,20 +1102,20 @@ There is no worker in the e2e server, so push is covered by Vitest only.
 
 Added 2026-09-24. One room, **Global chat**, that every member with names entered can read and post in, across schools. It is public by design, so the rules are the opposite of one-to-one chat in two places: there is no privacy guarantee toward the owner, and the owner moderates it directly.
 
-**Where it lives.** The chat list (`#messages`) starts with a **Group chats** section holding one row, "Global chat", above Recent and Friends. It opens at `#messages?room=global`, which is immersive on phones like a thread. The row shows the newest message as "Name: text", the viewer's unread count and a mute icon. The room counts as one unread chat in the badge when it has unread messages from others and is not muted (`countUnreadChats`).
+**Where it lives.** The chat list (`/messages`) starts with a **Group chats** section holding one row, "Global chat", above Recent and Friends. It opens at `/messages?room=global`, which is immersive on phones like a thread. The row shows the newest message as "Name: text", the viewer's unread count and a mute icon. The room counts as one unread chat in the badge when it has unread messages from others and is not muted (`countUnreadChats`).
 
-**Push.** `deliverChat` treats the room as one more candidate (`GLOBAL_CANDIDATE_SQL`, keyed `'global'`) under the §6 rules: the same 60 s delay, 10-minute and daily caps, quiet hours, the account's Message notifications switch, the room's own mute, and `global_members.notified_seq` so nothing is pushed twice. The payload is the same generic one.
+**Push.** `deliverChat` treats the room as one more candidate (`GLOBAL_CANDIDATE_SQL`, keyed `'global'`) under the §6 rules: the same 60 s delay, 10-minute and daily caps, quiet hours, the account's Message notifications switch, the room's own mute, and `global_members.notified_seq` so nothing is pushed twice. Recording a push creates a missing `global_members` row through `ensureGlobalMember`, seeded with the member's current read marker, so a newcomer's first push never marks the room's older messages unread. The payload is the same generic one.
 
-**Thread.** Each run of someone else's bubbles carries the sender's display name (with the verified check when they are verified). Mute is per member. There is no Block, Report or closed state. The empty state says who can read it and that slurs are blocked.
+**Thread.** Each run of someone else's bubbles carries the sender's display name (with the verified check when they are verified). Mute is per member. There is no Block, Report or closed state in the room itself, but a block made elsewhere (a profile or a one-to-one chat) applies to it one way: the blocker no longer sees the blocked member's room messages, in the thread and its polls, the list preview, the unread count or pushes (`NOT_BLOCKED_SENDER_SQL`, used by `GlobalChatService`, `countUnreadGlobal` and `GLOBAL_CANDIDATE_SQL`). The blocked member's view of the room does not change, so comparing views never reveals a block, and the owner's moderation view is only affected by the owner's own blocks. This is the second exception to "a block hides both people from each other", after D7, and the Block dialog says so. Unblocking brings the messages back. The empty state says who can read it and that slurs are censored.
 
-**Filter (`src/domain/chat-filter.ts`).** `censorSlurs` replaces every slur from a fixed list with asterisks (one per matched letter) before a message is stored, in the room and in one-to-one chat alike (`parseGlobalBody`, `parseBody`), and on owner edits. Matching happens on a normalized copy (NFKD, invisible and zero-width characters removed, lowercase, Cyrillic and Greek lookalikes and leetspeak mapped, censor marks as wildcards, repeated letters allowed, spaced-out letters joined) that keeps each character's origin, so the replacement lands on the original characters including any used to disguise the word. Ordinary swearing passes. The composer keeps Send enabled and shows `SLUR_NOTICE` (a fixed string) while the draft has a slur in it, and censors the pending bubble locally. Bubbles and list previews also run `censorSlurs` at display time, so messages stored before the filter existed show as asterisks too; the stored text and report evidence are unchanged. Message text is never echoed. The ICE line below shows in both kinds of chat.
+**Filter (`src/domain/chat-filter.ts`).** `censorSlurs` replaces every slur from a fixed list with asterisks (one per matched letter) before a message is stored, in the room and in one-to-one chat alike (`parseGlobalBody`, `parseBody`), and on owner edits. The stored text keeps `https://` links whole (`censorBody` in `src/domain/chat.ts` censors only the text around what `linkParts` finds), because a censored path segment such as ".../wiki/Coon_Rapids" would turn the link into a different, broken URL. Matching happens on a normalized copy (NFKD, tabs and line breaks read as spaces so they still separate words, other invisible and zero-width characters removed, lowercase, Cyrillic and Greek lookalikes and leetspeak mapped, censor marks inside a word as wildcards but only in a match with at least two real letters, so "f*g" is caught while self-censored swears such as "s***", "h***" or "f***" pass, and a "#" that starts a word is a hashtag rather than a wildcard ("#pics" passes), repeated letters allowed (only the last letter of a stem of three letters or fewer, so "woop" is not "wop"), spaced-out letters joined, with a slur that ends a joined run also found after leading one-letter words ("u r a f a g", "you're a r e t a r d"; only a, i, u, r, o and y are skipped, and not before a doubled letter, so a spaced-out "r a c c o o n" passes); a two-word stem matches across a run of spaces and joining symbols (hyphen, underscore, "/", "\", "+", "~", "&", "=", "^", "<", ">") or a single ".", "," or ":" with nothing around it ("towel/head", "ching:chong"), but never across a clause break such as ", ", ". ", ": ", "...", a dash other than "-", a bracket, a quote or an emoji ("grab a towel—head to the pool" and "my towel 😭 head over" pass), and ambiguous pairs such as "wet back" and "she male" only match when joined or hyphenated; a leet character at the edge of a word may count as a letter or as punctuation, so "faggot!" and "fag1" are caught while "n1gger" still reads as one word; a censor mark at the edge of a word is only ever punctuation, never a letter, so "*retard*" is caught while emphasis such as "*app*", "*id*" or "**on**" passes, at the accepted cost that a slur with its first or last letter starred ("*aggot") passes too; a lone censor mark inside spaced-out letters ("f * g") is still a wildcard) that keeps each character's origin, so the replacement lands on the original characters including any used to disguise the word. Ordinary swearing passes. The composer keeps Send enabled and shows `SLUR_NOTICE` (a fixed string) while the draft has a slur in it, and censors the pending bubble locally (`censorBody`, as the server does). Bubbles and list previews also censor at display time, so messages stored before the filter existed show as asterisks too: a bubble uses `censoredLinkParts`, which censors a link's visible text but keeps its real `href`, so a slur in a link is hidden while the link still works; the server censors a list preview before cutting it to 120 characters, so a slur split at the cut still shows as asterisks; and "Add as task" copies the censored text; the stored text and report evidence are unchanged. Message text is never echoed. The ICE line below shows in both kinds of chat.
 
 **Owner tools.** Every bubble's actions menu offers the owner **Edit** and **Remove** (on their own messages, Delete). Both take an optional reason (200 characters) that everyone sees: a removed message reads "Removed by the owner: reason"; an edited one keeps the new text and reads "Edited by the owner: reason" under it. Both are recorded in `audit_log` (`global.edit`, `global.delete`) with the seq, sender and reason. A sender can delete their own message ("Message deleted", no reason). Nobody else can edit.
 
 **The ICE prank.** Under any room message that mentions "immigrant" or "immigrants", the client renders the owner's joke line: `ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...` The all-caps klaxon is the tell. It is computed on the client from the message text (`mentionsImmigrants`, `icePrankNotice`); nothing is stored, sent or reported anywhere.
 
-**Data (migration 7).** `global_chat` (one row: `revision`, `last_message_at`), `global_messages` (`seq`, `id`, `sender_id`, `body`, `created_at`, `edited_at`, `deleted_at`, `deleted_by` in `sender|owner`, `reason`, `revision`, unique on `(sender_id, id)`), `global_members` (`user_id`, `last_read_seq`, `notified_seq`, `muted`). Retention matches §3.5 (`pruneGlobalChat`: 180 days, deleted text emptied after 30) and runs in the worker's chat step. Messaging pauses (§3.4) and the per-minute and per-day limits (§3.3) apply to the room; new-chat limits do not.
+**Data (migration 7).** `global_chat` (one row: `revision`, `last_message_at`), `global_messages` (`seq`, `id`, `sender_id`, `body`, `created_at`, `edited_at`, `deleted_at`, `deleted_by` in `sender|owner`, `reason`, `revision`, unique on `(sender_id, id)` and, since owner Remove and Edit address a message by `id`, also unique on `id` alone (index `global_messages_id`; opening an older database gives any later copy of a shared `id` a fresh UUID)), `global_members` (`user_id`, `last_read_seq`, `notified_seq`, `muted`). Retention matches §3.5 (`pruneGlobalChat`: 180 days, deleted text emptied after 30) and runs in the worker's chat step. Messaging pauses (§3.4) and the per-minute and per-day limits (§3.3) apply to the room; it shares one budget with one-to-one chat (`countSentSince` counts both tables), so 20 room messages in a minute also stop private sends that minute. New-chat limits do not apply.
 
-**API (`global` router, all account-scoped).** `thread({ after? | before? })` returns `{ peer: null, room: { members, canModerate }, messages, revision, lastReadSeq, hasEarlier, reset, muted, pause }`, the same page shape as `chat.thread`, so `useChatThread` drives both with a `ChatTarget` (`{ kind: 'peer', userId }` or `{ kind: 'global' }`). `send({ clientId, body })`, `delete({ messageId, reason })`, `edit({ messageId, body, reason })` (owner, `adminScoped`), `read({ seq })`, `mute({ muted })`. `chat.inbox` gains `global: { lastMessage, unread, muted }`. Messages carry `sender: { id, displayName, verified }`, `editedAt` and `reason`.
+**API (`global` router, all account-scoped).** `thread({ after? | before? })` returns `{ peer: null, room: { members, canModerate }, messages, revision, lastReadSeq, hasEarlier, reset, muted, pause }`, the same page shape as `chat.thread`, so `useChatThread` drives both with a `ChatTarget` (`{ kind: 'peer', userId }` or `{ kind: 'global' }`). `send({ clientId, body })` (a `clientId` another member already used gets `BAD_REQUEST` "A retry ID cannot be reused for a different message."), `delete({ messageId, reason })`, `edit({ messageId, body, reason })` (owner, `adminScoped`), `read({ seq })`, `mute({ muted })`. `chat.inbox` gains `global: { lastMessage, unread, muted }`. Messages carry `sender: { id, displayName, verified }`, `editedAt` and `reason`.
 
 **Tests.** `src/domain/chat-filter.test.ts` (swearing passes, slurs and obfuscations fail, innocent words pass), `src/server/global-chat.test.ts` (access, filter, delete and edit permissions with reasons and audit rows, revision polling, paging, unread and mute, limits and pauses, retry IDs, retention, account scoping) and the "global chat" test in `tests/e2e/chat.spec.ts`.

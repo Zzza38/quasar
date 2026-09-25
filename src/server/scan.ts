@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { effectiveSchedule, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { classKey, couldBeClass } from '@/domain/class-match';
 import { DirectoryService, type DirectoryClass } from './directory';
 import type { Service } from './service';
 
@@ -13,7 +14,12 @@ import type { Service } from './service';
  */
 export const SCAN_REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type ScanReasoning = typeof SCAN_REASONING[number];
-export type ScanConfig = { url: string; key: string; model: string; reasoning?: ScanReasoning };
+/**
+ * temperature is only sent when SCAN_MODEL_TEMPERATURE is set: reasoning models (OpenAI's o-series and GPT-5
+ * family) reject any non-default temperature with HTTP 400 while they reason, which would fail every scan after
+ * its quota unit is spent. Models that accept it (DeepSeek, Ollama) can pin 0 for steadier answers.
+ */
+export type ScanConfig = { url: string; key: string; model: string; reasoning?: ScanReasoning; temperature?: number };
 export function scanConfig(env: Record<string, string | undefined> = process.env): ScanConfig | null {
   // Accept either the API base (…/v1) or the full completions URL people paste from provider docs.
   const url = env.SCAN_API_URL?.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
@@ -21,7 +27,10 @@ export function scanConfig(env: Record<string, string | undefined> = process.env
   if (!url || !model) return null;
   const reasoning = env.SCAN_MODEL_REASONING?.trim().toLowerCase();
   if (reasoning && !SCAN_REASONING.includes(reasoning as ScanReasoning)) throw new Error(`SCAN_MODEL_REASONING must be one of ${SCAN_REASONING.join(', ')}.`);
-  return { url, key: env.SCAN_API_KEY?.trim() ?? '', model, ...(reasoning ? { reasoning: reasoning as ScanReasoning } : {}) };
+  const rawTemperature = env.SCAN_MODEL_TEMPERATURE?.trim();
+  const temperature = rawTemperature ? Number(rawTemperature) : undefined;
+  if (temperature !== undefined && !(Number.isFinite(temperature) && temperature >= 0 && temperature <= 2)) throw new Error('SCAN_MODEL_TEMPERATURE must be a number from 0 to 2.');
+  return { url, key: env.SCAN_API_KEY?.trim() ?? '', model, ...(reasoning ? { reasoning: reasoning as ScanReasoning } : {}), ...(temperature !== undefined ? { temperature } : {}) };
 }
 
 export const SCAN_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -108,7 +117,7 @@ export class ScanService {
       if (count(3_600_000) >= SCAN_HOURLY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_HOURLY_LIMIT} timetables per hour. Try again later.` });
       if (count(86_400_000) >= SCAN_DAILY_LIMIT) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: `You can scan up to ${SCAN_DAILY_LIMIT} timetables per day. Try again tomorrow.` });
       this.service.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at) VALUES(?,?,?,?,?)').run(accountId, 'schedule.scan', schoolId, JSON.stringify({ model: this.config!.model, images }), new Date().toISOString());
-    })();
+    }).immediate();
   }
 
   private async request(input: ScanRequest, schedule: Schedule, directory: DirectoryClass[]): Promise<string> {
@@ -122,7 +131,7 @@ export class ScanService {
         headers: { 'content-type': 'application/json', ...(config.key ? { authorization: `Bearer ${config.key}` } : {}) },
         body: JSON.stringify({
           model: config.model,
-          temperature: 0,
+          ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
           response_format: { type: 'json_object' },
           ...(config.reasoning ? { reasoning_effort: config.reasoning } : {}),
           messages: [
@@ -142,13 +151,20 @@ export class ScanService {
         throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service is having trouble right now. Try again in a few minutes, or add your classes by hand.' });
       }
       const payload = await response.json().catch(() => null) as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }> } | null;
-      const content = payload?.choices?.[0]?.message?.content;
+      // A 200 that is not a chat completion (a proxy's HTML page, an error object) is the service's fault, not the photo's.
+      if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
+        // A body cut off by the timer reads as null too; the catch below reports that as a timeout, not an upstream fault.
+        if (!controller.signal.aborted) console.error('[scan] upstream returned an unreadable body');
+        throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service is having trouble right now. Try again in a few minutes, or add your classes by hand.' });
+      }
+      const content = payload.choices[0]?.message?.content;
       const body = typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
       if (!body.trim()) throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service returned an empty answer. Try a clearer photo.' });
       return body;
     } catch (error) {
-      if (error instanceof TRPCError) throw error;
+      // Checked first: the timer also covers reading the body, and a body cut off by it would otherwise surface as an unreadable answer.
       if (controller.signal.aborted) throw new TRPCError({ code: 'TIMEOUT', message: 'The scan took too long. Try again with a smaller or clearer photo.' });
+      if (error instanceof TRPCError) throw error;
       throw new TRPCError({ code: 'BAD_GATEWAY', message: 'Could not reach the scanning service.' });
     } finally { clearTimeout(timeout); }
   }
@@ -158,31 +174,43 @@ export class ScanService {
     const parsed = responseSchema.safeParse(parseJson(body));
     if (!parsed.success) throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service answered in an unexpected format. Try again.' });
     const periods = new Map(schedule.periods.map(period => [period.id, period]));
-    const byLabel = new Map(schedule.periods.map(period => [normalize(period.label), period.id]));
+    // A label with no letters or digits ("★") gets no entry, so a punctuation-only answer ("—") never resolves to it.
+    const byLabel = new Map(schedule.periods.filter(period => normalize(period.label)).map(period => [normalize(period.label), period.id]));
     const entries = new Map(directory.map(entry => [entry.id, entry]));
     const notes: string[] = [];
     const rows: ScanRow[] = [];
     for (const candidate of parsed.data.rows) {
       const row = rowSchema.safeParse(candidate);
       if (!row.success) { notes.push('Skipped a line the scanner could not read.'); continue; }
-      const match = row.data.directoryId ? entries.get(row.data.directoryId) : undefined;
+      const listed = row.data.directoryId ? entries.get(row.data.directoryId) : undefined;
+      // The directory link (and the teacher and room it fills in) only stands when the printed name could be that class:
+      // the same words in any order, or an abbreviation of every word at the same level ("AP Chem" for "AP Chemistry", never "Art" for "Art History").
+      const match = listed && (!row.data.className || couldBeClass(row.data.className, listed.name)) ? listed : undefined;
       const name = row.data.className ?? match?.name;
       if (!name) continue;
-      // A class may meet in several periods across the rotation; rows are keyed by class name.
+      // A class may meet in several periods across the rotation; rows are keyed by directory class, else by class name (see classKey).
       const resolve = (value: string | undefined) => value ? (periods.has(value) ? value : byLabel.get(normalize(value))) : undefined;
       const matched = [...new Set([...(row.data.periodIds ?? []), row.data.periodId, row.data.periodLabel].map(resolve).filter((id): id is string => !!id))];
-      const key = normalize(name);
-      const existing = rows.find(entry => normalize(entry.name) === key);
-      if (existing) { existing.periodIds = [...new Set([...existing.periodIds, ...matched])]; if (existing.periodIds.length) existing.periodLabel = undefined; continue; }
-      rows.push({
-        name: match && normalize(match.name) === normalize(name) ? match.name : name,
+      const next: ScanRow = {
+        // A shortened printed name stays as printed, like the timetable the student is checking it against.
+        name: match && classKey(match.name) === classKey(name) ? match.name : name,
         teacher: row.data.teacher ?? match?.teacher,
         room: row.data.room ?? match?.room,
         periodIds: matched,
         periodLabel: matched.length ? undefined : row.data.periodLabel ?? row.data.periodId ?? row.data.periodIds?.find(Boolean),
         directoryId: match?.id,
         days: (row.data.days ?? []).filter(Boolean),
-      });
+      };
+      const key = classKey(name);
+      const existing = rows.find(entry => (next.directoryId && entry.directoryId === next.directoryId) || classKey(entry.name) === key);
+      if (!existing) { rows.push(next); continue; }
+      // The same class seen again (another photo): the first sighting wins, and the later one fills in what it lacked.
+      existing.periodIds = [...new Set([...existing.periodIds, ...next.periodIds])];
+      existing.periodLabel = existing.periodIds.length ? undefined : existing.periodLabel ?? next.periodLabel;
+      if (!existing.directoryId && next.directoryId) { existing.directoryId = next.directoryId; existing.name = next.name; }
+      existing.teacher ??= next.teacher;
+      existing.room ??= next.room;
+      existing.days = [...new Set([...existing.days, ...next.days])];
     }
     if (rows.length === 0) notes.push(images > 1
       ? 'No classes were found in the photos. Try straight-on, well-lit shots that together show the whole timetable.'
@@ -191,7 +219,11 @@ export class ScanService {
   }
 }
 
-const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/**
+ * A period label's lookup key, case- and punctuation-blind in any script: "Period 1" and "period-1" match, and so do
+ * "数学" and "数学". Combining marks are kept, so Devanagari or Thai labels that differ only in a vowel sign stay apart.
+ */
+const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, ' ').trim();
 function parseJson(body: string): unknown {
   const trimmed = body.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   try { return JSON.parse(trimmed); } catch { /* fall through to the widest object */ }
@@ -206,7 +238,7 @@ Return an object {"rows": [...]}. Each row is one class the student takes:
 Rules:
 - One row per distinct class. If the same class appears on several days, return it once and list the days in "days".
 - "periodIds" lists every school period ID the class meets in, matched by the period name or by its start time. A class that sits in different periods on different days lists all of them. Use an empty list only when no period can be matched, and then put the printed period text in "periodLabel".
-- "directoryId" must be the ID of a listed directory class only when the name (and teacher or room, if printed) clearly match. Otherwise null.
+- "directoryId" must be the ID of a listed directory class only when the name (and teacher or room, if printed) clearly match. A shortened or reordered name of the same class and level counts when every word is still there ("AP Chem" for "AP Chemistry"); a missing or extra word ("Art" for "Art History") or a different level, number or honors marker does not. Otherwise null.
 - Copy names exactly as printed. Do not invent teachers or rooms that are not visible.
 - Skip lunch, homeroom, advisory, free periods and headings unless they are clearly a class the student attends.
 - Several photos may be parts of one timetable (both halves, or front and back). Merge them into one list; a class seen in more than one photo is still one row.

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { bodyError, CHAT, linkParts, normalizeBody, REPORT_CATEGORIES, type ReportCategory } from '@/domain/chat';
+import { bodyError, censorBody, censoredLinkParts, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REPORT_CATEGORIES, type ReportCategory } from '@/domain/chat';
 import { censorSlurs, icePrankNotice, mentionsImmigrants, slurNotice } from '@/domain/chat-filter';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -88,11 +88,15 @@ function removedText(message: ChatMessage): string {
   return 'Message deleted';
 }
 
-/** Message text as React text nodes, slurs censored at display time too (messages stored before the filter existed); only https links (full URL shown) are clickable. */
+/**
+ * Message text as React text nodes, slurs censored at display time too (messages stored before the filter existed,
+ * and slur-shaped words inside links, whose href keeps the real address); only https links (full URL shown) are clickable.
+ */
 function MessageText({ text: raw, mine }: { text: string; mine: boolean }) {
-  const text = censorSlurs(raw);
-  if (!CHAT.linkify) return <>{text}</>;
-  return <>{linkParts(text).map((part, index) => part.href
+  // Memoised on the text: the log re-renders every bubble on each poll and menu toggle, and censoring is real work.
+  // censoredLinkParts returns one plain run when CHAT.linkify is off.
+  const parts = useMemo(() => censoredLinkParts(raw), [raw]);
+  return <>{parts.map((part, index) => part.href
     ? <a key={index} href={part.href} target="_blank" rel="noopener noreferrer nofollow ugc" className={cn('underline underline-offset-2', mine ? 'text-primary-foreground decoration-primary-foreground/60' : 'text-primary decoration-primary/50')}>{part.text}</a>
     : <span key={index}>{part.text}</span>)}</>;
 }
@@ -107,19 +111,45 @@ export function MessagesView({ state }: { state: AppState }) {
   const phone = useIsMobile();
   // Phones show the list or a thread; desktop shows both panes.
   const listMounted = !phone || !openKey;
-  const inbox = useChatInbox(state, listMounted);
+  /**
+   * The friend whose open thread closed (the server answered NOT_FOUND), and whether the chat list has since shown
+   * that chat as not open. A closed thread stops polling, so the list keeps polling for it (on phones too); once the
+   * list shows the chat open again (a reopen here, or the other person accepting), the thread remounts fresh.
+   */
+  const [closedThread, setClosedThread] = useState<{ userId: string; seenClosed: boolean } | null>(null);
+  const [threadGeneration, setThreadGeneration] = useState(0);
+  const threadClosed = !!withId && closedThread?.userId === withId;
+  const inbox = useChatInbox(state, listMounted || threadClosed);
   useChatViewport(phone && !!openKey);
   const [notice, setNotice] = useState('');
   const [reporting, setReporting] = useState<ClosedRow | null>(null);
 
+  /** The chat a notice was just set for: opening that chat (Reopen from the list) keeps the notice once. */
+  const noticeFor = useRef<string | null>(null);
   // Opening another chat clears the last result message.
-  useEffect(() => { if (openKey) setNotice(''); }, [openKey]);
+  useEffect(() => {
+    const keep = noticeFor.current === openKey;
+    noticeFor.current = null;
+    if (openKey && !keep) setNotice('');
+  }, [openKey]);
+  useEffect(() => { setClosedThread(null); }, [openKey]);
 
   const rows = inbox.inbox?.rows ?? [];
   const closedRow = withId ? rows.find((row): row is ClosedRow => row.state === 'closed' && row.userId === withId) ?? null : null;
   const openRow = withId ? rows.find((row): row is OpenRow => row.state === 'open' && row.peer.id === withId) ?? null : null;
   const reloadInbox = inbox.reload;
   const onThreadChange = useCallback(() => { if (listMounted) reloadInbox(); }, [listMounted, reloadInbox]);
+  const onThreadClosed = useCallback(() => {
+    if (withId) setClosedThread((current) => (current?.userId === withId ? current : { userId: withId, seenClosed: false }));
+    reloadInbox();
+  }, [withId, reloadInbox]);
+  // The list must first show the chat as not open (a closed row, or no row): one fetched before the thread closed may still show it open.
+  const listLoaded = !!inbox.inbox;
+  useEffect(() => {
+    if (!threadClosed || !listLoaded) return;
+    if (!openRow) setClosedThread((current) => (current && !current.seenClosed ? { ...current, seenClosed: true } : current));
+    else if (closedThread?.seenClosed) { setClosedThread(null); setThreadGeneration((count) => count + 1); }
+  }, [threadClosed, listLoaded, openRow, closedThread?.seenClosed]);
 
   // Leaving a thread removes the control that had focus (the list comes back on phones, and a block
   // closes the thread everywhere). Focus goes to the row of the chat just left, or to the heading.
@@ -149,6 +179,7 @@ export function MessagesView({ state }: { state: AppState }) {
     reloadInbox();
     void state.refresh();
     if (result.friendState === 'friends') {
+      noticeFor.current = row.userId;
       setNotice(`Chat with ${row.displayName} reopened.`);
       state.navigate('messages', { with: row.userId });
     } else {
@@ -166,8 +197,8 @@ export function MessagesView({ state }: { state: AppState }) {
         <ChatList state={state} inbox={inbox} selected={openKey} onReport={(row) => { setNotice(''); setReporting(row); }} onReopen={reopen} />
       </div>}
       {withId
-        ? <Thread key={withId} state={state} userId={withId} phone={phone} fallbackName={openRow?.peer.displayName ?? closedRow?.displayName ?? ''} closedRow={closedRow}
-            onChange={onThreadChange} onClosed={reloadInbox} onReportClosed={setReporting} onReopen={reopen} onLeave={backToList} />
+        ? <Thread key={`${withId}:${threadGeneration}`} state={state} userId={withId} phone={phone} fallbackName={openRow?.peer.displayName ?? closedRow?.displayName ?? ''} closedRow={closedRow}
+            onChange={onThreadChange} onClosed={onThreadClosed} onReportClosed={setReporting} onReopen={reopen} onLeave={backToList} />
         : inRoom
           ? <GlobalThread key={GLOBAL_ROOM} state={state} phone={phone} onChange={onThreadChange} />
           : <div className="hidden min-h-0 place-items-center rounded-3xl bg-card text-sm text-muted-foreground shadow-card ring-1 ring-foreground/[0.06] lg:grid">Pick a chat.</div>}
@@ -257,7 +288,7 @@ function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; 
   const id = useId();
   const name = row.peer.displayName;
   const unread = row.unread > 0;
-  const described = [`${id}-preview`, row.lastMessage && `${id}-time`, unread && `${id}-unread`, row.muted && `${id}-muted`].filter(Boolean).join(' ');
+  const described = [row.peer.verified && `${id}-verified`, `${id}-preview`, row.lastMessage && `${id}-time`, unread && `${id}-unread`, row.muted && `${id}-muted`].filter(Boolean).join(' ');
   return <li>
     <button type="button" data-chat-row={row.peer.id} aria-label={`Open chat with ${name}`} aria-describedby={described} aria-current={selected ? 'true' : undefined}
       onClick={() => state.navigate('messages', { with: row.peer.id })}
@@ -266,7 +297,7 @@ function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; 
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <strong className={cn('truncate text-sm', unread ? 'font-extrabold' : 'font-semibold')}>{name}</strong>
-          {row.peer.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}
+          {row.peer.verified && <span id={`${id}-verified`} role="img" aria-label="Verified" className="shrink-0 text-success"><Icon name="checkCircle" size={14} /></span>}
           {row.muted && <span id={`${id}-muted`} role="img" aria-label="Notifications muted" className="shrink-0 text-muted-foreground"><Icon name="bellOff" size={13} /></span>}
           {row.lastMessage && <span id={`${id}-time`} className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">{chatTime(row.lastMessage.createdAt, state.timeZone, state.now)}</span>}
         </span>
@@ -291,7 +322,7 @@ function ReopenButton({ row, online, onReopen, size = 'sm', variant = 'ghost' }:
   };
   const label = row.reopen === 'unblock' ? 'Unblock' : 'Add friend';
   return <span className="grid justify-items-end gap-1">
-    <Button size={size} variant={variant} icon={row.reopen === 'unblock' ? 'unlock' : 'plus'} aria-label={`${label === 'Unblock' ? 'Unblock' : 'Add'} ${row.displayName}${label === 'Unblock' ? ' and reopen the chat' : ' as a friend'}`} busy={pending} disabled={!online} onClick={() => void run()}>{label}</Button>
+    <Button size={size} variant={variant} icon={row.reopen === 'unblock' ? 'unlock' : 'plus'} aria-label={label === 'Unblock' ? `Unblock ${row.displayName} and reopen the chat` : `Add friend: ${row.displayName}`} busy={pending} disabled={!online} onClick={() => void run()}>{label}</Button>
     {error && <Hint tone="danger" role="alert" className="text-right text-[12px]">{error}</Hint>}
   </span>;
 }
@@ -392,9 +423,9 @@ function Thread({ state, userId, phone, fallbackName, closedRow, onChange, onClo
       ? <div className="border-t border-foreground/[0.06] pt-3 pb-[max(8px,env(safe-area-inset-bottom))] lg:px-4 lg:pb-4"><Hint role="status" className="text-[13px]">{pauseText(chat.pause, state.timeZone)}</Hint></div>
       : <Composer key={userId} chat={chat} name={name} online={state.online} filtered />}
 
-    {modal?.kind === 'delete' && <ConfirmModal title="Delete for both of you?" description="It disappears from this chat now. Support can still see it for 30 days if this chat is reported." confirm="Delete" online={state.online}
+    {modal?.kind === 'delete' && <ConfirmModal title="Delete for both of you?" description={`It disappears from this chat now. Support can still see it for ${CHAT.deletedTextDays} days if this chat is reported.`} confirm="Delete" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.messageId); setModal(null); }} />}
-    {modal?.kind === 'block' && <ConfirmModal title={`Block ${name}?`} description="You won’t see each other anywhere in Quasar, and this chat closes." confirm="Block" online={state.online}
+    {modal?.kind === 'block' && <ConfirmModal title={`Block ${name}?`} description="You won’t see each other in People, their Global chat messages are hidden from you, and this chat closes." confirm="Block" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => {
         await api.community.block.mutate({ accountId: state.context.user.id, userId, blocked: true });
         setModal(null);
@@ -632,7 +663,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
     if (!message.body) return;
     setAdded((current) => ({ ...current, [message.seq]: 'saving' }));
     try {
-      await state.saveTask(crypto.randomUUID(), { title: taskTitle(message.body), dueDate: null, dueTime: null, classId: null, notes: '', completed: false });
+      await state.saveTask(crypto.randomUUID(), { title: taskTitle(censorSlurs(message.body)), dueDate: null, dueTime: null, classId: null, notes: '', completed: false });
       setAdded((current) => ({ ...current, [message.seq]: 'added' }));
     } catch (err) {
       setAdded((current) => ({ ...current, [message.seq]: errorMessage(err) }));
@@ -698,7 +729,7 @@ function Bubble({ message, date, time, showTime, showName, online, mode, canMode
   const label = mode === 'global' && !mine ? `${name}: ` : '';
   const editNote = edited ? (reason ? `Edited by the owner: ${reason}` : 'Edited by the owner') : '';
   return <li data-seq={message.seq} className={cn('group/msg flex flex-col', mine ? 'items-end' : 'items-start')}>
-    {showName && <span className="mb-0.5 px-1 text-[12px] font-bold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" />}</span>}
+    {showName && <span className="mb-0.5 px-1 text-[12px] font-bold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <><Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" /><span className="sr-only"> (verified)</span></>}</span>}
     {/* The bubble keeps 80% of the row; the actions button sits beside it rather than eating into it. */}
     <div className={cn('flex items-center gap-1', removed ? 'max-w-[80%]' : 'max-w-[calc(80%+2.25rem)] pointer-coarse:max-w-[calc(80%+3rem)]', mine && 'flex-row-reverse')}>
       {removed
@@ -760,8 +791,8 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
   const update = (text: string) => { setDraft(text); chat.saveDraft(text); };
   const submit = () => {
     if (!canSend) return;
-    // Censored locally too, so the pending bubble never shows the slur while the send is out.
-    chat.send(censorSlurs(normalized));
+    // Censored locally too, so the pending bubble never shows the slur while the send is out. Links stay whole, as the server stores them.
+    chat.send(censorBody(normalized));
     update('');
     field.current?.focus();
   };
@@ -774,11 +805,11 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
 
   return <form className="flex items-end gap-2 border-t border-foreground/[0.06] pt-2 pb-[max(8px,env(safe-area-inset-bottom))] lg:px-4 lg:pb-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
     <div className="grid min-w-0 flex-1 gap-1">
-      <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="max-h-[7.5rem] min-h-10 resize-none text-base md:text-base" autoComplete="off" maxLength={1100}
+      <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="max-h-[7.5rem] min-h-10 resize-none text-base md:text-base" autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}
         placeholder={online ? 'Message' : 'Offline'} disabled={!online} enterKeyHint={fine ? 'send' : 'enter'} value={draft}
         onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} />
       {notice && <Hint role="status" className="px-1">{notice}</Hint>}
-      {!notice && left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
+      {left <= 100 && <Hint tone={left < 0 ? 'danger' : 'muted'} className="px-1">{left < 0 ? problem : `${left} left`}</Hint>}
     </div>
     <IconButton type="submit" label="Send" icon="send" variant="primary" disabled={!canSend} className="size-10 shrink-0 rounded-full" />
   </form>;
@@ -821,7 +852,7 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   const [reason, setReason] = useState(moderation(message).reason ?? '');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const normalized = censorSlurs(normalizeBody(draft));
+  const normalized = censorBody(normalizeBody(draft));
   const problem = bodyError(normalized);
   const notice = slurNotice(normalizeBody(draft));
   const changed = normalized !== (message.body ?? '') || reason.trim() !== (moderation(message).reason ?? '');
@@ -833,14 +864,14 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   return <Modal open onClose={onClose} busy={pending} dirty={changed} title={message.fromMe ? 'Edit your message' : `Edit ${senderName(message)}’s message`}
     description="Everyone sees the new text, “Edited by the owner” and your reason."
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={!online || !!problem || !changed} onClick={() => void save()}>Save</Button></>}>
-    <Field label="Message" htmlFor="global-edit-body" hint={notice ?? undefined} error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={1100} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
+    <Field label="Message" htmlFor="global-edit-body" hint={notice ?? undefined} error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={COMPOSER_MAX_LENGTH} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
     <Field label="Reason (optional, shown to everyone)" htmlFor="global-edit-reason"><Input id="global-edit-reason" maxLength={200} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Fixed the time, removed a phone number…" /></Field>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;
 }
 
 /**
- * Report a chat (latest 30 messages), one message (the window around it), or a closed chat's row.
+ * Report a chat (latest CHAT.evidence messages), one message (the window around it), or a closed chat's row.
  * Closed rows have no block checkbox, because the chat is already closed.
  */
 function ReportModal({ state, userId, name, mode, seq, onClose, onSent }: {
@@ -868,7 +899,7 @@ function ReportModal({ state, userId, name, mode, seq, onClose, onSent }: {
   };
   return <Modal open onClose={onClose} busy={pending} dirty={category !== '' || note.trim().length > 0}
     title={mode === 'message' ? 'Report message' : `Report ${name}`}
-    description={mode === 'message' ? `Support sees your report, this message and the messages around it. ${name} isn’t told who reported.` : `Support sees your report and the last 30 messages in this chat. ${name} isn’t told who reported.`}
+    description={mode === 'message' ? `Support sees your report, this message and the messages around it. ${name} isn’t told who reported.` : `Support sees your report and the last ${CHAT.evidence} messages in this chat. ${name} isn’t told who reported.`}
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={!category || !state.online} onClick={() => void send()}>Send report</Button></>}>
     <div className="grid gap-2">
       <span className="text-[13px] font-semibold text-foreground/80" aria-hidden="true">What’s wrong?</span>

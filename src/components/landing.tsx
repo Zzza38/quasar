@@ -7,6 +7,9 @@ import { BrandLockup, BrandMark } from './shell';
 import { AppearanceToggle } from './theme-picker';
 import { Callout } from './primitives';
 import { cn } from '@/lib/utils';
+import { signInErrorMessage, signInReturnPath, type SignInReturn } from '@/lib/sign-in';
+
+export { signInErrorMessage, signInReturnPath };
 
 /**
  * Signed-out landing page, in the "Notebook" direction (mockups/4-notebook.html).
@@ -56,8 +59,32 @@ const TODAY_ROWS: ReadonlyArray<{ time: string; name: string; room: string; next
   { time: '11:35', name: 'History', room: '221' },
 ];
 
-function signInWithGoogle() {
-  void signIn('google', { callbackUrl: '/' });
+function signInWithGoogle(callbackPath: string) {
+  void signIn('google', { callbackUrl: callbackPath });
+}
+
+/**
+ * Reads NextAuth's parameters from the address once: the sign-in failure to explain and the page the failed
+ * sign-in was headed for. Then drops them so a reload does not repeat the message.
+ */
+function useSignInReturn(provided?: SignInReturn): SignInReturn {
+  // The server-rendered page passes its reading of the address, so the HTML and its hydration agree; a page that
+  // reaches this component only in the browser (a lost session, the offline shell) reads the address itself.
+  const [state] = useState<SignInReturn>(() => {
+    if (provided) return provided;
+    if (typeof window === 'undefined') return { error: null, callbackPath: '/' };
+    const params = new URLSearchParams(window.location.search);
+    return { error: signInErrorMessage(params.get('error')), callbackPath: signInReturnPath(params.get('callbackUrl'), window.location.origin) };
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('error') && !params.has('callbackUrl')) return;
+    params.delete('error');
+    params.delete('callbackUrl');
+    const query = params.toString();
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }, []);
+  return state;
 }
 
 /** Chemistry has 14:32 left when the page opens; the card counts down slowly so it reads as live. */
@@ -75,7 +102,7 @@ function TodayCard() {
   const remaining = useCountdown();
   return <div className="relative max-lg:mx-auto max-lg:max-w-md">
     <span aria-hidden="true" className="absolute -top-7 right-2 -rotate-6 text-[15px] italic text-[#c8443f]" style={{ fontFamily: SERIF }}>actually right today ↓</span>
-    <div className="rotate-[1.2deg] rounded-[14px] border-[1.5px] border-[#1f2430] bg-white p-[18px] font-sans text-[#1f2430] shadow-[5px_5px_0_var(--shadow)] max-lg:rotate-0" aria-label="Preview of today in Quasar">
+    <div className="rotate-[1.2deg] rounded-[14px] border-[1.5px] border-[#1f2430] bg-white p-[18px] font-sans text-[#1f2430] shadow-[5px_5px_0_var(--shadow)] max-lg:rotate-0" role="figure" aria-label="Preview of today in Quasar">
       <div className="mb-2.5 flex justify-between text-[12.5px] font-semibold text-[#5b6270]"><span>Today</span><span>Day 4 of 8</span></div>
       <div className="text-[56px] leading-none font-extrabold tracking-[-0.04em] tabular-nums">
         {remaining}<span className="ml-1.5 text-[15px] font-semibold tracking-normal text-[#5b6270]">left in Chemistry</span>
@@ -95,7 +122,9 @@ function Highlight({ children }: { children: React.ReactNode }) {
   return <span className={HIGHLIGHT}>{children}</span>;
 }
 
-export function Welcome({ message }: { message?: string }) {
+export function Welcome({ message, signInReturn }: { message?: string; signInReturn?: SignInReturn }) {
+  const { error: signInError, callbackPath } = useSignInReturn(signInReturn);
+  const continueWithGoogle = () => signInWithGoogle(callbackPath);
   return <div
     className={cn('min-h-dvh overflow-x-clip text-[17px] leading-relaxed text-[var(--ink)] antialiased', PAPER)}
     style={{ fontFamily: SERIF, background: 'var(--paper) repeating-linear-gradient(transparent 0 31px, var(--rule) 31px 32px)' }}
@@ -110,7 +139,7 @@ export function Welcome({ message }: { message?: string }) {
         </a>
         <div className="flex items-center gap-2">
           <AppearanceToggle />
-          <button type="button" className={INK_BUTTON} onClick={signInWithGoogle}>Sign in</button>
+          <button type="button" className={INK_BUTTON} onClick={continueWithGoogle}>Sign in</button>
         </div>
       </header>
 
@@ -125,9 +154,9 @@ export function Welcome({ message }: { message?: string }) {
             <p className="mb-[26px] max-w-[520px] text-[19px] text-[var(--pencil)]">
               Snow days, two-hour delays, a Thursday that runs on a Monday schedule, lunch in two waves. Quasar keeps up. It’s free, it works with no signal, and it never shows you an ad.
             </p>
-            {message && <Callout tone="warning" icon="info" role="status" className="mb-6 max-w-lg font-sans">{message}</Callout>}
+            {(signInError || message) && <Callout tone="warning" icon="info" role="status" className="mb-6 max-w-lg font-sans">{signInError || message}</Callout>}
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" className={INK_BUTTON} onClick={signInWithGoogle}><GoogleLogo />Continue with Google</button>
+              <button type="button" className={INK_BUTTON} onClick={continueWithGoogle}><GoogleLogo />Continue with Google</button>
               <a className={OUTLINE_BUTTON} href="#why" onClick={(event) => {
                 const target = document.getElementById('why');
                 if (!target) return;
@@ -191,7 +220,7 @@ export function Welcome({ message }: { message?: string }) {
             Stop counting cycle days <Highlight>on your fingers.</Highlight>
           </h2>
           <p className="mx-auto mt-2 mb-[26px] text-[var(--pencil)]">Free for students. No ads, no trackers, nothing sold about you.</p>
-          <button type="button" className={INK_BUTTON} onClick={signInWithGoogle}><GoogleLogo />Get started free</button>
+          <button type="button" className={INK_BUTTON} onClick={continueWithGoogle}><GoogleLogo />Get started free</button>
           <div className="mt-14 flex justify-center"><BrandLockup height={150} /></div>
         </section>
       </main>

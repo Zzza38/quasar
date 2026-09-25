@@ -35,6 +35,19 @@ export const checklist = {
   tick: (item: string, userId: string, on = true) => write(`tick-${item}`, userId, on),
 };
 
+/** Forgets every setup flag of this account on this device (for sign-out), so none reveals who used it. */
+export function clearSetupState(userId: string): void {
+  try {
+    const suffix = `.${userId}`;
+    const keys: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const name = localStorage.key(index);
+      if (name?.startsWith('quasar.setup.') && name.endsWith(suffix)) keys.push(name);
+    }
+    for (const name of keys) localStorage.removeItem(name);
+  } catch { /* private mode */ }
+}
+
 /** True when the page runs as an installed app rather than in a browser tab. */
 export function isInstalled(): boolean {
   if (typeof window === 'undefined') return false;

@@ -179,3 +179,16 @@ export function mergeMutation(mutation: Mutation, current: Entity | null): SyncR
     },
   };
 }
+
+/**
+ * "Keep my changes": the same three-way merge, but each conflicting path keeps
+ * the local value, so the other side's independent edits still apply.
+ * Returns null for a deletion.
+ */
+export function mergePreferringLocal(mutation: Mutation, current: Entity | null): Record<string, unknown> | null {
+  const base = mutation.base && !mutation.base.deleted ? mutation.base.data : missing;
+  const remote = current && !current.deleted ? current.data : missing;
+  const local = mutation.data === null ? missing : mutation.data;
+  const data = mergeValue(base, local, remote, "", []);
+  return data === missing ? null : data as Record<string, unknown>;
+}

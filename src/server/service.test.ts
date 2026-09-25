@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, type Db } from './db';
-import { Service } from './service';
+import { MAX_SCHOOL_SCHEDULE_CHARS, namesSchema, reservedDisplayName, Service, SYNC_LIMITS } from './service';
 import { appRouter } from './router';
 import type { Schedule } from '@/domain/schedule';
 import type { Entity, Mutation } from '@/domain/sync';
@@ -94,8 +94,25 @@ describe('school membership and owner authorization', () => {
     expect(f.service.workspace(f.student).review).toBeNull();
     expect(f.service.entity(f.student,'personal')?.data).toMatchObject(data);
   });
+  it('revokes approval when a member edits an approved, unlocked schedule', () => {
+    const f=fixture(); f.service.join(f.student,{schoolId:f.school.id,choice:'community'});
+    f.service.updateSchool(f.owner,{schoolId:f.school.id,expectedVersion:1,schedule,approved:true,supportLocked:false},true);
+    expect(f.service.school(f.school.id).approved).toBe(true);
+    const edited=f.service.updateSchool(f.student,{schoolId:f.school.id,expectedVersion:2,schedule:{...schedule,exceptions:[{date:'2026-11-26',kind:'closure',advanceCycle:false}]}});
+    expect(edited).toMatchObject({version:3,approved:false,supportLocked:false});
+    // An unreviewed member edit is never offered as the approved default to a new student.
+    expect(()=>f.service.join(f.user(),{schoolId:f.school.id,choice:'approved'})).toThrow('explicitly');
+  });
   it('keeps other members names/tasks out of workspace and routes correction requests to owner', () => {
     const f=fixture(); f.service.join(f.student,{schoolId:f.school.id,choice:'community'});
+    const peer=f.user();
+    f.db.prepare('UPDATE users SET display_name=?,full_name=? WHERE id=?').run('Peer','Peer Secretname',peer);
+    f.service.join(peer,{schoolId:f.school.id,choice:'community'});
+    applied(f.service.sync(peer,mutation({...task,title:'Peer homework'})));
+    const workspace=f.service.workspace(f.student);
+    expect(workspace.user.id).toBe(f.student);
+    expect(workspace.entities.map(e=>e.id)).toEqual(['personal']);
+    expect(JSON.stringify(workspace)).not.toMatch(/Peer Secretname|Peer homework/);
     f.service.requestCorrection(f.student,'Lunch should begin at 12:15; see the published bell schedule.');
     expect(f.service.requests(f.owner)).toHaveLength(1);
     const request=f.service.requests(f.owner)[0];
@@ -103,6 +120,34 @@ describe('school membership and owner authorization', () => {
     expect(()=>f.service.requests(f.student)).toThrow('Owner');
     f.service.resolveRequest(f.owner,request.id);
     expect(f.service.requests(f.owner)).toHaveLength(0);
+  });
+});
+
+describe('account binding', () => {
+  it('rejects profile and school mutations composed as another account after a cookie switch', async () => {
+    const f=fixture();
+    // The cookie now names the student, but these requests were composed while the owner was signed in.
+    const caller=appRouter.createCaller({service:f.service,userId:f.student});
+    const composedAs={accountId:f.owner};
+    const before=f.service.user(f.student);
+    const attempts=[
+      caller.profile.save({...composedAs,displayName:'Owner',fullName:'Owner Name'}),
+      caller.school.create({...composedAs,name:'Owner High',location:'Boston, MA',schedule}),
+      caller.school.join({...composedAs,schoolId:f.school.id,choice:'community',grade:'9'}),
+      caller.school.update({...composedAs,schoolId:f.school.id,expectedVersion:1,schedule}),
+      caller.school.acknowledge({...composedAs,version:1}),
+      caller.school.requestCorrection({...composedAs,message:'Lunch should begin at 12:15 every day.'}),
+      caller.school.feedback({...composedAs,message:'The owner wrote this message.'}),
+    ];
+    for (const attempt of attempts) await expect(attempt).rejects.toMatchObject({code:'UNAUTHORIZED'});
+    expect(f.service.user(f.student)).toEqual(before);
+    expect(f.service.entity(f.student,'personal')).toBeNull();
+    expect(f.service.schools()).toHaveLength(1);
+    expect(f.service.requests(f.owner)).toHaveLength(0);
+    // The same requests composed as the signed-in account go through.
+    await caller.school.join({accountId:f.student,schoolId:f.school.id,choice:'community',grade:'9'});
+    expect(f.service.user(f.student).schoolId).toBe(f.school.id);
+    expect((await caller.profile.save({accountId:f.student,displayName:'Maya',fullName:'Maya Chen'})).displayName).toBe('Maya');
   });
 });
 
@@ -142,9 +187,55 @@ describe('durable synchronization', () => {
     const f=fixture(); const base=applied(f.service.sync(f.student,mutation(task)));
     applied(f.service.sync(f.student,mutation({...task,title:'Changed'},base)));
     expect(f.service.sync(f.student,mutation(null,base)).status).toBe('conflict');
-    expect(()=>f.service.sync(f.student,mutation({...task,title:''}))).toThrow();
-    expect(()=>f.service.sync(f.student,mutation({...task,dueTime:'12:00'}))).toThrow('due date');
+    // The reason is shown to the student with the parked change, so it is a sentence, never Zod's path text.
+    expect(()=>f.service.sync(f.student,mutation({...task,title:''}))).toThrow(/^Part of this change isn’t in a form Quasar can save\.$/);
+    expect(()=>f.service.sync(f.student,mutation({...task,dueTime:'12:00'}))).toThrow(/^A due time needs a due date\.$/);
     expect(()=>f.service.sync(f.student,mutation(task,{...base,data:{...task,title:'Fake base'}}))).toThrow('base revision');
+  });
+  it('caps live tasks per account but keeps edits, deletions and receipt replays working', () => {
+    const f=fixture();
+    const kept=applied(f.service.sync(f.student,mutation(task)));
+    const insert=f.db.prepare("INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,?,'task',1,?,0)");
+    f.db.transaction(()=>{ for (let i=1;i<SYNC_LIMITS.liveTasks;i++) insert.run(f.student,`filler-${i}`,JSON.stringify(task)); })();
+    expect(()=>f.service.sync(f.student,mutation(task))).toThrow(/the most Quasar keeps/);
+    const edit=mutation({...task,title:'Still editable'},kept);
+    const edited=applied(f.service.sync(f.student,edit));
+    expect(f.service.sync(f.student,edit)).toEqual({status:'applied',entity:edited});
+    applied(f.service.sync(f.student,mutation(null,edited)));
+    applied(f.service.sync(f.student,mutation(task)));
+    // Other accounts are unaffected.
+    applied(f.service.sync(f.user(),mutation(task)));
+  });
+  it('leaves calendar imports out of the live task cap, so a busy feed never blocks the student\'s own tasks', () => {
+    const f=fixture();
+    const insert=f.db.prepare("INSERT INTO entities(owner_id,id,kind,version,data,deleted) VALUES(?,?,'task',1,?,0)");
+    const imported={...task,imported:{subscriptionId:randomUUID(),uid:'x',recurrenceId:null,startDate:'2026-09-12',startTime:null,endDate:null,endTime:null,timeZone:null,allDay:true,sourceRemoved:false,sourceUpdatedAt:new Date().toISOString(),url:null}};
+    f.db.transaction(()=>{ for (let i=0;i<SYNC_LIMITS.liveTasks;i++) insert.run(f.student,`ical_${i}`,JSON.stringify(imported)); })();
+    applied(f.service.sync(f.student,mutation(task)));
+    // Only server-written import metadata exempts a task: a client cannot dodge the cap with an ical_ ID.
+    f.db.transaction(()=>{ for (let i=2;i<SYNC_LIMITS.liveTasks;i++) insert.run(f.student,`ical_own_${i}`,JSON.stringify(task)); })();
+    applied(f.service.sync(f.student,mutation(task,null,'ical_mine')));
+    expect(()=>f.service.sync(f.student,mutation(task))).toThrow(/the most Quasar keeps/);
+  });
+  it('limits how much one account can sync per day, while replays of applied changes still answer', () => {
+    const f=fixture();
+    const first=mutation(task);
+    const entity=applied(f.service.sync(f.student,first));
+    const receipt=f.db.prepare("INSERT INTO mutation_receipts VALUES(?,?,'x','{}',?)");
+    const old=new Date(Date.now()-2*86400000).toISOString();
+    f.db.transaction(()=>{ for (let i=0;i<SYNC_LIMITS.dailyMutations;i++) receipt.run(f.student,randomUUID(),old); })();
+    applied(f.service.sync(f.student,mutation(task)));
+    f.db.transaction(()=>{ for (let i=0;i<SYNC_LIMITS.dailyMutations;i++) receipt.run(f.student,randomUUID(),new Date().toISOString()); })();
+    expect(()=>f.service.sync(f.student,mutation(task))).toThrow(expect.objectContaining({code:'TOO_MANY_REQUESTS'}));
+    expect(f.service.sync(f.student,first)).toEqual({status:'applied',entity});
+    applied(f.service.sync(f.user(),mutation(task)));
+  });
+  it('limits how many bytes of changes one account can sync per day', () => {
+    const f=fixture();
+    // One receipt a few bytes short of the daily total (stored as text, like a real result), so any change tips it over.
+    f.db.prepare("INSERT INTO mutation_receipts VALUES(?,?,'x',CAST(zeroblob(?) AS TEXT),?)").run(f.student,randomUUID(),SYNC_LIMITS.dailyBytes-10,new Date().toISOString());
+    expect(()=>f.service.sync(f.student,mutation(task))).toThrow(expect.objectContaining({code:'TOO_MANY_REQUESTS'}));
+    applied(f.service.sync(f.user(),mutation(task)));
   });
   it('persists saved class/lunch data and receipts after database reopen', () => {
     const directory=mkdtempSync(join(tmpdir(),'quasar-test-')); const path=join(directory,'test.sqlite');
@@ -162,16 +253,67 @@ describe('durable synchronization', () => {
   });
 });
 
+describe('display names', () => {
+  const displayName = (raw: string) => namesSchema.parse({ displayName: raw, fullName: 'Student Name' }).displayName;
+
+  it('removes invisible characters before collapsing spaces, so none leaves a double or stray space', () => {
+    expect(displayName('Maya \u200B Chen')).toBe('Maya Chen');
+    expect(displayName('Jo\uFEFFhn')).toBe('John');
+    expect(displayName('Maya\tChen\n')).toBe('Maya Chen');
+    expect(displayName('\u202Etroppus\u00AD')).toBe('troppus');
+  });
+
+  it('keeps the joiners names in other scripts and emoji sequences need, but not inside Latin words', () => {
+    expect(displayName('\u0645\u062D\u0645\u062F\u200C\u0639\u0644\u06CC')).toBe('\u0645\u062D\u0645\u062F\u200C\u0639\u0644\u06CC');
+    expect(displayName('\u0915\u094D\u200D\u0937')).toBe('\u0915\u094D\u200D\u0937');
+    expect(displayName('Ana \u{1F469}\u{1F3FD}\u200D\u{1F4BB}')).toBe('Ana \u{1F469}\u{1F3FD}\u200D\u{1F4BB}');
+    expect(displayName('Ana \u{1F469}\u200D\u{1F4BB}')).toBe('Ana \u{1F469}\u200D\u{1F4BB}');
+    expect(displayName('Ma\u200Cya\u200D Chen')).toBe('Maya Chen');
+  });
+
+  it('refuses an oversized name before cleaning it, so a megabyte of joiners is rejected at once', () => {
+    const started = performance.now();
+    expect(namesSchema.safeParse({ displayName: '\u200D'.repeat(1_000_000), fullName: 'Student Name' }).success).toBe(false);
+    expect(namesSchema.safeParse({ displayName: 'Maya', fullName: '\u200D'.repeat(1_000_000) }).success).toBe(false);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(displayName('Maya' + '\u200B'.repeat(600))).toBe('Maya');
+  });
+
+  it('treats a reserved word with digits stuck to either end as reserved, and still allows longer words', () => {
+    for (const name of ['Support2', 'QuasarSupport1', 'Staff99', 'Admin1', '2Support', 'Supp0rt2', 'Support 2', 'Supp0rt']) expect(reservedDisplayName(name), name).toBe(true);
+    for (const name of ['Stafford', 'Badminton Bob', 'Staff0rd', 'Jo 5', 'Maya 2']) expect(reservedDisplayName(name), name).toBe(false);
+  });
+});
+
+describe('school search', () => {
+  it('lists summaries without schedules, loads one school by ID, and caps schedule size', async () => {
+    const f=fixture();
+    const caller=appRouter.createCaller({service:f.service,userId:f.student});
+    const [summary]=await caller.school.list({query:'example',summaries:true});
+    expect(summary).toEqual({id:f.school.id,name:'Example High',location:'Boston, MA',version:1,approved:false,memberLocked:false,supportLocked:false,memberCount:0});
+    expect((await caller.school.get({id:f.school.id})).schedule).toEqual(schedule);
+    const huge:Schedule={...schedule,exceptions:Array.from({length:3000},(_,i)=>({date:new Date(Date.UTC(2026,0,1+i)).toISOString().slice(0,10),kind:'replacement' as const,advanceCycle:false,slots:schedule.cycleDays[0]!.slots}))};
+    expect(JSON.stringify(huge).length).toBeGreaterThan(MAX_SCHOOL_SCHEDULE_CHARS);
+    expect(()=>f.service.createSchool(f.student,{name:'Huge High',location:'Boston, MA',schedule:huge})).toThrow('too large');
+    expect(()=>f.service.updateSchool(f.owner,{schoolId:f.school.id,expectedVersion:1,schedule:huge,approved:true,supportLocked:false},true)).toThrow('too large');
+    expect(f.service.school(f.school.id).version).toBe(1);
+  });
+});
+
 describe('grade-specific school revisions', () => {
   it('persists selected grades while preserving other schedules and revision history', () => {
     const f = fixture();
     f.service.join(f.student, { schoolId: f.school.id, choice: 'community' });
+    const peer = f.user();
+    f.service.join(peer, { schoolId: f.school.id, choice: 'community' });
     const draft = { ...schedule, cycleDays: [{ ...schedule.cycleDays[0], label: 'Junior day' }] };
     const updated = f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 1, schedule: draft, grades: ['9', '10'] });
     expect(updated.schedule.cycleDays).toEqual(schedule.cycleDays);
     expect(updated.schedule.gradeSchedules?.['9']?.cycleDays).toEqual(draft.cycleDays);
     expect(updated.schedule.gradeSchedules?.['10']?.cycleDays).toEqual(draft.cycleDays);
-    expect(f.service.workspace(f.student).review?.current).toEqual(updated.schedule);
+    // Other members review the change; the editor is not asked to review their own edit.
+    expect(f.service.workspace(peer).review?.current).toEqual(updated.schedule);
+    expect(f.service.workspace(f.student).review).toBeNull();
     expect(() => f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 1, schedule: draft, grades: ['11'] })).toThrow('changed');
     expect(() => f.service.updateSchool(f.student, { schoolId: f.school.id, expectedVersion: 2, schedule: draft, grades: [] })).toThrow();
   });

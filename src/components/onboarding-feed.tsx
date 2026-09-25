@@ -11,11 +11,11 @@ import { Button, Chip, Hint, Panel, Spacer } from './primitives';
  * as tasks by itself. Schoology instructions are shown first because that is what the first
  * real users have.
  */
-export function FeedStep({ userId, online, subscriptions, onSubscribed, onDone, footer }: {
-  userId: string; online: boolean; subscriptions: FeedSubscription[]; onSubscribed: () => Promise<void>; onDone: () => void; footer: React.ReactNode;
+export function FeedStep({ userId, online, timeZone, subscriptions, onSubscribed, onDone, footer, notice }: {
+  userId: string; online: boolean; timeZone: string; subscriptions: FeedSubscription[]; onSubscribed: () => Promise<unknown>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
 }) {
   const connected = subscriptions.length > 0;
-  return <Frame step={STEP_FEED} wide title="Get homework in automatically" description="If your school uses Schoology, Google Classroom or Canvas, it can send every assignment straight into your task list. Two minutes now, then it stays up to date on its own." footer={footer}>
+  return <Frame step={STEP_FEED} wide title="Get homework in automatically" description="If your school uses Schoology, Google Classroom or Canvas, it can send every assignment straight into your task list. Two minutes now, then it stays up to date on its own." notice={notice} footer={footer}>
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Panel className="grid gap-3">
         <strong className="text-sm font-bold">1. Copy your calendar link</strong>
@@ -30,7 +30,8 @@ export function FeedStep({ userId, online, subscriptions, onSubscribed, onDone, 
           </li>)}
         </ul>}
         {connected && <Hint>Add another link, or finish. Manage calendars later from the Schedule page.</Hint>}
-        <FeedSubscribeForm accountId={userId} online={online} id="setup-feed" onSubscribed={onSubscribed} autoFocus={false} defaultName={connected ? '' : 'School homework'} />
+        {/* defaultName is only the starting value: a step reopened with a calendar already connected starts blank, and the form clears the name itself after each connect. */}
+        <FeedSubscribeForm accountId={userId} online={online} schoolTimeZone={timeZone} id="setup-feed" onSubscribed={onSubscribed} autoFocus={false} defaultName={connected ? '' : 'School homework'} />
       </Panel>
     </div>
     <div className="flex flex-wrap items-center gap-2">

@@ -1,22 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '@/client/api';
 import { serviceWorkerEnabled } from '@/client/service-worker-support';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
-import { VIEWS, taskItems, type AppState, type View } from './app-state';
+import { VIEWS, personalSaver, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
 import { Onboarding, SignOutButton } from './onboarding';
 import { ClassesStep } from './onboarding-classes';
 import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
-import { CenteredNotice, Shell } from './shell';
+import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
-import { useWorkspace } from './use-workspace';
+import { useWorkspace, type InitialBoot } from './use-workspace';
+import { routeFromLocation, viewPath, type Route } from '@/lib/routes';
 import { ClassesView } from './views/classes';
 import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
@@ -27,32 +28,33 @@ import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
 
-/* ---------- Hash routing keeps the public offline shell at "/" ---------- */
+/* ---------- Path routing: Today at "/", every other view at "/<view>", rendered by the server ---------- */
 
-function splitHash(hash: string): [name: string, query: string] {
-  const [name, query = ''] = hash.replace(/^#\/?/, '').split('?');
-  return [name, query];
-}
+type RouteState = { view: View; params: URLSearchParams };
+const toState = (route: Route): RouteState => ({ view: route.view, params: new URLSearchParams(route.query) });
+const sameRoute = (a: RouteState, b: RouteState) => a.view === b.view && a.params.toString() === b.params.toString();
 
-function parseHash(hash: string): { view: View; params: URLSearchParams } {
-  const [name, query] = splitHash(hash);
-  const view = VIEWS.find((entry) => entry.id === name)?.id ?? 'today';
-  return { view, params: new URLSearchParams(query) };
-}
-
-function useHashRoute() {
-  const [route, setRoute] = useState(() => parseHash(typeof window === 'undefined' ? '' : window.location.hash));
+/**
+ * `initial` is the route the server rendered (src/app/page.tsx, src/app/[view]/page.tsx). The browser's address is
+ * re-read once the page is interactive: the offline shell is cached under "/" whatever path it was opened at, and an
+ * old `#view` bookmark is rewritten to its path. Navigation uses the history API without reloading; Next's router
+ * only observes it.
+ */
+function usePathRoute(initial?: Route) {
+  const [route, setRoute] = useState<RouteState>(() => initial ? toState(initial) : typeof window === 'undefined' ? { view: 'today', params: new URLSearchParams() } : toState(routeFromLocation(window.location)));
   const shownView = useRef(route.view);
   useEffect(() => {
-    const update = () => {
-      // In-page anchors (#main, #conflicts) are not routes: only an empty hash or a known view changes the screen.
-      const [name] = splitHash(window.location.hash);
-      if (name && !VIEWS.some((entry) => entry.id === name)) return;
-      setRoute(parseHash(window.location.hash));
+    const sync = () => {
+      const current = routeFromLocation(window.location);
+      if (current.legacyHash) window.history.replaceState(window.history.state, '', viewPath(current.view, new URLSearchParams(current.query)));
+      const next = toState(current);
+      setRoute((shown) => sameRoute(shown, next) ? shown : next);
     };
-    update();
-    window.addEventListener('hashchange', update);
-    return () => window.removeEventListener('hashchange', update);
+    sync();
+    // Back/forward, and a hash change to an in-page anchor (which leaves the route as it is).
+    window.addEventListener('popstate', sync);
+    window.addEventListener('hashchange', sync);
+    return () => { window.removeEventListener('popstate', sync); window.removeEventListener('hashchange', sync); };
   }, []);
   // Every way of changing view (tab bar, sidebar, links, back/forward, navigate) opens the new view at the top.
   // Scrolling after it renders avoids clamping to the old page's height; param-only changes keep their position.
@@ -62,25 +64,23 @@ function useHashRoute() {
     window.scrollTo({ top: 0 });
   }, [route.view]);
   const navigate = useCallback((view: View, params?: Record<string, string>, options?: { replace?: boolean }) => {
-    const query = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : '';
-    const next = `#${view}${query}`;
-    if (options?.replace) {
-      // Stripping a one-shot param must not leave it in history, or Back would re-trigger it.
-      // replaceState fires no hashchange, so the route is set directly.
-      window.history.replaceState(null, '', next);
-      setRoute(parseHash(next));
-      return;
-    }
-    if (window.location.hash === next) setRoute(parseHash(next));
-    else window.location.hash = next;
+    const next = viewPath(view, params);
+    const current = `${window.location.pathname}${window.location.search}`;
+    // Stripping a one-shot param must not leave it in history, or Back would re-trigger it.
+    if (options?.replace) window.history.replaceState(window.history.state, '', next);
+    else if (current !== next) window.history.pushState(null, '', next);
+    setRoute({ view, params: new URLSearchParams(params) });
     if (view === shownView.current) window.scrollTo({ top: 0 });
   }, []);
   return { ...route, navigate };
 }
 
-function useNow(intervalMs = 30_000): Date {
-  const [now, setNow] = useState(() => new Date());
+function useNow(intervalMs = 30_000, renderedAt?: number): Date {
+  // The server-rendered page and its hydration must agree on "now", so both start from the server's clock; the
+  // browser's own clock takes over as soon as the page is interactive.
+  const [now, setNow] = useState(() => renderedAt ? new Date(renderedAt) : new Date());
   useEffect(() => {
+    setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), intervalMs);
     const onVisible = () => { if (document.visibilityState === 'visible') setNow(new Date()); };
     document.addEventListener('visibilitychange', onVisible);
@@ -115,26 +115,38 @@ function useChatUnread(accountId: string | undefined, community: { unreadChats?:
   return { count: latest && latest.accountId === accountId ? latest.count : 0, setChatUnread };
 }
 
+const subscribeToNothing = () => () => {};
+/** False on the server and while its HTML hydrates, true once this device's own storage may be read during render. */
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToNothing, () => true, () => false);
+}
+
 /* ---------- Root ---------- */
 
-export function Tracker() {
-  const session = useWorkspace();
-  const route = useHashRoute();
-  const now = useNow();
+/**
+ * `initial` is what the server rendered for this request (src/app/page.tsx, src/app/[view]/page.tsx): the landing page
+ * or the account's workspace, and `initialRoute` the view its address named, so the first paint is the real screen and
+ * no API call stands in front of it.
+ */
+export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; initialRoute?: Route }) {
+  const session = useWorkspace(initial);
+  const route = usePathRoute(initialRoute);
+  const now = useNow(30_000, initial?.kind === 'workspace' ? initial.renderedAt : undefined);
+  const hydrated = useHydrated();
   const { context, snapshot } = session;
 
   const personalEntity = snapshot?.entities.find((entity) => entity.kind === 'personal' && entity.id === 'personal' && !entity.deleted);
   const parsedPersonal = useMemo(() => personalScheduleSchema.safeParse(personalEntity?.data ?? emptyPersonalSchedule()), [personalEntity]);
   const personal: PersonalSchedule = parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule();
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
-  const [setupClasses, setSetupClasses] = useState(false);
-  const [setupFeed, setSetupFeed] = useState(false);
+  // Finishing a setup step bumps this so its flag (in this device's storage) is re-read during render.
+  const [, rereadSetup] = useState(0);
   const userId = context?.user.id;
-  useEffect(() => { setSetupClasses(!!userId && classesStep.pending(userId)); setSetupFeed(!!userId && feedStep.pending(userId)); }, [userId, context?.school?.id]);
 
   const chatUnread = useChatUnread(userId, context?.community);
-  // Unsent chat messages and drafts live only in memory; signing out or losing the session forgets them.
-  useEffect(() => { if (session.authRequired || session.logout.pending) clearChatMemory(); }, [session.authRequired, session.logout.pending]);
+  // Unsent chat messages and drafts live only in memory; a finished sign-out or a lost session forgets them.
+  // Not when sign-out starts: it can still fail and leave the student signed in, with their unsent text kept.
+  useEffect(() => { if (session.authRequired) clearChatMemory(); }, [session.authRequired]);
   // Coming back online retries chat messages that failed for network reasons, in every thread (same IDs, so safe).
   const wasOnline = useRef(session.online);
   useEffect(() => {
@@ -158,35 +170,54 @@ export function Tracker() {
     return () => container.removeEventListener('message', onMessage);
   }, []);
 
-  if (session.authRequired) return <Welcome message={session.error || undefined} />;
-  // No loader: the page stays blank until the device cache or the server answers, so nothing flashes before the app paints.
-  if (session.loading && !context) return <div className="welcome-bg min-h-dvh" aria-busy="true" />;
+  if (session.authRequired) return <Welcome message={session.error || undefined} signInReturn={initial?.kind === 'signed-out' ? { error: initial.signInError, callbackPath: initial.callbackPath } : undefined} />;
+  // No loader: the page stays a plain background until the device cache or the server answers, so nothing flashes
+  // before the app paints (not even the sign-in gradient, which would read as a loading screen).
+  if (session.loading && !context) return <div className="min-h-dvh" aria-busy="true" />;
   if (!context || !snapshot) {
-    return <CenteredNotice title="Connect to get started" action={<Button variant="primary" onClick={() => void session.initialize()} busy={session.loading}>Retry connection</Button>}>
-      {session.error || 'Connect to the internet and sign in once to set up Quasar on this device.'}
+    // session.online is false after the last load could not reach the server (use-workspace sets it on every
+    // transport failure), so an online device that still has nothing to show hit a server or storage error.
+    const offline = !session.online || (typeof navigator !== 'undefined' && !navigator.onLine);
+    return <CenteredNotice title={offline ? 'Connect to get started' : 'Quasar couldn’t load'}
+      action={<Button variant="primary" onClick={() => void session.initialize()} busy={session.loading}>{offline ? 'Retry connection' : 'Try again'}</Button>}>
+      {session.error || (offline ? 'Connect to the internet and sign in once to set up Quasar on this device.' : 'Something went wrong. Please try again.')}
     </CenteredNotice>;
   }
 
+  // The setup screens have no shell, so they show session errors (a failed sign-out, a refresh or sync
+  // error) and the sign-out confirmation themselves.
+  const sessionNotice = session.error ? <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout> : null;
+  const logoutDialog = <LogoutDialog session={session} />;
+  // Refuses every write while the saved personal schedule is unreadable, so its empty fallback never replaces it.
+  const savePersonal = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
+
+  // Every signed-in screen is keyed by account, so a switch to another account never keeps the previous one's
+  // wizard drafts, prefilled names or screen state.
+  const accountKey = context.user.id;
   const needsNames = !context.user.displayName || !context.user.fullName;
   if (needsNames || !context.school) {
-    return <Onboarding context={context} online={session.online} error={session.error} onRefresh={session.initialize} onSignOut={session.requestLogout} logoutPending={session.logout.pending} />;
+    return <Fragment key={accountKey}><Onboarding context={context} online={session.online} sessionNotice={sessionNotice} onRefresh={session.initialize} onSignOut={session.requestLogout} logoutPending={session.logout.pending} />{logoutDialog}</Fragment>;
   }
 
   const school = context.school;
   const accountId = context.user.id;
   const schedule = effectiveSchedule(school.schedule, personal);
   const timeZone = schedule.timeZone;
-  // Right after joining, the wizard continues with the classes step until the student finishes or skips it.
+  // Right after joining, the wizard continues with the classes step until the student finishes or skips it. The
+  // flags live in this device's storage, which the server cannot see, so a server-rendered page shows the dashboard
+  // until it hydrates; every render after that reads them directly (no dashboard flash on the way into a step).
+  const setupClasses = hydrated && classesStep.pending(accountId);
+  const setupFeed = hydrated && feedStep.pending(accountId);
   if (setupClasses) {
-    return <ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
-      onSave={(value) => session.save('personal', 'personal', personalScheduleSchema.parse(value))}
-      onDone={() => { classesStep.finish(context.user.id); feedStep.begin(context.user.id); setSetupClasses(false); setSetupFeed(true); }}
-      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />;
+    return <Fragment key={accountKey}><ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
+      onSave={savePersonal} notice={sessionNotice}
+      onDone={() => { classesStep.finish(accountId); feedStep.begin(accountId); rereadSetup((version) => version + 1); }}
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
   }
   if (setupFeed) {
-    return <FeedStep userId={context.user.id} online={session.online} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
-      onDone={() => { feedStep.finish(context.user.id); setSetupFeed(false); }}
-      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />;
+    return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
+      onDone={() => { feedStep.finish(accountId); rereadSetup((version) => version + 1); }} notice={sessionNotice}
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
   }
   const state: AppState = {
     context: { ...context, school },
@@ -199,7 +230,7 @@ export function Tracker() {
     today: todayIn(timeZone, now),
     online: session.online,
     saveTask: (id: string, task: Task | null) => session.save('task', id, task),
-    savePersonal: (value: PersonalSchedule) => session.save('personal', 'personal', personalScheduleSchema.parse(value)),
+    savePersonal,
     refresh: session.initialize,
     navigate: route.navigate,
     params: route.params,
@@ -214,7 +245,7 @@ export function Tracker() {
     await session.synchronize();
   };
 
-  return <Shell session={session} context={context} view={route.view} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
+  return <Shell key={accountKey} session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
     gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
     {/* The grade prompt would crowd the chat column; it shows again on every other view. */}
@@ -227,7 +258,7 @@ export function Tracker() {
       {!parsedPersonal.success && <Callout tone="danger" icon="alert" role="alert" title="Your saved personal schedule needs review" actions={<Button size="sm" onClick={() => void session.synchronize()} disabled={!session.online}>Retry sync</Button>}>It could not be read on this device. Retry sync before making more changes so nothing is overwritten.</Callout>}
       <DeviceConflicts snapshot={snapshot} schedule={schedule} classes={personal.classes} resolve={session.resolve} />
       {context.review && <SchoolReview key={context.review.version} review={context.review} personal={personal} online={session.online} today={state.today}
-        onAcknowledge={async () => { await api.school.acknowledge.mutate({ version: context.review!.version }); await session.initialize(); }}
+        onAcknowledge={async () => { await api.school.acknowledge.mutate({ accountId, version: context.review!.version }); await session.initialize(); }}
         onOpenClasses={() => route.navigate('classes')} />}
     </div>
     {route.view === 'today' && <TodayView state={state} />}
