@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { censorSlurs } from './chat-filter';
 
 /**
  * Phase-4 chat rules shared by the client and the server (docs/CHAT.md §3.3, §3.6, §5).
- * Every number here is an owner-changeable default.
+ * Every number here is an owner-changeable default: user-facing copy and input caps derive from these
+ * values (see the message helpers below), so editing CHAT is enough to change a limit.
  */
 export const CHAT = {
   maxLength: 1000, perMinute: 20, perDay: 500, newChatsPerDay: 20,
@@ -29,11 +31,22 @@ export function normalizeBody(raw: string): string {
     .trim();
 }
 
-export type BodyError = 'Write a message first.' | 'Messages can be up to 1,000 characters.';
+/** "Messages can be up to 1,000 characters." for the default CHAT.maxLength. */
+export const TOO_LONG_MESSAGE: `Messages can be up to ${string} characters.` = `Messages can be up to ${CHAT.maxLength.toLocaleString('en-US')} characters.`;
+/** "You started 20 new chats today. Try again tomorrow." for the default CHAT.newChatsPerDay. */
+export const TOO_MANY_NEW_CHATS_MESSAGE: `You started ${number} new chats today. Try again tomorrow.` = `You started ${CHAT.newChatsPerDay} new chats today. Try again tomorrow.`;
+/**
+ * Native `maxLength` for chat body textareas: headroom past CHAT.maxLength so a paste that normalizes
+ * (trimmed, collapsed newlines) under the limit still fits, while zod's max(4000) stays unreachable.
+ */
+export const COMPOSER_MAX_LENGTH = CHAT.maxLength + 100;
+
+/** Kept a fixed-shape union (the constant's annotation stops it widening to string) so no caller can return echoed input. */
+export type BodyError = 'Write a message first.' | typeof TOO_LONG_MESSAGE;
 /** Fixed-string problem for a normalized body, or null. Used by the composer (disable Send) and by ChatService. */
 export function bodyError(normalized: string): BodyError | null {
   if (!normalized.replace(ZERO_WIDTH, '').trim()) return 'Write a message first.';
-  if (normalized.length > CHAT.maxLength) return 'Messages can be up to 1,000 characters.';
+  if (normalized.length > CHAT.maxLength) return TOO_LONG_MESSAGE;
   return null;
 }
 
@@ -61,6 +74,24 @@ export function linkParts(text: string): Array<{ text: string; href?: string }> 
   pushText(text.slice(cursor));
   return parts;
 }
+
+/**
+ * The stored form of a message (§11): slurs censored to asterisks everywhere except inside the https links that
+ * linkParts finds, which are kept whole so their address still works. A slur-shaped path segment or host label
+ * ("…/wiki/Coon_Rapids") is only hidden where the link is shown, by censoredLinkParts.
+ */
+export function censorBody(text: string): string {
+  return linkParts(text).map(part => (part.href ? part.text : censorSlurs(part.text))).join('');
+}
+
+/**
+ * linkParts for display: every run's visible text is censored, a link's too, but a link's href keeps the real
+ * address, so a censored segment never turns the link into a different, broken URL. Also covers messages stored
+ * before the filter existed.
+ */
+export function censoredLinkParts(text: string): Array<{ text: string; href?: string }> {
+  return linkParts(text).map(part => (part.href ? { text: censorSlurs(part.text), href: part.href } : { text: censorSlurs(part.text) }));
+}
 function isSafeLink(value: string): boolean {
   try {
     const url = new URL(value);
@@ -69,7 +100,7 @@ function isSafeLink(value: string): boolean {
 }
 
 /** The only zod-level check on a message body. Everything else is a fixed-string service check. */
-export const rawBodySchema = z.string().max(4000);
+export const rawBodySchema = z.string().max(Math.max(4000, CHAT.maxLength + 100));
 export const reportCategorySchema = z.enum(['danger', 'bullying', 'sexual', 'spam', 'other']);
 export type ReportCategory = z.infer<typeof reportCategorySchema>;
 export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: string }> = {

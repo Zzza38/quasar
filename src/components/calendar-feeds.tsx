@@ -12,9 +12,18 @@ export function CalendarFeeds({ state }: { state: AppState }) {
   const [adding, setAdding] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const wantsAdd = state.params.get('feed') === 'add';
-  useEffect(() => { if (wantsAdd) { setAdding(true); document.getElementById('calendar-feeds-title')?.scrollIntoView({ block: 'start' }); } }, [wantsAdd]);
+  const { navigate } = state;
+  // ?feed=add is one-shot: strip it in place once the dialog opens, so a reload, resume or Back does not reopen it.
+  useEffect(() => {
+    if (!wantsAdd) return;
+    setAdding(true);
+    document.getElementById('calendar-feeds-title')?.scrollIntoView({ block: 'start' });
+    navigate('schedule', undefined, { replace: true });
+  }, [wantsAdd, navigate]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState('');
+  // The in-place confirmation for removing a feed (docs/CHAT.md §Dialogs: no native confirm()).
+  const [removing, setRemoving] = useState<string | null>(null);
   const subscriptions = state.context.subscriptions ?? [];
   const run = async (id: string, action: () => Promise<unknown>) => {
     setPending(id); setError('');
@@ -30,8 +39,8 @@ export function CalendarFeeds({ state }: { state: AppState }) {
       const labels: Record<string, string> = { title: 'Title', notes: 'Notes', dueDate: 'Due date', dueTime: 'Due time' };
       const incoming = conflict.incoming as Record<string, unknown>;
       return <Callout key={conflict.entityId} tone="warning" icon="alert" title={`Calendar changes: ${String(local?.title ?? incoming.title ?? 'Imported item')}`} actions={<>
-        <Button size="sm" disabled={!state.online || pending !== null} onClick={() => void run(`resolve:${conflict.entityId}`, () => api.calendar.resolve.mutate({ accountId: state.context.user.id, entityId: conflict.entityId, expectedVersion: conflict.version, choice: 'local' }))}>Keep my edits</Button>
-        <Button size="sm" variant="primary" disabled={!state.online || pending !== null} onClick={() => void run(`resolve:${conflict.entityId}`, () => api.calendar.resolve.mutate({ accountId: state.context.user.id, entityId: conflict.entityId, expectedVersion: conflict.version, choice: 'source' }))}>Use source changes</Button>
+        <Button size="sm" disabled={!state.online || pending !== null} onClick={() => void run(`resolve:${conflict.entityId}`, () => api.calendar.resolve.mutate({ accountId: state.context.user.id, entityId: conflict.entityId, expectedVersion: conflict.version, revision: conflict.revision, choice: 'local' }))}>Keep my edits</Button>
+        <Button size="sm" variant="primary" disabled={!state.online || pending !== null} onClick={() => void run(`resolve:${conflict.entityId}`, () => api.calendar.resolve.mutate({ accountId: state.context.user.id, entityId: conflict.entityId, expectedVersion: conflict.version, revision: conflict.revision, choice: 'source' }))}>Use source changes</Button>
       </>}>
         <p className="text-sm">The source changed details you also edited. Choose which values to keep. Your completion is preserved.</p>
         <dl className="mt-2 grid gap-2 text-sm">{conflict.fields.map((field) => <div key={field}>
@@ -60,17 +69,21 @@ export function CalendarFeeds({ state }: { state: AppState }) {
         <div className="flex flex-wrap gap-1.5">
           <Button size="sm" icon="refresh" disabled={!state.online || !feed.enabled || pending !== null} busy={pending === `refresh:${feed.id}`} onClick={() => void run(`refresh:${feed.id}`, () => api.calendar.refresh.mutate({ accountId: state.context.user.id, id: feed.id }))}>Refresh</Button>
           <Button size="sm" disabled={!state.online || pending !== null} onClick={() => void run(`pause:${feed.id}`, () => api.calendar.setEnabled.mutate({ accountId: state.context.user.id, id: feed.id, enabled: !feed.enabled }))}>{feed.enabled ? 'Pause' : 'Resume'}</Button>
-          <Button size="sm" variant="ghost" disabled={!state.online || pending !== null} onClick={() => { if (confirm(`Remove ${feed.name}? Its imported items and completion will be kept as regular tasks. Updates will stop.`)) void run(`remove:${feed.id}`, () => api.calendar.remove.mutate({ accountId: state.context.user.id, id: feed.id })); }}>Remove</Button>
+          <Button size="sm" variant="ghost" disabled={!state.online || pending !== null || removing === feed.id} onClick={() => setRemoving(feed.id)}>Remove</Button>
         </div>
       </div>
-      {feed.lastError && <p className="text-sm text-destructive">{feed.lastError} Your saved items are unchanged. Try refreshing again.</p>}
+      {removing === feed.id && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${feed.name}?`} actions={<>
+        <Button size="sm" variant="danger" busy={pending === `remove:${feed.id}`} disabled={!state.online || pending !== null} onClick={() => void run(`remove:${feed.id}`, () => api.calendar.remove.mutate({ accountId: state.context.user.id, id: feed.id }))}>Remove calendar</Button>
+        <Button size="sm" autoFocus disabled={pending !== null} onClick={() => setRemoving(null)}>Keep it</Button>
+      </>}>Its imported items and completion will be kept as regular tasks. Updates will stop.</Callout>}
+      {feed.lastError && <p className="text-sm text-destructive">{feed.lastError}</p>}
     </li>)}</ul>}
     {!adding && <ErrorText>{error}</ErrorText>}
     <Modal open={adding} wide busy={pending !== null} onClose={() => setAdding(false)} title="Add calendar" description="Copy the iCal link from your school portal, then paste it here."
       footer={<><Button variant="ghost" disabled={pending !== null} onClick={() => setAdding(false)}>Cancel</Button></>}>
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Panel className="grid gap-2"><strong className="text-sm font-bold">Where to find the link</strong><FeedGuide compact /></Panel>
-        <FeedSubscribeForm accountId={state.context.user.id} online={state.online} autoFocus onSubscribed={async () => { await state.refresh(); setAdding(false); }} />
+        <FeedSubscribeForm accountId={state.context.user.id} online={state.online} schoolTimeZone={state.timeZone} autoFocus onSubscribed={async () => { await state.refresh(); setAdding(false); }} />
       </div>
     </Modal>
   </Section>;

@@ -11,6 +11,12 @@ export const authOptions: NextAuthOptions = {
     authorization: { params: { scope: 'openid email profile', prompt: 'select_account' } }
   })],
   session: { strategy: 'jwt', maxAge: 30 * 24 * 60 * 60 },
+  // A failed or refused sign-in returns to the landing page, which explains the `?error=` code
+  // (signInErrorMessage in src/components/landing.tsx), instead of NextAuth's unthemed pages.
+  // NextAuth sends callback failures to the sign-in page and refusals to the error page, so both point there.
+  // The sign-in redirect carries the failed attempt's `callbackUrl` (e.g. /admin); the landing page keeps a
+  // same-origin one for its retry button (signInReturnPath), so the owner console gets the owner back.
+  pages: { signIn: '/', error: '/' },
   callbacks: {
     async signIn({ account, profile }) {
       return account?.provider === 'google' && !!profile && 'email_verified' in profile && profile.email_verified === true;

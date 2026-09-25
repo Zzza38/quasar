@@ -5,8 +5,8 @@ import type { Workspace } from '@/client/api';
 import { errorMessage } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
 import { scheduleForGrade, gradeLabel, detectOverrideConflicts, personalScheduleSchema, resolveDay, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import { taskSchema } from '@/domain/task';
-import { formatDate, formatDateTime, formatRange, formatTimeZone, WEEKDAYS } from '@/lib/format';
+import { taskSchema, type Task } from '@/domain/task';
+import { addDays, formatDate, formatDateTime, formatRange, formatTimeZone, reminderLabel, WEEKDAYS } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
 import { Button, Callout, Chip, Hint } from './primitives';
@@ -40,6 +40,18 @@ export function DiffTable<T>({ left, right, leftTitle, rightTitle, fields, onlyC
 
 const empty = (value: unknown) => value === null || value === undefined || value === '' ? null : String(value);
 
+/**
+ * The "Calendar source" row. An all-day event's endDate is the iCalendar DTEND, which is exclusive (importedEventOnDate
+ * reads it the same way), so the last day shown is the day before it, and a one-day event shows no range.
+ */
+export function importedSourceLabel(imported: NonNullable<Task['imported']>): string {
+  const lastDay = imported.allDay && imported.endDate ? addDays(imported.endDate, -1) : null;
+  const end = imported.allDay
+    ? lastDay && lastDay > imported.startDate ? ` – ${formatDateTime(lastDay, null)}` : ''
+    : imported.endDate ? ` – ${formatDateTime(imported.endDate, imported.endTime)}` : '';
+  return `${imported.sourceRemoved ? 'Removed from source' : 'Subscribed'} · ${formatDateTime(imported.startDate, imported.startTime)}${end} · ${imported.allDay ? 'All day' : formatTimeZone(imported.timeZone)}`;
+}
+
 export function taskFields(classes: Array<{ id: string; name: string }>): FieldSpec<Record<string, unknown>>[] {
   const parse = (task: Record<string, unknown>) => taskSchema.safeParse(task).data;
   return [
@@ -51,8 +63,8 @@ export function taskFields(classes: Array<{ id: string; name: string }>): FieldS
     { key: 'priority', label: 'Priority', render: (task) => { const priority = parse(task)?.priority ?? 'normal'; return priority.charAt(0).toUpperCase() + priority.slice(1); } },
     { key: 'subtasks', label: 'Checklist', render: (task) => parse(task)?.subtasks?.map((item) => `${item.completed ? 'Done' : 'Open'}: ${item.title}`).join('; ') || null },
     { key: 'recurrence', label: 'Repeat', render: (task) => { const recurrence = parse(task)?.recurrence; if (!recurrence) return null; const unit = { daily: 'day', weekly: 'week', monthly: 'month' }[recurrence.frequency]; return `Every ${recurrence.interval} ${unit}${recurrence.interval === 1 ? '' : 's'}${recurrence.until ? ` through ${formatDate(recurrence.until)}` : ''}`; } },
-    { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminder.minutesBefore === 0 ? 'At due time' : `${reminder.minutesBefore} minutes before`} · ${formatTimeZone(reminder.timeZone)}` : null; } },
-    { key: 'imported', label: 'Calendar source', render: (task) => { const imported = parse(task)?.imported; return imported ? `${imported.sourceRemoved ? 'Removed from source' : 'Subscribed'} · ${formatDateTime(imported.startDate, imported.startTime)}${imported.endDate ? ` – ${formatDateTime(imported.endDate, imported.endTime)}` : ''} · ${imported.allDay ? 'All day' : formatTimeZone(imported.timeZone)}` : null; } },
+    { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminderLabel(reminder.minutesBefore)} · ${formatTimeZone(reminder.timeZone)}` : null; } },
+    { key: 'imported', label: 'Calendar source', render: (task) => { const imported = parse(task)?.imported; return imported ? importedSourceLabel(imported) : null; } },
   ];
 }
 
@@ -80,6 +92,23 @@ export function ChangedWhileEditing<T extends Record<string, unknown>>({ draft, 
 
 /* ---------- Device conflicts ---------- */
 
+/** The task fields a calendar refresh writes (CalendarService's FIELDS); `imported` itself never conflicts. */
+const CALENDAR_FIELDS = new Set(['/title', '/notes', '/dueDate', '/dueTime']);
+
+/**
+ * Who made the competing change. 'calendar' needs a refresh that restamped the source metadata and a conflict on a
+ * field the calendar writes, with nothing else in between: a refresh writes its fields and the new metadata as one
+ * version, so a gap of exactly one version means the calendar's write was the only one. Metadata can change alone (a
+ * new start time or link), so a restamp next to more versions may sit beside another device's edit of the same field
+ * and is 'either'; a conflict on a field the calendar never writes, such as the checklist, is always 'device'.
+ */
+export function conflictSource(conflict: WorkspaceSnapshot['conflicts'][number]): 'calendar' | 'either' | 'device' {
+  if (conflict.mutation.kind !== 'task' || !conflict.current?.data.imported) return 'device';
+  if (JSON.stringify(conflict.current.data.imported) === JSON.stringify(conflict.mutation.base?.data.imported ?? null)) return 'device';
+  if (!conflict.paths.some((path) => CALENDAR_FIELDS.has(path))) return 'device';
+  return conflict.mutation.base && conflict.current.version === conflict.mutation.base.version + 1 ? 'calendar' : 'either';
+}
+
 export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snapshot: WorkspaceSnapshot; schedule: Schedule | null; classes: Array<{ id: string; name: string }>; resolve: (mutationId: string, choice: 'local' | 'remote') => Promise<void> }) {
   const [error, setError] = useState('');
   const [pending, setPending] = useState<string | null>(null);
@@ -90,18 +119,21 @@ export function DeviceConflicts({ snapshot, schedule, classes, resolve }: { snap
       const isTask = conflict.mutation.kind === 'task';
       const fields = isTask ? taskFields(classes) : schedule ? personalFields(schedule) : [];
       const title = isTask ? (taskSchema.safeParse(local?.data).data?.title ?? taskSchema.safeParse(conflict.current?.data).data?.title ?? 'a task') : 'your personal schedule';
+      const subject = isTask ? `“${title}”` : 'Your personal schedule';
+      const source = conflictSource(conflict);
+      const rejected = conflict.rejected;
       const choose = async (choice: 'local' | 'remote') => {
         setError(''); setPending(conflict.mutation.mutationId);
         try { await resolve(conflict.mutation.mutationId, choice); } catch (err) { setError(errorMessage(err)); } finally { setPending(null); }
       };
-      return <Card key={conflict.mutation.mutationId} aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
+      return <Card key={conflict.mutation.mutationId} role="region" aria-labelledby={`conflict-${conflict.mutation.mutationId}`}>
         <CardContent className="grid gap-3">
-          <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="alert" size={17} /></span><div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-bold">Choose which changes to keep</h2><p className="mt-1 text-sm text-muted-foreground">{isTask ? `“${title}”` : 'Your personal schedule'} was edited here and on another device. Nothing is lost until you choose.</p></div></div>
-          <div className="overflow-hidden rounded-xl ring-1 ring-foreground/[0.06]"><DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle="Other device" fields={fields} /></div>
+          <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="alert" size={17} /></span><div><h2 id={`conflict-${conflict.mutation.mutationId}`} className="text-base font-bold">{rejected ? 'This change couldn’t be saved' : 'Choose which changes to keep'}</h2><p className="mt-1 text-sm text-muted-foreground">{rejected ? `Quasar didn’t accept this change to ${isTask ? subject : 'your personal schedule'}: ${rejected} Your other changes keep syncing. Try again on top of the saved version, or discard every change this device has not saved to ${isTask ? 'this task' : 'your personal schedule'}.` : `${subject} was edited here and ${{ calendar: 'updated by its calendar', either: 'changed on another device or by its calendar', device: 'on another device' }[source]}. Nothing is lost until you choose.`}</p></div></div>
+          <div className="overflow-hidden rounded-xl ring-1 ring-foreground/[0.06]"><DiffTable left={local && !local.deleted ? local.data : null} right={conflict.current && !conflict.current.deleted ? conflict.current.data : null} leftTitle="This device" rightTitle={rejected || source === 'either' ? 'Saved version' : source === 'calendar' ? 'Calendar' : 'Other device'} fields={fields} /></div>
           {error && <Callout tone="danger" role="alert">{error}</Callout>}
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" busy={pending === conflict.mutation.mutationId} onClick={() => void choose('local')}>Keep my changes</Button>
-            <Button variant="secondary" disabled={pending !== null} onClick={() => void choose('remote')}>Use the other device’s version</Button>
+            <Button variant="primary" busy={pending === conflict.mutation.mutationId} onClick={() => void choose('local')}>{rejected ? 'Try again' : 'Keep my changes'}</Button>
+            <Button variant="secondary" disabled={pending !== null} onClick={() => void choose('remote')}>{rejected ? (isTask ? 'Discard my changes to this task' : 'Discard my schedule changes') : { calendar: 'Use the calendar’s version', either: 'Use the saved version', device: 'Use the other device’s version' }[source]}</Button>
           </div>
         </CardContent>
       </Card>;
@@ -176,7 +208,7 @@ export function SchoolReview({ review, personal, online, onAcknowledge, onOpenCl
   const todayBefore = resolveDay(review.previous, today, personal);
   const todayAfter = resolveDay(review.current, today, personal);
   const todayChanged = JSON.stringify(todayBefore) !== JSON.stringify(todayAfter);
-  return <Card aria-labelledby="review-title">
+  return <Card role="region" aria-labelledby="review-title">
     <CardContent className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={17} /></span><div><h2 id="review-title" className="text-base font-bold">Your school’s schedule was updated</h2><p className="mt-1 text-sm text-muted-foreground">Your classes and personal adjustments are untouched.{changes.length > 0 ? ' Here is what changed.' : ''}</p></div></div>

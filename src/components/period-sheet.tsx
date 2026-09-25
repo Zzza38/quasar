@@ -2,9 +2,9 @@
 
 import { useRef, useState } from 'react';
 import { errorMessage } from '@/client/api';
-import { effectiveSchedule, type ResolvedPeriod } from '@/domain/schedule';
+import { cycleDaysWithPeriod, effectiveSchedule, type ResolvedPeriod } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
-import type { AppState } from './app-state';
+import { openBellTimes, type AppState } from './app-state';
 import { Button, Field, Hint, Modal, Select } from './primitives';
 
 /**
@@ -27,7 +27,8 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
   const [saved, setSaved] = useState(false);
   const assigned = personal.assignments[period.periodId] ?? '';
   const current = personal.classes.find((cls) => cls.id === assigned);
-  const days = effectiveSchedule(state.schedule, personal).cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === period.periodId)).map((day) => day.label);
+  // Rotation days as this student has them: their cycle-day adjustments move a period on or off a day.
+  const days = cycleDaysWithPeriod(effectiveSchedule(state.schedule, personal), personal, period.periodId);
   const scope = days.length > 1 ? `Applies on every day with ${period.label}: ${days.join(', ')}.` : days.length === 1 ? `Applies on ${days[0]}.` : `Applies wherever ${period.label} meets.`;
 
   const assign = async (classId: string) => {
@@ -42,7 +43,8 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
   return <Modal open onClose={onClose} busy={pending} title={current?.name ?? period.label}
     description={`${period.label} · ${formatRange(period.start, period.end)} · ${formatDate(date, { weekday: 'long' })}`}
     footer={<Button variant="primary" onClick={whenIdle(onClose)}>Done</Button>}>
-    <Field label={`Class in ${period.label}`} htmlFor="period-class" hint={scope} error={error}>
+    {/* The error is a failed save, not a bad choice: the picker still shows the valid saved class. */}
+    <Field label={`Class in ${period.label}`} htmlFor="period-class" hint={scope} error={error} invalid={false}>
       {personal.classes.length > 0
         ? <Select id="period-class" value={assigned} onChange={(event) => void assign(event.target.value)}>
           <option value="">No class</option>
@@ -55,6 +57,6 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
       <div><Button icon="calendar" onClick={whenIdle(onAdjustDay)}>Adjust this day</Button></div>
       <Hint>Close, reopen or move periods on {formatDate(date, { weekday: 'long' })} only.</Hint>
     </div>
-    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); state.navigate('school', { fix: 'times' }); })}>Bell time wrong? Fix the school schedule</Button></div>
+    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); openBellTimes(state); })}>{personal.customSchedule ? 'Bell time wrong? Edit my private schedule' : 'Bell time wrong? Fix the school schedule'}</Button></div>
   </Modal>;
 }

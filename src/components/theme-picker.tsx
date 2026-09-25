@@ -2,8 +2,8 @@
 
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
-import { ACCENTS, useTheme, type Appearance } from '@/lib/theme';
-import { IconButton, Segmented } from './primitives';
+import { ACCENTS, useTheme, type AccentId, type Appearance } from '@/lib/theme';
+import { ChoiceGroup, ChoiceItem, IconButton, Segmented } from './primitives';
 import { Label } from './ui/label';
 
 export function ThemePicker() {
@@ -17,15 +17,15 @@ export function ThemePicker() {
     </div>
     <div className="grid gap-1.5">
       <Label className="text-[13px] font-semibold text-foreground/80">Accent color</Label>
-      <div className="flex flex-wrap gap-2.5" role="radiogroup" aria-label="Accent color">
+      <ChoiceGroup<AccentId> className="flex flex-wrap gap-2.5" label="Accent color" value={theme.accent} onChange={theme.setAccent}>
         {ACCENTS.map((accent) => {
           const selected = theme.accent === accent.id;
-          return <button key={accent.id} type="button" role="radio" aria-checked={selected} aria-label={accent.label} title={accent.label} style={{ background: accent.swatch }} onClick={() => theme.setAccent(accent.id)}
+          return <ChoiceItem key={accent.id} value={accent.id} aria-label={accent.label} title={accent.label} style={{ background: accent.swatch }}
             className={cn('grid size-9 place-items-center rounded-full text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.3),0_2px_6px_-2px_rgb(0_0_0/0.4)] ring-2 ring-offset-2 ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-ring', selected ? 'scale-105 ring-foreground' : 'ring-transparent')}>
             {selected && <Icon name="check" size={14} strokeWidth={3} />}
-          </button>;
+          </ChoiceItem>;
         })}
-      </div>
+      </ChoiceGroup>
     </div>
   </div>;
 }

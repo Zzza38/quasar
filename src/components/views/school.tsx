@@ -25,26 +25,36 @@ function FactRow({ icon, tone = 'neutral', children }: { icon: IconName; tone?: 
   return <li className="flex gap-3"><span className={cn('mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg', tones[tone])}><Icon name={icon} size={15} strokeWidth={2.2} /></span><span className="text-sm leading-relaxed">{children}</span></li>;
 }
 
+/**
+ * How a school's shared schedule is locked. `voting` mirrors the server's proposal rule (src/server/proposals.ts):
+ * proposals exist only for member-locked schools (10 or more members). A smaller school that support locked has no
+ * member editing and no voting; its changes go through a correction request to support.
+ */
+export function schoolLocks(school: { supportLocked: boolean; memberLocked: boolean; memberCount: number }): { locked: boolean; voting: boolean } {
+  const voting = school.memberLocked || school.memberCount >= 10;
+  return { locked: school.supportLocked || voting, voting };
+}
+
 export function SchoolView({ state }: { state: AppState }) {
   const { context, personal, online } = state;
   const school = context.school;
   const sharedSchedule = scheduleForGrade(school.schedule, personal.grade);
   const [gradeError, setGradeError] = useState('');
-  const locked = school.supportLocked || school.memberLocked || school.memberCount >= 10;
+  const { locked, voting } = schoolLocks(school);
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   // "Wrong time?" on Today lands here: open the shared editor, or, when editing is locked, point at proposals
-  // (the Verify callout there covers unverified members) and fall back to the correction form. The param is
+  // (the Verify callout there covers unverified members) where the school votes, and otherwise at the correction form. The param is
   // cleared afterwards so a remount does not reopen the editor or scroll again.
   const fix = state.params.get('fix');
   const { navigate } = state;
   useEffect(() => {
     if (fix !== 'times') return;
     if (!locked && online) setEditing(true);
-    else scrollToId(locked && document.getElementById('proposals-title') ? 'proposals-title' : 'correction-title', true);
+    else scrollToId(voting && document.getElementById('proposals-title') ? 'proposals-title' : 'correction-title', true);
     navigate('school', {}, { replace: true });
-  }, [fix, locked, online, navigate]);
+  }, [fix, locked, voting, online, navigate]);
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">
@@ -56,7 +66,7 @@ export function SchoolView({ state }: { state: AppState }) {
       <div className="flex flex-wrap gap-1.5">
         {school.approved ? <Chip tone="success" icon="check">Approved by support</Chip> : <Chip tone="warning" icon="users">Community schedule · not reviewed</Chip>}
         {school.supportLocked && <Chip icon="lock">Locked by support</Chip>}
-        {!school.supportLocked && (school.memberLocked || school.memberCount >= 10) && <Chip icon="lock">Locked at 10 members</Chip>}
+        {!school.supportLocked && voting && <Chip icon="lock">Locked at 10 members</Chip>}
         {!locked && <Chip icon="unlock">Members can edit</Chip>}
       </div>
     </header>
@@ -65,7 +75,7 @@ export function SchoolView({ state }: { state: AppState }) {
       <Section id="status-title" title="How this schedule is managed" icon="info">
         <ul className="grid gap-3">
           <FactRow icon={school.approved ? 'checkCircle' : 'info'} tone={school.approved ? 'success' : 'warning'}>{school.approved ? 'Support has checked this schedule against the school’s published one.' : 'This schedule was entered by students and has not been checked by support yet. Compare it with the school’s published schedule.'}</FactRow>
-          <FactRow icon={locked ? 'lock' : 'unlock'}>{school.supportLocked ? 'Support locked the shared schedule. Verified members can still propose and vote on changes; support publishes the ones that pass.' : school.memberLocked || school.memberCount >= 10 ? 'Shared editing locked when the school reached 10 members, so one person cannot change everyone’s schedule. Verified members propose changes and vote on them below, or send a correction request.' : `Any member can edit the shared schedule until the school reaches 10 members (${school.memberCount} now). Every edit is saved as a new revision that other members review.`}</FactRow>
+          <FactRow icon={locked ? 'lock' : 'unlock'}>{school.supportLocked ? (voting ? 'Support locked the shared schedule. Verified members can still propose and vote on changes; support publishes the ones that pass.' : 'Support locked the shared schedule, so only support publishes changes. Send a correction request below.') : voting ? 'Shared editing locked when the school reached 10 members, so one person cannot change everyone’s schedule. Verified members propose changes and vote on them below, or send a correction request.' : `Any member can edit the shared schedule until the school reaches 10 members (${school.memberCount} now). Every edit is saved as a new revision that other members review.`}</FactRow>
           <FactRow icon="users">Corrections never touch your classes or adjustments. When the shared schedule changes, you see what changed and anything of yours it affects.</FactRow>
         </ul>
       </Section>
@@ -98,21 +108,21 @@ export function SchoolView({ state }: { state: AppState }) {
       {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
     </Section>
 
-    {locked && <ProposalsSection state={state} />}
+    {voting && <ProposalsSection state={state} />}
 
     <div className="grid items-start gap-5 lg:grid-cols-2">
       <Section id="school-directory-title" title="School class directory" icon="book" description="Find classes shared by schoolmates and add personal copies to your timetable.">
         <div><Button icon="search" onClick={() => state.navigate('classes', { directory: 'open' })}>Browse school classes</Button></div>
       </Section>
-      <CorrectionRequest online={online} />
+      <CorrectionRequest accountId={context.user.id} online={online} />
     </div>
 
-    <SharedEditorSheet open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />
+    <SharedEditorSheet accountId={context.user.id} open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={sharedSchedule} personal={personal} save={state.savePersonal} />
   </div>;
 }
 
-function CorrectionRequest({ online }: { online: boolean }) {
+function CorrectionRequest({ accountId, online }: { accountId: string; online: boolean }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [sent, setSent] = useState(false);
@@ -120,7 +130,7 @@ function CorrectionRequest({ online }: { online: boolean }) {
   return <Section id="correction-title" title="Request a correction" icon="inbox" description="Spotted a wrong bell time or a missing day off? Tell support.">
     <form className="grid gap-3" onSubmit={async (event) => {
       event.preventDefault(); setPending(true); setError(''); setSent(false);
-      try { await api.school.requestCorrection.mutate({ message: message.trim() }); setMessage(''); setSent(true); }
+      try { await api.school.requestCorrection.mutate({ accountId, message: message.trim() }); setMessage(''); setSent(true); }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>
       <Field label="What needs to change?" htmlFor="correction" hint="At least 10 characters."><Textarea id="correction" required minLength={10} maxLength={5000} value={message} placeholder="Example: Day 3 lunch is 11:20–11:50, not 11:40–12:10. See the district bell schedule PDF…" onChange={(event) => setMessage(event.target.value)} /></Field>
@@ -131,13 +141,13 @@ function CorrectionRequest({ online }: { online: boolean }) {
   </Section>;
 }
 
-function SharedEditorSheet({ open, onClose, schedule, initialGrade, schoolId, version, onSaved }: { open: boolean; onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<void> }) {
-  return open ? <SharedEditorBody onClose={onClose} schedule={schedule} initialGrade={initialGrade} schoolId={schoolId} version={version} onSaved={onSaved} /> : null;
+function SharedEditorSheet({ accountId, open, onClose, schedule, initialGrade, schoolId, version, onSaved }: { accountId: string; open: boolean; onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<boolean> }) {
+  return open ? <SharedEditorBody accountId={accountId} onClose={onClose} schedule={schedule} initialGrade={initialGrade} schoolId={schoolId} version={version} onSaved={onSaved} /> : null;
 }
 
 type Notice = { tone: 'success' | 'warning'; text: string };
 
-function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, onSaved }: { onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<void> }) {
+function SharedEditorBody({ accountId, onClose, schedule, initialGrade, schoolId, version, onSaved }: { accountId: string; onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<boolean> }) {
   // Frozen when the editor opens: the background sync updates the live props, and publishing against them would
   // pass the server's stale-revision check and silently replace a classmate's newer revision.
   const [base, setBase] = useState(() => ({ version, schedule }));
@@ -161,11 +171,19 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
   const moved = version > base.version;
   const issues = describeIssues(draft);
   const clearMessages = () => { setError(''); setNotice(null); };
+  // Copying replaces this grade's draft, so unpublished edits need a confirmation first; the result is announced.
+  const [copyConfirm, setCopyConfirm] = useState<Grade | null>(null);
+  const copyFrom = (entry: Grade) => {
+    setDraft(structuredClone(drafts[entry] ?? baseFor(entry)));
+    setCopyConfirm(null);
+    setError('');
+    setNotice({ tone: 'success', text: `Copied ${gradeLabel(entry)} into ${gradeLabel(grade)}. Publish to save it.` });
+  };
   const submit = async () => {
-    setPending(true); clearMessages(); setStale(false);
+    setPending(true); clearMessages(); setStale(false); setCopyConfirm(null);
     try {
       const saved = [grade, ...copyGrades];
-      const updated = await api.school.update.mutate({ schoolId, expectedVersion: base.version, schedule: scheduleSchema.parse(draft), grades: saved });
+      const updated = await api.school.update.mutate({ accountId, schoolId, expectedVersion: base.version, schedule: scheduleSchema.parse(draft), grades: saved });
       // Move the base to our own revision so the next grade's publish is not rejected as stale.
       setBase({ version: updated.version, schedule: updated.schedule });
       const remaining = { ...drafts };
@@ -186,7 +204,8 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
   const reload = async () => {
     setPending(true); clearMessages();
     try {
-      await onSaved();
+      // refresh reports failure instead of throwing; adopting then would keep the stale base and fail the next publish again.
+      if (!(await onSaved())) { setError('Could not load the latest version. Check your connection and try again.'); return; }
       setAdopt(true);
       setStale(false);
       setNotice({ tone: 'warning', text: 'Reloaded. Your draft is still here; publishing now replaces the newer revision.' });
@@ -201,6 +220,7 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
         <Segmented<Grade> label="Grade to edit" value={grade} disabled={pending} options={GRADES.map((entry) => ({ value: entry, label: <>{gradeLabel(entry)}{edited.includes(entry) && <><span aria-hidden="true"> *</span><span className="sr-only"> (edited)</span></>}</> }))} onChange={(entry) => {
           setGrade(entry);
           setCopyGrades([]);
+          setCopyConfirm(null);
           clearMessages();
         }} />
         <Hint>* marks unpublished edits.</Hint>
@@ -209,11 +229,14 @@ function SharedEditorBody({ onClose, schedule, initialGrade, schoolId, version, 
         <Label className="text-[13px] font-semibold text-foreground/80">Copy from</Label>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Copy from">
           {GRADES.filter((entry) => entry !== grade).map((entry) => <Button key={entry} size="sm" disabled={pending} onClick={() => {
-            setDraft(structuredClone(drafts[entry] ?? baseFor(entry)));
-            clearMessages();
+            if (edited.includes(grade)) setCopyConfirm(entry);
+            else copyFrom(entry);
           }}>{gradeLabel(entry)}</Button>)}
         </div>
         <Hint>Replace the current {gradeLabel(grade)} draft with another grade’s schedule.</Hint>
+        {copyConfirm && <Callout tone="warning" icon="alert" role="alert" actions={<><Button size="sm" variant="danger" disabled={pending} onClick={() => copyFrom(copyConfirm)}>Replace my {gradeLabel(grade)} edits</Button><Button size="sm" variant="ghost" onClick={() => setCopyConfirm(null)}>Keep my edits</Button></>}>
+          {gradeLabel(grade)} has unpublished edits. Copying {gradeLabel(copyConfirm)} replaces them and they cannot be restored.
+        </Callout>}
       </div>
     </div>
     <ScheduleEditor key={grade} value={draft} onChange={setDraft} disabled={pending} />

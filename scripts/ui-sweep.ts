@@ -6,7 +6,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { hydrating } from '../tests/e2e/fixtures';
 import { encode } from 'next-auth/jwt';
 import { openDatabase } from '../src/server/db';
 import { Service } from '../src/server/service';
@@ -24,9 +26,13 @@ const OWNER_EMAIL = 'browser-owner@example.com';
 const NOW = new Date('2026-09-17T12:51:37Z');
 const PAST = '2026-09-10T15:00:00.000Z';
 
+// `next start` fills every key that is still undefined from .env.local, so production-only keys are blanked here
+// (an empty value counts as defined) to keep the real scan provider and VAPID keys out of the sweep server.
 Object.assign(process.env, {
   DATABASE_PATH: DB_PATH, NEXTAUTH_SECRET: SECRET, NEXTAUTH_URL: BASE, OWNER_EMAIL,
   GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-client-secret',
+  SCAN_API_URL: '', SCAN_API_KEY: '', SCAN_MODEL: '', SCAN_MODEL_REASONING: '', SCAN_MODEL_TEMPERATURE: '',
+  VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', VAPID_SUBJECT: '',
 });
 
 type Fixture = { maya: string; bob: string; owner: string; newbies: string[]; schoolName: string; checklistTitle: string; chatThread: string; chatReadSeq: number };
@@ -138,11 +144,28 @@ function seed(): Fixture {
   } finally { db.close(); }
 }
 
+/**
+ * A sweep server orphaned by a killed run (SIGKILL cannot be caught) would otherwise answer the health check
+ * for the new one, serving its old, already-deleted database. Checked before seed() deletes that database.
+ */
+function assertPortFree(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', (error: NodeJS.ErrnoException) => reject(error.code === 'EADDRINUSE'
+      ? new Error(`Port ${PORT} is already in use, probably by a sweep server an earlier run left behind. Stop it (for example \`fuser -k ${PORT}/tcp\`) and run again.`)
+      : error));
+    probe.listen(PORT, '127.0.0.1', () => probe.close(() => resolve()));
+  });
+}
+
 async function waitForHealth(server: ChildProcess) {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    if (server.exitCode !== null) throw new Error(`Server exited early with code ${server.exitCode}`);
-    try { if ((await fetch(`${BASE}/api/health`)).ok) return; } catch { /* not up yet */ }
+    if (server.exitCode !== null || server.signalCode !== null) throw new Error(`Server exited early (${server.exitCode ?? server.signalCode}); see ${OUT}/server.log`);
+    let healthy = false;
+    try { healthy = (await fetch(`${BASE}/api/health`)).ok; } catch { /* not up yet */ }
+    // Only the server spawned by this run counts: a healthy answer after it died came from something else.
+    if (healthy && server.exitCode === null && server.signalCode === null) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error('Server did not become healthy within 90s');
@@ -167,7 +190,7 @@ async function newContext(browser: Browser, variant: Variant, userId: string | n
 }
 
 async function newPage(context: BrowserContext) {
-  const page = await context.newPage();
+  const page = hydrating(await context.newPage());
   await page.clock.setFixedTime(NOW);
   return page;
 }
@@ -230,8 +253,8 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
   // Maya, the main student.
   const context = await newContext(browser, variant, fixture.maya);
   const page = await newPage(context);
-  const go = async (hash: string, heading: RegExp | string) => {
-    await page.goto(`${BASE}/#${hash}`);
+  const go = async (view: string, heading: RegExp | string) => {
+    await page.goto(`${BASE}/${view === 'today' ? '' : view}`);
     await page.getByRole('heading', { name: heading, exact: typeof heading === 'string' }).first().waitFor({ timeout: 20_000 });
   };
   await attempt('today', variant, async () => { await go('today', /Maya/); await shot(page, 'today', variant, 'Today view for Maya at 8:51 AM Thursday, period A in progress, tasks due'); });
@@ -290,7 +313,7 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
   });
   await attempt('messages-thread', variant, async () => {
     unreadBob();
-    await page.goto(`${BASE}/#messages?with=${fixture.bob}`);
+    await page.goto(`${BASE}/messages?with=${fixture.bob}`);
     await page.getByRole('log', { name: 'Messages with Bob' }).getByText('notes from US History', { exact: false }).waitFor({ timeout: 20_000 });
     await shot(page, 'messages-thread', variant, 'Thread with Bob: yesterday and today, a deleted message, a link, the New messages divider', false);
     await attempt('messages-actions', variant, async () => {
@@ -381,13 +404,17 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
 async function main() {
   if (!existsSync('.next/BUILD_ID')) throw new Error('No production build in .next. Run npm run build first.');
   mkdirSync(OUT, { recursive: true });
+  await assertPortFree();
   const fixture = seed();
-  const server = spawn('npm', ['start', '--', '--port', String(PORT)], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  // Loopback only (not `npm start`, which binds 0.0.0.0): SECRET is public, so the server must not be reachable from the LAN.
+  const server = spawn('npx', ['next', 'start', '--hostname', '127.0.0.1', '--port', String(PORT)], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let serverLog = '';
   server.stdout?.on('data', (chunk) => { serverLog += chunk; });
   server.stderr?.on('data', (chunk) => { serverLog += chunk; });
   const stop = () => { try { if (server.pid) process.kill(-server.pid, 'SIGTERM'); } catch { /* already gone */ } };
-  process.on('SIGINT', () => { stop(); process.exit(130); });
+  // The server runs in its own process group, so it outlives this script unless stopped explicitly.
+  process.on('exit', stop);
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) process.on(signal, () => { stop(); process.exit(code); });
   let browser: Browser | null = null;
   try {
     await waitForHealth(server);
@@ -407,6 +434,8 @@ async function main() {
   const text = [...manifest, '', 'NOT CAPTURED:', ...(failures.length ? failures : ['(none)'])].join('\n');
   writeFileSync(`${OUT}/MANIFEST.txt`, text + '\n');
   console.log('\n' + text);
+  // Screens that were not captured fail the run, so a caller does not mistake a partial sweep for a complete one.
+  if (failures.length) process.exitCode = 1;
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

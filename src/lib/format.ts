@@ -93,6 +93,15 @@ export function minutesUntil(instant: string, now: Date): number {
   return Math.round((new Date(instant).getTime() - now.getTime()) / 60_000);
 }
 
+/**
+ * Whole minutes left on a countdown, rounded up so the time left is never understated: 8:23 left is
+ * "9 min", and any time left under a minute is 1, never 0. Already reached or past is 0.
+ */
+export function minutesLeft(instant: string, now: Date | number): number {
+  const ms = new Date(instant).getTime() - (typeof now === 'number' ? now : now.getTime());
+  return ms > 0 ? Math.ceil(ms / 60_000) : 0;
+}
+
 export function formatMinutes(minutes: number): string {
   const total = Math.max(0, Math.abs(minutes));
   if (total < 60) return `${total} min`;
@@ -197,4 +206,15 @@ export function browserTimeZone(): string {
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * How a task reminder's lead time reads everywhere it is shown: the task editor's choices ("1 hour before",
+ * "1 day before") and the conflict tables, so both describe the same saved value the same way.
+ */
+export function reminderLabel(minutesBefore: number): string {
+  if (minutesBefore === 0) return 'At due time';
+  if (minutesBefore % 1440 === 0) return `${pluralize(minutesBefore / 1440, 'day')} before`;
+  if (minutesBefore % 60 === 0) return `${pluralize(minutesBefore / 60, 'hour')} before`;
+  return `${pluralize(minutesBefore, 'minute')} before`;
 }

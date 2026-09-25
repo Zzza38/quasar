@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
  * Appearance and accent are device preferences stored in localStorage so they
@@ -25,19 +25,51 @@ export const DEFAULT_ACCENT: AccentId = 'ocean';
 const APPEARANCE_KEY = 'quasar.appearance';
 const ACCENT_KEY = 'quasar.accent';
 
+/**
+ * The page background of each appearance (--background in globals.css). The browser and installed-app
+ * bar takes it from the theme-color meta tags, which layout.tsx picks by the OS scheme alone, so every
+ * tag is rewritten to the painted appearance; otherwise choosing Light on a dark phone keeps a dark bar.
+ */
+export const THEME_COLORS = { light: '#f4f5f9', dark: '#0b0d12' } as const;
+const THEME_COLOR_SELECTOR = 'meta[name="theme-color"]';
+
 /** Inline in <head>; must stay dependency-free and tolerate blocked storage. */
-export const themeBootScript = `(function(){try{var a=localStorage.getItem(${JSON.stringify(APPEARANCE_KEY)})||'system';var c=localStorage.getItem(${JSON.stringify(ACCENT_KEY)})||${JSON.stringify(DEFAULT_ACCENT)};var d=a==='dark'||(a==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.dataset.appearance=d?'dark':'light';r.dataset.appearancePreference=a;r.dataset.accent=c;}catch(e){}})();`;
+export const themeBootScript = `(function(){try{var a=localStorage.getItem(${JSON.stringify(APPEARANCE_KEY)})||'system';var c=localStorage.getItem(${JSON.stringify(ACCENT_KEY)})||${JSON.stringify(DEFAULT_ACCENT)};var d=a==='dark'||(a==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.dataset.appearance=d?'dark':'light';r.dataset.appearancePreference=a;r.dataset.accent=c;var m=document.querySelectorAll(${JSON.stringify(THEME_COLOR_SELECTOR)});for(var i=0;i<m.length;i++)m[i].setAttribute('content',d?${JSON.stringify(THEME_COLORS.dark)}:${JSON.stringify(THEME_COLORS.light)});}catch(e){}})();`;
 
 function isAppearance(value: string | null): value is Appearance { return value === 'system' || value === 'light' || value === 'dark'; }
 function isAccent(value: string | null): value is AccentId { return ACCENTS.some((accent) => accent.id === value); }
 
-function readStored(): { appearance: Appearance; accent: AccentId } {
+type ThemeChoice = { appearance: Appearance; accent: AccentId };
+
+/**
+ * A choice storage refused (site data blocked, or the quota full). It is kept here and wins over
+ * what storage holds, so the choice still applies for the life of this page.
+ */
+const unsaved: Partial<ThemeChoice> = {};
+
+/** The current choice: what this page could not save, else what storage holds, else the defaults. */
+export function readStored(): ThemeChoice {
+  let appearance: string | null = null;
+  let accent: string | null = null;
   try {
-    const appearance = localStorage.getItem(APPEARANCE_KEY);
-    const accent = localStorage.getItem(ACCENT_KEY);
-    return { appearance: isAppearance(appearance) ? appearance : 'system', accent: isAccent(accent) ? accent : DEFAULT_ACCENT };
-  } catch { return { appearance: 'system', accent: DEFAULT_ACCENT }; }
+    appearance = localStorage.getItem(APPEARANCE_KEY);
+    accent = localStorage.getItem(ACCENT_KEY);
+  } catch { /* Storage is blocked; fall back to this page's choice or the defaults. */ }
+  return {
+    appearance: unsaved.appearance ?? (isAppearance(appearance) ? appearance : 'system'),
+    accent: unsaved.accent ?? (isAccent(accent) ? accent : DEFAULT_ACCENT),
+  };
 }
+
+function save<K extends keyof ThemeChoice>(field: K, key: string, value: ThemeChoice[K]): void {
+  try { localStorage.setItem(key, value); delete unsaved[field]; } catch { unsaved[field] = value; }
+  sync();
+}
+
+/** Stores and paints an appearance choice. */
+export function saveAppearance(appearance: Appearance): void { save('appearance', APPEARANCE_KEY, appearance); }
+/** Stores and paints an accent choice. */
+export function saveAccent(accent: AccentId): void { save('accent', ACCENT_KEY, accent); }
 
 function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
   const dark = appearance === 'dark' || (appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -45,6 +77,7 @@ function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
   root.dataset.appearance = dark ? 'dark' : 'light';
   root.dataset.appearancePreference = appearance;
   root.dataset.accent = accent;
+  document.querySelectorAll(THEME_COLOR_SELECTOR).forEach((meta) => meta.setAttribute('content', THEME_COLORS[dark ? 'dark' : 'light']));
   return dark ? 'dark' : 'light';
 }
 
@@ -66,13 +99,22 @@ function sync(): void {
 export function ThemeSync() {
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const onStorage = (event: StorageEvent) => { if (event.key === null || event.key === APPEARANCE_KEY || event.key === ACCENT_KEY) sync(); };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== APPEARANCE_KEY && event.key !== ACCENT_KEY) return;
+      // Another tab saved a newer choice, which replaces one this page could not save.
+      if (event.key === null || event.key === APPEARANCE_KEY) delete unsaved.appearance;
+      if (event.key === null || event.key === ACCENT_KEY) delete unsaved.accent;
+      sync();
+    };
     const onVisible = () => { if (document.visibilityState === 'visible') sync(); };
     media.addEventListener('change', sync);
     window.addEventListener('storage', onStorage);
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('pageshow', sync);
     sync();
+    // Pages are rendered by the server, so controls are visible before React has attached its handlers; this marks
+    // the moment they are interactive (the browser tests wait for it before typing into a freshly loaded page).
+    document.documentElement.dataset.hydrated = 'true';
     return () => {
       media.removeEventListener('change', sync);
       window.removeEventListener('storage', onStorage);
@@ -93,13 +135,5 @@ export function useTheme() {
     window.addEventListener(THEME_EVENT, load);
     return () => window.removeEventListener(THEME_EVENT, load);
   }, []);
-  const setAppearance = useCallback((appearance: Appearance) => {
-    try { localStorage.setItem(APPEARANCE_KEY, appearance); } catch { /* Private mode; the choice lasts for this page. */ }
-    sync();
-  }, []);
-  const setAccent = useCallback((accent: AccentId) => {
-    try { localStorage.setItem(ACCENT_KEY, accent); } catch { /* Private mode; the choice lasts for this page. */ }
-    sync();
-  }, []);
-  return { ...(state ?? DEFAULTS), resolved, setAppearance, setAccent };
+  return { ...(state ?? DEFAULTS), resolved, setAppearance: saveAppearance, setAccent: saveAccent };
 }

@@ -63,6 +63,8 @@ describe('timetable scanning', () => {
     expect(body.model).toBe('test-vision');
     expect(body.response_format).toEqual({ type: 'json_object' });
     expect(body.reasoning_effort).toBeUndefined();
+    // Reasoning models reject a non-default temperature, so none is sent unless configured.
+    expect('temperature' in body).toBe(false);
     const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
     expect(parts[1].image_url?.url).toBe(`data:image/jpeg;base64,${image.image}`);
     expect(parts[0].text).toContain(`id "${firstPeriod.id}"`);
@@ -110,7 +112,23 @@ describe('timetable scanning', () => {
     const f = fixture();
     const scan = new ScanService(f.service, { ...config, reasoning: 'low' }, f.fetcher);
     await scan.scan(f.student, image);
-    expect(JSON.parse(f.fetcher.mock.calls[0][1].body as string).reasoning_effort).toBe('low');
+    const body = JSON.parse(f.fetcher.mock.calls[0][1].body as string);
+    expect(body.reasoning_effort).toBe('low');
+    expect('temperature' in body).toBe(false);
+  });
+
+  it('sends a temperature only when SCAN_MODEL_TEMPERATURE sets one', async () => {
+    const env = { SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm' };
+    expect(scanConfig(env)).not.toHaveProperty('temperature');
+    expect(scanConfig({ ...env, SCAN_MODEL_TEMPERATURE: ' ' })).not.toHaveProperty('temperature');
+    expect(scanConfig({ ...env, SCAN_MODEL_TEMPERATURE: '0' })).toMatchObject({ temperature: 0 });
+    expect(scanConfig({ ...env, SCAN_MODEL_TEMPERATURE: '0.2' })).toMatchObject({ temperature: 0.2 });
+    expect(() => scanConfig({ ...env, SCAN_MODEL_TEMPERATURE: 'cold' })).toThrow('SCAN_MODEL_TEMPERATURE');
+    expect(() => scanConfig({ ...env, SCAN_MODEL_TEMPERATURE: '3' })).toThrow('SCAN_MODEL_TEMPERATURE');
+    const f = fixture();
+    const scan = new ScanService(f.service, { ...config, temperature: 0 }, f.fetcher);
+    await scan.scan(f.student, image);
+    expect(JSON.parse(f.fetcher.mock.calls[0][1].body as string).temperature).toBe(0);
   });
 
   it('keeps only verified periods and directory matches, filling details from the directory', async () => {
@@ -147,6 +165,94 @@ describe('timetable scanning', () => {
     ]);
   });
 
+  it('merges a class seen twice, filling in the directory link, teacher, room and days the first sighting lacked', async () => {
+    const f = fixture();
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'algebra ii', periodIds: [firstPeriod.id], teacher: null, room: null, directoryId: null, days: ['Mon'] },
+      { className: 'Algebra II', periodIds: [exampleSchedule.periods[1].id], directoryId: f.algebra.id, days: ['Wed', 'Mon'] },
+      { className: 'Chemistry', teacher: 'Dr. Vance', periodLabel: 'Block Z' },
+      { className: 'chemistry', teacher: 'Mr. Other', room: '12', periodLabel: 'Block Y' },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows).toEqual([
+      { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', periodIds: [firstPeriod.id, exampleSchedule.periods[1].id], periodLabel: undefined, directoryId: f.algebra.id, days: ['Mon', 'Wed'] },
+      // The first sighting's teacher and period text stand; only the missing room is filled in.
+      { name: 'Chemistry', teacher: 'Dr. Vance', room: '12', periodIds: [], periodLabel: 'Block Z', directoryId: undefined, days: [] },
+    ]);
+  });
+
+  it('keeps classes named in other scripts apart and never matches a label on an empty key', async () => {
+    const f = fixture();
+    f.fetcher.mockResolvedValue(answer([
+      { className: '数学', periodId: 'A' }, { className: '物理', periodId: 'B' }, { className: 'Алгебра', periodId: 'C' },
+      { className: 'Русский 1', periodId: 'D' }, { className: 'Химия 1', periodId: 'lunch' }, { className: 'АЛГЕБРА', periodId: 'A' },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows.map(row => [row.name, row.periodIds])).toEqual([
+      ['数学', ['A']], ['物理', ['B']], ['Алгебра', ['C', 'A']], ['Русский 1', ['D']], ['Химия 1', ['lunch']],
+    ]);
+    const starred = { ...exampleSchedule, periods: exampleSchedule.periods.map((period, index) => (index === 0 ? { ...period, label: '★' } : period)) };
+    const body = JSON.stringify({ rows: [{ className: 'Art', periodLabel: '—' }, { className: 'Band', periodLabel: '*' }] });
+    expect(f.scan.interpret(body, starred, []).rows.map(row => [row.name, row.periodIds, row.periodLabel])).toEqual([
+      ['Art', [], '—'], ['Band', [], '*'],
+    ]);
+  });
+
+  it('drops a directory ID whose class does not match the printed name', async () => {
+    const f = fixture();
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'Chemistry', periodId: firstPeriod.id, directoryId: f.algebra.id },
+      { periodId: exampleSchedule.periods[1].id, directoryId: f.algebra.id },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows).toEqual([
+      { name: 'Chemistry', teacher: undefined, room: undefined, periodIds: [firstPeriod.id], periodLabel: undefined, directoryId: undefined, days: [] },
+      // With no printed name, the directory class names the row.
+      { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', periodIds: [exampleSchedule.periods[1].id], periodLabel: undefined, directoryId: f.algebra.id, days: [] },
+    ]);
+  });
+
+  it('keeps a directory link for a shortened or reordered printed name, and shows the name as printed', async () => {
+    const f = fixture();
+    const spanish = new DirectoryService(f.service).save(f.student, { schoolId: f.school.id, details: { name: 'Spanish 2 Honors', teacher: 'Sra. Diaz', room: '110', grades: ['9'] } });
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'Alg II', teacher: 'Ms. Ortiz', periodId: firstPeriod.id, directoryId: f.algebra.id },
+      { className: 'Honors Spanish 2', periodId: exampleSchedule.periods[1].id, directoryId: spanish.id },
+      // The same directory class under its full name on a second photo is still one row.
+      { className: 'Algebra II', periodId: exampleSchedule.periods[2].id, directoryId: f.algebra.id, days: ['Fri'] },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows).toEqual([
+      { name: 'Alg II', teacher: 'Ms. Ortiz', room: '204', periodIds: [firstPeriod.id, exampleSchedule.periods[2].id], periodLabel: undefined, directoryId: f.algebra.id, days: ['Fri'] },
+      { name: 'Spanish 2 Honors', teacher: 'Sra. Diaz', room: '110', periodIds: [exampleSchedule.periods[1].id], periodLabel: undefined, directoryId: spanish.id, days: [] },
+    ]);
+  });
+
+  it('drops a directory link to a class whose name has a word the printed name lacks, so the two rows stay apart', async () => {
+    const f = fixture();
+    const art = new DirectoryService(f.service).save(f.student, { schoolId: f.school.id, details: { name: 'Art', teacher: 'Ms. Kahlo', room: 'A1', grades: ['9'] } });
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'Art', periodId: 'A', directoryId: art.id },
+      { className: 'Art History', periodId: 'B', directoryId: art.id },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows).toEqual([
+      { name: 'Art', teacher: 'Ms. Kahlo', room: 'A1', periodIds: ['A'], periodLabel: undefined, directoryId: art.id, days: [] },
+      { name: 'Art History', teacher: undefined, room: undefined, periodIds: ['B'], periodLabel: undefined, directoryId: undefined, days: [] },
+    ]);
+  });
+
+  it('keeps class names that differ only in a vowel sign apart', async () => {
+    const f = fixture();
+    const fort = new DirectoryService(f.service).save(f.student, { schoolId: f.school.id, details: { name: 'किला', grades: ['9'] } });
+    f.fetcher.mockResolvedValue(answer([
+      { className: 'किला', periodId: 'A' },
+      { className: 'कोला', periodId: 'B', directoryId: fort.id },
+    ]));
+    const { rows } = await f.scan.scan(f.student, image);
+    expect(rows.map(row => [row.name, row.periodIds, row.directoryId])).toEqual([['किला', ['A'], undefined], ['कोला', ['B'], undefined]]);
+  });
+
   it('tolerates fenced JSON and reports unusable answers', async () => {
     const fenced = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '```json\n{"rows":[{"className":"Art"}]}\n```' } }] }))));
     expect((await fenced.scan.scan(fenced.student, image)).rows.map(row => row.name)).toEqual(['Art']);
@@ -154,10 +260,44 @@ describe('timetable scanning', () => {
     expect((await empty.scan.scan(empty.student, image)).notes[0]).toContain('No classes were found');
     const prose = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'I cannot help with that.' } }] }))));
     await expect(prose.scan.scan(prose.student, image)).rejects.toThrow('unexpected format');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const html = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('<html>Bad gateway</html>', { status: 200 })));
+    await expect(html.scan.scan(html.student, image)).rejects.toThrow('having trouble');
+    const errorBody = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 200 })));
+    await expect(errorBody.scan.scan(errorBody.student, image)).rejects.toThrow('having trouble');
+    expect(error).toHaveBeenCalledWith('[scan] upstream returned an unreadable body');
+    error.mockClear();
+    const blank = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }))));
+    await expect(blank.scan.scan(blank.student, image)).rejects.toThrow('empty answer');
+    expect(error).not.toHaveBeenCalled();
     const failing = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('quota', { status: 402 })));
     await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('having trouble');
     const offline = fixture(vi.fn<ScanFetch>().mockRejectedValue(new TypeError('fetch failed')));
     await expect(offline.scan.scan(offline.student, image)).rejects.toThrow('Could not reach');
+    error.mockRestore();
+  });
+
+  it('reports a busy upstream and a scan that runs past the 90 second limit', async () => {
+    const busy = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('slow down', { status: 429 })));
+    await expect(busy.scan.scan(busy.student, image)).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS', message: 'The scanning service is busy. Try again in a minute.' });
+    const aborted = (signal: AbortSignal | null | undefined) => new Promise<never>((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // The model never answers.
+      const stalled = fixture(vi.fn<ScanFetch>().mockImplementation((_, init) => aborted(init.signal)));
+      const first = expect(stalled.scan.scan(stalled.student, image)).rejects.toMatchObject({ code: 'TIMEOUT', message: expect.stringContaining('took too long') });
+      await vi.advanceTimersByTimeAsync(90_000);
+      await first;
+      // Headers arrive but the body is still streaming when the limit hits: still a timeout, not an unreadable answer.
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const streaming = fixture(vi.fn<ScanFetch>().mockImplementation(async (_, init) => ({ ok: true, status: 200, json: () => aborted(init.signal) }) as unknown as Response));
+      const second = expect(streaming.scan.scan(streaming.student, image)).rejects.toMatchObject({ code: 'TIMEOUT', message: expect.stringContaining('took too long') });
+      await vi.advanceTimersByTimeAsync(90_000);
+      await second;
+      // A timeout is not the upstream's fault, so it logs no unreadable-body line.
+      expect(error).not.toHaveBeenCalled();
+      error.mockRestore();
+    } finally { vi.useRealTimers(); }
   });
 
   it('rate limits each account and counts attempts even when the model fails', async () => {

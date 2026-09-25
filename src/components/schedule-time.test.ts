@@ -32,3 +32,27 @@ it('flips AM/PM across 11 and 12 in both directions at noon and midnight', () =>
   expect(parseScheduleTime('12:15 PM', '23:15')).toBe('12:15');
   expect(parseScheduleTime('11:15 AM', '00:15')).toBe('11:15');
 });
+
+it('treats a zero-padded hour as explicit 24-hour input', () => {
+  expect(parseScheduleTime('01:30')).toBe('01:30');
+  expect(parseScheduleTime('06:45')).toBe('06:45');
+  expect(parseScheduleTime('06:50', '07:30')).toBe('06:50');
+  expect(parseScheduleTime('09:30', '21:15')).toBe('09:30');
+  expect(parseScheduleTime('12:15')).toBe('12:15');
+});
+it('keeps early-bird hours in the morning after a nearby morning value', () => {
+  expect(parseScheduleTime('6:50', '07:30')).toBe('06:50');
+  expect(parseScheduleTime('6:30', '08:00')).toBe('06:30');
+  expect(parseScheduleTime('5:45', '06:30')).toBe('05:45');
+  // Far from the previous value, the school-hours default applies again.
+  expect(parseScheduleTime('6:50', '10:30')).toBe('18:50');
+  expect(parseScheduleTime('1:30', '09:15')).toBe('13:30');
+  expect(parseScheduleTime('1:30', '12:45')).toBe('13:30');
+  expect(parseScheduleTime('9:15', '13:15')).toBe('09:15');
+});
+it('keeps the school-hours default after a late-evening value', () => {
+  expect(parseScheduleTime('9:15', '23:55')).toBe('09:15');
+  expect(parseScheduleTime('12:00', '22:00')).toBe('12:00');
+  expect(parseScheduleTime('10:00', '21:30')).toBe('10:00');
+  expect(parseScheduleTime('8:15', '19:30')).toBe('08:15');
+});

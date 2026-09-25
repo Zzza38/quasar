@@ -44,6 +44,7 @@ Public URL: https://quasar.ziona.dev. DNS and hostname ingress are configured, `
 ## Cloudflare and ongoing operations
 
 - Do not apply cache-everything rules to Quasar. Bypass caching for `/api/*`, authenticated HTML, and `/sw.js`; honor origin cache headers. Immutable Next.js assets can be cached.
+- Turn on SSL/TLS > Edge Certificates > Always Use HTTPS for the zone. The tunnel otherwise answers `http://quasar.ziona.dev` with the app over cleartext; check that `curl -sI http://quasar.ziona.dev/` returns a 301 to `https://`. The app's own `Strict-Transport-Security` header (set in `next.config.ts` with its Content-Security-Policy and Permissions-Policy) only takes effect after a browser has loaded the HTTPS origin once.
 - Use the app's Google login for students. A Cloudflare Access policy on the hostname adds another login gate and must be configured deliberately if desired.
 - Add an external uptime check for `/api/health`, monitor service failures and backup age, and arrange encrypted off-server backup copies. Local backups alone do not cover server loss.
 - Keep the tunnel credentials, `.env.local`, and database out of Git. Keep `cloudflared` updated; the service disables automatic binary updates.

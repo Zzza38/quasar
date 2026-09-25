@@ -12,7 +12,7 @@ Complete replacement of the presentation layer. The domain (`src/domain`), serve
 ## Design direction
 
 - Phone-first with a bottom tab bar; sidebar on desktop. Light and dark appearance plus selectable accent palettes from one token set; the choice is stored on the device.
-- Five views behind hash routes so the offline shell keeps working: **Today**, **Schedule**, **Tasks**, **Classes**, **School**. Owner-only **Admin** stays at `/admin`.
+- Seven views at their own paths (`/`, `/schedule`, `/tasks`, …), all served by one shell so the offline copy of `/` opens any of them: **Today**, **Schedule**, **Tasks**, **Classes**, **School**, **People** and **Messages** (the first six are the phone dock; Messages opens from the top bar). Owner-only **Admin** stays at `/admin` and the public **Help** page at `/help`.
 - Today answers two questions instantly: what is happening now / next (with countdown and progress) and what is due.
 - Every schedule concept gets a structured editor with a live preview computed by the real `resolveDay` engine.
 - Saving, waiting to sync, syncing, saved, failed and conflict states are always visible in one status pill.
@@ -68,13 +68,16 @@ Complete replacement of the presentation layer. The domain (`src/domain`), serve
 | --- | --- |
 | `/` signed out | Welcome with Google sign-in |
 | `/` without names or school | Onboarding wizard (online only; offline shows a retry screen) |
-| `/#today` | Now/next card, today's timeline, due-soon tasks |
+| `/` | Now/next card, today's timeline, due-soon tasks |
 | `/#schedule` (`?date=YYYY-MM-DD`) | Week strip, day list, rotation overview, adjustments |
 | `/#tasks` (`?edit=<id>`) | Task groups, quick add, edit sheet |
-| `/#classes` | Classes, period assignments, adjustments, private schedule |
-| `/#school` | School status, shared schedule, correction requests |
-| `/#messages` | Chat list: recent and closed chats, friends to start a chat with; on desktop the list and thread side by side |
+| `/classes` | Classes, period assignments, adjustments, private schedule |
+| `/school` | School status, shared schedule, correction requests |
+| `/#people` (`?member=<id>`) | School verification, friend requests, friends, schoolmates search; `?member=` opens that member's profile |
+| `/messages` | Chat list: Group chats (Global chat), recent and closed chats, friends to start a chat with; on desktop the list and thread side by side |
 | `/#messages?with=<id>` | Thread with one friend: message log, composer, mute, report and block; the phone dock is hidden |
+| `/#messages?room=global` | Global chat room thread; immersive on phones like a friend thread, so the dock is hidden |
 | `/admin` | Owner-only inbox and school review |
+| `/help` | Public help page: short answers plus a message form (sending needs a signed-in account); readable signed out and cached by the service worker for offline use |
 
 Device conflicts and school-correction reviews render above whichever view is open. The status pill shows saving / syncing / waiting / failed / needs a choice / offline / saved and is clickable when a retry or a choice is possible.

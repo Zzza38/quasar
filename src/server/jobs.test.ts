@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {startJobs} from './jobs';
+import {errorSummary,startJobs} from './jobs';
 import type {Db} from './db';
 
 const idle=()=>({deliverChat:vi.fn().mockResolvedValue({sent:0,failed:0}),deliverSupport:vi.fn().mockResolvedValue({sent:0,failed:0}),prune:vi.fn()});
@@ -27,7 +27,7 @@ describe('background jobs',()=>{
     try {
       const worker=startJobs({} as Db,{onError}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
       await vi.advanceTimersByTimeAsync(0);
-      expect(deliverDue).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('calendar');
+      expect(deliverDue).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('calendar',expect.any(Error));
       expect(deliverChat).toHaveBeenCalledTimes(1);expect(deliverSupport).toHaveBeenCalledTimes(1);expect(prune).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60_000);expect(refreshDue).toHaveBeenCalledTimes(2);expect(deliverDue).toHaveBeenCalledTimes(2);
       await worker.stop();await vi.advanceTimersByTimeAsync(60_000);expect(refreshDue).toHaveBeenCalledTimes(2);
@@ -61,7 +61,7 @@ describe('background jobs',()=>{
     try {
       const worker=startJobs({} as Db,{onError}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
       await vi.advanceTimersByTimeAsync(0);
-      expect(onError).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('chat');expect(deliverSupport).toHaveBeenCalledTimes(1);expect(prune).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('chat',expect.any(Error));expect(deliverSupport).toHaveBeenCalledTimes(1);expect(prune).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(deliverChat).toHaveBeenCalledTimes(2);expect(prune).toHaveBeenCalledTimes(2);expect(onError).toHaveBeenCalledTimes(1);
       await worker.stop();
@@ -73,7 +73,7 @@ describe('background jobs',()=>{
     const {deliverChat,deliverSupport}=idle();const prune=vi.fn().mockImplementationOnce(()=>{throw new Error('database is locked');});const onError=vi.fn();
     try {
       const worker=startJobs({} as Db,{onError}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
-      await vi.advanceTimersByTimeAsync(0);expect(onError).toHaveBeenCalledWith('chat');
+      await vi.advanceTimersByTimeAsync(0);expect(onError).toHaveBeenCalledWith('chat',expect.any(Error));
       await vi.advanceTimersByTimeAsync(60_000);expect(refreshDue).toHaveBeenCalledTimes(2);expect(prune).toHaveBeenCalledTimes(2);
       await worker.stop();
     } finally {vi.useRealTimers();}
@@ -86,10 +86,43 @@ describe('background jobs',()=>{
     try {
       const worker=startJobs({} as Db,{onError}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
       await vi.advanceTimersByTimeAsync(0);
-      expect(onError).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('support');expect(prune).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledTimes(1);expect(onError).toHaveBeenCalledWith('support',expect.any(Error));expect(prune).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(deliverSupport).toHaveBeenCalledTimes(2);expect(prune).toHaveBeenCalledTimes(2);expect(onError).toHaveBeenCalledTimes(1);
       await worker.stop();
     } finally {vi.useRealTimers();}
+  });
+  it('reports non-zero failed push counts per step, with no provider text, and stays quiet when nothing failed',async()=>{
+    vi.useFakeTimers();
+    const refreshDue=vi.fn().mockResolvedValue(undefined);
+    const deliverDue=vi.fn().mockResolvedValueOnce({sent:0,failed:3}).mockResolvedValue({sent:1,failed:0});
+    const deliverChat=vi.fn().mockResolvedValue({sent:0,failed:0});const deliverSupport=vi.fn().mockResolvedValueOnce({sent:1,failed:1}).mockResolvedValue({sent:0,failed:0});
+    const prune=vi.fn();const onError=vi.fn();const onFailures=vi.fn();
+    try {
+      const worker=startJobs({} as Db,{onError,onFailures}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onFailures.mock.calls).toEqual([['notifications',3],['support',1]]);expect(onError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onFailures).toHaveBeenCalledTimes(2);expect(prune).toHaveBeenCalledTimes(2);
+      await worker.stop();
+    } finally {vi.useRealTimers();}
+  });
+  it('passes the thrown error to onError, and summarises it by name and code without the message',async()=>{
+    vi.useFakeTimers();
+    const busy=Object.assign(new Error('database is locked at https://feeds.example/private-token'),{code:'SQLITE_BUSY'});
+    const refreshDue=vi.fn().mockRejectedValueOnce(busy).mockResolvedValue(undefined);const deliverDue=vi.fn().mockResolvedValue({sent:0,failed:0});
+    const {deliverChat,deliverSupport,prune}=idle();const onError=vi.fn();
+    try {
+      const worker=startJobs({} as Db,{onError}, {calendar:{refreshDue},notifications:{deliverDue,deliverChat,deliverSupport},chat:{prune}});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onError).toHaveBeenCalledWith('calendar',busy);
+      await worker.stop();
+    } finally {vi.useRealTimers();}
+    expect(errorSummary(busy)).toBe('Error, code SQLITE_BUSY');
+    expect(errorSummary(busy)).not.toContain('private-token');
+    class WebPushError extends Error {statusCode=410;override name='WebPushError';}
+    expect(errorSummary(new WebPushError('gone: https://push.example/endpoint'))).toBe('WebPushError, status 410');
+    expect(errorSummary(Object.assign(new TypeError('x'),{code:'bad code with https://x'}))).toBe('TypeError');
+    expect(errorSummary('https://feeds.example/private-token')).toBe('non-error value');
   });
 });

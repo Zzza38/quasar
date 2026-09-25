@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { errorMessage } from '@/client/api';
-import { nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
-import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
+import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
+import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { heroBase } from '@/lib/color';
 import { classmatesFor, withLabel } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
-import { sortByDue, taskItems } from '../app-state';
+import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { Icon } from '../icon';
 import { DateAdjustmentSheet } from '../overrides';
 import { PeriodSheet } from '../period-sheet';
@@ -39,15 +39,18 @@ export function TodayView({ state }: { state: AppState }) {
   const dueSoon = tasks.filter((item) => !item.task.dueDate || daysBetween(today, item.task.dueDate) <= 2);
   const shown = dueSoon.slice(0, 6);
   const later = tasks.length - dueSoon.length;
-  // Same split as the Tasks page groups: overdue is the more urgent number, so it wins the tile.
-  const overdue = tasks.filter((item) => item.task.dueDate && item.task.dueDate < today).length;
-  const dueToday = tasks.filter((item) => item.task.dueDate === today).length;
+  // Same rule as the task rows and the Tasks page groups: overdue is the more urgent number, so it wins the tile.
+  const nowTime = clockTime(now, timeZone);
+  const overdue = tasks.filter((item) => isOverdue(item.task, today, nowTime)).length;
+  const dueToday = tasks.filter((item) => item.task.dueDate === today && !isOverdue(item.task, today, nowTime)).length;
   const periodsLeft = day && !day.closed ? day.periods.filter((period) => new Date(period.endAt).getTime() > now.getTime()).length : 0;
   const hasSetup = personal.classes.length > 0;
   // Until classes exist and sit on periods the countdown has nothing to show, so setup comes first.
   const setupFirst = !coreSetupDone(personal, schedule);
-  const cycleIndex = day && !day.closed ? schedule.cycleDays.findIndex((entry) => entry.id === day.cycleDayId) : -1;
-  const cyclePosition = day && !day.closed && schedule.cycleDays.length > 1 && cycleIndex >= 0 && !day.cycleDayLabel.includes(String(cycleIndex + 1)) ? ` · ${cycleIndex + 1} of ${schedule.cycleDays.length}` : '';
+  // resolveDay follows the private schedule when there is one, so the rotation position must come from the same schedule.
+  const effective = effectiveSchedule(schedule, personal);
+  const cycleIndex = day && !day.closed ? effective.cycleDays.findIndex((entry) => entry.id === day.cycleDayId) : -1;
+  const cyclePosition = day && !day.closed && effective.cycleDays.length > 1 && cycleIndex >= 0 && !day.cycleDayLabel.includes(String(cycleIndex + 1)) ? ` · ${cycleIndex + 1} of ${effective.cycleDays.length}` : '';
   // During school hours, quick add files new tasks under the class that is on now or just ended.
   const suggestedClassId = useMemo(() => {
     if (!day || day.closed || day.periods.length === 0) return null;
@@ -74,7 +77,7 @@ export function TodayView({ state }: { state: AppState }) {
 
     {setupFirst && <SetupChecklist state={state} />}
 
-    <NowCard next={next} following={following} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => state.navigate('school', { fix: 'times' })} hasSetup={hasSetup} noSchedule={schedule.cycleDays.every((entry) => entry.slots.length === 0)} />
+    <NowCard next={next} following={following} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
 
     {!setupFirst && <SetupChecklist state={state} />}
 
@@ -86,17 +89,17 @@ export function TodayView({ state }: { state: AppState }) {
     </div>
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-      <Section title="Today" id="today-timeline" aria-labelledby="today-timeline" description={day && !day.closed ? `${day.periods.length} periods · ${day.periods.length ? formatRange(day.periods[0].start, day.periods[day.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{day && !day.closed && day.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => state.navigate('school', { fix: 'times' })} title="Fix the shared bell schedule">Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule')}>Full schedule</Button></div>}>
+      <Section title="Today" id="today-timeline" description={day && !day.closed ? `${day.periods.length} periods · ${day.periods.length ? formatRange(day.periods[0].start, day.periods[day.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{day && !day.closed && day.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => openBellTimes(state)} title={personal.customSchedule ? 'Edit my private schedule' : 'Fix the shared bell schedule'}>Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule')}>Full schedule</Button></div>}>
         {day?.closed && <div className="grid justify-items-start gap-2 py-3">
           <p className="text-sm text-muted-foreground">No periods today. Enjoy the day off.</p>
           {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
         </div>}
         {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
         {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, period)} />}
-        {day && day.issues.length > 0 && <Hint tone="danger">{day.issues.length} period(s) could not be shown because of a time adjustment. Review them under Classes.</Hint>}
+        {day && day.issues.length > 0 && <Hint tone="danger">{describeDayIssues(day.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
 
-      <Section title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" aria-labelledby="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
+      <Section title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
         <QuickAdd today={today} classes={personal.classes} suggestedClassId={suggestedClassId}
           onAdd={(title, extra) => state.saveTask(crypto.randomUUID(), { title, dueDate: extra.dueDate ?? null, dueTime: null, classId: extra.classId ?? null, notes: '', completed: false })} />
         {shown.length === 0 && <EmptyState icon="checkCircle" title="Nothing due soon">Add anything you need to get done. Homework, forms, practice.</EmptyState>}
@@ -112,15 +115,24 @@ export function TodayView({ state }: { state: AppState }) {
   </div>;
 }
 
-function NowCard({ next, following, now, today, onSetup, onFixSchedule, hasSetup, noSchedule }: { next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; hasSetup: boolean; noSchedule: boolean }) {
-  if (!next) return <Card aria-label="Next class"><CardContent className="grid gap-2 py-2">
+/** Slate for periods with no class colour; heroBase only darkens hex colours, and the muted-foreground variable is too light for white text in dark mode. */
+const NEUTRAL_HERO = '#64748b';
+
+/** The Now card's gradient base: the period's colour, darkened until white text reaches 4.5:1. CSS variables fall back to NEUTRAL_HERO. */
+export function nowCardBase(dot: string): string {
+  return heroBase(/^#[0-9a-fA-F]{6}$/.test(dot) ? dot : NEUTRAL_HERO);
+}
+
+function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateSchedule, hasSetup, noSchedule }: { next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; privateSchedule: boolean; hasSetup: boolean; noSchedule: boolean }) {
+  if (!next) return <Card role="region" aria-label="Next class"><CardContent className="grid gap-2 py-2">
     <Eyebrow>Up next</Eyebrow>
     <h2 className="text-xl">{noSchedule ? 'Your schedule has no periods yet' : 'No upcoming periods'}</h2>
-    <p className="text-sm text-muted-foreground">{noSchedule ? 'Add periods to the school schedule or build a private one.' : 'Nothing is scheduled for the next year.'}</p>
-    {noSchedule && <div><Button size="sm" onClick={onFixSchedule}>Open the school schedule</Button></div>}
+    <p className="text-sm text-muted-foreground">{!noSchedule ? 'Nothing is scheduled for the next year.' : privateSchedule ? 'Add periods to your private schedule.' : 'Add periods to the school schedule or build a private one.'}</p>
+    {noSchedule && <div><Button size="sm" onClick={onFixSchedule}>{privateSchedule ? 'Edit my private schedule' : 'Open the school schedule'}</Button></div>}
   </CardContent></Card>;
   const current = next.status === 'current';
-  const until = current ? minutesUntil(next.endAt, now) : minutesUntil(next.startAt, now);
+  // Rounded up, like the seconds view, so a running period never reads "0 min"; elapsed is then whole minutes gone.
+  const until = minutesLeft(current ? next.endAt : next.startAt, now);
   const total = current ? Math.max(1, minutesUntil(next.endAt, new Date(next.startAt))) : 0;
   const elapsed = current ? Math.min(total, Math.max(0, total - until)) : 0;
   const name = next.class?.name ?? next.label;
@@ -129,8 +141,8 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, hasSetup
   const when = next.date === today ? `Today at ${formatTime(next.start)}` : `${relativeDate(next.date, today, { weekday: 'long' })} at ${formatTime(next.start)}`;
   const meta = [next.class && next.class.name !== next.label ? next.label : null, next.class?.room ? formatRoom(next.class.room) || null : null, next.class?.teacher ?? null].filter(Boolean);
   // Light class colours (amber, lime, yellow) are darkened just enough for white text to reach 4.5:1.
-  const base = heroBase(color.dot);
-  return <Card className="hero-card rounded-3xl text-white shadow-float ring-0" style={{ background: `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)` }} aria-label="Next class">
+  const base = nowCardBase(color.dot);
+  return <Card className="hero-card rounded-3xl text-white shadow-float ring-0" style={{ background: `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)` }} role="region" aria-label="Next class">
     <CardContent className="grid gap-5 px-5 py-1 sm:px-7 sm:py-3">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="grid min-w-0 gap-2">
@@ -162,8 +174,9 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, hasSetup
 }
 
 /**
- * "Ends in 8 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
- * tapped. The shared leading text stays put; the differing tails slide open/closed.
+ * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
+ * tapped. Minutes round up in both modes (see minutesLeft). The shared leading text
+ * stays put; the differing tails slide open/closed.
  */
 function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
   const [hover, setHover] = useState(false);
@@ -177,7 +190,7 @@ function Countdown({ label, target, minutes }: { label: string; target: string; 
     return () => clearInterval(timer);
   }, [precise]);
   const seconds = precise ? Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000)) : minutes * 60;
-  const compact = formatMinutes(precise ? Math.floor(seconds / 60) : minutes);
+  const compact = formatMinutes(precise ? Math.ceil(seconds / 60) : minutes);
   const exact = formatSeconds(seconds);
   let shared = 0;
   while (shared < compact.length && shared < exact.length && compact[shared] === exact[shared]) shared += 1;
@@ -396,7 +409,7 @@ export function TaskRow({ item, state, showDate = true, onComplete }: { item: Ta
   const metaId = useId();
   const { task } = item;
   const cls = state.personal.classes.find((entry) => entry.id === task.classId);
-  const overdue = task.dueDate && !task.completed && (task.dueDate < state.today || (task.dueDate === state.today && task.dueTime !== null && task.dueTime < new Intl.DateTimeFormat('en-GB', { timeZone: state.timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(state.now)));
+  const overdue = isOverdue(task, state.today, clockTime(state.now, state.timeZone));
   const dueToday = task.dueDate === state.today && !overdue;
   const hasMeta = task.dueDate || cls || task.notes || task.priority || task.subtasks?.length || task.recurrence || task.imported || task.reminder;
   return <li className="group/task flex items-start gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-muted/70">
