@@ -9,7 +9,6 @@ export const dynamic = 'force-dynamic';
 const DESCRIPTION = 'Answers to common questions about Quasar: adding your school, working out the rotation day, fixing bell times, importing Schoology, Google Classroom or Canvas homework, offline use, reminders and privacy.';
 
 export const metadata: Metadata = {
-  title: 'Help',
   description: DESCRIPTION,
   alternates: { canonical: '/help' },
   ...socialMetadata({ path: '/help', title: 'Help · Quasar', description: DESCRIPTION }),
