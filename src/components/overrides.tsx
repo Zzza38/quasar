@@ -5,6 +5,7 @@ import { errorMessage } from '@/client/api';
 import { describeDayIssues, effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
 import { Icon } from './icon';
+import { useSchoolTimetable } from './personal-timetable';
 import { ScheduleEditor, SlotsEditor, describeIssues } from './schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, Panel, Segmented, Spacer, Toggle } from './primitives';
 import { Label } from './ui/label';
@@ -155,7 +156,7 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
   const [stopping, setStopping] = useState(false);
   const stop = async () => {
     setError(''); setPending(true);
-    try { await save({ ...personal, customSchedule: null }); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+    try { await save(useSchoolTimetable(school, personal)); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending || stopping} onClick={() => setStopping(true)}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
@@ -163,7 +164,7 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     {stopping && personal.customSchedule && <Callout tone="warning" icon="alert" role="alert" title="Go back to the school schedule?" actions={<>
       <Button size="sm" variant="danger" busy={pending} onClick={() => void stop()}>Use the school schedule</Button>
       <Button size="sm" autoFocus disabled={pending} onClick={() => setStopping(false)}>Keep my private schedule</Button>
-    </>}>Your private schedule will be deleted. Classes, assignments and date adjustments are kept.</Callout>}
+    </>}>Your private timetable and date and rotation day adjustments will be cleared. Classes and assignments to school periods will stay saved.</Callout>}
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
   </Modal>;
 }

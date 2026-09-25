@@ -401,8 +401,8 @@ function ClassesTab({ record, busy, onSave }: { record: SupportRecord; busy: boo
   const known = new Set(periods.map((period) => period.id));
   const otherAssignments = Object.entries(draft.assignments).filter(([periodId]) => !known.has(periodId));
   const updateClass = (id: string, change: Partial<StudentClass>) => setDraft((current) => ({ ...current, classes: current.classes.map((entry) => entry.id === id ? stripEmpty({ ...entry, ...change }) : entry) }));
-  // The same cleanup as the student's own Classes page: assignments and the private blocks made for the class go too.
-  const removeClass = (id: string) => setDraft((current) => removeClassEverywhere(record.school?.schedule ?? null, current, id));
+  // The same rule as the student's own Classes page: assignments go, timetable periods and time blocks stay.
+  const removeClass = (id: string) => setDraft((current) => removeClassEverywhere(current, id));
   const addClass = () => setDraft((current) => ({ ...current, classes: [...current.classes, { id: slugId('class', current.classes.map((entry) => entry.id)), name: 'New class' }] }));
   const assign = (periodId: string, classId: string) => setDraft((current) => {
     const assignments = { ...current.assignments };

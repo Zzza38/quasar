@@ -67,6 +67,29 @@ test('today’s lunch shows under the timeline and the School view lists the wee
   await expect(page.getByRole('region', { name: /^Lunch Monday/ })).toContainText('Chicken Parmesan · Garlic Bread');
 });
 
+test('the Today timeline and lunch advance together after the last period', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const source = { org: 'browserhigh', domain: 'nutrislice.com', school: 'upper-school', menu: 'lunch', name: 'Upper School Lunch' };
+    const days = [{ date: '2026-09-21', notes: [], sections: [{ title: 'Entree', items: ['Monday Pasta'] }] }];
+    db.prepare('INSERT INTO menu_weeks(school_id,week_start,source,days,fetched_at) VALUES(?,?,?,?,?)').run(fixture.school.id, '2026-09-20', JSON.stringify(source), JSON.stringify(days), new Date().toISOString());
+  } finally { db.close(); }
+
+  await page.clock.install({ time: new Date('2026-09-18T15:40:00Z') });
+  await page.goto('/');
+  const timeline = page.locator('[role="region"][aria-labelledby="today-timeline"]');
+  await expect(timeline).toContainText('Today');
+  await expect(timeline).toContainText('Early dismissal');
+
+  await page.clock.fastForward(20 * 60 * 1000);
+  await expect(timeline).toContainText('Next school day · Monday, Sep 21');
+  await expect(timeline).toContainText('Monday Pasta');
+  await expect(timeline).not.toContainText('Early dismissal');
+  await timeline.getByRole('button', { name: 'Full schedule' }).click();
+  await expect(page.locator('#day-title')).toContainText('Monday');
+});
+
 test('members of an open school can change the menu, and a link off Nutrislice is refused before any fetch', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
