@@ -2,6 +2,20 @@
 
 The production installation is available at https://quasar.ziona.dev/ through Cloudflare Tunnel. Quasar's former Tailscale route has been removed. See [Cloudflare Tunnel deployment](CLOUDFLARE.md) for services, recovery instructions, and remaining Google authentication checks. The general deployment instructions below also support a separate Docker installation. Google sign-in with a second account has been verified by the owner. Actual device push delivery still requires interactive pilot verification.
 
+## Search engines
+
+The site is only eight days old at the public address and nothing links to it yet, so search engines have to be told it exists; the code side is already in place. Every page carries a title, description, canonical address, Open Graph and Twitter tags and (on the signed-out home page) schema.org data, all built from `src/server/site.ts` and `NEXTAUTH_URL`. `/robots.txt` allows everything except `/api/` and `/admin` and names `/sitemap.xml`, which lists `/` and `/help`; the view paths (`/schedule`, `/tasks`, …) point their canonical link at `/` because a visitor without a session sees the same landing page on all of them. Link previews use `public/brand/og.png` (rendered from the landing page's headline and Today card; regenerate it if that copy changes). A proxied plain-HTTP request is redirected to HTTPS by `next.config.ts`.
+
+What still needs the owner, in order:
+
+1. **Google Search Console**: at https://search.google.com/search-console add a *Domain* property for `ziona.dev` (covers `quasar.ziona.dev` and every scheme) and verify it with the TXT record Google shows, added in the Cloudflare DNS panel. Alternatively add a *URL prefix* property for `https://quasar.ziona.dev/`, pick the *HTML tag* method, put the `content="…"` value in `.env.local` as `GOOGLE_SITE_VERIFICATION`, rebuild and restart, then click Verify.
+2. In Search Console, **Sitemaps** → submit `https://quasar.ziona.dev/sitemap.xml`. Then **URL inspection** → enter `https://quasar.ziona.dev/` → *Request indexing*; repeat for `/help`. Indexing normally follows within days; ranking for generic queries takes longer and depends on links.
+3. **Bing Webmaster Tools** (https://www.bing.com/webmasters) can import the Search Console property in one click; Bing feeds DuckDuckGo and others.
+4. In Cloudflare, **SSL/TLS → Edge Certificates → Always Use HTTPS** on for the zone (docs/CLOUDFLARE.md), so the http:// address redirects at the edge as well as at the app.
+5. **Links**: the single strongest signal for a new site. Link to `https://quasar.ziona.dev` from the GitHub repository's README and About field, from `ziona.dev`, and from anywhere the school community lists tools. A crawler that finds the address on another indexed page discovers the site without waiting for the sitemap.
+
+Check with `curl -sA Googlebot https://quasar.ziona.dev/ | grep -o '<title>[^<]*'`, `curl -s https://quasar.ziona.dev/robots.txt` and `curl -s https://quasar.ziona.dev/sitemap.xml`; in Search Console, *Pages* shows what was indexed and why anything was left out.
+
 ## Configure and deploy
 
 1. Choose a domain and configure HTTPS at the existing reverse proxy. Set `NEXTAUTH_URL=https://your-domain` and add `https://your-domain/api/auth/callback/google` to the Google OAuth web client's redirect URIs. The OAuth consent screen must permit your pilot accounts; a client left in testing only admits configured test users.

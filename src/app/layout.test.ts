@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import config, { contentSecurityPolicy, permissionsPolicy } from '../../next.config';
+import config, { contentSecurityPolicy, httpsRedirects, permissionsPolicy } from '../../next.config';
 
 const directives = new Map(contentSecurityPolicy.split(';').map((part) => part.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
 
@@ -29,5 +29,18 @@ describe('response security headers', () => {
     expect(permissionsPolicy).toContain('geolocation=()');
     expect(permissionsPolicy).toContain('microphone=()');
     expect(permissionsPolicy).not.toContain('camera');
+  });
+
+  it('sends a proxied plain-HTTP visit to the same path on HTTPS, for good', async () => {
+    const rules = await config.redirects!();
+    expect(rules).toEqual(httpsRedirects);
+    for (const rule of httpsRedirects) {
+      expect(rule.source).toBe('/:path*');
+      expect(rule.destination).toBe('https://:host/:path*');
+      expect(rule.permanent).toBe(true);
+      // Only a proxied request can match: a direct request (next dev, the browser tests) carries neither header.
+      expect(rule.has.map((condition) => condition.type)).toEqual(['header', 'host']);
+    }
+    expect(httpsRedirects.map((rule) => rule.has[0].key)).toEqual(['x-forwarded-proto', 'cf-visitor']);
   });
 });

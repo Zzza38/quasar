@@ -43,11 +43,26 @@ export const securityHeaders = [
   ...(isDev ? [] : [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]),
 ];
 
+/**
+ * A plain-HTTP visit is sent to the HTTPS address. The app only ever sits behind a proxy (Cloudflare Tunnel,
+ * tailscale serve, Docker), which tells it the visitor's scheme in X-Forwarded-Proto, or CF-Visitor at Cloudflare's
+ * edge. A direct request without those headers (next dev, the browser tests on 127.0.0.1) is left alone. Without
+ * this, a search engine that discovers http://… sees a second copy of every page; Cloudflare's own "Always Use
+ * HTTPS" switch does the same at the edge and should be on as well (docs/CLOUDFLARE.md).
+ */
+export const httpsRedirects = [
+  { source: "/:path*", has: [{ type: "header" as const, key: "x-forwarded-proto", value: "http" }, { type: "host" as const, value: "(?<host>.*)" }], destination: "https://:host/:path*", permanent: true },
+  { source: "/:path*", has: [{ type: "header" as const, key: "cf-visitor", value: '.*"scheme":"http".*' }, { type: "host" as const, value: "(?<host>.*)" }], destination: "https://:host/:path*", permanent: true },
+];
+
 const config: NextConfig = {
   output: process.env.QUASAR_STANDALONE === '1' ? "standalone" : undefined,
   serverExternalPackages: ["better-sqlite3"],
   // The tailnet-only dev server is reached through tailscale serve.
   allowedDevOrigins: ["home-server.tail210f05.ts.net"],
+  async redirects() {
+    return isDev ? [] : httpsRedirects;
+  },
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
