@@ -519,7 +519,7 @@ describe('10. what the owner can see', () => {
   it('pins the admin procedure list', () => {
     expect(Object.keys(appRouter._def.procedures).filter(key => key.startsWith('admin.')).sort()).toEqual([
       'schools', 'update', 'requests', 'resolveRequest', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport',
-      'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses',
+      'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses', 'bans', 'liftBan',
       'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
       'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
@@ -600,8 +600,8 @@ describe('11. pause', () => {
     expect(f.db.prepare('SELECT outcome FROM reports WHERE reported_id=?').all(f.bob)).toEqual([{ outcome: 'paused' }]);
     fails(() => f.chat.send(f.bob, f.alice, randomUUID(), 'still here'), 'FORBIDDEN', 'Support paused your messaging.');
     const until = new Date(f.clock.now.getTime() + 7 * DAY).toISOString();
-    expect(f.chat.inbox(f.bob).pause).toEqual({ until });
-    expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until });
+    expect(f.chat.inbox(f.bob).pause).toEqual({ until, reason: 'Harassment', appealed: false });
+    expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until, reason: 'Harassment', appealed: false });
     expect(f.chat.mute(f.bob, f.alice, true)).toMatchObject({ muted: true });
     expect(f.chat.report(f.bob, f.alice, { category: 'other', block: false })).toEqual({ blocked: false });
     f.community.block(f.bob, f.cara, true);
@@ -612,7 +612,7 @@ describe('11. pause', () => {
 
     f.chat.pauseChat(f.owner, { userId: f.bob, days: null, reason: 'Again' });
     f.tick(100 * DAY);
-    expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until: null });
+    expect(f.chat.thread(f.bob, f.alice).pause).toEqual({ until: null, reason: expect.any(String), appealed: false });
     fails(() => f.chat.send(f.bob, f.alice, randomUUID(), 'no'), 'FORBIDDEN', 'Support paused your messaging.');
     f.chat.liftChatPause(f.owner, f.bob);
     expect(f.send(f.bob, f.alice, 'lifted').body).toBe('lifted');

@@ -1,6 +1,7 @@
 import { CalendarService } from './calendar';
 import { pruneChat } from './chat';
 import { pruneGlobalChat } from './global-chat';
+import { pruneGroupChat } from './group-chat';
 import { NotificationService } from './notifications';
 import type { Db } from './db';
 
@@ -38,7 +39,7 @@ export function errorSummary(error: unknown): string {
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
-  calendar: new CalendarService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); } },
+  calendar: new CalendarService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
 }): { stop: () => Promise<void> } {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');

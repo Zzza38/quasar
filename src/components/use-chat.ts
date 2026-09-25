@@ -8,25 +8,33 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api, errorMessage, isTransportFailure, isUnauthorized, type RouterOutput } from '@/client/api';
+import { CHAT } from '@/domain/chat';
 import type { AppState } from './app-state';
 
 type ChatRouter = RouterOutput['chat'];
 type GlobalRouter = RouterOutput['global'];
+type GroupRouter = RouterOutput['group'];
 export type ChatInbox = ChatRouter['inbox'];
 export type ChatInboxRow = ChatInbox['rows'][number];
 export type ChatThreadResult = ChatRouter['thread'];
 export type GlobalThreadResult = GlobalRouter['thread'];
+export type GroupThreadResult = GroupRouter['thread'];
 export type GlobalSummary = ChatInbox['global'];
+export type GroupSummary = ChatInbox['groups'][number];
 export type ChatPeer = ChatThreadResult['peer'];
 export type GlobalRoom = GlobalThreadResult['room'];
+export type GroupInfo = GroupThreadResult['group'];
+export type GroupMember = GroupInfo['members'][number];
+/** Another member's delivery and read markers and typing signal (docs/CHAT.md §13). */
+export type Receipt = ChatThreadResult['receipts'][number];
 export type ChatPause = NonNullable<ChatThreadResult['pause']>;
-/** A message in either kind of thread. Global messages also carry their sender and an edit stamp. */
-export type ChatMessage = ChatThreadResult['messages'][number] | GlobalThreadResult['messages'][number];
+/** A message in any kind of thread. Global and group messages also carry their sender (and, in the room, an edit stamp). */
+export type ChatMessage = ChatThreadResult['messages'][number] | GlobalThreadResult['messages'][number] | GroupThreadResult['messages'][number];
 export type GlobalMessage = GlobalThreadResult['messages'][number];
-/** Which conversation a thread hook drives: one friend, or the global room (docs/CHAT.md §11). */
-export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' };
+/** Which conversation a thread hook drives: one friend, a friend group (§12), or the global room (§11). */
+export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string };
 export const GLOBAL_TARGET: ChatTarget = { kind: 'global' };
-const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : 'global');
+const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : 'global');
 
 /** Window event that asks every mounted chat poller to poll now (Tracker fires it on a service-worker CHAT_ACTIVITY message). */
 export const CHAT_ACTIVITY_EVENT = 'quasar:chat-activity';
@@ -147,7 +155,9 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
       const options = { signal: timeoutSignal(SEND_TIMEOUT_MS) };
       const result = entry.target.kind === 'peer'
         ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body }, options)
-        : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body }, options);
+        : entry.target.kind === 'group'
+          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body }, options)
+          : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -363,12 +373,13 @@ export function useChatInbox(state: AppState, active = true) {
 
 /* ---------- Thread ---------- */
 
-type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null };
-type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
+type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; group: GroupInfo | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null; receipts: Receipt[] };
+type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; group?: GroupInfo; receipts: Receipt[]; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
 
-/** The thread query for either target. Both endpoints answer with the same page shape. */
+/** The thread query for any target. All three endpoints answer with the same page shape. */
 function queryThread(accountId: string, target: ChatTarget, cursor: { after?: number; before?: number }, signal?: AbortSignal): Promise<ThreadPage> {
   if (target.kind === 'peer') return api.chat.thread.query({ accountId, userId: target.userId, ...cursor }, { signal });
+  if (target.kind === 'group') return api.group.thread.query({ accountId, groupId: target.groupId, ...cursor }, { signal });
   return api.global.thread.query({ accountId, ...cursor }, { signal });
 }
 export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
@@ -409,6 +420,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const accountId = state.context.user.id;
   const entry = threadMemory(accountId, target);
   const userId = target.kind === 'peer' ? target.userId : null;
+  const groupId = target.kind === 'group' ? target.groupId : null;
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
   const onChangeRef = useRef(options.onChange);
@@ -443,8 +455,10 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
         // A mute toggled while this poll was out wins over the poll's older value.
         const muted = previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted;
         const room = result.room ?? null;
-        if (full || !previous) return { peer: result.peer, room, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
-        return { peer: result.peer, room, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
+        const group = result.group ?? null;
+        const receipts = result.receipts ?? [];
+        if (full || !previous) return { peer: result.peer, room, group, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
+        return { peer: result.peer, room, group, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
       });
       setLastReadSeq((previous) => Math.max(previous, result.lastReadSeq));
       setInitialReadSeq((previous) => previous ?? result.lastReadSeq);
@@ -510,7 +524,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     readRequested.current = seq;
     try {
       // Both answer with the server-stamped badge count, so the badge updates even while the list is unmounted (phones).
-      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : await api.global.read.mutate({ accountId, seq });
+      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : groupId ? await api.group.read.mutate({ accountId, groupId, seq }) : await api.global.read.mutate({ accountId, seq });
       latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
@@ -519,12 +533,12 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (errorCode(err) === 'NOT_FOUND') setStatus('closed');
       else if (isUnauthorized(err)) void latest.current.refresh();
     }
-  }, [accountId, userId]);
+  }, [accountId, userId, groupId]);
 
   const setMuted = useCallback(async (muted: boolean) => {
     muteVersion.current += 1;
     try {
-      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : await api.global.mute.mutate({ accountId, muted });
+      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
       setData((previous) => previous && { ...previous, muted: result.muted });
       // Muted chats are left out of the badge (§3.4), so the new count comes back with the answer.
@@ -535,25 +549,49 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-  }, [accountId, userId]);
+  }, [accountId, userId, groupId]);
 
   /** `reason` is the owner's note, shown to everyone; it only applies to global messages the owner removes. */
   const deleteMessage = useCallback(async (messageId: string, reason = '') => {
     try {
       if (userId) await api.chat.delete.mutate({ accountId, userId, messageId });
+      else if (groupId) await api.group.delete.mutate({ accountId, groupId, messageId });
       else await api.global.delete.mutate({ accountId, messageId, reason });
     } catch (err) {
-      // A private chat that vanished is closed; a global message that vanished is simply gone, and the poll shows that.
-      if (errorCode(err) === 'NOT_FOUND' && userId) { setStatus('closed'); return; }
+      // A private chat that vanished is closed; a global or group message that vanished is simply gone, and the poll shows that.
+      if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.'))) { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    // The owner's deletion of someone else's global message shows as "Removed by the owner" once the poll lands.
+    // The owner's (or a group admin's) removal of someone else's message shows with its note once the poll lands.
     setData((previous) => previous && { ...previous, messages: previous.messages.map((message): ChatMessage => (message.id === messageId
-      ? { ...message, body: null, deletedBy: message.fromMe ? 'sender' : 'owner', ...(message.fromMe || userId ? {} : { reason }) } as ChatMessage : message)) });
+      ? { ...message, body: null, deletedBy: message.fromMe ? 'sender' : groupId ? 'admin' : 'owner', ...(message.fromMe || userId || groupId ? {} : { reason }) } as ChatMessage : message)) });
     pollNow();
     onChangeRef.current?.();
-  }, [accountId, userId, pollNow]);
+  }, [accountId, userId, groupId, pollNow]);
+
+  /**
+   * The typing signal (§13): `true` while the draft is being typed, renewed every CHAT.typingRenewMs so the server's
+   * CHAT.typingMs expiry never lapses mid-sentence; `false` as soon as the draft is empty or the composer goes away.
+   * Best effort: a failed signal is simply dropped. The room has no typing signal.
+   */
+  const typingOn = useRef(false);
+  const typingSentAt = useRef(0);
+  const signalTyping = useCallback((active: boolean) => {
+    if (!userId && !groupId) return;
+    const now = Date.now();
+    if (active) {
+      if (typingOn.current && now - typingSentAt.current < CHAT.typingRenewMs) return;
+      typingOn.current = true; typingSentAt.current = now;
+    } else {
+      if (!typingOn.current) return;
+      typingOn.current = false;
+    }
+    const call = userId ? api.chat.typing.mutate({ accountId, userId, typing: active }) : api.group.typing.mutate({ accountId, groupId: groupId!, typing: active });
+    call.catch(() => undefined);
+  }, [accountId, userId, groupId]);
+  // Leaving the thread with a live signal turns it off, so nobody sees "typing" for a closed tab.
+  useEffect(() => () => { if (typingOn.current) { typingOn.current = false; const cancel = userId ? api.chat.typing.mutate({ accountId, userId, typing: false }) : groupId ? api.group.typing.mutate({ accountId, groupId, typing: false }) : null; cancel?.catch(() => undefined); } }, [accountId, userId, groupId]);
 
   /** Owner only, global room only: replaces a message's text. The server applies the same body rules and filter. */
   const editMessage = useCallback(async (messageId: string, body: string, reason = '') => {
@@ -570,7 +608,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     onChangeRef.current?.();
   }, [accountId, userId, pollNow]);
 
-  const send = useCallback((body: string) => enqueue(entry, body), [entry]);
+  // A send clears the signal on the server too, so the flag only needs resetting here.
+  const send = useCallback((body: string) => { typingOn.current = false; enqueue(entry, body); }, [entry]);
   const retry = useCallback(() => { if (requeue(entry, false)) void pump(entry); }, [entry]);
   const discard = useCallback((clientId: string) => setOutgoing(entry, entry.outgoing.filter((item) => item.clientId !== clientId)), [entry]);
   const saveDraft = useCallback((text: string) => { entry.draft = text; }, [entry]);
@@ -582,8 +621,12 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     /** Load error for the first page (the thread shows it with Try again). */
     error,
     peer: data?.peer ?? null,
-    /** The global room's details; null for a one-to-one chat. */
+    /** The global room's details; null otherwise. */
     room: data?.room ?? null,
+    /** The friend group's details (name, members, the viewer's role); null otherwise. */
+    group: data?.group ?? null,
+    /** The other members' delivery and read markers and typing signals (§13); empty in the room. */
+    receipts: data?.receipts ?? [],
     messages,
     hasEarlier: data?.hasEarlier ?? false,
     muted: data?.muted ?? false,
@@ -606,6 +649,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     setMuted,
     deleteMessage,
     editMessage,
+    signalTyping,
   };
 }
 

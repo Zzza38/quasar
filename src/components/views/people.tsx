@@ -6,9 +6,9 @@ import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type S
 import { sameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
+import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
@@ -19,18 +19,13 @@ type Member = RouterOutput['community']['members']['members'][number];
 type Friends = RouterOutput['community']['friends'];
 type Profile = RouterOutput['community']['profile'];
 
-function MemberAvatar({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' }) {
-  return <span aria-hidden="true" className={cn('grid shrink-0 place-items-center rounded-full font-extrabold text-primary-foreground', size === 'lg' ? 'size-14 text-xl' : 'size-10 text-sm')}
-    style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 75%, white) 0%, var(--primary) 60%, color-mix(in srgb, var(--primary) 70%, black) 100%)' }}>{(name || '?').slice(0, 1).toUpperCase()}</span>;
-}
-
 function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: string) => void; children?: React.ReactNode }) {
   const detailId = useId();
   const detail = [member.fullName, member.grade ? gradeLabel(member.grade) : null, member.friendState === 'friends' ? 'Friend' : member.friendState === 'requested' ? 'Request sent' : member.friendState === 'incoming' ? 'Wants to be friends' : null].filter(Boolean).join(' · ') || 'Member';
   // The short label keeps the button name stable; the details (verified, full name, grade, friend state) are its description.
   return <li className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
     <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(member.id)} aria-label={`Open ${member.displayName}’s profile`} aria-describedby={detailId}>
-      <MemberAvatar name={member.displayName} />
+      <MemberAvatar name={member.displayName} src={member.avatar} />
       <span className="grid min-w-0">
         <strong className="flex min-w-0 items-center gap-1.5 text-sm font-bold"><span className="truncate">{member.displayName}</span>{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong>
         <Hint className="truncate"><span id={detailId}>{member.verified && <span className="sr-only">Verified · </span>}{detail}</span></Hint>
@@ -300,7 +295,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     {!profile && !error && <Hint role="status">Loading profile…</Hint>}
     {profile && <>
       <div className="flex flex-wrap items-center gap-3">
-        <MemberAvatar name={profile.displayName} size="lg" />
+        <MemberAvatar name={profile.displayName} src={profile.avatar} size="lg" />
         <div className="flex flex-wrap gap-1.5">
           {profile.verified ? <Chip tone="success" icon="checkCircle">Verified at {profile.school.name}</Chip> : <Chip tone="outline">Not verified</Chip>}
           {profile.friendState === 'friends' && <Chip tone="accent" icon="star">Friend</Chip>}
