@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { classKey, couldBeClass, sameClass } from './class-match';
+import { classKey, couldBeClass, sameClass, similarClassName, classSearchScore, directoryCandidates } from './class-match';
+
+describe('directory name suggestions', () => {
+  it('suggests small typos and incomplete names without making them automatic matches', () => {
+    expect(similarClassName('Algebar II', 'Algebra II')).toBe(true);
+    expect(similarClassName('Algera II', 'Algebra II')).toBe(true);
+    expect(classSearchScore('Algebar', 'Algebra II')).not.toBeNull();
+    expect(classSearchScore('Alg', 'Algebra II')).not.toBeNull();
+    expect(classSearchScore('Honors Spanish', 'Spanish 2 Honors')).not.toBeNull();
+    expect(couldBeClass('Algebar II', 'Algebra II')).toBe(false);
+    expect(sameClass({ name: 'Algebar II' }, { name: 'Algebra II' })).toBe(false);
+  });
+  it('keeps different course words and explicit levels apart', () => {
+    for (const [query, name] of [['Algebar II', 'Algebra I'], ['Spanish 2', 'Spanish 3'], ['AP Chemistry', 'Chemistry'], ['Art', 'Art History']]) {
+      expect(similarClassName(query, name), `${query} / ${name}`).toBe(false);
+    }
+    expect(classSearchScore('Algebar II', 'Algebra III')).toBeNull();
+    expect(classSearchScore('Physics', 'Algebra II')).toBeNull();
+    expect(classSearchScore('', 'Algebra II')).toBeNull();
+  });
+  it('requires compatible teachers and rooms before suggesting the same section', () => {
+    const entries = [{ name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204' }];
+    expect(directoryCandidates({ name: 'Algebar II' }, entries)).toEqual({ matches: [], similar: entries });
+    expect(directoryCandidates({ name: 'Algebra II', teacher: 'Mr. Lee' }, entries)).toEqual({ matches: [], similar: [] });
+    expect(directoryCandidates({ name: 'Algebra II', room: '301' }, entries)).toEqual({ matches: [], similar: [] });
+  });
+});
 
 describe('class matching', () => {
   it('treats word order, case, punctuation and honors spellings as the same class', () => {
