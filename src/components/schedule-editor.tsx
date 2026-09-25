@@ -7,7 +7,7 @@ import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, rand
 import { Icon } from './icon';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
-import { Button, Callout, Chip, Field, Hint, IconButton, Input, Panel, Segmented, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
+import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Panel, Segmented, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
 import { Label } from './ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 
@@ -53,6 +53,9 @@ function nextSlot(slots: ScheduleSlot[], periods: SchoolPeriod[]): ScheduleSlot 
 }
 
 export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'No periods yet.' }: { slots: ScheduleSlot[]; periods: SchoolPeriod[]; onChange: (slots: ScheduleSlot[]) => void; disabled?: boolean; emptyText?: string }) {
+  const [removing, setRemoving] = useState<string | null>(null);
+  const target = slots.find(slot => slot.id === removing);
+  const targetName = periods.find(period => period.id === target?.periodId)?.label ?? REMOVED_PERIOD_LABEL;
   const update = (index: number, patch: Partial<ScheduleSlot>) => onChange(slots.map((slot, position) => position === index ? { ...slot, ...patch } : slot));
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
@@ -61,7 +64,7 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
   };
-  return <div className="grid gap-2">
+  return <><div className="grid gap-2">
     {slots.length === 0 && <Hint>{emptyText}</Hint>}
     {slots.map((slot, index) => <div key={slot.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 min-[481px]:grid-cols-[minmax(0,1fr)_118px_118px_auto]">
       <Select small aria-label={`Slot ${index + 1} period`} value={slot.periodId} disabled={disabled} onChange={(event) => update(index, { periodId: event.target.value })}>
@@ -74,11 +77,14 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
       </div>
       <div className="col-start-2 row-start-1 flex items-center gap-0.5 min-[481px]:col-start-auto min-[481px]:row-start-auto">
         <IconButton size="sm" label={`Move slot ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} className="max-[480px]:hidden" />
-        <IconButton size="sm" label={`Remove slot ${index + 1}`} icon="x" disabled={disabled} onClick={() => onChange(slots.filter((_, position) => position !== index))} />
+        <IconButton size="sm" label={`Remove slot ${index + 1}`} icon="x" disabled={disabled} onClick={() => setRemoving(slot.id)} />
       </div>
     </div>)}
     <div><Button size="sm" icon="plus" disabled={disabled || periods.length === 0} onClick={() => onChange([...slots, nextSlot(slots, periods)])}>Add period</Button></div>
-  </div>;
+  </div><Modal open={!!target} onClose={() => setRemoving(null)} title={`Remove ${targetName} time block?`}
+    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Keep block</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={() => { if (target) onChange(slots.filter(slot => slot.id !== target.id)); setRemoving(null); }}>Remove time block</Button></>}>
+    <p className="text-sm text-muted-foreground">{target && formatRange(target.start, target.end)}. The period and any class assigned to it will stay saved.</p>
+  </Modal></>;
 }
 
 /* ---------- Editor ---------- */
@@ -163,9 +169,10 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
   const update = (index: number, patch: Partial<SchoolPeriod>) => set({ periods: value.periods.map((period, position) => position === index ? { ...period, ...patch } : period) });
   const scheduled = scheduledPeriodIds(value);
   const usage = (id: string) => value.cycleDays.filter((day) => day.slots.some((slot) => slot.periodId === id)).length;
-  // The period waiting in the in-place removal confirmation (docs/CHAT.md §Dialogs: no native confirm()).
   const [removing, setRemoving] = useState<string | null>(null);
+  const target = value.periods.find(period => period.id === removing);
   const remove = (index: number) => {
+    if (!value.periods[index]) return;
     setRemoving(null);
     const id = value.periods[index].id;
     set({
@@ -181,7 +188,7 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
     [next[index], next[target]] = [next[target], next[index]];
     set({ periods: next });
   };
-  return <div className="grid gap-4">
+  return <><div className="grid gap-4">
     <div className="grid gap-2">
       {value.periods.map((period, index) => <div key={period.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-xl bg-muted/60 p-2 ring-1 ring-inset ring-foreground/[0.04]">
         <span aria-hidden="true" className="grid size-7 place-items-center rounded-lg bg-card text-[11px] font-extrabold text-muted-foreground shadow-card">{index + 1}</span>
@@ -191,19 +198,18 @@ export function Periods({ value, set, disabled, confirmRemoval = true }: { value
         </Select>
         <div className="flex items-center gap-0.5">
           <IconButton size="sm" label={`Move period ${index + 1} up`} icon="arrowUp" disabled={disabled || index === 0} onClick={() => move(index, -1)} />
-          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (!confirmRemoval || usage(period.id) === 0) remove(index); else setRemoving(period.id); }} />
+          <IconButton size="sm" label={`Remove period ${period.label || index + 1}`} icon="trash" disabled={disabled} onClick={() => { if (!confirmRemoval) remove(index); else setRemoving(period.id); }} />
         </div>
-        {removing === period.id && <Callout tone="warning" icon="alert" role="alert" className="col-span-full" title={`Remove ${period.label || 'this period'}?`} actions={<>
-          <Button size="sm" variant="danger" disabled={disabled} onClick={() => remove(index)}>Remove period</Button>
-          <Button size="sm" autoFocus onClick={() => setRemoving(null)}>Keep it</Button>
-        </>}>It is used on {usage(period.id) === 1 ? '1 rotation day' : `${usage(period.id)} rotation days`}, and its times there are removed too.</Callout>}
       </div>)}
     </div>
     <div className="flex flex-wrap gap-2">
       <Button size="sm" icon="plus" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId(`period-${value.periods.length + 1}`, value.periods.map((period) => period.id)), label: `Period ${value.periods.length + 1}`, kind: 'class' }] })}>Add period</Button>
       {!value.periods.some((period) => period.kind === 'lunch') && <Button size="sm" icon="coffee" disabled={disabled} onClick={() => set({ periods: [...value.periods, { id: slugId('lunch', value.periods.map((period) => period.id)), label: 'Lunch', kind: 'lunch' }] })}>Add lunch</Button>}
     </div>
-  </div>;
+  </div><Modal open={!!target} onClose={() => setRemoving(null)} title={`Remove ${target?.label || 'this period'}?`}
+    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Keep period</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={() => { if (target) remove(value.periods.findIndex(period => period.id === target.id)); }}>Remove period</Button></>}>
+    <p className="text-sm text-muted-foreground">{target && usage(target.id) > 0 ? `Its time blocks on ${usage(target.id)} rotation ${usage(target.id) === 1 ? 'day' : 'days'} will also be removed.` : 'This period has no time blocks.'}</p>
+  </Modal></>;
 }
 
 /**
