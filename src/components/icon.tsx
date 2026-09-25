@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, BellOff, BookOpen, Calendar, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Coffee, Copy, Ellipsis, ExternalLink, Eye, GraduationCap, GripHorizontal, GripVertical, House, Inbox, Info, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, MessageCircle, Moon, Palette, Pencil, Plus, RefreshCw, Search, SendHorizontal, Settings, Sparkles, Star, Sun, Trash2, TriangleAlert, Users, Utensils, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, Bell, BellOff, Bold, BookOpen, Calendar, Camera, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Code, Coffee, Copy, Crown, Ellipsis, ExternalLink, Eye, Flag, GraduationCap, GripHorizontal, GripVertical, House, ImageUp, Inbox, Info, Italic, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, MessageCircle, MessageSquarePlus, Moon, Palette, Pencil, Plus, RefreshCw, Search, SendHorizontal, Settings, Sparkles, Star, Strikethrough, Sun, Trash2, TriangleAlert, Type, UserMinus, UserPlus, Users, Utensils, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -58,6 +58,20 @@ const icons = {
   send: SendHorizontal,
   palette: Palette,
   spinner: LoaderCircle,
+  // Chat (docs/CHAT.md §12-§14): formatting, receipts, groups, reports and appeals.
+  bold: Bold,
+  italic: Italic,
+  strikethrough: Strikethrough,
+  code: Code,
+  textFormat: Type,
+  checkCheck: CheckCheck,
+  userPlus: UserPlus,
+  userMinus: UserMinus,
+  newGroup: MessageSquarePlus,
+  crown: Crown,
+  flag: Flag,
+  ban: Ban,
+  imageUp: ImageUp,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof icons;

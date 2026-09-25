@@ -195,6 +195,21 @@ const GLOBAL_CANDIDATE_SQL = `SELECT 'global' AS threadId, max(c.seq) AS seq
     AND c.created_at<=@newest AND c.created_at>=@oldest
   HAVING max(c.seq) IS NOT NULL`;
 const GLOBAL_THREAD = 'global';
+/**
+ * Friend groups (docs/CHAT.md §12) as candidates keyed 'group:<id>': the recipient is a live, unmuted member with
+ * names and chat_push on, and an undeleted message from someone else (not blocked, sent since they joined) is past
+ * both their read and notified markers, at least 60 s old and at most 24 h old.
+ */
+const GROUP_CANDIDATES_SQL = `SELECT 'group:' || m.group_id AS threadId, max(c.seq) AS seq
+  FROM chat_group_members m
+  JOIN users r ON r.id=m.user_id
+  JOIN chat_group_messages c ON c.group_id=m.group_id
+  WHERE m.user_id=@owner AND m.left_at IS NULL AND m.muted=0 AND r.chat_push=1 AND r.display_name<>'' AND r.full_name<>''
+    AND c.sender_id<>m.user_id AND c.seq>max(m.last_read_seq,m.notified_seq) AND c.deleted_at IS NULL AND c.created_at>=m.joined_at
+    AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id=m.user_id AND b.blocked_id=c.sender_id)
+    AND c.created_at<=@newest AND c.created_at>=@oldest
+  GROUP BY m.group_id`;
+const GROUP_PREFIX = 'group:';
 
 /** The recipient's school time zone, or the fallback when there is no school or the stored zone is unusable. */
 function chatTimeZone(schedule: string | null): string {
@@ -316,7 +331,7 @@ export class NotificationService {
     const windowStart = new Date(Math.floor(now.getTime() / CHAT.pushWindowMs) * CHAT.pushWindowMs).toISOString();
     const candidates = (owner: string) => {
       const params = { owner, newest: at(CHAT.pushDelayMs), oldest: at(DAY) };
-      return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params)] as { threadId: string; seq: number }[];
+      return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GROUP_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params)] as { threadId: string; seq: number }[];
     };
     const recipients = this.db.prepare(`SELECT u.id, s.schedule FROM users u LEFT JOIN schools s ON s.id=u.school_id
       WHERE u.chat_push=1 AND EXISTS (SELECT 1 FROM push_subscriptions p WHERE p.owner_id=u.id) ORDER BY u.id`).all() as { id: string; schedule: string | null }[];
@@ -364,10 +379,12 @@ export class NotificationService {
         if (notified.size) {
           const update = this.db.prepare('UPDATE chat_members SET notified_seq=max(notified_seq,?) WHERE thread_id=? AND user_id=?');
           const updateGlobal = this.db.prepare('UPDATE global_members SET notified_seq=max(notified_seq,?) WHERE user_id=?');
+          const updateGroup = this.db.prepare('UPDATE chat_group_members SET notified_seq=max(notified_seq,?) WHERE group_id=? AND user_id=?');
           this.db.transaction(() => {
             for (const [threadId, seq] of notified) {
               // A newcomer's row starts at their read marker, not 0, so a push never marks the backlog unread.
               if (threadId === GLOBAL_THREAD) { ensureGlobalMember(this.db, recipient.id); updateGlobal.run(seq, recipient.id); }
+              else if (threadId.startsWith(GROUP_PREFIX)) updateGroup.run(seq, threadId.slice(GROUP_PREFIX.length), recipient.id);
               else update.run(seq, threadId, recipient.id);
             }
           }).immediate();

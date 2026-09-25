@@ -11,6 +11,7 @@ import { Icon } from './icon';
 import { Days, describeIssues, Periods, Preview, ScheduleEditor, ScheduleSummary, SlotsEditor } from './schedule-editor';
 import { classesStep } from './setup-state';
 import { Brand } from './shell';
+import { AppealModal } from './appeal';
 import { Button, Callout, ChoiceGroup, Chip, Eyebrow, Field, Hint, Input, OptionCard, Panel, Select, Spacer } from './primitives';
 import { Card, CardContent } from './ui/card';
 import { Label } from './ui/label';
@@ -93,10 +94,26 @@ export function Onboarding({ context, online, sessionNotice, onRefresh, onSignOu
   if (step === 'names') return <NamesStep {...shared} user={context.user} onSaved={async () => { await onRefresh(); setStep('school'); }} />;
   if (step === 'create') return <CreateStep {...shared} userId={context.user.id} onBack={() => setStep('school')} onCreated={open} onUseExisting={open} />;
   if (step === 'choice' && selected) return <ChoiceStep {...shared} school={selected} userId={context.user.id} onBack={() => setStep('school')} onJoined={onRefresh} onSchoolChanged={setSelected} />;
-  return <SchoolStep {...shared} onSelect={open} onCreate={() => setStep('create')} />;
+  return <SchoolStep {...shared} onSelect={open} onCreate={() => setStep('create')} bans={context.sanctions?.bans ?? []} accountId={context.user.id} onAppealed={onRefresh} />;
 }
 
 type StepProps = { online: boolean; notice: ReactNode; footer: ReactNode };
+type Ban = NonNullable<WorkspaceContext['sanctions']>['bans'][number];
+
+/**
+ * A removal the student can see and appeal (docs/CHAT.md §14): the school, support's reason, and an Appeal button
+ * until an appeal is open. They can still join another school.
+ */
+function BanNotice({ ban, accountId, online, onAppealed }: { ban: Ban; accountId: string; online: boolean; onAppealed: () => Promise<unknown> }) {
+  const [appealing, setAppealing] = useState(false);
+  return <>
+    <Callout tone="warning" icon="lock" role="status" title={`Support removed you from ${ban.schoolName}`}
+      actions={ban.appealed ? <Chip tone="neutral" icon="clock">Appeal sent. Support will review it.</Chip> : <Button size="sm" disabled={!online} onClick={() => setAppealing(true)}>Appeal</Button>}>
+      Reason: {ban.reason} You can’t rejoin that school unless support lifts the removal, but you can still join another one.
+    </Callout>
+    {appealing && <AppealModal accountId={accountId} kind="ban" schoolId={ban.schoolId} what={`your removal from ${ban.schoolName}`} onClose={() => setAppealing(false)} onSent={async () => { setAppealing(false); await onAppealed(); }} />}
+  </>;
+}
 
 /* ---------- Step 1: names ---------- */
 
@@ -173,7 +190,7 @@ function usePick(onOpen: (school: School) => void, setMessage: (message: string)
   return { opening, pick, cancel };
 }
 
-function SchoolStep({ onSelect, onCreate, online, notice, footer }: StepProps & { onSelect: (school: School) => void; onCreate: () => void }) {
+function SchoolStep({ onSelect, onCreate, online, notice, footer, bans, accountId, onAppealed }: StepProps & { onSelect: (school: School) => void; onCreate: () => void; bans: Ban[]; accountId: string; onAppealed: () => Promise<unknown> }) {
   const [query, setQuery] = useState('');
   const [schools, setSchools] = useState<SchoolSummary[] | null>(null);
   const [message, setMessage] = useState('');
@@ -187,6 +204,7 @@ function SchoolStep({ onSelect, onCreate, online, notice, footer }: StepProps & 
     return () => { current = false; clearTimeout(timer); };
   }, [query, online]);
   return <Frame step={2} title="Find your school" description="If a schoolmate already added it, you get their bell schedule instantly." notice={notice} footer={footer}>
+    {bans.map((ban) => <BanNotice key={ban.schoolId} ban={ban} accountId={accountId} online={online} onAppealed={onAppealed} />)}
     <div className="relative">
       <Icon name="search" size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
       <Input aria-label="School name or location" placeholder="School name or town" autoFocus maxLength={200} value={query} onChange={(event) => setQuery(event.target.value)} className="h-12 rounded-2xl pl-11 text-[15px]" />
