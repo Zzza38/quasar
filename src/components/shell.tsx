@@ -240,7 +240,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     {chatCount > 0 && <span id={COUNT_IDS.messages} hidden>{chatCount === 1 ? '1 unread chat' : `${chatCount} unread chats`}</span>}
 
     <Sidebar collapsible="icon" className="app-sidebar">
-      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
+      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-start group-data-[collapsible=icon]:px-2">
         {navOpen ? <>
           <Brand onClick={home} />
           <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="rounded-lg text-muted-foreground hover:bg-sidebar-accent" />
@@ -278,7 +278,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         <AttentionGap zone="sidebar" top={8} className="mx-3 flex-1 group-data-[collapsible=icon]:hidden" />
       </SidebarContent>
       <SidebarFooter className="gap-3 px-3 pb-4 group-data-[collapsible=icon]:px-2">
-        <div className="flex group-data-[collapsible=icon]:justify-center">
+        <div className="flex group-data-[collapsible=icon]:w-10 group-data-[collapsible=icon]:justify-center">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="group-data-[collapsible=icon]:hidden" className="group-data-[collapsible=icon]:px-1.5" />
         </div>
         <SidebarMenu>
