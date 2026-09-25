@@ -11,7 +11,7 @@ import type { AppState } from '../app-state';
 import { ChangedWhileEditing, type FieldSpec } from '../conflicts';
 import { ClassAssignmentGrid } from '../class-assignment-grid';
 import { ClassNameInput, useClassDirectory } from '../class-name-input';
-import { removeClass } from '../personal-timetable';
+import { removeClass, useSchoolTimetable } from '../personal-timetable';
 import { Icon } from '../icon';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer } from '../primitives';
@@ -39,6 +39,8 @@ export function ClassesView({ state }: { state: AppState }) {
   const [adjustDate, setAdjustDate] = useState<string | null>(null);
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
   const [privateOpen, setPrivateOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
   // "Wrong time?" links (openBellTimes) arrive with ?private=open; open the sheet once and drop the param.
   const privateParam = state.params.get('private');
   useEffect(() => { if (privateParam === 'open') { setPrivateOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [privateParam, state]);
@@ -71,7 +73,7 @@ export function ClassesView({ state }: { state: AppState }) {
   const current = editing && editing !== 'new' ? personal.classes.find((entry) => entry.id === editing) ?? null : null;
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
-    <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'} · drag them onto school periods below.` : undefined}
+    <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'} · unlock the timetable to place them on school periods.` : undefined}
       actions={<>{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan timetable</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></>} />
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
       if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
@@ -114,7 +116,7 @@ export function ClassesView({ state }: { state: AppState }) {
       })}
     </ul>}
 
-    <Section id="assignments-title" title="Your class timetable" icon="layers" description="Drag a class onto a school period, or select a class and tap the block. Resize to fine-tune times.">
+    <Section id="assignments-title" title="Your class timetable" icon="layers" description="Unlock to move classes, change times, or remove blocks. Lock it again when you finish.">
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'}, assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
@@ -133,7 +135,10 @@ export function ClassesView({ state }: { state: AppState }) {
           <strong>{personal.customSchedule ? 'Your timetable has personal changes' : 'Your timetable starts with the school schedule'}</strong>
           <Hint>{personal.customSchedule ? 'School corrections do not change your private copy.' : 'School corrections reach you automatically.'}</Hint>
         </div>
-        <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>Advanced schedule settings</Button>
+        <div className="flex flex-wrap gap-2">
+          {(personal.customSchedule || personal.cycleDayOverrides.length > 0 || personal.dateOverrides.length > 0) && <Button size="sm" icon="refresh" onClick={() => setResetOpen(true)}>Revert to school timetable</Button>}
+          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>Advanced schedule settings</Button>
+        </div>
       </Panel>
     </Section>
 
@@ -144,13 +149,18 @@ export function ClassesView({ state }: { state: AppState }) {
         setEditing(null);
       }}
       onDelete={current ? async () => {
-        await state.savePersonal(removeClass(school, personal, current.id));
+        await state.savePersonal(removeClass(personal, current.id));
         setEditing(null);
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
     <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schoolId={state.context.school.id} online={state.online} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
+    <Modal open={resetOpen} onClose={() => setResetOpen(false)} busy={resetPending} title="Revert to the school timetable?"
+      footer={<><Button variant="ghost" disabled={resetPending} onClick={() => setResetOpen(false)}>Keep my timetable</Button><Spacer /><Button variant="danger" busy={resetPending} onClick={async () => { setResetPending(true); setError(''); try { await state.savePersonal(useSchoolTimetable(school, personal)); setResetOpen(false); } catch (err) { setError(errorMessage(err)); } finally { setResetPending(false); } }}>Revert timetable</Button></>}>
+      <p className="text-sm text-muted-foreground">Your private timetable and date and rotation day adjustments will be cleared. Your classes and their assignments to school periods will stay saved.</p>
+      {error && <Callout tone="danger" role="alert">{error}</Callout>}
+    </Modal>
   </div>;
 }
 
@@ -169,7 +179,6 @@ function ClassSheet({ schoolId, online, personal, open, onClose, initial, curren
   const removed = current === null;
   const dirty = JSON.stringify(draft) !== JSON.stringify(original);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
-  // The in-place confirmation for removing the class (docs/CHAT.md §Dialogs: no native confirm()).
   const [removing, setRemoving] = useState(false);
   if (open && missingAtOpen) return <Modal open onClose={onClose} title="Class not found"><p className="text-sm text-muted-foreground">This class was removed on another device.</p></Modal>;
   const submit = () => run(async () => {
@@ -178,7 +187,7 @@ function ClassSheet({ schoolId, online, personal, open, onClose, initial, curren
     await onSave(value);
   });
   const previewColor = draft.color ?? classColor(draft.id || slugId(draft.name, usedIds, 'class')).dot;
-  return <Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'Add a class' : 'Edit class'}
+  return <><Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'Add a class' : 'Edit class'}
     footer={<>{onDelete && !removed && <Button variant="danger" disabled={pending || changed} onClick={() => setRemoving(true)}>Remove</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="class-form" type="submit" busy={pending} disabled={changed || !draft.name.trim()}>{isNew || removed ? 'Add class' : 'Save'}</Button></>}>
     <form id="class-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void submit(); }}>
       <div className="flex items-center gap-3">
@@ -198,11 +207,12 @@ function ClassSheet({ schoolId, online, personal, open, onClose, initial, curren
         </div>
       </Field>
       {changed && !pending && <ChangedWhileEditing draft={draft as unknown as Record<string, unknown>} current={current as unknown as Record<string, unknown> | null} fields={classFields} onKeep={() => setAcknowledged(serialized)} onLoad={() => { if (current) { setDraft(current); setOriginal(current); setAcknowledged(serialized); } else onClose(); }} />}
-      {removing && onDelete && !removed && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${draft.name.trim() || 'this class'}?`} actions={<>
-        <Button size="sm" variant="danger" busy={pending} disabled={changed} onClick={() => void run(onDelete)}>Remove class</Button>
-        <Button size="sm" autoFocus disabled={pending} onClick={() => setRemoving(false)}>Keep it</Button>
-      </>}>Its period assignments and the timetable blocks made for it are cleared. Tasks keep their notes.</Callout>}
       {error && <Callout tone="danger" role="alert">{error}</Callout>}
     </form>
-  </Modal>;
+  </Modal>
+  <Modal open={removing && !!onDelete && !removed} onClose={() => setRemoving(false)} busy={pending} title={`Remove ${draft.name.trim() || 'this class'}?`}
+    footer={<><Button variant="ghost" onClick={() => setRemoving(false)} disabled={pending}>Keep class</Button><Spacer /><Button variant="danger" busy={pending} disabled={changed} onClick={() => { if (onDelete) void run(onDelete); }}>Remove class</Button></>}>
+    <p className="text-sm text-muted-foreground">The class and its period assignments will be removed. Its time blocks will stay on your timetable, and tasks will keep their notes.</p>
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
+  </Modal></>;
 }

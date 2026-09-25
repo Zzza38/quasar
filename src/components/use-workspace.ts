@@ -445,7 +445,7 @@ export function useWorkspace(initial?: InitialBoot): WorkspaceSession {
     // The server's answer for this page load is the boot: its workspace goes straight into the device store (and a
     // background sync then uploads anything waiting there), or its sign-in verdict stands unless the session check
     // cannot reach the server, in which case the cached workspace opens for offline use. Without a server answer
-    // (the offline shell, or a server that could not decide) the boot is the usual cache-first load.
+    // (the neutral offline shell, or a server that could not decide) the boot is the usual cache-first load.
     if (boot.kind === 'workspace') void followLatest(() => load({ fresh: boot.workspace }), latestLoadRef).then((loaded) => { if (loaded) void synchronize({ background: true }); });
     else if (boot.kind === 'signed-out') void followLatest(() => load({ cachePaint: false }), latestLoadRef);
     else void initialize();

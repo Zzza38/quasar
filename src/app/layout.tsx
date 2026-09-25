@@ -17,7 +17,7 @@ const manrope = Manrope({ subsets: ['latin'], display: 'swap', variable: '--font
 export const metadata: Metadata = {
   metadataBase: new URL(siteOrigin()),
   applicationName: SITE_NAME,
-  title: { default: SITE_TITLE, template: `%s · ${SITE_NAME}` },
+  title: SITE_NAME,
   description: SITE_DESCRIPTION,
   keywords: [...SITE_KEYWORDS],
   category: 'education',

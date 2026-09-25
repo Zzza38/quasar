@@ -31,11 +31,9 @@ export function TodayView({ state }: { state: AppState }) {
   const next = useMemo(() => nextClass(schedule, now, personal), [schedule, now, personal]);
   const following = useMemo(() => next?.status === 'current' ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
   const day = useMemo(() => { try { return resolveDay(schedule, today, personal); } catch { return null; } }, [schedule, today, personal]);
-  const nextSchoolDay = useMemo(() => {
-    if (!day || !day.closed) return null;
-    for (let offset = 1; offset <= 60; offset += 1) { const date = addDays(today, offset); const resolved = resolveDay(schedule, date, personal); if (!resolved.closed && resolved.periods.length > 0) return { date, resolved }; }
-    return null;
-  }, [day, schedule, today, personal]);
+  // Once today's last period ends, the timeline and its lunch follow the same date as Up next.
+  const displayDate = next && next.date > today ? next.date : today;
+  const displayDay = useMemo(() => { try { return resolveDay(schedule, displayDate, personal); } catch { return null; } }, [schedule, displayDate, personal]);
   const tasks = useMemo(() => sortByDue(taskItems(state.snapshot.entities).filter((item) => !item.task.completed)), [state.snapshot.entities]);
   const dueSoon = tasks.filter((item) => !item.task.dueDate || daysBetween(today, item.task.dueDate) <= 2);
   const shown = dueSoon.slice(0, 6);
@@ -50,8 +48,8 @@ export function TodayView({ state }: { state: AppState }) {
   const setupFirst = !coreSetupDone(personal, schedule);
   // resolveDay follows the private schedule when there is one, so the rotation position must come from the same schedule.
   const effective = effectiveSchedule(schedule, personal);
-  const cycleIndex = day && !day.closed ? effective.cycleDays.findIndex((entry) => entry.id === day.cycleDayId) : -1;
-  const cyclePosition = day && !day.closed && effective.cycleDays.length > 1 && cycleIndex >= 0 && !day.cycleDayLabel.includes(String(cycleIndex + 1)) ? ` · ${cycleIndex + 1} of ${effective.cycleDays.length}` : '';
+  const cycleIndex = displayDay && !displayDay.closed ? effective.cycleDays.findIndex((entry) => entry.id === displayDay.cycleDayId) : -1;
+  const cyclePosition = displayDay && !displayDay.closed && effective.cycleDays.length > 1 && cycleIndex >= 0 && !displayDay.cycleDayLabel.includes(String(cycleIndex + 1)) ? ` · ${cycleIndex + 1} of ${effective.cycleDays.length}` : '';
   // During school hours, quick add files new tasks under the class that is on now or just ended.
   const suggestedClassId = useMemo(() => {
     if (!day || day.closed || day.periods.length === 0) return null;
@@ -71,7 +69,7 @@ export function TodayView({ state }: { state: AppState }) {
         <h1 className="text-[30px] lg:text-[36px]">{greeting(now, timeZone)}, {context.user.displayName}</h1>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {day && !day.closed && <Chip tone="accent" icon="layers">{day.cycleDayLabel}{cyclePosition}</Chip>}
+        {displayDay && !displayDay.closed && <Chip tone="accent" icon="layers">{displayDate !== today ? 'Next: ' : ''}{displayDay.cycleDayLabel}{cyclePosition}</Chip>}
         {day?.closed && <Chip icon="coffee">No school today</Chip>}
       </div>
     </header>
@@ -90,15 +88,14 @@ export function TodayView({ state }: { state: AppState }) {
     </div>
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-      <Section title="Today" id="today-timeline" description={day && !day.closed ? `${day.periods.length} periods · ${day.periods.length ? formatRange(day.periods[0].start, day.periods[day.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{day && !day.closed && day.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => openBellTimes(state)} title={personal.customSchedule ? 'Edit my private schedule' : 'Fix the shared bell schedule'}>Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule')}>Full schedule</Button></div>}>
-        {day?.closed && <div className="grid justify-items-start gap-2 py-3">
+      <Section title={displayDate === today ? 'Today' : `Next school day · ${relativeDate(displayDate, today, { weekday: 'long' })}`} id="today-timeline" description={displayDay && !displayDay.closed ? `${displayDay.periods.length} periods · ${displayDay.periods.length ? formatRange(displayDay.periods[0].start, displayDay.periods[displayDay.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{displayDay && !displayDay.closed && displayDay.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => openBellTimes(state)} title={personal.customSchedule ? 'Edit my private schedule' : 'Fix the shared bell schedule'}>Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule', displayDate === today ? undefined : { date: displayDate })}>Full schedule</Button></div>}>
+        {displayDay?.closed && <div className="grid justify-items-start gap-2 py-3">
           <p className="text-sm text-muted-foreground">No periods today. Enjoy the day off.</p>
-          {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
         </div>}
-        {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
-        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, today, period)} />}
-        {day && !day.closed && <LunchDay state={state} date={today} />}
-        {day && day.issues.length > 0 && <Hint tone="danger">{describeDayIssues(day.issues).join(' ')} Review your adjustments under Classes.</Hint>}
+        {displayDay && !displayDay.closed && displayDay.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
+        {displayDay && displayDay.periods.length > 0 && <Timeline periods={displayDay.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, displayDate, period)} />}
+        {displayDay && !displayDay.closed && <LunchDay state={state} date={displayDate} />}
+        {displayDay && displayDay.issues.length > 0 && <Hint tone="danger">{describeDayIssues(displayDay.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
 
       <Section title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
@@ -112,8 +109,8 @@ export function TodayView({ state }: { state: AppState }) {
           : later > 0 && <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{later} due later</Button>}
       </Section>
     </div>
-    {state.personalValid && <PeriodSheet state={state} period={changePeriod} date={today} onClose={() => setChangePeriod(null)} onAdjustDay={() => { setChangePeriod(null); setAdjustDay(true); }} />}
-    <DateAdjustmentSheet open={adjustDay} onClose={() => setAdjustDay(false)} date={today} school={schedule} personal={personal} save={state.savePersonal} />
+    {state.personalValid && <PeriodSheet state={state} period={changePeriod} date={displayDate} onClose={() => setChangePeriod(null)} onAdjustDay={() => { setChangePeriod(null); setAdjustDay(true); }} />}
+    <DateAdjustmentSheet open={adjustDay} onClose={() => setAdjustDay(false)} date={displayDate} school={schedule} personal={personal} save={state.savePersonal} />
   </div>;
 }
 
