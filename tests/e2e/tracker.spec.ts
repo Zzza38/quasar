@@ -834,6 +834,42 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await expect(saved(page)).toBeVisible();
 });
 
+test('class and time block removals confirm, and reverting restores school times', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await dialog(page).getByLabel('Class name').fill('Biology');
+  await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  const schoolBlock = day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true });
+  await expect(page.getByRole('button', { name: 'Place Biology', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Unlock timetable' }).click();
+  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
+  await schoolBlock.click();
+  await expect(day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Biology', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit Biology' }).click();
+  await page.getByRole('dialog', { name: 'Edit class' }).getByRole('button', { name: 'Remove', exact: true }).click();
+  const classPrompt = page.getByRole('dialog', { name: 'Remove Biology?' });
+  await expect(classPrompt).toBeVisible();
+  await classPrompt.getByRole('button', { name: 'Keep class' }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit class' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Edit class' }).getByRole('button', { name: 'Remove', exact: true }).click();
+  await classPrompt.getByRole('button', { name: 'Remove class' }).click();
+  await expect(page.getByRole('button', { name: 'Edit Biology' })).toHaveCount(0);
+  await expect(schoolBlock).toBeVisible();
+  await day.getByRole('button', { name: 'Clear Day 1 8:00–9:00 AM' }).click();
+  const blockPrompt = page.getByRole('dialog', { name: 'Remove A?' });
+  await expect(blockPrompt).toBeVisible();
+  await blockPrompt.getByRole('button', { name: 'Keep block' }).click();
+  await expect(schoolBlock).toBeVisible();
+  await day.getByRole('button', { name: 'Clear Day 1 8:00–9:00 AM' }).click();
+  await blockPrompt.getByRole('button', { name: 'Remove time block' }).click();
+  await expect(schoolBlock).toHaveCount(0);
+  await page.getByRole('button', { name: 'Revert to school timetable' }).click();
+  await page.getByRole('dialog', { name: 'Revert to the school timetable?' }).getByRole('button', { name: 'Revert timetable' }).click();
+  await expect(schoolBlock).toBeVisible();
+});
+
 
 test('large period palette stays beside the canvas on desktop', async ({ page, context }, testInfo) => {
   const schedule = structuredClone(exampleSchedule);
