@@ -23,6 +23,7 @@
     "@trpc/server": "11.18.0",
     "better-sqlite3": "13.0.3",
     "class-variance-authority": "0.7.1",
+    "cmdk": "1.1.1",
     "cn": "0.3.0",
     "ical.js": "2.2.1",
     "idb": "8.0.3",

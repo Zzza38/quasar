@@ -1,16 +1,20 @@
 import type { WorkspaceContext } from '@/components/app-state';
-import type { ResolvedPeriod } from '@/domain/schedule';
-import { classKey } from '@/domain/class-match';
+import { resolveDay, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
+import { sameClass } from '@/domain/class-match';
 
 export type Classmate = { id: string; displayName: string };
 
-/** Friends who have the same class in this same period: the same directory entry, or the same words in any order (see classKey). */
-export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, period: Pick<ResolvedPeriod, 'periodId' | 'class'>): Classmate[] {
+/** Friends whose resolved timetable has this same class at this same time on this date. */
+export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, schedule: Schedule, date: string, period: Pick<ResolvedPeriod, 'periodId' | 'startAt' | 'endAt' | 'class'>): Classmate[] {
   const own = period.class;
   if (!own?.name) return [];
-  const key = classKey(own.name);
   return (context.community?.classmates ?? [])
-    .filter((friend) => friend.classes.some((cls) => cls.periodId === period.periodId && (own.directoryId && cls.directoryId ? cls.directoryId === own.directoryId : key !== '' && cls.key === key)))
+    .filter((friend) => {
+      try {
+        const day = resolveDay(schedule, date, friend.personal);
+        return !day.closed && day.periods.some((theirs) => theirs.periodId === period.periodId && theirs.startAt === period.startAt && theirs.endAt === period.endAt && theirs.class && sameClass(own, theirs.class));
+      } catch { return false; }
+    })
     .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
 }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { formatRoom } from '@/lib/format';
+import { classSearchScore } from '@/domain/class-match';
 import { GRADES, gradeLabel, type Grade, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { Button, Callout, Field, Hint, Input, Modal, Panel, Select, Spacer, Textarea } from './primitives';
 import { Checkbox } from './ui/checkbox';
@@ -42,7 +43,7 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
     setPending(true); setError(''); setNotice('');
     try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  const entries = (directory?.classes ?? []).filter(entry => (!grade || entry.grades.includes(grade)) && `${entry.name} ${entry.teacher ?? ''} ${entry.room ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const entries = (directory?.classes ?? []).filter(entry => (!grade || entry.grades.includes(grade)) && (classSearchScore(query, entry.name) !== null || `${entry.name} ${entry.teacher ?? ''} ${entry.room ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())));
   const selectedEntries = (directory?.classes ?? []).filter(entry => selected.includes(entry.id) && !personal?.classes.some(cls => isCopy(cls, entry)));
   return <Modal open onClose={onClose} dirty={selectedEntries.length > 0 || !!correction?.message.trim()} busy={pending} wide title="School class directory" description="Search your school’s classes, select yours, then place them into periods in your class timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{onAdd && <Button variant="primary" busy={pending} disabled={!online || selectedEntries.length === 0 || editing !== null} onClick={() => void run(async () => {

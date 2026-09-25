@@ -23,6 +23,68 @@ function fixture() {
 }
 const details = { name: 'Algebra', teacher: 'Teacher', room: '101', grades: ['9' as const] };
 
+describe('adding reviewed scans to the directory', () => {
+  it('reuses listed classes, adds new classes once, and keeps grade and section boundaries', () => {
+    const f = fixture();
+    const entry = f.directory.save(f.student, { schoolId: f.school.id, details });
+    const input = { schoolId: f.school.id, grade: '9' as const, rows: [{ name: 'Algebra' }, { name: 'Biology', teacher: 'Ms. Chen' }] };
+    const first = f.directory.importClasses(f.student, input);
+    expect(first.rows[0]).toMatchObject({ directoryId: entry.id, teacher: 'Teacher', room: '101' });
+    expect(first.rows[1].directoryId).toBeTruthy();
+    expect(f.directory.importClasses(f.student, input).rows).toEqual(first.rows);
+    expect(f.directory.list(f.student, f.school.id).classes).toHaveLength(2);
+    f.directory.importClasses(f.student, { ...input, rows: [{ name: 'Algebra', teacher: 'Another teacher' }] });
+    f.directory.importClasses(f.student, { ...input, grade: '10', rows: [{ name: 'Algebra' }] });
+    expect(f.directory.list(f.student, f.school.id).classes).toHaveLength(4);
+  });
+  it('requires a decision for typos and only corrects the explicitly confirmed name', () => {
+    const f = fixture();
+    const entry = f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Algebar' } });
+    const input = { schoolId: f.school.id, grade: '9' as const, rows: [{ name: 'Algebra' }] };
+    expect(() => f.directory.importClasses(f.student, input)).toThrow('possible match');
+    expect(f.directory.list(f.student, f.school.id).classes[0].name).toBe('Algebar');
+    const confirmed = { ...input, rows: [{ name: 'Algebra', directoryId: entry.id, correctName: true, expectedVersion: entry.version }] };
+    expect(f.directory.importClasses(f.student, confirmed).rows[0]).toMatchObject({ directoryId: entry.id, name: 'Algebra' });
+    expect(f.directory.importClasses(f.student, confirmed).rows[0].directoryId).toBe(entry.id);
+    expect(f.directory.list(f.student, f.school.id).classes).toEqual([{ ...entry, name: 'Algebra', version: 2 }]);
+    expect(() => f.directory.importClasses(f.student, { ...confirmed, rows: [{ ...confirmed.rows[0], name: 'Physics' }] })).toThrow('spelling correction');
+  });
+  it('allows an explicitly separate class and rolls back the batch when another row needs review', () => {
+    const f = fixture();
+    f.directory.save(f.student, { schoolId: f.school.id, details });
+    const input = { schoolId: f.school.id, grade: '9' as const, rows: [{ name: 'Biology' }, { name: 'Algebar' }] };
+    expect(() => f.directory.importClasses(f.student, input)).toThrow('possible match');
+    expect(f.directory.list(f.student, f.school.id).classes).toHaveLength(1);
+    const result = f.directory.importClasses(f.student, { ...input, rows: [{ name: 'Algebar', separate: true }] });
+    expect(result.rows[0].directoryId).toBeTruthy();
+    expect(f.directory.list(f.student, f.school.id).classes).toHaveLength(2);
+  });
+  it('checks current locks and leaves new classes and confirmed corrections personal when locked', () => {
+    const f = fixture();
+    const entry = f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Algebar' } });
+    f.db.prepare('UPDATE schools SET support_locked=1 WHERE id=?').run(f.school.id);
+    const result = f.directory.importClasses(f.student, { schoolId: f.school.id, grade: '9', rows: [
+      { name: 'Algebra', directoryId: entry.id, correctName: true, expectedVersion: entry.version }, { name: 'Biology' },
+    ] });
+    expect(result).toMatchObject({ canEdit: false, skipped: 2, rows: [{ name: 'Algebra', directoryId: entry.id }, { name: 'Biology' }] });
+    expect(result.rows[1].directoryId).toBeUndefined();
+    expect(f.directory.list(f.student, f.school.id).classes).toEqual([entry]);
+    f.db.prepare('UPDATE schools SET support_locked=0,member_locked=1 WHERE id=?').run(f.school.id);
+    expect(f.directory.importClasses(f.student, { schoolId: f.school.id, rows: [{ name: 'Biology' }] }).skipped).toBe(1);
+  });
+  it('rejects stale corrections, foreign class IDs, and mutations from another account', async () => {
+    const f = fixture();
+    const entry = f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Algebar' } });
+    f.directory.save(f.student, { schoolId: f.school.id, id: entry.id, expectedVersion: entry.version, details: { ...details, name: 'Algebar', room: '202' } });
+    const input = { schoolId: f.school.id, rows: [{ name: 'Algebra', directoryId: entry.id, correctName: true, expectedVersion: entry.version }] };
+    expect(() => f.directory.importClasses(f.student, input)).toThrow('changed');
+    expect(() => f.directory.importClasses(f.student, { ...input, rows: [{ name: 'Algebra', directoryId: randomUUID() }] })).toThrow('removed');
+    expect(() => f.directory.importClasses(f.outsider, input)).toThrow('Only school members');
+    const caller = appRouter.createCaller({ service: f.service, userId: f.student });
+    await expect(caller.directory.importClasses({ ...input, accountId: f.outsider })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+});
+
 describe('school class directory', () => {
   it('requires membership, authenticates mutations against the original account, and rejects unsupported grades', async () => {
     const f = fixture();

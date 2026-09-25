@@ -96,7 +96,7 @@ export function TodayView({ state }: { state: AppState }) {
           {nextSchoolDay && <p className="text-sm">Next school day: <button type="button" className="font-semibold text-primary hover:underline" onClick={() => state.navigate('schedule', { date: nextSchoolDay.date })}>{relativeDate(nextSchoolDay.date, today, { weekday: 'long' })}</button> · {nextSchoolDay.resolved.cycleDayLabel}</p>}
         </div>}
         {day && !day.closed && day.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
-        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, period)} />}
+        {day && day.periods.length > 0 && <Timeline periods={day.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, today, period)} />}
         {day && !day.closed && <LunchDay state={state} date={today} />}
         {day && day.issues.length > 0 && <Hint tone="danger">{describeDayIssues(day.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
@@ -270,8 +270,8 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
  * "With Bob" on a timeline row; opens that friend's profile, or People when there are several.
  * A plain function, not a component, so rows without classmates get null and no empty wrapper.
  */
-export function classmatesTag(state: AppState, period: ResolvedPeriod): ReactNode {
-  const mates = classmatesFor(state.context, period);
+export function classmatesTag(state: AppState, date: string, period: ResolvedPeriod): ReactNode {
+  const mates = classmatesFor(state.context, state.schedule, date, period);
   const label = withLabel(mates);
   if (!label) return null;
   const only = mates.length === 1 ? mates[0] : null;
