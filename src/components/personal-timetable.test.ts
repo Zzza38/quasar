@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
 import { personalScheduleSchema, resolveDay, scheduleSchema, withCycleDay, type Schedule } from '@/domain/schedule';
-import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, removeClass, saveTimetableEdit } from './personal-timetable';
+import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, removeClass, saveTimetableEdit, useSchoolTimetable } from './personal-timetable';
 it('automatically saves a changed day as an override while other days follow the school', () => {
   const next = structuredClone(exampleSchedule);
   next.cycleDays[0].slots[0].end = '08:55';
@@ -25,7 +25,7 @@ it('keeps overrides for a rotation day the school removed when another day is ed
   const saved = saveTimetableEdit(exampleSchedule, personal, next, personal.assignments);
   expect(saved.cycleDayOverrides).toEqual([{ cycleDayId: 'day-1', slots: next.cycleDays[0].slots }, orphan]);
 });
-it('removing a class also removes the private block made for it, and only that block', () => {
+it('removing a class keeps its private time blocks and other schedule adjustments', () => {
   const personal = { ...examplePersonalSchedule, classes: [...examplePersonalSchedule.classes, { id: 'art', name: 'Art' }] };
   // ClassAssignmentGrid places an unplaced class as its own private period, labelled with the class name.
   const next = structuredClone(exampleSchedule);
@@ -34,20 +34,29 @@ it('removing a class also removes the private block made for it, and only that b
   const placed = saveTimetableEdit(exampleSchedule, personal, next, { ...personal.assignments, 'class-art': 'art' });
   const withDate = { ...placed, dateOverrides: [{ date: '2026-09-09', slots: [{ id: 'd', periodId: 'class-art', start: '13:00', end: '13:30' }, { id: 'e', periodId: 'A', start: '14:00', end: '14:30' }] }] };
   expect(resolveDay(exampleSchedule, '2026-09-08', withDate).periods.some(period => period.label === 'Art')).toBe(true);
-  const removed = removeClass(exampleSchedule, withDate, 'art');
+  const removed = removeClass(withDate, 'art');
   expect(personalScheduleSchema.safeParse(removed).success).toBe(true);
   expect(removed.classes.map(cls => cls.id)).not.toContain('art');
   expect(removed.assignments['class-art']).toBeUndefined();
-  expect(removed.customSchedule?.periods.map(period => period.id)).toEqual(exampleSchedule.periods.map(period => period.id));
-  expect(removed.customSchedule?.cycleDays).toEqual(exampleSchedule.cycleDays);
-  expect(removed.dateOverrides[0].slots?.map(slot => slot.id)).toEqual(['e']);
-  expect(resolveDay(exampleSchedule, '2026-09-08', removed).periods.some(period => period.label === 'Art')).toBe(false);
+  expect(removed.customSchedule).toEqual(withDate.customSchedule);
+  expect(removed.dateOverrides).toEqual(withDate.dateOverrides);
+  expect(resolveDay(exampleSchedule, '2026-09-08', removed).periods.some(period => period.label === 'Art')).toBe(true);
 });
 it('removing a class keeps school periods and their times, clearing only the assignment', () => {
-  const removed = removeClass(exampleSchedule, examplePersonalSchedule, 'algebra');
+  const removed = removeClass(examplePersonalSchedule, 'algebra');
   expect(removed.assignments).toEqual({ B: 'english', C: 'biology', D: 'history' });
   expect(removed.customSchedule).toBeNull();
   expect(removed.cycleDayOverrides).toEqual(examplePersonalSchedule.cycleDayOverrides);
+});
+
+it('reverts to school times while keeping classes and valid school period assignments', () => {
+  const personal = { ...examplePersonalSchedule, customSchedule: exampleSchedule, cycleDayOverrides: [{ cycleDayId: 'day-1', slots: [] }], dateOverrides: [{ date: '2026-09-09', closed: true }], assignments: { ...examplePersonalSchedule.assignments, 'class-art': 'algebra' } };
+  const reset = useSchoolTimetable(exampleSchedule, personal);
+  expect(reset.classes).toEqual(personal.classes);
+  expect(reset.assignments).toEqual(examplePersonalSchedule.assignments);
+  expect(reset.customSchedule).toBeNull();
+  expect(reset.cycleDayOverrides).toEqual([]);
+  expect(reset.dateOverrides).toEqual([]);
 });
 
 describe('knowing when a timetable edit makes a private copy', () => {
