@@ -112,6 +112,9 @@ export function ThemeSync() {
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('pageshow', sync);
     sync();
+    // Pages are rendered by the server, so controls are visible before React has attached its handlers; this marks
+    // the moment they are interactive (the browser tests wait for it before typing into a freshly loaded page).
+    document.documentElement.dataset.hydrated = 'true';
     return () => {
       media.removeEventListener('change', sync);
       window.removeEventListener('storage', onStorage);

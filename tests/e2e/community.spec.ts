@@ -1,4 +1,5 @@
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, hydrating } from './fixtures';
+import { type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
@@ -40,7 +41,7 @@ async function signedIn(browser: Browser, id: string): Promise<Page> {
   const context = await browser.newContext();
   contexts.push(context);
   await authenticate(context, id);
-  return context.newPage();
+  return hydrating(await context.newPage());
 }
 
 test('friends share classes only after acceptance, and removal revokes access', async ({ browser }, testInfo) => {

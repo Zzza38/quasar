@@ -1,4 +1,5 @@
-import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
+import { test, expect, hydrating } from './fixtures';
+import { type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
@@ -64,14 +65,14 @@ async function signedIn(browser: Browser, id: string): Promise<Page> {
   const context = await browser.newContext();
   contexts.push(context);
   await authenticate(context, id);
-  return context.newPage();
+  return hydrating(await context.newPage());
 }
 /** A phone: 390×844 with touch, so `(pointer: fine)` is false. */
 async function phone(browser: Browser, id: string): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   contexts.push(context);
   await authenticate(context, id);
-  return context.newPage();
+  return hydrating(await context.newPage());
 }
 
 /** Pick an option from a shadcn/ui Select by its visible label. */
