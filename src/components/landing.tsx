@@ -134,7 +134,7 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
 
     <div className="mx-auto max-w-[1000px] px-6 pl-14 max-md:pl-10">
       <header className="flex items-center justify-between py-[22px] font-sans">
-        <a className="inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-[var(--ink)] no-underline hover:no-underline" href="#" aria-label="Quasar home">
+        <a className="inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-[var(--ink)] no-underline hover:no-underline" href="/" aria-label="Quasar home">
           <BrandMark size={26} />Quasar
         </a>
         <div className="flex items-center gap-2">
