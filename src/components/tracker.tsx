@@ -36,7 +36,7 @@ const sameRoute = (a: RouteState, b: RouteState) => a.view === b.view && a.param
 
 /**
  * `initial` is the route the server rendered (src/app/page.tsx, src/app/[view]/page.tsx). The browser's address is
- * re-read once the page is interactive: the offline shell is cached under "/" whatever path it was opened at, and an
+ * re-read once the page is interactive: the neutral offline shell is cached under "/offline" whatever path it was opened at, and an
  * old `#view` bookmark is rewritten to its path. Navigation uses the history API without reloading; Next's router
  * only observes it.
  */
