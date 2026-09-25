@@ -61,8 +61,7 @@ function levelsAndWords(name: string): { levels: string; words: string[] } {
 }
 
 /** Pairs every word of `left` with a distinct word of `right` (bipartite matching, so word order never matters). */
-function wordsPair(left: string[], right: string[]): boolean {
-  const fits = (x: string, y: string) => x === y || ([...x].length >= 2 && [...y].length >= 2 && (x.startsWith(y) || y.startsWith(x)));
+function wordsPair(left: string[], right: string[], fits = (x: string, y: string) => x === y || ([...x].length >= 2 && [...y].length >= 2 && (x.startsWith(y) || y.startsWith(x)))): boolean {
   const owner: number[] = right.map(() => -1);
   const claim = (index: number, seen: Set<number>): boolean => right.some((word, at) => {
     if (seen.has(at) || !fits(left[index], word)) return false;
@@ -71,6 +70,49 @@ function wordsPair(left: string[], right: string[]): boolean {
     return false;
   });
   return left.every((_, index) => claim(index, new Set()));
+}
+
+/** A small spelling error, including swapped adjacent letters, is a suggestion, never an automatic class match. */
+function closeWord(left: string, right: string): boolean {
+  if (left === right) return true;
+  const a = [...left], b = [...right];
+  const limit = Math.min(a.length, b.length) >= 8 ? 2 : 1;
+  if (Math.min(a.length, b.length) < 4 || Math.abs(a.length - b.length) > limit) return false;
+  const distance = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+    distance[i][j] = Math.min(distance[i - 1][j] + 1, distance[i][j - 1] + 1, distance[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) distance[i][j] = Math.min(distance[i][j], distance[i - 2][j - 2] + 1);
+  }
+  return distance[a.length][b.length] <= limit;
+}
+
+/** Whole course names with a likely typo. Extra course words and different levels still mean different classes. */
+export function similarClassName(left: string, right: string): boolean {
+  const a = levelsAndWords(left), b = levelsAndWords(right);
+  return a.levels === b.levels && a.words.length > 0 && a.words.length === b.words.length && wordsPair(a.words, b.words, closeWord);
+}
+
+/** Lower scores come first in autocomplete. Incomplete names may omit levels, but explicit levels must agree. */
+export function classSearchScore(query: string, name: string): number | null {
+  if (!query.trim()) return null;
+  if (classKey(query) === classKey(name)) return 0;
+  if (couldBeClass(query, name)) return 1;
+  const a = levelsAndWords(query), b = levelsAndWords(name);
+  if (a.levels && !a.levels.split(' ').every(level => b.levels.split(' ').includes(level))) return null;
+  if (!a.words.length || a.words.length > b.words.length) return null;
+  if (wordsPair(a.words, b.words, (x, y) => x === y || (x.length >= 2 && y.startsWith(x)))) return 2;
+  return wordsPair(a.words, b.words, (x, y) => closeWord(x, y) || (x.length >= 2 && y.startsWith(x))) ? 3 : null;
+}
+
+export type DirectoryDetails = { name: string; teacher?: string; room?: string };
+
+/** Printed teacher/room conflicts keep separate sections from being automatically linked. */
+export function directoryCandidates<T extends DirectoryDetails>(printed: DirectoryDetails, entries: T[]): { matches: T[]; similar: T[] } {
+  const compatible = entries.filter(entry => (['teacher', 'room'] as const).every(field => !printed[field]?.trim() || !entry[field]?.trim() || classKey(printed[field]!) === classKey(entry[field]!)));
+  return {
+    matches: compatible.filter(entry => couldBeClass(printed.name, entry.name)),
+    similar: compatible.filter(entry => !couldBeClass(printed.name, entry.name) && similarClassName(printed.name, entry.name)),
+  };
 }
 
 export type ClassLike = { name: string; directoryId?: string | null };

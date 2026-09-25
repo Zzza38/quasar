@@ -2,16 +2,18 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
-import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import { classSchema, personalScheduleSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import { directoryCandidates, similarClassName } from '@/domain/class-match';
 import { slugId } from '@/lib/format';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Spacer } from './primitives';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Toggle } from './ui/toggle';
+import { ClassNameInput, useClassDirectory, type DirectoryEntry } from './class-name-input';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 /** `scanned` remembers the directory class the scanner guessed, so the link holds only while the name is the one it read. */
-type Draft = ScanRow & { include: boolean; scanned?: { name: string; directoryId: string } };
+type Draft = ScanRow & { include: boolean; scanned?: { name: string; directoryId: string }; correctName?: boolean; expectedVersion?: number; separate?: boolean };
 type Photo = { image: string; mediaType: 'image/jpeg'; preview: string };
 const MAX_EDGE = 1600;
 /** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
@@ -49,7 +51,7 @@ export function draftRow(row: ScanRow): Draft {
  * the name is usually correcting a wrong match, so the link is dropped until the name is set back.
  */
 export function renameRow(row: Draft, name: string): Draft {
-  const next: Draft = { ...row, name };
+  const next: Draft = { ...row, name, correctName: false, expectedVersion: undefined, separate: false };
   if (row.scanned && same(name, row.scanned.name)) next.directoryId = row.scanned.directoryId;
   else delete next.directoryId;
   return next;
@@ -77,7 +79,13 @@ export function replacedClasses(personal: PersonalSchedule, rows: Draft[]): { pe
 }
 
 /** The saved class a row will be added to instead of creating a new one. */
-const findClass = (classes: StudentClass[], row: Draft) => classes.find(cls => (row.directoryId && cls.directoryId === row.directoryId) || same(cls.name, row.name));
+const findClass = (classes: StudentClass[], row: Draft) => classes.find(cls => (row.directoryId && cls.directoryId === row.directoryId) || ((!row.directoryId || !cls.directoryId) && same(cls.name, row.name)));
+
+export function scanSuggestions(row: Draft, entries: DirectoryEntry[]): DirectoryEntry[] {
+  if (row.directoryId || row.separate || !row.name.trim()) return [];
+  const candidates = directoryCandidates(row, entries);
+  return [...candidates.matches, ...candidates.similar];
+}
 
 /** The row's typed teacher and room, trimmed, leaving out blanks. */
 const details = (row: Draft) => ({ ...(row.teacher?.trim() ? { teacher: row.teacher.trim() } : {}), ...(row.room?.trim() ? { room: row.room.trim() } : {}) });
@@ -123,8 +131,8 @@ function resolveScan(personal: PersonalSchedule, rows: Draft[]) {
       // A reused class keeps what the student saved; the scan only fills a teacher or room it is missing.
       const typed = details(row);
       const fill = Object.fromEntries((['teacher', 'room'] as const).filter(field => typed[field] && !existing?.[field]?.trim()).map(field => [field, typed[field]]));
-      if (Object.keys(fill).length) {
-        const filled = classSchema.parse({ ...existing, ...fill });
+      if (Object.keys(fill).length || (!existing.directoryId && row.directoryId)) {
+        const filled = classSchema.parse({ ...existing, ...fill, ...(row.directoryId ? { directoryId: row.directoryId } : {}) });
         classes[classes.indexOf(existing)] = filled;
         existing = filled;
       }
@@ -141,9 +149,11 @@ export function applyScan(personal: PersonalSchedule, rows: Draft[]): PersonalSc
   return { ...personal, classes, assignments };
 }
 
-export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal, disabled, onSave }: {
-  open: boolean; onClose: () => void; accountId: string; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>;
+export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, schedule, personal, disabled, onSave }: {
+  open: boolean; onClose: () => void; accountId: string; schoolId: string; online: boolean; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>;
 }) {
+  const { directory, error: directoryError, reload } = useClassDirectory(schoolId, open && online);
+  const entries = (directory?.classes ?? []).filter(entry => !personal.grade || entry.grades.includes(personal.grade));
   const fileRef = useRef<HTMLInputElement>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [limited, setLimited] = useState(false);
@@ -151,7 +161,8 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (!open) { setPhotos([]); setLimited(false); setRows(null); setNotes([]); setError(''); } }, [open]);
+  const [savedNotice, setSavedNotice] = useState('');
+  useEffect(() => { if (!open) { setPhotos([]); setLimited(false); setRows(null); setNotes([]); setError(''); setSavedNotice(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -180,17 +191,52 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
   });
   const update = (index: number, patch: Partial<Draft>) => setRows(current => current?.map((row, i) => i === index ? { ...row, ...patch } : row) ?? null);
   const rename = (index: number, name: string) => setRows(current => current?.map((row, i) => i === index ? renameRow(row, name) : row) ?? null);
+  const reviewDirectory = () => {
+    reload();
+    setRows(current => current?.map(row => ({ ...row, directoryId: undefined, scanned: undefined, correctName: false, expectedVersion: undefined, separate: false })) ?? null);
+    setError('');
+  };
   const ready = rows?.filter(row => row.include && row.name.trim()) ?? [];
+  const unresolved = ready.some(row => scanSuggestions(row, entries).length > 0);
+  const chooseClass = (index: number, entry: DirectoryEntry) => update(index, {
+    name: entry.name, directoryId: entry.id, teacher: entry.teacher ?? '', room: entry.room ?? '',
+    scanned: { name: entry.name, directoryId: entry.id }, correctName: false, expectedVersion: undefined, separate: false,
+  });
+  const save = () => run(async () => {
+    if (!rows || !ready.length || unresolved || !directory) return;
+    personalScheduleSchema.parse(applyScan(personal, rows));
+    const result = await api.directory.importClasses.mutate({ accountId, schoolId, grade: personal.grade,
+      rows: ready.map(row => ({ name: row.name.trim(), ...details(row), directoryId: row.directoryId, correctName: row.correctName, expectedVersion: row.expectedVersion, separate: row.separate })),
+    });
+    let at = 0;
+    const linked = rows.map(row => {
+      if (!row.include || !row.name.trim()) return row;
+      const imported = result.rows[at++];
+      const keepPersonalSpelling = row.correctName && !result.canEdit;
+      return { ...row, ...imported, correctName: keepPersonalSpelling, expectedVersion: keepPersonalSpelling ? row.expectedVersion : undefined, separate: row.separate,
+        scanned: !keepPersonalSpelling && imported.directoryId ? { name: imported.name, directoryId: imported.directoryId } : undefined };
+    });
+    // Keep the reconciled links if the personal save fails, so retrying cannot add another directory copy.
+    setRows(linked);
+    await onSave(applyScan(personal, linked));
+    if (result.skipped) setSavedNotice('Classes added to your timetable. The school directory is locked, so new classes and spelling corrections were saved in your personal copy only.');
+    else onClose();
+  });
   const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
   const clashes = rows ? periodClashes(personal, rows) : [];
   const replacements = rows ? replacedClasses(personal, rows) : [];
 
+  if (savedNotice) return <Modal open={open} onClose={onClose} title="Classes added" footer={<Button variant="primary" onClick={onClose}>Done</Button>}><Callout tone="success" role="status">{savedNotice}</Callout></Modal>;
+
   return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Scan your timetable" description="Take up to three photos of a printed or on-screen schedule, for example both halves of a wide timetable. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
-      {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || ready.length === 0} onClick={() => void run(async () => { await onSave(applyScan(personal, rows)); onClose(); })}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
-        : <Button variant="primary" icon="sparkle" busy={pending} disabled={photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
+      {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || !online || !directory || unresolved || ready.length === 0} onClick={() => void save()}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
+        : <Button variant="primary" icon="sparkle" busy={pending} disabled={!online || photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
     <input ref={fileRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true" multiple aria-label="Choose a timetable photo" onChange={choose} />
-    {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
+    {error && <Callout tone="danger" icon="alert" role="alert" actions={rows ? <Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory matches</Button> : undefined}>{error}</Callout>}
+    {directoryError && <Callout tone="warning" role="alert" actions={<Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory</Button>}>{directoryError}</Callout>}
+    {rows && directory && <Hint>{directory.canEdit ? 'Existing directory classes are reused. New included classes are also added to the school directory when you add them to your timetable.' : 'The school directory is locked. You can reuse its classes; new classes and spelling corrections will stay in your personal copy.'}</Hint>}
+    {unresolved && <Hint tone="danger">Confirm the possible directory matches below before adding your classes.</Hint>}
     {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
     <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
       <div className="grid content-start gap-2">
@@ -217,23 +263,37 @@ export function ScanScheduleSheet({ open, onClose, accountId, schedule, personal
               const replaces = (replacements[index] ?? []).map(entry => `${entry.name} on ${label(entry.periodId)}`);
               const shared = clashes[index] ?? [];
               const reused = row.include && row.name.trim() ? keptDetails(personal.classes, row) : null;
+              const suggestions = scanSuggestions(row, entries);
               return <li key={index} className={row.include ? 'grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]' : 'grid gap-2 rounded-2xl p-3 opacity-60 ring-1 ring-inset ring-foreground/[0.06]'}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center gap-2"><Checkbox id={`scan-include-${index}`} checked={row.include} onCheckedChange={checked => update(index, { include: checked === true })} /><Label htmlFor={`scan-include-${index}`} className="text-sm font-semibold">Include</Label></div>
+                  <div className="flex items-center gap-2"><Checkbox id={`scan-include-${index}`} checked={row.include} disabled={pending} onCheckedChange={checked => update(index, { include: checked === true })} /><Label htmlFor={`scan-include-${index}`} className="text-sm font-semibold">Include</Label></div>
                   {row.directoryId && <Chip tone="accent" icon="school">From the school directory</Chip>}
                   {row.periodIds.length === 0 && <Chip tone="warning" icon="alert">{row.periodLabel ? `Could not match “${row.periodLabel}” to a period` : 'No period matched'}</Chip>}
                   {row.days.length > 0 && <Chip tone="neutral">{row.days.join(', ')}</Chip>}
                 </div>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)]">
-                  <Field label="Class" htmlFor={`scan-name-${index}`}><Input id={`scan-name-${index}`} small maxLength={120} value={row.name} disabled={!row.include} onChange={event => rename(index, event.target.value)} /></Field>
-                  <Field label="Teacher" htmlFor={`scan-teacher-${index}`}><Input id={`scan-teacher-${index}`} small maxLength={120} value={row.teacher ?? ''} disabled={!row.include} onChange={event => update(index, { teacher: event.target.value })} /></Field>
-                  <Field label="Room" htmlFor={`scan-room-${index}`}><Input id={`scan-room-${index}`} small maxLength={120} value={row.room ?? ''} disabled={!row.include} onChange={event => update(index, { room: event.target.value })} /></Field>
+                  <Field label="Class" htmlFor={`scan-name-${index}`}><ClassNameInput id={`scan-name-${index}`} small maxLength={120} value={row.name} disabled={!row.include || pending} entries={entries} grade={personal.grade} onValueChange={name => rename(index, name)} onChoose={entry => chooseClass(index, entry)} /></Field>
+                  <Field label="Teacher" htmlFor={`scan-teacher-${index}`}><Input id={`scan-teacher-${index}`} small maxLength={120} value={row.teacher ?? ''} disabled={!row.include || pending} onChange={event => update(index, { teacher: event.target.value })} /></Field>
+                  <Field label="Room" htmlFor={`scan-room-${index}`}><Input id={`scan-room-${index}`} small maxLength={120} value={row.room ?? ''} disabled={!row.include || pending} onChange={event => update(index, { room: event.target.value })} /></Field>
                 </div>
+                {row.include && suggestions.length > 0 && <Callout tone="warning" title={`Is “${row.name}” already in the directory?`}>
+                  <div className="grid gap-3">
+                    {suggestions.map(entry => <div key={entry.id} className="grid gap-1.5">
+                      <span><strong>{entry.name}</strong>{[entry.teacher, entry.room].filter(Boolean).length > 0 ? ` · ${[entry.teacher, entry.room].filter(Boolean).join(' · ')}` : ''}</span>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" disabled={pending} onClick={() => chooseClass(index, entry)}>Use “{entry.name}”</Button>
+                        {similarClassName(row.name, entry.name) && row.name !== entry.name && <Button size="sm" disabled={pending} onClick={() => update(index, { directoryId: entry.id, correctName: true, expectedVersion: entry.version, scanned: undefined, separate: false })}>{directory?.canEdit ? `Same class, correct to “${row.name}”` : 'Same class, keep my spelling'}</Button>}
+                      </div>
+                    </div>)}
+                    <Button size="sm" variant="ghost" disabled={pending} onClick={() => update(index, { separate: true })}>Different class</Button>
+                  </div>
+                </Callout>}
+                {row.correctName && <Hint>{directory?.canEdit ? `You confirmed the same class. The directory name will change to “${row.name}” when you add your classes.` : 'Your spelling will be saved in your personal copy. The directory name is locked.'}</Hint>}
                 <Field label="Periods" hint={row.periodIds.length === 0 ? 'Not placed yet. Tap every period this class meets in.' : undefined}>
                   <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Periods for ${row.name || 'this class'}`}>
                     {schedule.periods.map(period => {
                       const on = row.periodIds.includes(period.id);
-                      return <Toggle key={period.id} variant="outline" size="sm" pressed={on} disabled={!row.include} className="min-w-[44px] rounded-full bg-card px-3 font-semibold data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                      return <Toggle key={period.id} variant="outline" size="sm" pressed={on} disabled={!row.include || pending} className="min-w-[44px] rounded-full bg-card px-3 font-semibold data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                         onPressedChange={() => update(index, { periodIds: on ? row.periodIds.filter(id => id !== period.id) : schedule.periods.filter(entry => entry.id === period.id || row.periodIds.includes(entry.id)).map(entry => entry.id) })}>{period.label}</Toggle>;
                     })}
                   </div>

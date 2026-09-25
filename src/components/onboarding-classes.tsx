@@ -11,6 +11,7 @@ import { Button, Callout, Chip, Field, Hint, IconButton, Input, Panel, Spacer } 
 import { SchoolDirectory } from './school-directory';
 import { ScanScheduleSheet } from './scan-schedule';
 import { Toggle } from './ui/toggle';
+import { ClassNameInput, useClassDirectory } from './class-name-input';
 
 /**
  * The last setup step: the student adds the classes they take and taps the periods each one
@@ -24,6 +25,8 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
   const [name, setName] = useState('');
   const [room, setRoom] = useState('');
   const [teacher, setTeacher] = useState('');
+  const [directoryId, setDirectoryId] = useState<string | undefined>();
+  const { directory } = useClassDirectory(schoolId, online);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [scanEnabled, setScanEnabled] = useState(false);
@@ -46,9 +49,9 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
     const trimmed = name.trim();
     if (!trimmed) return;
     const id = slugId(trimmed, personal.classes.map((cls) => cls.id), 'class');
-    const cls = classSchema.parse({ id, name: trimmed, ...(room.trim() ? { room: room.trim() } : {}), ...(teacher.trim() ? { teacher: teacher.trim() } : {}) });
+    const cls = classSchema.parse({ id, name: trimmed, ...(directoryId ? { directoryId } : {}), ...(room.trim() ? { room: room.trim() } : {}), ...(teacher.trim() ? { teacher: teacher.trim() } : {}) });
     // A failed save keeps what the student typed, so they can retry without typing it again.
-    if (await run({ ...personal, classes: [...personal.classes, cls] })) { setName(''); setRoom(''); setTeacher(''); }
+    if (await run({ ...personal, classes: [...personal.classes, cls] })) { setName(''); setRoom(''); setTeacher(''); setDirectoryId(undefined); }
   };
   const toggle = (cls: StudentClass, periodId: string) => {
     const assignments = { ...personal.assignments };
@@ -63,7 +66,9 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
     {disabled && <Callout tone="warning" icon="alert">Your saved schedule could not be read. Retry sync before adding classes.</Callout>}
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
       <form className="grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04] sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); void addClass(); }}>
-        <Field label="Class" htmlFor="setup-class-name"><Input id="setup-class-name" autoFocus maxLength={120} placeholder="Algebra II" value={name} disabled={pending || disabled} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label="Class" htmlFor="setup-class-name"><ClassNameInput id="setup-class-name" autoFocus maxLength={120} placeholder="Algebra II" value={name} disabled={pending || disabled}
+          entries={directory?.classes ?? []} grade={personal.grade} onValueChange={value => { setName(value); setDirectoryId(undefined); }}
+          onChoose={entry => { setName(entry.name); setTeacher(entry.teacher ?? ''); setRoom(entry.room ?? ''); setDirectoryId(entry.id); }} /></Field>
         <Field label="Teacher" htmlFor="setup-class-teacher"><Input id="setup-class-teacher" maxLength={120} placeholder="Ms. Ortiz" value={teacher} disabled={pending || disabled} onChange={(event) => setTeacher(event.target.value)} /></Field>
         <Field label="Room" htmlFor="setup-class-room"><Input id="setup-class-room" maxLength={120} placeholder="204" value={room} disabled={pending || disabled} onChange={(event) => setRoom(event.target.value)} /></Field>
         <Button type="submit" variant="primary" icon="plus" busy={pending} disabled={!name.trim() || disabled}>Add</Button>
@@ -117,6 +122,6 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
       const added = classes.filter((cls) => !personal.classes.some((existing) => existing.id === cls.id || existing.directoryId === cls.directoryId));
       await onSave({ ...personal, classes: [...personal.classes, ...added] });
     }} />}
-    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={userId} schedule={schedule} personal={personal} disabled={disabled} onSave={onSave} />
+    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={userId} schoolId={schoolId} online={online} schedule={schedule} personal={personal} disabled={disabled} onSave={onSave} />
   </Frame>;
 }
