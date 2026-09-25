@@ -3,7 +3,7 @@ import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
 import { Service, type ClientOptions, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
-import { DirectoryService, directorySaveSchema, directoryRemoveSchema } from './directory';
+import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
@@ -64,6 +64,7 @@ export const appRouter = t.router({
   directory: t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
     save: accountScoped.input(directorySaveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).save(ctx.userId, input)),
+    importClasses: accountScoped.input(directoryImportSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).importClasses(ctx.userId, input)),
     remove: accountScoped.input(directoryRemoveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).remove(ctx.userId, input)),
   }),
   community: t.router({

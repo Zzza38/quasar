@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { effectiveSchedule, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
-import { classKey, couldBeClass } from '@/domain/class-match';
+import { classKey, directoryCandidates } from '@/domain/class-match';
 import { DirectoryService, type DirectoryClass } from './directory';
 import type { Service } from './service';
 
@@ -183,9 +183,9 @@ export class ScanService {
       const row = rowSchema.safeParse(candidate);
       if (!row.success) { notes.push('Skipped a line the scanner could not read.'); continue; }
       const listed = row.data.directoryId ? entries.get(row.data.directoryId) : undefined;
-      // The directory link (and the teacher and room it fills in) only stands when the printed name could be that class:
-      // the same words in any order, or an abbreviation of every word at the same level ("AP Chem" for "AP Chemistry", never "Art" for "Art History").
-      const match = listed && (!row.data.className || couldBeClass(row.data.className, listed.name)) ? listed : undefined;
+      const candidates = directoryCandidates({ name: row.data.className ?? listed?.name ?? '', teacher: row.data.teacher, room: row.data.room }, directory).matches;
+      // Prefer a verified directory entry even when the model forgot its ID. Ambiguous sections and typos need review.
+      const match = listed && candidates.includes(listed) ? listed : candidates.length === 1 ? candidates[0] : undefined;
       const name = row.data.className ?? match?.name;
       if (!name) continue;
       // A class may meet in several periods across the rotation; rows are keyed by directory class, else by class name (see classKey).
@@ -236,6 +236,8 @@ const SYSTEM_PROMPT = `You read photos of a student's printed or on-screen class
 Return an object {"rows": [...]}. Each row is one class the student takes:
 {"className": string, "teacher": string|null, "room": string|null, "periodIds": string[], "periodLabel": string|null, "directoryId": string|null, "days": string[]}
 Rules:
+- Prefer the school directory whenever an existing class matches. Always include its directoryId when certain; do not create another spelling of the same directory class.
+- Keep possible spelling mistakes exactly as printed so the student can confirm whether a similar directory name is the same class. Never silently correct a directory entry.
 - One row per distinct class. If the same class appears on several days, return it once and list the days in "days".
 - "periodIds" lists every school period ID the class meets in, matched by the period name or by its start time. A class that sits in different periods on different days lists all of them. Use an empty list only when no period can be matched, and then put the printed period text in "periodLabel".
 - "directoryId" must be the ID of a listed directory class only when the name (and teacher or room, if printed) clearly match. A shortened or reordered name of the same class and level counts when every word is still there ("AP Chem" for "AP Chemistry"); a missing or extra word ("Art" for "Art History") or a different level, number or honors marker does not. Otherwise null.
