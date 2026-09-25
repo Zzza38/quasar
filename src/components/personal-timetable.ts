@@ -1,5 +1,4 @@
-import { cycleDaySchema, scheduleForGrade, scheduleSchema, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
-import { slugId } from '@/lib/format';
+import { cycleDaySchema, scheduleForGrade, scheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 
 /** Keep ordinary timetable edits as day overrides so untouched days follow school updates. */
 export function saveTimetableEdit(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): PersonalSchedule {
@@ -84,32 +83,23 @@ export function queueTimetableEdit(queued: QueuedTimetableEdit | null, edit: Que
   return { change, assign: { ...queued?.assign, ...edit.assign } };
 }
 
-/**
- * Removes a class, its period assignments and the private blocks made for it. ClassAssignmentGrid gives an
- * unplaced class its own period (`class-<id>`, labelled with the class name); once placed, that period lives only
- * in the private timetable, so leaving it behind would keep showing the removed class's name. School periods,
- * and private periods the student made some other way, stay; only their assignment to this class is cleared.
- * `school` is null for a student without one (the owner console), whose every period is then a private one.
- */
-export function removeClass(school: Schedule | null, personal: PersonalSchedule, classId: string): PersonalSchedule {
-  const schoolPeriods = new Set(school ? scheduleForGrade(school, personal.grade).periods.map(period => period.id) : []);
-  const base = slugId(`class-${classId}`, []);
-  const dropped = new Set((personal.customSchedule?.periods ?? [])
-    .filter(period => !schoolPeriods.has(period.id) && personal.assignments[period.id] === classId && (period.id === base || period.id.startsWith(`${base}-`)))
-    .map(period => period.id));
-  const keep = (slots: ScheduleSlot[]) => slots.filter(slot => !dropped.has(slot.periodId));
-  const custom = personal.customSchedule;
+/** Remove a class and its assignments while preserving every timetable period and time block. */
+export function removeClass(personal: PersonalSchedule, classId: string): PersonalSchedule {
   return {
     ...personal,
     classes: personal.classes.filter(cls => cls.id !== classId),
     assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([, id]) => id !== classId)),
-    cycleDayOverrides: personal.cycleDayOverrides.map(entry => ({ ...entry, slots: keep(entry.slots) })),
-    dateOverrides: personal.dateOverrides.map(entry => entry.slots ? { ...entry, slots: keep(entry.slots) } : entry),
-    ...(custom && dropped.size > 0 ? { customSchedule: {
-      ...custom,
-      periods: custom.periods.filter(period => !dropped.has(period.id)),
-      cycleDays: custom.cycleDays.map(day => ({ ...day, slots: keep(day.slots) })),
-      exceptions: custom.exceptions.map(entry => 'slots' in entry && entry.slots ? { ...entry, slots: keep(entry.slots) } : entry),
-    } } : {}),
+  };
+}
+
+/** Return to school bell times, retaining classes and assignments to school periods. */
+export function useSchoolTimetable(school: Schedule, personal: PersonalSchedule): PersonalSchedule {
+  const schoolIds = new Set(scheduleForGrade(school, personal.grade).periods.map(period => period.id));
+  return {
+    ...personal,
+    customSchedule: null,
+    cycleDayOverrides: [],
+    dateOverrides: [],
+    assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([id]) => schoolIds.has(id))),
   };
 }
