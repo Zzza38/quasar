@@ -9,6 +9,7 @@ import { classmatesFor, withLabel } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
+import { nextSchoolDate } from '../task-groups';
 import { Icon } from '../icon';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
@@ -35,7 +36,10 @@ export function TodayView({ state }: { state: AppState }) {
   const displayDate = next && next.date > today ? next.date : today;
   const displayDay = useMemo(() => { try { return resolveDay(schedule, displayDate, personal); } catch { return null; } }, [schedule, displayDate, personal]);
   const tasks = useMemo(() => sortByDue(taskItems(state.snapshot.entities).filter((item) => !item.task.completed)), [state.snapshot.entities]);
-  const dueSoon = tasks.filter((item) => !item.task.dueDate || daysBetween(today, item.task.dueDate) <= 2);
+  // "Due soon" reaches at least two days out and always through the next school day, so on a Friday (or before
+  // a holiday) the homework due when school resumes is up next rather than hidden behind "due later".
+  const soonUntil = Math.max(2, (() => { const school = nextSchoolDate(schedule, personal, today); return school ? daysBetween(today, school) : 0; })());
+  const dueSoon = tasks.filter((item) => !item.task.dueDate || daysBetween(today, item.task.dueDate) <= soonUntil);
   const shown = dueSoon.slice(0, 6);
   const later = tasks.length - dueSoon.length;
   // Same rule as the task rows and the Tasks page groups: overdue is the more urgent number, so it wins the tile.
