@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { FIRST_DATE, LAST_DATE } from '@/domain/schedule';
 import { taskSchema, type Task } from '@/domain/task';
-import { addDays, classColor, daysBetween, formatTime, formatTimeZone, reminderLabel } from '@/lib/format';
+import { addDays, classColor, formatTime, formatTimeZone, reminderLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
+import { DATED_GROUPS, groupTasks, type TaskGroupKey } from '../task-groups';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
 import { Button, Callout, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Select, Spacer, Textarea } from '../primitives';
@@ -46,7 +47,7 @@ export function withoutBlankSubtasks(task: Task): Task {
   return task.subtasks ? { ...task, subtasks: task.subtasks.filter((item) => item.title.trim() !== '') } : task;
 }
 
-const GROUP_TONES: Record<string, string> = { Overdue: 'bg-destructive', Today: 'bg-primary', Tomorrow: 'bg-now', 'Next 7 days': 'bg-success', Later: 'bg-muted-foreground/60', 'No due date': 'bg-muted-foreground/40' };
+const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'next-school-day': 'bg-warning', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
 
 export function TasksView({ state }: { state: AppState }) {
   const items = useMemo(() => taskItems(state.snapshot.entities), [state.snapshot.entities]);
@@ -69,14 +70,8 @@ export function TasksView({ state }: { state: AppState }) {
   // One overdue rule for the header, the groups and each row: a due time earlier today counts too.
   const nowTime = clockTime(state.now, state.timeZone);
   const late = (item: TaskItem) => isOverdue(item.task, state.today, nowTime);
-  const groups: Array<{ title: string; items: TaskItem[] }> = [
-    { title: 'Overdue', items: filtered.filter(late) },
-    { title: 'Today', items: filtered.filter((item) => item.task.dueDate === state.today && !late(item)) },
-    { title: 'Tomorrow', items: filtered.filter((item) => item.task.dueDate && daysBetween(state.today, item.task.dueDate) === 1) },
-    { title: 'Next 7 days', items: filtered.filter((item) => item.task.dueDate && daysBetween(state.today, item.task.dueDate) > 1 && daysBetween(state.today, item.task.dueDate) <= 7) },
-    { title: 'Later', items: filtered.filter((item) => item.task.dueDate && daysBetween(state.today, item.task.dueDate) > 7) },
-    { title: 'No due date', items: filtered.filter((item) => !item.task.dueDate) },
-  ].filter((group) => group.items.length > 0);
+  // Groups follow the school calendar: the next school day stands apart from the weekend or holiday before it.
+  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal });
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter(late).length;
   const filterToggle = 'h-9 shrink-0 gap-1.5 pointer-coarse:h-10 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
@@ -101,13 +96,14 @@ export function TasksView({ state }: { state: AppState }) {
       </div>
     </div>}
     {groups.length === 0 && <Card><EmptyState icon="checkCircle" title={classFilter || priorityFilter ? 'No matching open tasks' : 'All clear'} action={!(classFilter || priorityFilter) ? <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add a task</Button> : <Button onClick={() => { setClassFilter(''); setPriorityFilter(''); }}>Clear filters</Button>}>{classFilter || priorityFilter ? 'Try another filter or add a task.' : 'Add homework, forms, practice, anything you need to remember.'}</EmptyState></Card>}
-    {groups.map((group) => <Card key={group.title} className="gap-1 py-3" role="region" aria-labelledby={`group-${group.title}`}>
+    {groups.map((group) => <Card key={group.key} className="gap-1 py-3" role="region" aria-labelledby={`group-${group.key}`}>
       <CardContent className="grid gap-1 px-2 sm:px-3">
-        <h2 id={`group-${group.title}`} className={cn('flex items-center gap-2 px-2.5 pt-1 text-[12px] font-extrabold uppercase tracking-[0.1em] text-muted-foreground', group.title === 'Overdue' && 'text-destructive')}>
-          <span aria-hidden="true" className={cn('size-2 rounded-full', GROUP_TONES[group.title])} />
+        <h2 id={`group-${group.key}`} className={cn('flex flex-wrap items-center gap-2 px-2.5 pt-1 text-[12px] font-extrabold uppercase tracking-[0.1em] text-muted-foreground', group.key === 'overdue' && 'text-destructive')}>
+          <span aria-hidden="true" className={cn('size-2 rounded-full', GROUP_TONES[group.key])} />
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
+          {group.detail && <span className="ml-1 rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-bold normal-case tracking-normal text-foreground/80">{group.detail}</span>}
         </h2>
-        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={group.title !== 'Today' && group.title !== 'Tomorrow'} />)}</ul>
+        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
