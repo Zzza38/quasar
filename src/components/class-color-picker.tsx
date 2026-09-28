@@ -10,7 +10,7 @@ import { ColorPicker } from './ui/color-picker';
 /**
  * An absolute extension of the card surface; opening never changes layout.
  * With `children`, the caller places the visible palette trigger (passed in) in its own layout; the
- * colored top strip then stays as a mouse-only hover shortcut.
+ * colored top strip then stays as a hover shortcut for pointers that can hover (mouse, trackpad, Apple Pencil).
  */
 export function ClassColorPicker({ cls, disabled, onSave, children }: { cls: StudentClass; disabled: boolean; onSave: (color: string | undefined) => Promise<void>; children?: (trigger: ReactNode) => ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -95,15 +95,16 @@ export function ClassColorPicker({ cls, disabled, onSave, children }: { cls: Stu
     onClick={() => { cancelHoverOpen(); if (!open) focusOnReady.current = true; changeOpen(!open); }} /> : null;
 
   return <><div ref={root} data-color-picker-open={surfaceVisible} className="absolute -top-1 inset-x-0" style={{ zIndex: surfaceVisible ? 40 : 1 }}
-    onPointerLeave={(event) => { cancelHoverOpen(); if (event.pointerType === 'mouse') changeOpen(false); }}
+    // Hover is anything but touch: Apple Pencil hover on iPadOS reports `pen`, not `mouse`.
+    onPointerLeave={(event) => { cancelHoverOpen(); if (event.pointerType !== 'touch') changeOpen(false); }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !paletteTrigger()?.contains(event.relatedTarget)) changeOpen(false); }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); changeOpen(false); focusTrigger(); } }}>
     <button ref={trigger} type="button" disabled={disabled} data-slot="class-color-strip"
       {...external ? { 'aria-hidden': true, tabIndex: -1 } : { 'aria-label': `Change color for ${cls.name}`, 'aria-expanded': open, 'aria-controls': id }}
       className="absolute inset-x-0 top-0 h-4 rounded-t-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       onClick={() => { cancelHoverOpen(); changeOpen(!open); }}
-      // Hovering opens only after the mouse has rested on the strip for a quarter second, so passing over cards stays quiet.
-      onPointerEnter={(event) => { if (event.pointerType !== 'mouse' || disabled || open) return; cancelHoverOpen(); hoverTimer.current = setTimeout(() => { hoverTimer.current = null; changeOpen(true); }, 250); }}
+      // Hovering opens only after the pointer has rested on the strip for a quarter second, so passing over cards stays quiet.
+      onPointerEnter={(event) => { if (event.pointerType === 'touch' || disabled || open) return; cancelHoverOpen(); hoverTimer.current = setTimeout(() => { hoverTimer.current = null; changeOpen(true); }, 250); }}
       onPointerLeave={cancelHoverOpen} />
     <div ref={surface} id={id} role="dialog" aria-label={`Color for ${cls.name}`} aria-hidden={!open} inert={!open}
       data-slot="class-color-expansion"
