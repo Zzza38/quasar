@@ -4,6 +4,10 @@
 
 /* Appearance is a data attribute on <html>, applied by src/lib/theme.ts before first paint. */
 @custom-variant dark (&:where([data-appearance="dark"], [data-appearance="dark"] *));
+/* Tailwind 4 wraps every hover: and group-hover: rule in @media (hover: hover). iPadOS reports (hover: none) unless a
+   trackpad is attached, so Apple Pencil hover (which does fire :hover) matched nothing. Use plain :hover, as Tailwind 3 did;
+   a tapped control on a phone may keep its hover colour until the next tap, which is the trade-off. */
+@custom-variant hover (&:hover);
 /* Screens with no hover at all (phones, iPads without a trackpad): hover-revealed controls stay faintly visible. */
 @custom-variant no-hover (@media (hover: none));
 
