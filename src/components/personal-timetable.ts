@@ -73,7 +73,7 @@ export function rebaseTimetableEdit(before: Schedule, after: Schedule): (latest:
 }
 
 /** Edits made while a save is running, saved together next. */
-export type QueuedTimetableEdit = { change?: (latest: Schedule) => Schedule; assign?: PersonalSchedule['assignments'] };
+export type QueuedTimetableEdit = { change?: (latest: Schedule) => Schedule; assign?: Record<string, string | null> };
 
 /** Adds `edit` behind the edits already queued: its timetable change applies after theirs, and its assignments win. */
 export function queueTimetableEdit(queued: QueuedTimetableEdit | null, edit: QueuedTimetableEdit): QueuedTimetableEdit {

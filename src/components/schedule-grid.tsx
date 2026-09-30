@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent } from 'react';
 import { buildTimeAxis } from './time-axis';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { cycleDaySchema, REMOVED_PERIOD_LABEL, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
+import { cycleDaySchema, displayPeriodLabel, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Button, IconButton, Input, Modal, Spacer } from './primitives';
@@ -15,7 +15,7 @@ const snap = (value: number) => Math.round(value / 5) * 5;
 type Resize = { dayId: string; slot: ScheduleSlot; edge: 'start' | 'end'; y: number; start: number; end: number };
 
 export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay }: {
-  onAssign?: (periodId: string, classId: string) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
+  onAssign?: (periodId: string, classId: string | null) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
   /**
    * Called once per edit. Returning false means the edit was not saved yet (the caller is asking the student
    * first, in place, and saves it itself once they agree), so the grid shows the timetable as it was: a renamed
@@ -110,6 +110,14 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     setMessage(`Cleared ${name} from ${value.cycleDays.find(day => day.id === dayId)?.label ?? 'the timetable'}.`);
     setRemoving(null);
   };
+  const clearClass = () => {
+    if (!removing || disabled || !onAssign) return;
+    void onAssign(removing.slot.periodId, null);
+    setSelected(null);
+    setCleared(null);
+    setMessage(`Removed ${removing.name} from ${removing.dayLabel}. The time block remains.`);
+    setRemoving(null);
+  };
   const timeAt = (y: number, top: number, duration: number) => Math.max(startMinute, Math.min(endMinute - duration, snap(axis.time(y - top))));
   const beginDrag = (event: DragEvent, source: PeriodPlacement) => {
     event.dataTransfer.setData(dragType, JSON.stringify(source));
@@ -185,7 +193,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const cls = clsFor(slot.periodId);
                 const isGuide = personalClassesOnly && period?.kind === 'class' && !cls;
                 // A slot can outlive its period (a school removed it under a student's day override); never show the raw ID.
-                const name = cls?.name ?? period?.label ?? REMOVED_PERIOD_LABEL;
+                const name = cls?.name ?? displayPeriodLabel(period, !personalClassesOnly);
                 const color = classColor(cls?.id ?? period?.id, period?.kind, cls?.color);
                 const active = resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
                 const start = active?.start ?? minutes(slot.start); const end = active?.end ?? minutes(slot.end);
@@ -201,7 +209,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                     <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
                   <div className="time-block-detail" aria-hidden="true"><strong>{name}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
-                  <button type="button" className="time-block-clear" aria-label={`Clear ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => setRemoving({ dayId: day.id, dayLabel: day.label, slot, name, keyboard: event.detail === 0 })}>×</button>
+                  <button type="button" className="time-block-clear" aria-label={`${cls && onAssign ? 'Remove class from' : 'Remove time block from'} ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => setRemoving({ dayId: day.id, dayLabel: day.label, slot, name, keyboard: event.detail === 0 })}>×</button>
                   {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled} aria-label={`Resize ${day.label} ${period?.label ?? name} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
                     onPointerDown={event => beginResize(event, day.id, slot, edge)} onPointerMove={moveResize}
                     onPointerUp={event => { const current = resizeRef.current; if (!current) return; event.stopPropagation(); if (current.start !== minutes(current.slot.start) || current.end !== minutes(current.slot.end)) commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
@@ -216,9 +224,9 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
       </section>)}
     </div>
   </div>
-  <Modal open={!!removing} onClose={() => setRemoving(null)} title={`Remove ${removing?.name ?? 'time block'}?`}
-    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Keep block</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={clearBlock}>Remove time block</Button></>}>
-    <p className="text-sm text-muted-foreground">{removing && `${removing.dayLabel}, ${formatRange(removing.slot.start, removing.slot.end)}`}. This removes the time block from the timetable. The class stays saved.</p>
+  <Modal open={!!removing} onClose={() => setRemoving(null)} title={removing && clsFor(removing.slot.periodId) && onAssign ? `Remove ${removing.name} from this block?` : `Remove ${removing?.name ?? 'time block'}?`}
+    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={removing && clsFor(removing.slot.periodId) && onAssign ? clearClass : clearBlock}>{removing && clsFor(removing.slot.periodId) && onAssign ? 'Remove class' : 'Remove time block'}</Button></>}>
+    <p className="text-sm text-muted-foreground">{removing && `${removing.dayLabel}, ${formatRange(removing.slot.start, removing.slot.end)}`}. {removing && clsFor(removing.slot.periodId) && onAssign ? 'The class stays saved, and this time block stays on your timetable. Use × again to remove the empty block.' : 'This removes the time block from the timetable.'}</p>
   </Modal></>;
 }
 
