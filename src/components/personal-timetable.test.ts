@@ -40,7 +40,7 @@ it('removing a class keeps its private time blocks and other schedule adjustment
   expect(removed.assignments['class-art']).toBeUndefined();
   expect(removed.customSchedule).toEqual(withDate.customSchedule);
   expect(removed.dateOverrides).toEqual(withDate.dateOverrides);
-  expect(resolveDay(exampleSchedule, '2026-09-08', removed).periods.some(period => period.label === 'Art')).toBe(true);
+  expect(resolveDay(exampleSchedule, '2026-09-08', removed).periods.some(period => period.label === 'Unassigned block' && period.start === '12:00')).toBe(true);
 });
 it('removing a class keeps school periods and their times, clearing only the assignment', () => {
   const removed = removeClass(examplePersonalSchedule, 'algebra');
