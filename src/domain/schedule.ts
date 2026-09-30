@@ -317,6 +317,13 @@ function cycleDayForDate(schedule: Schedule, index: ExceptionIndex, date: Tempor
 
 /** Shown for a slot whose period is gone (a personal override kept after the school removed it); never the raw id. */
 export const REMOVED_PERIOD_LABEL = "Removed period";
+export const UNASSIGNED_BLOCK_LABEL = "Unassigned block";
+
+/** Private periods are named after the class that created them; hide that name once the class is unassigned. */
+export function displayPeriodLabel(period: Schedule['periods'][number] | undefined, assigned: boolean): string {
+  if (!period) return REMOVED_PERIOD_LABEL;
+  return !assigned && period.kind === 'class' && period.id.startsWith('class-') ? UNASSIGNED_BLOCK_LABEL : period.label;
+}
 
 /**
  * Precedence: school rotation -> school exception -> personal cycle override -> personal date override.
@@ -377,7 +384,7 @@ export function resolveDay(schoolSchedule: Schedule, dateString: string, persona
     result.periods.push({
       slotId: slot.id,
       periodId: slot.periodId,
-      label: period?.label ?? assignedClass?.name ?? REMOVED_PERIOD_LABEL,
+      label: period ? displayPeriodLabel(period, !!assignedClass) : assignedClass?.name ?? REMOVED_PERIOD_LABEL,
       kind: period?.kind ?? "other",
       start,
       end,
