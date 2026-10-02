@@ -311,19 +311,25 @@ export function WeekdayPicker({ value, onChange, label, disabled }: { value: num
   </div>;
 }
 
-/** Seven-day (or any) row of selectable dates with a small caption per day. */
-export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ date: string; caption: string; closed?: boolean; label: string; dot?: boolean }>; selected: string; today: string; onSelect: (date: string) => void }) {
-  return <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
+/**
+ * Seven-day (or any) row of selectable dates with a small caption per day. The selected day is a soft tile and today
+ * is a ringed number, so the two stay apart by shape; both rings reach 3:1 in every accent. Phones get narrower
+ * gaps and padding: seven columns share about 350px there.
+ */
+export function WeekStrip({ days, selected, today, onSelect }: { days: Array<{ date: string; caption: ReactNode; closed?: boolean; label: string; dot?: boolean }>; selected: string; today: string; onSelect: (date: string) => void }) {
+  return <div className="grid gap-1.5 max-sm:gap-1" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
     {days.map((day) => {
       const active = day.date === selected;
       const isToday = day.date === today;
       return <button key={day.date} type="button" aria-pressed={active} aria-current={isToday ? 'date' : undefined} aria-label={day.label} onClick={() => onSelect(day.date)}
-        className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow,transform] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          active ? 'bg-primary text-primary-foreground shadow-[0_6px_16px_-6px_color-mix(in_srgb,var(--primary)_70%,transparent)]' : 'text-muted-foreground hover:bg-muted', day.closed && !active && 'opacity-60')}>
-        <span className={cn('text-[10.5px] font-bold uppercase tracking-wide', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>{formatDate(day.date, { weekday: 'short' }).slice(0, 3)}</span>
-        <span className={cn('grid size-8 place-items-center rounded-full text-[15px] font-extrabold tabular-nums', active ? 'text-primary-foreground' : isToday ? 'bg-primary-soft text-primary-soft-foreground ring-1 ring-primary/40' : 'text-foreground')}>{Number(day.date.slice(8))}</span>
-        <small className={cn('max-w-full truncate text-[10.5px] font-semibold', active ? 'text-primary-foreground/85' : 'text-muted-foreground')}>{day.caption}</small>
-        <span aria-hidden="true" className={cn('size-1 rounded-full', day.dot ? (active ? 'bg-primary-foreground' : 'bg-primary') : 'bg-transparent')} />
+        className={cn('group/day grid justify-items-center gap-1 rounded-2xl px-0.5 py-2.5 text-xs outline-none transition-[background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-sm:rounded-lg max-sm:px-px max-sm:py-2 max-sm:focus-visible:ring-offset-1',
+          // inset-ring has its own shadow slot, so the focus ring above still draws outside the tile.
+          active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/70' : 'text-muted-foreground hover:bg-muted', day.closed && !active && 'opacity-60')}>
+        <span className={cn('text-[10.5px] font-bold uppercase tracking-wide', active ? 'text-primary-soft-foreground' : 'text-muted-foreground')}>{formatDate(day.date, { weekday: 'short' }).slice(0, 3)}</span>
+        <span className={cn('grid size-8 place-items-center rounded-full text-[15px] font-extrabold tabular-nums max-sm:size-7',
+          active || isToday ? 'text-primary-soft-foreground' : 'text-foreground', isToday && 'inset-ring-[1.5px] inset-ring-primary dark:inset-ring-primary/80', isToday && !active && 'bg-primary-soft')}>{Number(day.date.slice(8))}</span>
+        <small className={cn('max-w-full truncate text-[10.5px] font-semibold max-sm:tracking-tight', active ? 'text-primary-soft-foreground' : 'text-muted-foreground')}>{day.caption}</small>
+        <span aria-hidden="true" className={cn('size-1 rounded-full', day.dot ? 'bg-primary' : 'bg-transparent')} />
       </button>;
     })}
   </div>;
@@ -381,8 +387,8 @@ export function EmptyState({ icon, title, children, action }: { icon: IconName; 
   </div>;
 }
 
-export function ColorDot({ color, size = 10 }: { color: string; size?: number }) {
-  return <span aria-hidden="true" className="inline-block shrink-0 rounded-full ring-1 ring-inset ring-black/10" style={{ width: size, height: size, background: color }} />;
+export function ColorDot({ color, size = 10, className }: { color: string; size?: number; className?: string }) {
+  return <span aria-hidden="true" className={cn('inline-block shrink-0 rounded-full ring-1 ring-inset ring-black/10', className)} style={{ width: size, height: size, background: color }} />;
 }
 
 /* ---------- Surfaces ---------- */
