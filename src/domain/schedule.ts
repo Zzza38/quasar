@@ -319,10 +319,14 @@ function cycleDayForDate(schedule: Schedule, index: ExceptionIndex, date: Tempor
 export const REMOVED_PERIOD_LABEL = "Removed period";
 export const UNASSIGNED_BLOCK_LABEL = "Unassigned block";
 
-/** Private periods are named after the class that created them; hide that name once the class is unassigned. */
-export function displayPeriodLabel(period: Schedule['periods'][number] | undefined, assigned: boolean): string {
+/**
+ * Private periods are named after the class that created them, so the name is only right while that class is in
+ * the block: with no class it reads as an unassigned block, and with another class (`assigned` is its name) as that class.
+ */
+export function displayPeriodLabel(period: Schedule['periods'][number] | undefined, assigned: boolean | string): string {
   if (!period) return REMOVED_PERIOD_LABEL;
-  return !assigned && period.kind === 'class' && period.id.startsWith('class-') ? UNASSIGNED_BLOCK_LABEL : period.label;
+  if (period.kind !== 'class' || !period.id.startsWith('class-')) return period.label;
+  return !assigned ? UNASSIGNED_BLOCK_LABEL : typeof assigned === 'string' ? assigned : period.label;
 }
 
 /**
@@ -384,7 +388,7 @@ export function resolveDay(schoolSchedule: Schedule, dateString: string, persona
     result.periods.push({
       slotId: slot.id,
       periodId: slot.periodId,
-      label: period ? displayPeriodLabel(period, !!assignedClass) : assignedClass?.name ?? REMOVED_PERIOD_LABEL,
+      label: period ? displayPeriodLabel(period, assignedClass?.name ?? false) : assignedClass?.name ?? REMOVED_PERIOD_LABEL,
       kind: period?.kind ?? "other",
       start,
       end,

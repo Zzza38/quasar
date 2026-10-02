@@ -1,7 +1,7 @@
 'use client';
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import { scheduleSchema, withCycleDay, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
+import { displayPeriodLabel, scheduleSchema, withCycleDay, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { errorMessage } from '@/client/api';
 import { slugId } from '@/lib/format';
 import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, saveTimetableEdit, type QueuedTimetableEdit } from './personal-timetable';
@@ -137,7 +137,7 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
       <Button size="sm" variant="danger" disabled={disabled || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
       <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
     </>}>{prompt.body}</Callout>}
-    <ScheduleGrid value={draft} personal={displayPersonal} personalClassesOnly onAssign={(periodId, classId) => enqueue({ assign: { [periodId]: classId } })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
+    <ScheduleGrid value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
       onEditDay={id => { setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
         const days = draft.cycleDays.filter(day => day.id !== id);
         if (!days.length) return;
@@ -148,7 +148,8 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled }: {
         ask({ kind: 'remove', dayId: id, label, runs: [() => void remove()] });
       }} />
     {draft.cycleDays.filter(day => day.id === editing).map(day => <Panel key={day.id} className="grid gap-2 p-3"><strong className="text-sm">{day.label} times</strong>
-      <SlotsEditor slots={editedSlots} periods={draft.periods} disabled={disabled} onChange={setEditedSlots} />
+      {/* A block the student made is named after the class in it now, as in the grid. */}
+      <SlotsEditor slots={editedSlots} periods={draft.periods.map(period => ({ ...period, label: displayPeriodLabel(period, personal.classes.find(cls => cls.id === assignments[period.id])?.name ?? false) }))} disabled={disabled} onChange={setEditedSlots} />
       <div><Button size="sm" disabled={disabled || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
     </Panel>)}
     <div><Button size="sm" icon="plus" disabled={disabled || draft.cycleDays.length >= 366} onClick={() => {

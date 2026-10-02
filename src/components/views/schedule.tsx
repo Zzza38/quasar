@@ -162,7 +162,7 @@ export function RotationOverview({ state, onAdjust, onJump }: { state: AppState;
           {slots.map((slot) => {
             const period = schedule.periods.find((entry) => entry.id === slot.periodId);
             const cls = personal.classes.find((entry) => entry.id === personal.assignments[slot.periodId]);
-            return <li key={slot.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1"><ColorDot color={classColor(cls?.id, period?.kind ?? 'other', cls?.color).dot} /><span className="min-w-0 flex-1 truncate font-medium">{cls?.name ?? displayPeriodLabel(period, false)}{cls && period && cls.name !== period.label ? <span className="font-normal text-muted-foreground"> · {period.label}</span> : ''}</span><span className="text-xs tabular-nums text-muted-foreground">{formatRange(slot.start, slot.end)}</span></li>;
+            return <li key={slot.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1"><ColorDot color={classColor(cls?.id, period?.kind ?? 'other', cls?.color).dot} /><span className="min-w-0 flex-1 truncate font-medium">{cls?.name ?? displayPeriodLabel(period, false)}{cls && period && cls.name !== displayPeriodLabel(period, cls.name) ? <span className="font-normal text-muted-foreground"> · {period.label}</span> : ''}</span><span className="text-xs tabular-nums text-muted-foreground">{formatRange(slot.start, slot.end)}</span></li>;
           })}
           {slots.length === 0 && <li className="text-xs text-muted-foreground">No periods on this day.</li>}
         </ul>}
