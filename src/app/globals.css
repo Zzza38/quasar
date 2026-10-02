@@ -214,14 +214,16 @@
 .timetable-workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
 /* The heading stays put; only the list scrolls, inside the rounded panel. */
 /* --timetable-top is the height of whatever covers the top of the scroll area (the app bar on phones and tablets). */
-.timetable-palette { position: sticky; top: calc(var(--timetable-top, 0px) + 12px); display: flex; flex-direction: column; max-height: min(65dvh, 650px); overflow: hidden; }
+/* On the Classes page the palette runs down to the bottom of the screen (--timetable-fill); in a dialog it keeps a fixed cap. */
+.timetable-palette { position: sticky; top: calc(var(--timetable-top, 0px) + 12px); display: flex; flex-direction: column; max-height: var(--timetable-fill, min(65dvh, 650px)); overflow: hidden; }
 /* Rows keep their full content height; without this a height-limited grid squashes wrapped labels into each other. */
 .timetable-palette-items { display: grid; grid-auto-rows: max-content; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: thin; align-content: start; margin: -4px; padding: 4px; }
 /* max-width lets a long name wrap in the phone layout, where the chips are shrink-0 flex items. */
 .timetable-palette-items > button { white-space: normal; text-align: left; justify-content: flex-start; height: auto; min-height: 2.25rem; max-width: 100%; padding: 8px 12px; overflow-wrap: anywhere; border-radius: 10px; }
 .timetable-content { display: grid; gap: 14px; min-width: 0; }
 /* Same breakpoint as the app bar's lg:hidden, in rem like Tailwind's. */
-@media (width < 64rem) { .app-main { --timetable-top: calc(3.5rem + env(safe-area-inset-top)); } }
+.app-main { --timetable-fill: calc(100dvh - var(--timetable-top, 0px) - var(--timetable-bottom, 0px) - 40px); }
+@media (width < 64rem) { .app-main { --timetable-top: calc(3.5rem + env(safe-area-inset-top)); --timetable-bottom: var(--nav-h); } }
 /* The selection bar stays in view over a long timetable and takes no room in the flow (zero height, the negative
    margin cancels its grid gap), so selecting never moves the blocks under the next tap. */
 .timetable-pin { position: sticky; top: calc(var(--timetable-top, 0px) + 8px); z-index: 6; height: 0; margin-bottom: -14px; }

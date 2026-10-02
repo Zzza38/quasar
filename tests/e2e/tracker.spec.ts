@@ -1183,8 +1183,10 @@ test('a drag held at the bottom edge scrolls the page to blocks below the fold',
   const end = await page.locator('.timetable-workspace').evaluate(element => element.getBoundingClientRect().bottom);
   expect(end).toBeGreaterThan(520 - 24 - 60);
   expect(end).toBeLessThanOrEqual(520);
-  // The palette is sticky, so it is still on screen this far down.
+  // The palette is sticky, so it is still on screen this far down, and never past the bottom edge.
   await expect(palette).toBeInViewport();
+  const paletteBox = (await page.locator('.timetable-palette').boundingBox())!;
+  expect(paletteBox.y + paletteBox.height).toBeLessThanOrEqual(520);
   const target = page.getByRole('group', { name: 'Day 6 time canvas', exact: true }).getByRole('button', { name: 'Day 6, 10:50–11:50 AM: D', exact: true });
   await expect(target).toBeInViewport();
   const box = (await target.boundingBox())!;
