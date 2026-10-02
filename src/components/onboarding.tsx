@@ -45,7 +45,7 @@ export function Frame({ step, total = SETUP_STEPS, title, description, children,
     heading.current?.focus({ preventScroll: true });
   }, [key]);
   return <main className="welcome-bg grid min-h-dvh place-items-center items-start p-3 sm:items-center sm:px-4 sm:py-8">
-    <Card className={cn('w-full min-w-0 rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
+    <Card className={cn('w-full min-w-0 overflow-clip rounded-3xl shadow-float animate-in fade-in-0 slide-in-from-bottom-2 duration-300 sm:py-8', wide ? 'max-w-[980px]' : 'max-w-[580px]')}>
       <CardContent className="grid grid-cols-[minmax(0,1fr)] gap-6 sm:px-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Brand />
@@ -358,7 +358,7 @@ function CreateStep({ userId, onBack, onCreated, onUseExisting, online, notice, 
         <OptionCard icon="layers" value="varies" title="The order or the times change by day" description="For example, Day 2 starts with Period 3, or Wednesdays end early. You will drag periods around next." />
       </ChoiceGroup>
       {varies && <Panel className="grid gap-3">
-        <Hint>Drag a period to move it. Tap a day’s name to change its times. Every day started as a copy of the normal day, so you only need to fix what differs.</Hint>
+        <Hint>Drag a period to move it, or tap it and then tap a time. Edit times sets a day’s exact times. Every day started as a copy of the normal day, so you only need to fix what differs.</Hint>
         <Days value={draft} set={set} />
       </Panel>}
       <div className="flex flex-wrap items-center gap-2">
