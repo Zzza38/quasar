@@ -282,7 +282,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           const active = selected?.periodId === period.id && !selected.dayId;
           const lifted = !!carry && !carry.source.dayId && carry.source.periodId === period.id;
           return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', active && 'ring-2 ring-ring/60', lifted && 'opacity-50')} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
-            style={{ borderColor: 'transparent', borderLeftColor: color.dot, background: `color-mix(in srgb, ${color.dot} 14%, var(--card))` }} onPointerDown={event => { if (!disabled) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); }}
+            style={{ borderColor: 'transparent', background: `color-mix(in srgb, ${color.dot} 22%, var(--card))` }} onPointerDown={event => { if (!disabled) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); }}
             onClick={event => {
               if (active) { cancelSelection(); return; }
               // Tap works in either order: with an empty block selected, tapping a class puts it in that block.
