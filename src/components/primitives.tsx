@@ -387,8 +387,8 @@ export function EmptyState({ icon, title, children, action }: { icon: IconName; 
   </div>;
 }
 
-export function ColorDot({ color, size = 10, className }: { color: string; size?: number; className?: string }) {
-  return <span aria-hidden="true" className={cn('inline-block shrink-0 rounded-full ring-1 ring-inset ring-black/10', className)} style={{ width: size, height: size, background: color }} />;
+export function ColorDot({ color, size = 10 }: { color: string; size?: number }) {
+  return <span aria-hidden="true" className="inline-block shrink-0 rounded-full ring-1 ring-inset ring-black/10" style={{ width: size, height: size, background: color }} />;
 }
 
 /* ---------- Surfaces ---------- */
