@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { classSchema, cycleDaysWithPeriod, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
+import { classSchema, cycleDaysWithPeriod, displayPeriodLabel, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { heroBase } from '@/lib/color';
 import { classColor, formatDate, formatRoom, slugId, todayIn } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -108,7 +108,7 @@ export function ClassesView({ state }: { state: AppState }) {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {periods.length === 0 && <Chip tone="warning" icon="alert">Not on your timetable yet</Chip>}
-            {periods.map((period) => <Chip key={period.id} tone="accent">{period.label}{!scheduled.has(period.id) ? ' · No times set' : ''}</Chip>)}
+            {periods.map((period) => <Chip key={period.id} tone="accent">{displayPeriodLabel(period, cls.name)}{!scheduled.has(period.id) ? ' · No times set' : ''}</Chip>)}
             {days.size > 0 && schedule.cycleDays.length > 1 && <Chip tone="outline">{days.size === schedule.cycleDays.length ? 'Every day' : `${days.size} of ${schedule.cycleDays.length} days`}</Chip>}
           </div>
           </>}</ClassColorPicker>
@@ -116,7 +116,8 @@ export function ClassesView({ state }: { state: AppState }) {
       })}
     </ul>}
 
-    <Section id="assignments-title" title="Your class timetable" icon="layers" description="Unlock to move classes, change times, or remove blocks. Lock it again when you finish.">
+    {/* overflow-clip: a card that hides its overflow becomes the scrollport of the sticky palette and selection bar, so they would scroll away. */}
+    <Section id="assignments-title" title="Your class timetable" icon="layers" className="overflow-clip" description="Drag a class onto a block, or tap the class and then the block. Drag a block to an empty time to move it.">
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'}, assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
