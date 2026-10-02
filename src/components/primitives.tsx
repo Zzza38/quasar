@@ -32,7 +32,8 @@ const VARIANTS = { primary: 'default', secondary: 'outline', ghost: 'ghost', dan
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary: 'shadow-[0_1px_2px_rgb(0_0_0/0.12),inset_0_1px_0_rgb(255_255_255/0.18)] hover:bg-primary/90 font-semibold',
   secondary: 'bg-card shadow-card hover:bg-muted font-semibold',
-  ghost: 'font-semibold',
+  // Same outline as secondary, without its fill: every button shows its edge.
+  ghost: 'border-border dark:border-input font-semibold',
   danger: 'font-semibold',
   soft: 'font-semibold',
   link: '',
