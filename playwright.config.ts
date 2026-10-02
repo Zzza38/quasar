@@ -10,6 +10,8 @@ if (!process.env.E2E_DATABASE_PATH) {
   process.on('exit', () => { if (!process.env.E2E_KEEP_DATABASE) rmSync(directory, { recursive: true, force: true }); });
 }
 process.env.E2E_AUTH_SECRET ||= 'test-only-secret-which-is-never-used-in-production-123456789';
+// Use the NVIDIA-capable browser locally; keep CI's portable default.
+const useLocalGpu = process.platform === 'linux' && !process.env.CI;
 export default defineConfig({
   testDir: './tests/e2e', workers: 1, fullyParallel: false, timeout: 60_000,
   // A committed test.only would otherwise run alone in CI and still pass.
@@ -18,7 +20,11 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   use: {
     baseURL: 'http://localhost:3100', trace: 'retain-on-failure',
-    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? {executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE} : {},
+    channel: useLocalGpu ? 'chromium' : undefined,
+    launchOptions: {
+      ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}),
+      args: useLocalGpu ? ['--enable-gpu', '--use-angle=vulkan'] : [],
+    },
   },
   webServer: {
     // Loopback only (not `npm start`, which binds 0.0.0.0): the session secret below is public, so the server must not be reachable from the LAN.
