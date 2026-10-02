@@ -35,6 +35,34 @@ async function choose(select: Locator, option: string) {
   await select.page().getByRole('option', { name: option, exact: true }).click();
 }
 
+type Point = { x: number; y: number };
+/** A point in a locator, in viewport coordinates. Stale after any scroll: read it again. */
+async function pointIn(target: Locator, offset?: Point): Promise<Point> {
+  const box = (await target.boundingBox())!;
+  return offset ? { x: box.x + offset.x, y: box.y + offset.y } : { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+/** A real mouse drag. Unlike `dragTo` it sends several moves, so the timetable's drop preview and auto-scroll take part. */
+async function mouseDrag(page: Page, from: Point, to: Point) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 4, from.y + 4, { steps: 2 });
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.mouse.up();
+}
+/** One finger pressing, holding, dragging and lifting, through CDP (Chromium only; needs hasTouch). Both points must be in the viewport. */
+async function touchDrag(page: Page, from: Point, to: Point, { hold = 400, beforeRelease }: { hold?: number; beforeRelease?: () => Promise<void> } = {}) {
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', points: Point[]) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(point => ({ x: Math.round(point.x), y: Math.round(point.y), id: 1 })) });
+  try {
+    await touch('touchStart', [from]);
+    if (hold) await page.waitForTimeout(hold);
+    for (let step = 1; step <= 10; step++) await touch('touchMove', [{ x: from.x + (to.x - from.x) * step / 10, y: from.y + (to.y - from.y) * step / 10 }]);
+    await page.waitForTimeout(60);
+    await beforeRelease?.();
+    await touch('touchEnd', []);
+  } finally { await cdp.detach().catch(() => {}); }
+}
+
 test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
@@ -734,6 +762,16 @@ test('time canvas fits desktop, groups weeks, and drags and resizes freely timed
   await expect(dialog(page).getByRole('region', { name: /Rotation week/ })).toHaveCount(2);
   expect(await dialog(page).locator('.time-canvas-scroll').first().evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   const day = dialog(page).getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  // Escape during a drag ends the drag, not the dialog around it.
+  const lift = await pointIn(dialog(page).getByRole('button', { name: 'Place D', exact: true }));
+  await page.mouse.move(lift.x, lift.y);
+  await page.mouse.down();
+  await page.mouse.move(lift.x + 60, lift.y + 30, { steps: 3 });
+  await expect(page.locator('.time-drag-ghost')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.time-drag-ghost')).toHaveCount(0);
+  await page.mouse.up();
+  await expect(dialog(page)).toHaveCount(1);
   await dialog(page).getByRole('button', { name: 'Place D', exact: true }).dragTo(day.getByRole('button', { name: 'Place in Day 1 at 2:00 PM', exact: true }), { targetPosition: { x: 40, y: 1 } });
   await expect(day.getByRole('button', { name: 'Day 1, 2:00–2:45 PM: D', exact: true })).toBeVisible();
   const edge = day.getByRole('button', { name: 'Resize Day 1 D end', exact: true });
@@ -894,6 +932,9 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await expect(day.getByRole('button', { name: 'Day 1, 9:10–10:10 AM: Spanish 2H', exact: true })).toHaveCount(1);
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true })).toHaveCount(0);
   await expect(saved(page)).toBeVisible();
+  // The class moved into period B; both of its old A blocks are still there, empty.
+  await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: A', exact: true })).toHaveCount(1);
+  await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: A', exact: true })).toHaveCount(1);
 });
 
 test('class and time block removals confirm, and reverting restores school times', async ({ page, context }) => {
@@ -962,6 +1003,244 @@ test('removing a class from a private time block keeps the block until it is rem
   await day.getByRole('button', { name: 'Remove time block from Day 1 1:00–1:45 PM' }).click();
   await page.getByRole('dialog', { name: 'Remove Unassigned block?' }).getByRole('button', { name: 'Remove time block' }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Unassigned block', exact: true })).toHaveCount(0);
+});
+
+test('a class moves between blocks, swaps with another class, and no time block disappears', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/classes');
+  for (const name of ['Biology', 'Chemistry']) {
+    await page.getByRole('button', { name: 'Add class', exact: true }).click();
+    await dialog(page).getByLabel('Class name').fill(name);
+    await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+    await expect(dialog(page)).toHaveCount(0);
+  }
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  const block = (name: string, scope = day, label = 'Day 1') => scope.getByRole('button', { name: `${label}, ${name}`, exact: true });
+  const status = page.locator('.timetable-status').getByRole('status');
+  const assignments = () => { const db = openDatabase(process.env.E2E_DATABASE_PATH!); try { const personal = new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data; return { assignments: personal.assignments, overrides: personal.cycleDayOverrides, custom: personal.customSchedule }; } finally { db.close(); } };
+  await page.locator('.timetable-workspace').scrollIntoViewIfNeeded();
+
+  // From the palette into an empty block: the drop preview is on the block, and the class fills it.
+  const palette = await pointIn(page.getByRole('button', { name: 'Place Biology', exact: true }));
+  const first = await pointIn(block('8:00–9:00 AM: A'));
+  await page.mouse.move(palette.x, palette.y);
+  await page.mouse.down();
+  await page.mouse.move(first.x, first.y, { steps: 6 });
+  await expect(page.locator('.time-drag-ghost')).toContainText('Biology');
+  await expect(day.locator('.time-drop-preview')).toHaveText('8:00–9:00 AM');
+  await page.mouse.up();
+  await expect(block('8:00–9:00 AM: Biology')).toBeVisible();
+  await expect(page.locator('.time-drag-ghost')).toHaveCount(0);
+  await expect(status).toHaveText('Placed Biology in A.');
+  // The drag did not also select the class: nothing is pinned, and the next tap on a block selects that block.
+  await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+
+  // From one block to an empty one: the class moves, on every day those periods meet, and both time blocks stay.
+  await mouseDrag(page, await pointIn(block('8:00–9:00 AM: Biology')), await pointIn(block('9:10–10:10 AM: B')));
+  await expect(block('9:10–10:10 AM: Biology')).toBeVisible();
+  await expect(block('8:00–9:00 AM: A')).toBeVisible();
+  await expect(status).toHaveText('Moved Biology to B. Its 7 old blocks stay empty.');
+  const dayTwo = page.getByRole('group', { name: 'Day 2 time canvas', exact: true });
+  await expect(block('8:00–9:00 AM: Biology', dayTwo, 'Day 2')).toBeVisible();
+  await expect.poll(assignments).toEqual({ assignments: { B: 'Biology' }, overrides: [], custom: null });
+
+  // Onto a block that has a class: from the palette it replaces, from another block the two trade places.
+  await mouseDrag(page, await pointIn(page.getByRole('button', { name: 'Place Chemistry', exact: true })), await pointIn(block('8:00–9:00 AM: A')));
+  await expect(block('8:00–9:00 AM: Chemistry')).toBeVisible();
+  await mouseDrag(page, await pointIn(block('8:00–9:00 AM: Chemistry')), await pointIn(block('9:10–10:10 AM: Biology')));
+  await expect(block('8:00–9:00 AM: Biology')).toBeVisible();
+  await expect(block('9:10–10:10 AM: Chemistry')).toBeVisible();
+  await expect(status).toHaveText('Swapped Chemistry and Biology.');
+  await expect.poll(assignments).toEqual({ assignments: { A: 'Biology', B: 'Chemistry' }, overrides: [], custom: null });
+  await page.locator('.timetable-status').getByRole('button', { name: 'Undo' }).click();
+  await expect(block('8:00–9:00 AM: Chemistry')).toBeVisible();
+  await expect(block('9:10–10:10 AM: Biology')).toBeVisible();
+
+  // A near miss still fills the block: dropped in the gap above C, the class goes into C instead of making a new block over it.
+  const third = (await block('10:50–11:50 AM: C').boundingBox())!;
+  await mouseDrag(page, await pointIn(page.getByRole('button', { name: 'Place Chemistry', exact: true })), { x: third.x + 30, y: third.y - 3 });
+  await expect(block('10:50–11:50 AM: Chemistry')).toBeVisible();
+
+  // A time that overlaps another block is refused, and says so; nothing is removed to make room.
+  let from = await pointIn(block('10:50–11:50 AM: Chemistry'));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x, from.y - 50, { steps: 4 });
+  await expect(day.locator('.time-drop-preview')).toHaveAttribute('data-invalid', '');
+  await page.mouse.up();
+  await expect(status).toHaveText('That block overlaps another class or has invalid times. Choose a free time.');
+  await expect(page.locator('.timetable-status').getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  await expect(block('10:50–11:50 AM: Chemistry')).toBeVisible();
+  await expect(block('10:15–10:45 AM: Lunch')).toBeVisible();
+  // Picked up and put back where it was: nothing is saved and the message stays. (The message row changed height, so aim again.)
+  from = await pointIn(block('10:50–11:50 AM: Chemistry'));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 8, from.y, { steps: 3 });
+  await page.mouse.up();
+  await expect(status).toHaveText('That block overlaps another class or has invalid times. Choose a free time.');
+
+  // Escape abandons a drag.
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(first.x, first.y, { steps: 4 });
+  await expect(page.locator('.time-drag-ghost')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.time-drag-ghost')).toHaveCount(0);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.up();
+  await expect(block('10:50–11:50 AM: Chemistry')).toBeVisible();
+  // Letting go after Escape is not a click on the block the drag started on.
+  await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+  await expect.poll(assignments).toEqual({ assignments: { A: 'Chemistry', B: 'Biology', C: 'Chemistry' }, overrides: [], custom: null });
+});
+
+test('tapping works in either order, and the selection bar stays in view with a way out', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 820, height: 700 });
+  await page.goto('/classes');
+  for (const name of ['Biology', 'Chemistry']) {
+    await page.getByRole('button', { name: 'Add class', exact: true }).click();
+    await dialog(page).getByLabel('Class name').fill(name);
+    await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+    await expect(dialog(page)).toHaveCount(0);
+  }
+  const day = page.getByRole('group', { name: 'Day 6 time canvas', exact: true });
+  const status = page.locator('.timetable-status').getByRole('status');
+  const prompt = page.locator('.timetable-pin').getByRole('status');
+  const cancel = page.getByRole('button', { name: 'Cancel selection' });
+  // Class first: the bar follows down to the second week, where the block is.
+  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
+  await expect(prompt).toHaveText('Biology selected. Tap a block to put it there, or tap an empty time.');
+  const empty = day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: B', exact: true });
+  await expect(empty).toContainText('Tap to place here');
+  await empty.scrollIntoViewIfNeeded();
+  await expect(prompt).toBeInViewport();
+  const appBar = (await page.locator('.app-topbar').boundingBox())!;
+  expect((await cancel.boundingBox())!.y).toBeGreaterThanOrEqual(appBar.y + appBar.height);
+  await empty.click();
+  await expect(day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: Biology', exact: true })).toBeVisible();
+  await expect(status).toHaveText('Placed Biology in B.');
+  await expect(cancel).toHaveCount(0);
+  // Block first: tap an empty block, then the class.
+  const next = day.getByRole('button', { name: 'Day 6, 9:10–10:10 AM: C', exact: true });
+  // Selecting takes no room in the flow, so the block stays under the pointer for the next tap.
+  const before = (await next.boundingBox())!.y;
+  await next.click();
+  await expect(next).toHaveAttribute('aria-pressed', 'true');
+  await expect(prompt).toHaveText('Empty block selected. Tap a class to put it here, or tap an empty time to move the block.');
+  expect((await next.boundingBox())!.y).toBe(before);
+  await page.getByRole('button', { name: 'Place Chemistry', exact: true }).click();
+  await expect(day.getByRole('button', { name: 'Day 6, 9:10–10:10 AM: Chemistry', exact: true })).toBeVisible();
+  // Block to block: tap a class's block, then another block, and they trade places.
+  await day.getByRole('button', { name: 'Day 6, 9:10–10:10 AM: Chemistry', exact: true }).click();
+  await day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: Biology', exact: true }).click();
+  await expect(day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: Chemistry', exact: true })).toBeVisible();
+  await expect(day.getByRole('button', { name: 'Day 6, 9:10–10:10 AM: Biology', exact: true })).toBeVisible();
+  // Tapping the selected thing again, or Cancel selection, lets go of it.
+  const chemistry = day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: Chemistry', exact: true });
+  await chemistry.click();
+  await expect(chemistry).toHaveAttribute('aria-pressed', 'true');
+  await chemistry.click();
+  await expect(chemistry).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
+  await cancel.click();
+  await expect(page.getByRole('button', { name: 'Place Biology', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  // Removing the class from a block can be undone.
+  await day.getByRole('button', { name: 'Remove class from Day 6 8:00–9:00 AM' }).click();
+  await page.getByRole('dialog', { name: 'Remove Chemistry from this block?' }).getByRole('button', { name: 'Remove class' }).click();
+  await expect(day.getByRole('button', { name: 'Day 6, 8:00–9:00 AM: B', exact: true })).toBeVisible();
+  await page.locator('.timetable-status').getByRole('button', { name: 'Undo' }).click();
+  await expect(chemistry).toBeVisible();
+});
+
+test('a drag held at the bottom edge scrolls the page to blocks below the fold', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await dialog(page).getByLabel('Class name').fill('Biology');
+  await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.locator('.timetable-workspace').evaluate(element => element.scrollIntoView({ block: 'start' }));
+  const palette = page.getByRole('button', { name: 'Place Biology', exact: true });
+  await expect(page.getByRole('group', { name: 'Day 6 time canvas', exact: true })).not.toBeInViewport();
+  const from = await pointIn(palette);
+  const column = (await page.getByRole('group', { name: 'Day 1 time canvas', exact: true }).boundingBox())!;
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  const startY = await scrollY();
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(column.x + 40, 300, { steps: 4 });
+  // Away from the edges nothing scrolls; parked at the bottom edge the page scrolls on its own, with no further moves.
+  await page.waitForTimeout(400);
+  expect(await scrollY()).toBe(startY);
+  await page.mouse.move(column.x + 40, 514, { steps: 4 });
+  await expect.poll(scrollY, { timeout: 20_000 }).toBeGreaterThan(startY + 300);
+  // It stops by itself where the timetable ends, instead of running on down the page.
+  await expect.poll(async () => { const at = await scrollY(); await page.waitForTimeout(250); return await scrollY() - at; }, { timeout: 20_000 }).toBe(0);
+  const end = await page.locator('.timetable-workspace').evaluate(element => element.getBoundingClientRect().bottom);
+  expect(end).toBeGreaterThan(520 - 24 - 60);
+  expect(end).toBeLessThanOrEqual(520);
+  // The palette is sticky, so it is still on screen this far down.
+  await expect(palette).toBeInViewport();
+  const target = page.getByRole('group', { name: 'Day 6 time canvas', exact: true }).getByRole('button', { name: 'Day 6, 10:50–11:50 AM: D', exact: true });
+  await expect(target).toBeInViewport();
+  const box = (await target.boundingBox())!;
+  await page.mouse.move(box.x + 30, box.y + 30, { steps: 3 });
+  await page.mouse.up();
+  await expect(page.getByRole('group', { name: 'Day 6 time canvas', exact: true }).getByRole('button', { name: 'Day 6, 10:50–11:50 AM: Biology', exact: true })).toBeVisible();
+});
+
+test.describe('timetable touch', () => {
+  test.use({ hasTouch: true, viewport: { width: 820, height: 1180 } });
+
+  test('a finger holds to drag a class into a block, a swipe still scrolls, and taps place without a hover card', async ({ page, context }) => {
+    const fixture = seed(); await authenticate(context, fixture.id);
+    await page.goto('/classes');
+    for (const name of ['Biology', 'Chemistry']) {
+      await page.getByRole('button', { name: 'Add class', exact: true }).tap();
+      await dialog(page).getByLabel('Class name').fill(name);
+      await dialog(page).getByRole('button', { name: 'Add class', exact: true }).tap();
+      await expect(dialog(page)).toHaveCount(0);
+    }
+    const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+    const palette = page.getByRole('button', { name: 'Place Biology', exact: true });
+    const empty = day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true });
+    await palette.evaluate(element => element.scrollIntoView({ block: 'center' }));
+    const scrollY = () => page.evaluate(() => window.scrollY);
+    // A swipe that starts on a class scrolls the page and places nothing.
+    let before = await scrollY();
+    const start = await pointIn(palette);
+    await touchDrag(page, start, { x: start.x, y: start.y - 150 }, { hold: 0 });
+    await expect.poll(scrollY).toBeGreaterThan(before + 50);
+    await expect(empty).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+    // Held first, the class lifts and follows the finger; the page stays put and the class lands in the block.
+    await palette.evaluate(element => element.scrollIntoView({ block: 'center' }));
+    before = await scrollY();
+    await touchDrag(page, await pointIn(palette), await pointIn(empty), { beforeRelease: async () => {
+      await expect(page.locator('.time-drag-ghost')).toContainText('Biology');
+      await expect(day.locator('.time-drop-preview')).toBeVisible();
+    } });
+    await expect(day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Biology', exact: true })).toBeVisible();
+    expect(await scrollY()).toBe(before);
+    await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+    // A press held long enough to lift the class but never moved is still a tap: it selects.
+    const chemistry = page.getByRole('button', { name: 'Place Chemistry', exact: true });
+    const held = await pointIn(chemistry);
+    await touchDrag(page, held, held, { hold: 350 });
+    await expect(chemistry).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Cancel selection' }).tap();
+    // Tap the class, tap the block. A tap shows no hover card over the timetable, and the first tap on the block places.
+    await page.getByRole('button', { name: 'Place Chemistry', exact: true }).tap();
+    const second = day.getByRole('button', { name: 'Day 1, 9:10–10:10 AM: B', exact: true });
+    await second.tap();
+    await expect(day.getByRole('button', { name: 'Day 1, 9:10–10:10 AM: Chemistry', exact: true })).toBeVisible();
+    await expect(page.locator('.time-block-detail:visible')).toHaveCount(0);
+    await expect.poll(() => { const db = openDatabase(process.env.E2E_DATABASE_PATH!); try { return new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data.assignments; } finally { db.close(); } }).toEqual({ A: 'Biology', B: 'Chemistry' });
+  });
 });
 
 

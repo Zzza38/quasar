@@ -213,11 +213,29 @@
    Positioned layout that Tailwind utilities do not express well; tokens follow the theme. */
 .timetable-workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
 /* The heading stays put; only the list scrolls, inside the rounded panel. */
-.timetable-palette { position: sticky; top: 12px; display: flex; flex-direction: column; max-height: min(65dvh, 650px); overflow: hidden; }
+/* --timetable-top is the height of whatever covers the top of the scroll area (the app bar on phones and tablets). */
+.timetable-palette { position: sticky; top: calc(var(--timetable-top, 0px) + 12px); display: flex; flex-direction: column; max-height: min(65dvh, 650px); overflow: hidden; }
 /* Rows keep their full content height; without this a height-limited grid squashes wrapped labels into each other. */
 .timetable-palette-items { display: grid; grid-auto-rows: max-content; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: thin; align-content: start; margin: 0 -4px -4px; padding: 0 4px 4px; }
 .timetable-palette-items > button { white-space: normal; text-align: left; justify-content: flex-start; height: auto; min-height: 2.25rem; padding: 8px 10px; overflow-wrap: anywhere; border-left-width: 4px; border-radius: 10px; }
 .timetable-content { display: grid; gap: 14px; min-width: 0; }
+/* Same breakpoint as the app bar's lg:hidden, in rem like Tailwind's. */
+@media (width < 64rem) { .app-main { --timetable-top: calc(3.5rem + env(safe-area-inset-top)); } }
+/* The selection bar stays in view over a long timetable and takes no room in the flow (zero height, the negative
+   margin cancels its grid gap), so selecting never moves the blocks under the next tap. */
+.timetable-pin { position: sticky; top: calc(var(--timetable-top, 0px) + 8px); z-index: 6; height: 0; margin-bottom: -14px; }
+.timetable-pin-bar { position: absolute; inset: 0 0 auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 8px; padding: 4px 4px 4px 12px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 12px; background: var(--card); box-shadow: var(--shadow-float); }
+.timetable-pin-bar > p { flex: 1 1 12rem; padding: 4px 0; font-size: 13px; font-weight: 600; color: var(--foreground); }
+/* Dragging uses pointer events (pointer-drag.ts): a held press must not open the iOS callout or select text, and a
+   swipe that starts on a class or block still scrolls. */
+.timetable-palette-items > button, .time-block-body { touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+html[data-pointer-dragging] { overscroll-behavior: contain; }
+html[data-pointer-dragging], html[data-pointer-dragging] * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+.time-drag-ghost { position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; max-width: min(240px, calc(100vw - 8px)); padding: 7px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.25; color: var(--foreground); box-shadow: var(--shadow-float); will-change: transform; overflow-wrap: anywhere; }
+.time-drag-ghost > strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 600; }
+.time-drag-ghost > span { display: block; margin-top: 1px; font-size: 11px; font-weight: 500; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.time-drag-ghost[data-invalid] > span { color: var(--destructive); font-weight: 600; }
+.time-drag-source { opacity: .45; }
 @media (max-width: 900px) {
   .timetable-workspace { grid-template-columns: minmax(0, 1fr); }
   /* Tall enough for a student's whole class list; the long school-editor list scrolls, and the fade in the
@@ -240,7 +258,7 @@
 .time-targets { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .time-targets > button { width: 100%; flex-shrink: 0; border: 0; border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent); background: transparent; padding: 0; }
 .time-targets > button:focus-visible, .time-targets > button:not(:disabled):hover { background: var(--primary-soft); outline: 1px solid var(--primary); }
-.time-block { position: absolute; left: 4px; right: 4px; border: 1px solid; border-left-width: 4px; border-radius: 9px; z-index: 1; min-width: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .06); transition: box-shadow .15s ease, transform .15s ease; }
+.time-block { position: absolute; left: 4px; right: 4px; border: 1px solid var(--block-color, currentColor); border-left-width: 4px; border-radius: 9px; z-index: 1; min-width: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .06); transition: box-shadow .15s ease, transform .15s ease; }
 .time-block:hover { box-shadow: 0 6px 18px -6px rgb(0 0 0 / .25); }
 .time-block-body { display: flex; flex-direction: column; width: 100%; height: 100%; text-align: left; padding: 8px 16px 6px 8px; overflow: hidden; font-size: 11.5px; line-height: 1.25; cursor: grab; border: 0; background: transparent; color: inherit; border-radius: inherit; }
 .time-block-body:active { cursor: grabbing; }
@@ -254,10 +272,14 @@
 .time-resize-end { bottom: -3px; }
 .time-resize::after { content: ''; display: block; width: 24px; height: 3px; border-radius: 3px; background: currentColor; opacity: .45; margin: auto; }
 .time-resize:focus-visible { outline: 2px solid var(--primary); }
-.time-drop-preview { position: absolute; pointer-events: none; left: 3px; right: 3px; z-index: 3; border: 2px dashed var(--primary); background: color-mix(in srgb, var(--primary) 16%, var(--card)); color: var(--primary-soft-foreground); font-size: 11px; font-weight: 600; padding: 4px 6px; border-radius: 9px; }
+.time-drop-preview { position: absolute; pointer-events: none; left: 3px; right: 3px; z-index: 5; overflow: hidden; border: 2px dashed var(--primary); background: color-mix(in srgb, var(--primary) 16%, var(--card)); color: var(--primary-soft-foreground); font-size: 11px; font-weight: 600; padding: 4px 6px; border-radius: 9px; }
 @media (max-width: 900px) { .time-canvas { min-width: 650px; } }
-.time-school-guide { border-style: dashed; border-left-style: solid; box-shadow: none; }
+.time-drop-preview[data-invalid] { border-style: solid; border-color: var(--destructive); background: color-mix(in srgb, var(--destructive) 12%, var(--card)); color: var(--destructive); }
+.time-school-guide { border-style: dashed; border-left-style: solid; box-shadow: none; background: var(--muted); }
 .time-school-guide .time-block-body { color: var(--muted-foreground); }
+/* While a class is being placed (selected or dragged), the empty blocks it can go into stand out. */
+.timetable-workspace[data-placing] .time-school-guide { border-color: var(--primary); background: var(--primary-soft); }
+.timetable-workspace[data-placing] .time-school-guide .time-block-body { color: var(--primary-soft-foreground); }
 /* Small events keep one readable line; full details remain available on hover/focus. */
 .time-block-compact .time-block-body { padding: 3px 16px 3px 7px; justify-content: center; }
 .time-block-compact .time-block-body strong { display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 14px; }
@@ -281,6 +303,10 @@
 .time-block-detail { display: none; position: absolute; left: 0; top: calc(100% + 6px); width: max-content; max-width: 260px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-float); font-size: 12px; pointer-events: none; }
 .time-block-detail span { display: block; margin-top: 3px; color: var(--muted-foreground); }
 .time-block:hover, .time-block:focus-within { z-index: 4; }
-.time-block:hover .time-block-detail, .time-block:focus-within .time-block-detail, .time-block-open .time-block-detail { display: block; }
+/* The card follows a mouse or pen (data-hover-cards) and keyboard focus only: after a finger tap :hover and focus
+   stick to the tapped block, and its card would cover the block below. */
+.timetable-workspace[data-hover-cards] .time-block:is(:hover, :focus-within) .time-block-detail, .time-block:has(:focus-visible) .time-block-detail, .time-block-open .time-block-detail { display: block; }
+/* A card would cover the blocks being aimed at, and its overflow would give the canvas a scroll range it does not have. */
+html[data-pointer-dragging] .time-block-detail { display: none !important; }
 /* A tapped (selected) block shows its detail card too: touch screens cannot hover, and iPad Safari does not focus a tapped button. */
 .time-block-open { z-index: 4; }
