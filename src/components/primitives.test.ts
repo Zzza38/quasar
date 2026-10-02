@@ -139,4 +139,16 @@ describe('WeekStrip', () => {
     expect(buttons.map((button) => button.includes('aria-current="date"'))).toEqual([false, true, false]);
     expect(buttons[2]).toContain('aria-pressed="true"');
   });
+
+  it('keeps the today ring when today is also the selected day, and renders a node caption', () => {
+    const caption = createElement(Fragment, null, 8, createElement('span', { className: 'sm:hidden' }, 'p'));
+    const days = ['2026-09-23', '2026-09-24'].map((date) => ({ date, caption, label: date }));
+    const html = renderToStaticMarkup(createElement(WeekStrip, { days, selected: '2026-09-24', today: '2026-09-24', onSelect: () => {} }));
+    const [, other, todayButton] = html.split('<button');
+    expect(todayButton).toContain('aria-pressed="true"');
+    expect(todayButton).toContain('aria-current="date"');
+    expect(todayButton).toMatch(/<span class="[^"]*inset-ring-primary[^"]*">24<\/span>/);
+    expect(todayButton).toContain('8<span class="sm:hidden">p</span>');
+    expect(other).not.toContain('inset-ring');
+  });
 });

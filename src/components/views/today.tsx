@@ -234,7 +234,7 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
       const start = new Date(period.startAt).getTime();
       const end = new Date(period.endAt).getTime();
       const status = nowMs >= end ? 'past' : nowMs >= start ? 'now' : 'future';
-      // Fade finished periods only while the day is under way, and fade the colour bar rather than the text so room and teacher stay readable.
+      // Fade finished periods only while the day is under way, and fade the colour dot rather than the text so room and teacher stay readable.
       const dim = sameDay && status === 'past';
       const color = classColor(period.class?.id, period.kind, period.class?.color);
       const detail = [period.class && period.class.name !== period.label ? period.label : null, period.class?.room ? formatRoom(period.class.room) : null, period.class?.teacher].filter(Boolean).join(' · ');
@@ -248,8 +248,10 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
           {/* Stretched over the row; the tag sits above it so both stay clickable without nesting buttons. */}
           {selectable && <button type="button" aria-label={`Change ${period.label}`} title={`Change ${period.label}`} className="absolute inset-0 cursor-pointer rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => onPeriodSelect(period)} />}
           <div className="grid content-start text-[12.5px] tabular-nums text-muted-foreground"><strong className={cn('text-[13.5px] font-bold', status === 'now' ? 'text-now-foreground' : dim ? 'text-muted-foreground' : 'text-foreground')}>{formatTime(period.start)}</strong>{!compact && <span>{formatTime(period.end)}</span>}</div>
-          <div className="flex min-w-0 items-start gap-3">
-            <span className={cn('w-1.5 min-h-[36px] shrink-0 self-stretch rounded-full', dim && 'opacity-40')} style={{ background: color.dot }} />
+          {/* min-h keeps a compact row with no detail line as tall as the others. */}
+          <div className="flex min-h-9 min-w-0 items-start gap-2">
+            {/* mt centres the dot on the first line of the name. */}
+            <ColorDot color={color.dot} className={cn('mt-1.5', dim && 'opacity-40')} />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <strong className={cn('text-[15px] font-bold tracking-tight', dim && 'text-muted-foreground')}>{period.class?.name ?? period.label}</strong>

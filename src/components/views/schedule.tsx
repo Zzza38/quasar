@@ -66,7 +66,8 @@ export function ScheduleView({ state }: { state: AppState }) {
         <Input id="schedule-date" type="date" value={date} min={FIRST_DATE} max={LAST_DATE} className="h-10 max-w-[150px] font-semibold" onChange={(event) => pickDate(event.target.value)} />
       </div>} />
 
-    <Card role="region" aria-label="Week"><CardContent className="grid gap-3">
+    {/* Less side padding on phones: the seven day tiles need the width. */}
+    <Card role="region" aria-label="Week"><CardContent className="grid gap-3 max-sm:px-2">
       <div className="flex items-center justify-between gap-2">
         <IconButton label="Previous week" icon="chevronLeft" size="lg" onClick={() => setDate(addDays(date, -7))} />
         <strong className="text-sm font-bold tracking-tight">{formatDate(week[0].date)} – {formatDate(week[6].date, { year: true })}</strong>
@@ -74,7 +75,8 @@ export function ScheduleView({ state }: { state: AppState }) {
       </div>
       <WeekStrip selected={date} today={today} onSelect={pickDate} days={week.map(({ date: entry, day }) => !day
         ? { date: entry, closed: true, caption: '-', label: `${formatDate(entry, { weekday: 'long' })}: outside the supported dates` }
-        : { date: entry, closed: day.closed, caption: day.closed ? '-' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`, dot: dueCounts.has(entry), label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}${dueCounts.has(entry) ? `, ${dueCounts.get(entry)} due` : ''}` })} />
+        // "8 periods" does not fit a phone tile, so phones get the "8p" the schedule editor's preview uses.
+        : { date: entry, closed: day.closed, caption: day.closed ? '-' : rotation ? day.cycleDayLabel : <>{day.periods.length}<span className="max-sm:hidden">{day.periods.length === 1 ? ' period' : ' periods'}</span><span className="sm:hidden">p</span></>, dot: dueCounts.has(entry), label: `${formatDate(entry, { weekday: 'long' })}: ${day.closed ? 'no school' : day.cycleDayLabel}${dueCounts.has(entry) ? `, ${dueCounts.get(entry)} due` : ''}` })} />
     </CardContent></Card>
 
     <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => setAdjustDate(date)}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
