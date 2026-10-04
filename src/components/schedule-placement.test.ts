@@ -10,7 +10,7 @@ describe('class colors', () => {
   });
 });
 
-import { classFill, placeTimedPeriod } from './schedule-placement';
+import { classFill, periodFill, placeTimedPeriod } from './schedule-placement';
 describe('freely timed blocks', () => {
   it('resizes without shifting other periods, rejects overlap, and moves between days', () => {
     const day = exampleSchedule.cycleDays[0];
@@ -64,6 +64,50 @@ describe('classes fill blocks', () => {
     expect(classFill(schedule, assignments, algebra, day.id, 9 * 60 + 5, 8 * 60 + 30, 9 * 60 + 30)).toBeUndefined();
     // A block that already has a class is only replaced when pointed at.
     expect(classFill(schedule, { ...assignments, C: 'biology' }, palette, day.id, 10 * 60 + 47, 10 * 60 + 45, 11 * 60 + 30)).toBeUndefined();
+  });
+});
+
+describe('periods fill empty blocks', () => {
+  // Day 1: A 8:00–9:00, B 9:10–10:10, lunch 10:15–10:45, C 10:50–11:50. A has a class; B and C are empty.
+  const day = exampleSchedule.cycleDays[0];
+  const schedule = { ...exampleSchedule, periods: [...exampleSchedule.periods, { id: 'advisory', label: 'Advisory', kind: 'other' as const }] };
+  const assignments = { A: 'algebra' };
+  const palette = { periodId: 'advisory' };
+  const lunch = { periodId: 'lunch', dayId: day.id, slotId: 'lunch-slot' };
+
+  it('puts a period from the palette into the empty block it is dropped on, keeping the block time', () => {
+    const taken = periodFill(schedule, assignments, palette, day.id, 9 * 60 + 30, 9 * 60 + 30, 10 * 60 + 15);
+    expect(taken?.slot).toEqual(day.slots[1]);
+    expect(taken?.next.cycleDays[0].slots).toEqual([day.slots[0], { ...day.slots[1], periodId: 'advisory' }, day.slots[2], day.slots[3]]);
+    expect(taken?.next.cycleDays[1]).toEqual(exampleSchedule.cycleDays[1]);
+  });
+  it('moves a period out of its own block into an empty block', () => {
+    const taken = periodFill(schedule, assignments, lunch, day.id, 11 * 60, 10 * 60 + 50, 11 * 60 + 20);
+    expect(taken?.slot).toEqual(day.slots[3]);
+    expect(taken?.next.cycleDays[0].slots).toEqual([day.slots[0], day.slots[1], { ...day.slots[3], periodId: 'lunch' }]);
+    // Slot ids repeat on every day: only the source day loses its block, and the target day keeps its own lunch.
+    const across = periodFill(schedule, assignments, { periodId: 'lunch', dayId: 'day-2', slotId: 'lunch-slot' }, day.id, 9 * 60 + 30, 9 * 60 + 30, 10 * 60);
+    expect(across?.next.cycleDays[0].slots).toEqual([day.slots[0], { ...day.slots[1], periodId: 'lunch' }, day.slots[2], day.slots[3]]);
+    expect(across?.next.cycleDays[1].slots).toEqual(exampleSchedule.cycleDays[1].slots.filter(slot => slot.id !== 'lunch-slot'));
+  });
+  it('leaves blocks with a class, free time, and classes to the other placements', () => {
+    expect(periodFill(schedule, assignments, palette, day.id, 8 * 60 + 30, 8 * 60 + 30, 9 * 60 + 15)).toBeUndefined();
+    expect(periodFill(schedule, assignments, palette, day.id, 13 * 60, 13 * 60, 13 * 60 + 45)).toBeUndefined();
+    expect(periodFill(schedule, assignments, { periodId: 'B' }, day.id, 10 * 60 + 55, 10 * 60 + 55, 11 * 60 + 40)).toBeUndefined();
+    expect(periodFill(schedule, assignments, { periodId: 'nope' }, day.id, 9 * 60 + 30, 9 * 60 + 30, 10 * 60 + 15)).toBeUndefined();
+  });
+  it('does not act on a block that changed since it was picked up', () => {
+    // The slot now holds another period, or is gone: nothing is removed, and placeTimedPeriod reports the change.
+    expect(periodFill(schedule, assignments, { periodId: 'lunch', dayId: day.id, slotId: 'first' }, day.id, 11 * 60, 10 * 60 + 50, 11 * 60 + 20)).toBeUndefined();
+    expect(periodFill(schedule, assignments, { periodId: 'lunch', dayId: day.id, slotId: 'gone' }, day.id, 11 * 60, 10 * 60 + 50, 11 * 60 + 20)).toBeUndefined();
+    expect(placeTimedPeriod(schedule, { periodId: 'lunch', dayId: day.id, slotId: 'gone' }, day.id, { start: '10:50', end: '11:20' }, 'new')).toBe('This period changed. Select it again.');
+  });
+  it('counts a near miss from the palette, but not a block being moved', () => {
+    // In the gap before C: the placement would run into C, so the period goes into C.
+    expect(periodFill(schedule, assignments, palette, day.id, 10 * 60 + 47, 10 * 60 + 45, 11 * 60 + 30)?.slot).toEqual(day.slots[3]);
+    // Pointing at lunch is not pointing at C, even though the placement would reach it.
+    expect(periodFill(schedule, assignments, palette, day.id, 10 * 60 + 20, 10 * 60 + 20, 11 * 60 + 5)).toBeUndefined();
+    expect(periodFill(schedule, assignments, lunch, day.id, 10 * 60 + 47, 10 * 60 + 45, 11 * 60 + 30)).toBeUndefined();
   });
 });
 

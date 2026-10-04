@@ -280,7 +280,7 @@ html[data-pointer-dragging], html[data-pointer-dragging] * { cursor: grabbing !i
 .time-drop-preview[data-invalid] { border-style: solid; border-color: var(--destructive); background: color-mix(in srgb, var(--destructive) 12%, var(--card)); color: var(--destructive); }
 .time-school-guide { border-style: dashed; box-shadow: none; background: var(--muted); }
 .time-school-guide .time-block-body { color: var(--muted-foreground); }
-/* While a class is being placed (selected or dragged), the empty blocks it can go into stand out. */
+/* While a class, or a period such as lunch, is being placed (selected or dragged), the empty blocks it can go into stand out. */
 .timetable-workspace[data-placing] .time-school-guide { border-color: var(--primary); background: var(--primary-soft); }
 .timetable-workspace[data-placing] .time-school-guide .time-block-body { color: var(--primary-soft-foreground); }
 /* Small events keep one readable line; full details remain available on hover/focus. */
