@@ -43,3 +43,27 @@ export function classFill(schedule: Schedule, assignments: Record<string, string
   if (held === classId) return { slot, changes: null };
   return { slot, changes: source.dayId ? { [slot.periodId]: classId, [source.periodId]: held ?? null } : { [slot.periodId]: classId } };
 }
+
+/**
+ * The empty class block a period that is not a class (advisory, lunch, study hall) goes into, and the timetable
+ * with it there, or undefined when it lands on free time or on a block that has a class. The block keeps its time
+ * and becomes that period's; a block the period was dragged out of is removed. As with classes, a near miss from
+ * the palette counts: pointed at free time, a placement that would overlap an empty block goes into that block.
+ * A block that changed since it was picked up (another device moved it) is left to placeTimedPeriod to report.
+ */
+export function periodFill(schedule: Schedule, assignments: Record<string, string>, source: PeriodPlacement, dayId: string, at: number, start: number, end: number): { slot: ScheduleSlot; next: Schedule } | undefined {
+  const period = schedule.periods.find(entry => entry.id === source.periodId);
+  const day = schedule.cycleDays.find(entry => entry.id === dayId);
+  const sourceSlot = source.dayId ? schedule.cycleDays.find(entry => entry.id === source.dayId)?.slots.find(slot => slot.id === source.slotId) : undefined;
+  if (!period || period.kind === 'class' || !day || (source.dayId && sourceSlot?.periodId !== source.periodId)) return undefined;
+  const empty = day.slots.filter(slot => schedule.periods.find(entry => entry.id === slot.periodId)?.kind === 'class' && !assignments[slot.periodId]);
+  const distance = (slot: ScheduleSlot) => Math.min(Math.abs(minutes(slot.start) - at), Math.abs(minutes(slot.end) - at));
+  const under = day.slots.find(entry => minutes(entry.start) <= at && at < minutes(entry.end));
+  const slot = under ? empty.find(entry => entry === under)
+    : source.dayId ? undefined : empty.filter(entry => minutes(entry.start) < end && minutes(entry.end) > start).sort((a, b) => distance(a) - distance(b))[0];
+  if (!slot) return undefined;
+  const next = { ...schedule, cycleDays: schedule.cycleDays.map(entry => ({ ...entry, slots: entry.slots
+    .filter(item => !(entry.id === source.dayId && item.id === source.slotId))
+    .map(item => entry.id === dayId && item.id === slot.id ? { ...item, periodId: source.periodId } : item) })) };
+  return { slot, next };
+}
