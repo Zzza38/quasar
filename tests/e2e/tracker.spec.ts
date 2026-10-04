@@ -1096,6 +1096,83 @@ test('a class moves between blocks, swaps with another class, and no time block 
   await expect.poll(assignments).toEqual({ assignments: { A: 'Chemistry', B: 'Biology', C: 'Chemistry' }, overrides: [], custom: null });
 });
 
+test('a period that is not a class fills an empty block by drag and by tap, keeping the block time', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/classes');
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  const block = (name: string) => day.getByRole('button', { name: `Day 1, ${name}`, exact: true });
+  const status = page.locator('.timetable-status').getByRole('status');
+  const prompt = page.locator('.timetable-pin').getByRole('status');
+  const personal = () => { const db = openDatabase(process.env.E2E_DATABASE_PATH!); try { const data = new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data; return { overrides: data.cycleDayOverrides, custom: data.customSchedule }; } finally { db.close(); } };
+  const [first, second, lunch, third] = exampleSchedule.cycleDays[0].slots;
+  await page.locator('.timetable-workspace').scrollIntoViewIfNeeded();
+
+  // From the palette onto an empty block: Lunch takes the block's time instead of being refused for overlapping it.
+  const palette = await pointIn(page.getByRole('button', { name: 'Place Lunch', exact: true }));
+  const target = await pointIn(block('9:10–10:10 AM: B'));
+  await page.mouse.move(palette.x, palette.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 6 });
+  await expect(day.locator('.time-drop-preview')).toHaveText('9:10–10:10 AM');
+  await page.mouse.up();
+  await expect(block('9:10–10:10 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in B.');
+  await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slots: [first, { ...second, periodId: 'lunch' }, lunch, third] }], custom: null });
+
+  // By tap, in the class order: the period, then the empty block, which says it can take it.
+  await page.getByRole('button', { name: 'Place Lunch', exact: true }).click();
+  await expect(prompt).toHaveText('Lunch selected. Tap an empty block to put it there, or tap an empty time.');
+  await expect(block('10:50–11:50 AM: C')).toContainText('Tap to place here');
+  await block('10:50–11:50 AM: C').click();
+  await expect(block('10:50–11:50 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in C.');
+  await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+
+  // A period's own block dragged onto an empty block moves into it, and its old block goes.
+  await mouseDrag(page, await pointIn(block('10:15–10:45 AM: Lunch')), await pointIn(block('8:00–9:00 AM: A')));
+  await expect(block('8:00–9:00 AM: Lunch')).toBeVisible();
+  await expect(block('10:15–10:45 AM: Lunch')).toHaveCount(0);
+  await expect(status).toHaveText('Moved Lunch to A.');
+  await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slots: [{ ...first, periodId: 'lunch' }, { ...second, periodId: 'lunch' }, { ...third, periodId: 'lunch' }] }], custom: null });
+  // Other days keep the school's timetable: only this day was overridden.
+  const day2 = page.getByRole('group', { name: 'Day 2 time canvas', exact: true });
+  const block2 = (name: string) => day2.getByRole('button', { name: `Day 2, ${name}`, exact: true });
+  await expect(block2('9:10–10:10 AM: C')).toBeVisible();
+
+  // Block first: an empty block, then the period.
+  await block2('8:00–9:00 AM: B').click();
+  await expect(prompt).toHaveText('Empty block selected. Tap a class or period to put it here, or tap an empty time to move the block.');
+  await page.getByRole('button', { name: 'Place Lunch', exact: true }).click();
+  await expect(block2('8:00–9:00 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in B.');
+  // A period's own block, by tap: it moves into the empty block it is tapped onto.
+  await block2('8:00–9:00 AM: Lunch').click();
+  await expect(prompt).toHaveText('Lunch selected. Tap an empty block to move it there, or tap an empty time.');
+  await block2('9:10–10:10 AM: C').click();
+  await expect(block2('9:10–10:10 AM: Lunch')).toBeVisible();
+  await expect(block2('8:00–9:00 AM: Lunch')).toHaveCount(0);
+  await expect(status).toHaveText('Moved Lunch to C.');
+
+  // A block that holds a class is not taken over: the drop is refused where it would have landed.
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await dialog(page).getByLabel('Class name').fill('Biology');
+  await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await mouseDrag(page, await pointIn(page.getByRole('button', { name: 'Place Biology', exact: true })), await pointIn(block2('10:50–11:50 AM: D')));
+  await expect(block2('10:50–11:50 AM: Biology')).toBeVisible();
+  const lunchChip = await pointIn(page.getByRole('button', { name: 'Place Lunch', exact: true }));
+  const biology = await pointIn(block2('10:50–11:50 AM: Biology'));
+  await page.mouse.move(lunchChip.x, lunchChip.y);
+  await page.mouse.down();
+  await page.mouse.move(lunchChip.x + 4, lunchChip.y + 4, { steps: 2 });
+  await page.mouse.move(biology.x, biology.y, { steps: 8 });
+  await expect(day2.locator('.time-drop-preview[data-invalid]')).toContainText('Not here');
+  await page.mouse.up();
+  await expect(status).toHaveText('That block overlaps another class or has invalid times. Choose a free time.');
+  await expect(block2('10:50–11:50 AM: Biology')).toBeVisible();
+});
+
 test('tapping works in either order, and the selection bar stays in view with a way out', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 820, height: 700 });
@@ -1129,7 +1206,7 @@ test('tapping works in either order, and the selection bar stays in view with a 
   const before = (await next.boundingBox())!.y;
   await next.click();
   await expect(next).toHaveAttribute('aria-pressed', 'true');
-  await expect(prompt).toHaveText('Empty block selected. Tap a class to put it here, or tap an empty time to move the block.');
+  await expect(prompt).toHaveText('Empty block selected. Tap a class or period to put it here, or tap an empty time to move the block.');
   expect((await next.boundingBox())!.y).toBe(before);
   await page.getByRole('button', { name: 'Place Chemistry', exact: true }).click();
   await expect(day.getByRole('button', { name: 'Day 6, 9:10–10:10 AM: Chemistry', exact: true })).toBeVisible();

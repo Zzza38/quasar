@@ -10,17 +10,18 @@ import { cn } from '@/lib/utils';
 import { Button, IconButton, Input, Modal, Spacer } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { usePointerDrag, verticalScroller, type DragPoint } from './pointer-drag';
-import { classFill, clockTime, minutes, placeTimedPeriod, PLACEMENT_BLOCKED, type PeriodPlacement } from './schedule-placement';
+import { classFill, periodFill, clockTime, minutes, placeTimedPeriod, PLACEMENT_BLOCKED, type PeriodPlacement } from './schedule-placement';
 
 const snap = (value: number) => Math.round(value / 5) * 5;
 type Resize = { dayId: string; slot: ScheduleSlot; edge: 'start' | 'end'; y: number; start: number; end: number };
 /** A class or block being dragged. `grab` is how far below a block's top it was picked up, so the block does not jump to the pointer. */
 type Carry = { source: PeriodPlacement; label: string; color: string; grab: number; touch?: boolean };
 /**
- * What dropping or tapping at a spot would do. With `slotId` the class goes into that block (`changes` are the
- * assignments to save); otherwise the block lands on free time. `problem` says why nothing would happen.
+ * What dropping or tapping at a spot would do. With `slotId` the class or period goes into that block: `changes`
+ * are the assignments that put a class there, `schedule` the timetable with a period (advisory, lunch) in it.
+ * Otherwise the block lands on free time. `problem` says why nothing would happen.
  */
-type Landing = { dayId: string; start: number; end: number; slotId?: string; changes?: Record<string, string | null>; label?: string; done?: string; problem?: string };
+type Landing = { dayId: string; start: number; end: number; slotId?: string; changes?: Record<string, string | null>; schedule?: Schedule; label?: string; done?: string; problem?: string };
 
 /** The part of the viewport between the app's top bar and tab bar, which cover the page's edges on phones and tablets. */
 function pageBounds() {
@@ -93,7 +94,10 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const next = placeTimedPeriod(value, source, dayId, { start: clockTime(start), end: clockTime(end) }, randomId());
     if (next !== PLACEMENT_BLOCKED) return next;
     const empty = value.cycleDays.find(day => day.id === dayId)?.slots.some(slot => !(source.dayId === dayId && source.slotId === slot.id) && minutes(slot.start) < end && minutes(slot.end) > start && isGuide(slot));
-    return empty ? 'That time overlaps an empty block. Put a class in that block, or remove the block with × first.' : next;
+    if (!empty) return next;
+    // A class, or a period that is not a class, can go into that block instead; another empty block cannot.
+    const fills = !!clsFor(source.periodId) || periodOf(source.periodId)?.kind !== 'class';
+    return fills ? 'That time overlaps an empty block. Drop it on that block to put it there, or remove the block with × first.' : 'That time overlaps an empty block. Choose a free time, or remove that block with × first.';
   };
   /** The part of the viewport where the timetable can be seen: inside its scroll area and clear of the app's bars. */
   const visibleBand = () => {
@@ -132,7 +136,16 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     // Only the student's own timetable puts classes into blocks; a dangling assignment counts as no class.
     const held = onAssign && personal ? Object.fromEntries(Object.entries(personal.assignments).filter(([id]) => clsFor(id))) : undefined;
     const fill = held && classFill(value, held, source, dayId, at, start, end);
-    if (!fill) { const next = timed(source, dayId, start, end); return typeof next === 'string' ? { dayId, start, end, label: `Not here · ${formatRange(clockTime(start), clockTime(end))}`, problem: next } : { dayId, start, end }; }
+    if (!fill) {
+      // A period that is not a class (advisory, lunch, study hall) fills an empty block too, taking the block's time.
+      const taken = held && periodFill(value, held, source, dayId, at, start, end);
+      if (taken) {
+        const name = displayPeriodLabel(periodOf(source.periodId), !personalClassesOnly);
+        return { dayId, start: minutes(taken.slot.start), end: minutes(taken.slot.end), slotId: taken.slot.id, schedule: taken.next, done: source.dayId ? `Moved ${name} to ${blockName(taken.slot)}.` : `Placed ${name} in ${blockName(taken.slot)}.` };
+      }
+      const next = timed(source, dayId, start, end);
+      return typeof next === 'string' ? { dayId, start, end, label: `Not here · ${formatRange(clockTime(start), clockTime(end))}`, problem: next } : { dayId, start, end };
+    }
     const cls = clsFor(source.periodId)!; const other = clsFor(fill.slot.periodId);
     const spot = { dayId, start: minutes(fill.slot.start), end: minutes(fill.slot.end), slotId: fill.slot.id };
     if (!fill.changes) return { ...spot, label: 'Already here', problem: `${cls.name} is already in that block.` };
@@ -143,6 +156,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const place = (source: PeriodPlacement, spot: Landing): number | undefined => {
     if (disabled) return undefined;
     if (!spot.slotId) return commit(source, spot.dayId, spot.start, spot.end) ? spot.start : undefined;
+    if (spot.schedule) {
+      const saved = onChange(spot.schedule) !== false;
+      setSelected(null); setCleared(null); setReplaced(null); say(saved ? spot.done ?? '' : '');
+      return saved ? spot.start : undefined;
+    }
     if (!spot.changes || !onAssign) { say(spot.problem ?? ''); return undefined; }
     setReplaced({ changes: Object.fromEntries(Object.keys(spot.changes).map(id => [id, clsFor(id)?.id ?? null])), message: spot.done ?? '' });
     void onAssign(spot.changes);
@@ -253,6 +271,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   // What is being placed, by drag or by tap, and whether it is a class that goes into blocks.
   const placing = carry?.source ?? selected;
   const placingClass = onAssign && placing ? clsFor(placing.periodId) : undefined;
+  // A period that is not a class (advisory, lunch) goes into empty blocks as well, taking the block's time.
+  const fillsBlocks = !!placingClass || (!!onAssign && !!placing && !!periodOf(placing.periodId) && periodOf(placing.periodId)!.kind !== 'class');
   const hoverDay = hover && value.cycleDays.find(day => day.id === hover.dayId);
   const undoable = !!replaced && !cleared && replaced.message === message;
   const beginResize = (event: PointerEvent<HTMLButtonElement>, dayId: string, slot: ScheduleSlot, edge: 'start' | 'end') => {
@@ -270,7 +290,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const end = current.edge === 'end' ? Math.min(endMinute, Math.max(minutes(current.slot.start) + 5, minutes(current.slot.end) + delta)) : current.end;
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
-  return <><div ref={workspaceRef} className="timetable-workspace" data-hover-cards={hoverCards ? '' : undefined} data-placing={placingClass ? 'class' : undefined} onPointerOver={event => setHoverCards(event.pointerType !== 'touch')}>
+  return <><div ref={workspaceRef} className="timetable-workspace" data-hover-cards={hoverCards ? '' : undefined} data-placing={fillsBlocks ? '' : undefined} onPointerOver={event => setHoverCards(event.pointerType !== 'touch')}>
     <aside className="timetable-palette gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
       <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
       <div className="timetable-palette-items" role="group" aria-label="Available periods">
@@ -287,8 +307,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
               if (active) { cancelSelection(); return; }
               // Tap works in either order: with an empty block selected, tapping a class puts it in that block.
               const block = slotOf(selected);
-              if (selected?.dayId && block && cls && onAssign && isGuide(block)) { followWithFocus(event.detail, selected.dayId, placeAt({ periodId: period.id }, selected.dayId, minutes(block.start))); return; }
-              select({ periodId: period.id }, cls && onAssign ? `${label} selected. Tap a block to put it there, or tap an empty time.` : `${label} selected. Tap a time in a day column.`);
+              if (selected?.dayId && block && (cls || period.kind !== 'class') && onAssign && isGuide(block)) { followWithFocus(event.detail, selected.dayId, placeAt({ periodId: period.id }, selected.dayId, minutes(block.start))); return; }
+              select({ periodId: period.id }, cls && onAssign ? `${label} selected. Tap a block to put it there, or tap an empty time.` : period.kind !== 'class' && onAssign ? `${label} selected. Tap an empty block to put it there, or tap an empty time.` : `${label} selected. Tap a time in a day column.`);
             }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">{personalClassesOnly && cls ? 'Not placed yet' : 'No times set'}</span>}</span></ShadButton>;
         })}
       </div>
@@ -350,10 +370,10 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                     onPointerDown={event => { if (!disabled) lift(event, { source: { periodId: slot.periodId, dayId: day.id, slotId: slot.id }, label: name, color: color.dot, grab: event.clientY - event.currentTarget.getBoundingClientRect().top }); }}
                     onClick={event => {
                       if (own) { cancelSelection(); return; }
-                      if (selected && placingClass) { followWithFocus(event.detail, day.id, placeAt(selected, day.id, minutes(slot.start))); return; }
-                      select({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, guide ? 'Empty block selected. Tap a class to put it here, or tap an empty time to move the block.' : cls && onAssign ? `${name} selected. Tap another block to move the class there, or tap an empty time to move this block.` : 'Select another time to move this block.');
+                      if (selected && (placingClass || (fillsBlocks && guide))) { followWithFocus(event.detail, day.id, placeAt(selected, day.id, minutes(slot.start))); return; }
+                      select({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, guide ? 'Empty block selected. Tap a class or period to put it here, or tap an empty time to move the block.' : cls && onAssign ? `${name} selected. Tap another block to move the class there, or tap an empty time to move this block.` : onAssign && period && period.kind !== 'class' ? `${name} selected. Tap an empty block to move it there, or tap an empty time.` : 'Select another time to move this block.');
                     }}>
-                    <strong>{name}</strong>{guide && <span>{placingClass ? (carry ? 'Drop here' : 'Tap to place here') : name === UNASSIGNED_BLOCK_LABEL ? 'Drop a class here' : 'Unassigned block · drop class here'}</span>}
+                    <strong>{name}</strong>{guide && <span>{fillsBlocks ? (carry ? 'Drop here' : 'Tap to place here') : name === UNASSIGNED_BLOCK_LABEL ? 'Drop a class or period here' : 'Unassigned block · drop a class or period here'}</span>}
                     {/* The axis already says AM or PM; the full range stays in the tooltip, the hover card and the label. */}
                     <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
