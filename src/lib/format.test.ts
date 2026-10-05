@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { browserTimeZone, chatTime, classColor, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, formatTimeZone, instantParts, minutesLeft, pluralize, relativeDate, reminderLabel, slugId, todayIn } from './format';
+import { browserTimeZone, chatTime, classColor, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, formatTimeZone, instantParts, minutesLeft, monthGrid, monthOf, pluralize, relativeDate, reminderLabel, sameMonth, slugId, todayIn } from './format';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -182,5 +182,21 @@ describe('reminder labels', () => {
     expect(reminderLabel(90)).toBe('90 minutes before');
     expect(reminderLabel(1440)).toBe('1 day before');
     expect(reminderLabel(10080)).toBe('7 days before');
+  });
+});
+
+describe('month grid', () => {
+  it('describes a month and lays it out from the Monday on or before the 1st', () => {
+    expect(monthOf('2026-10-05')).toEqual({ start: '2026-10-01', days: 31, label: 'October 2026' });
+    expect(monthOf('2028-02-10').days).toBe(29);
+    const grid = monthGrid('2026-10-05');
+    expect(grid).toHaveLength(42);
+    expect(grid[0]).toBe('2026-09-28');
+    expect(grid[3]).toBe('2026-10-01');
+    expect(grid[41]).toBe('2026-11-08');
+    // June 2026 starts on a Monday, so the grid starts on the 1st itself.
+    expect(monthGrid('2026-06-15')[0]).toBe('2026-06-01');
+    expect(sameMonth('2026-10-01', '2026-10-31')).toBe(true);
+    expect(sameMonth('2026-10-31', '2026-11-01')).toBe(false);
   });
 });

@@ -258,21 +258,13 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await page.getByRole('heading', { name: heading, exact: typeof heading === 'string' }).first().waitFor({ timeout: 20_000 });
   };
   await attempt('today', variant, async () => { await go('today', /Maya/); await shot(page, 'today', variant, 'Today view for Maya at 8:51 AM Thursday, period A in progress, tasks due'); });
-  await attempt('schedule', variant, async () => { await go('schedule', 'Schedule'); await shot(page, 'schedule', variant, 'Schedule view, today selected in the week strip, timeline and rotation'); });
+  await attempt('schedule', variant, async () => { await go('schedule', 'Schedule'); await shot(page, 'schedule', variant, 'Schedule view: month grid with today selected, the day beside it'); });
   await attempt('schedule-day', variant, async () => {
     await go('schedule', 'Schedule');
-    const monday = page.locator('[aria-label="Week"] button[aria-pressed]').filter({ hasText: /^Mon/ }).first();
+    const monday = page.locator('[aria-label="Month"] button[aria-pressed]').filter({ has: page.locator('[aria-label^="Monday"]') }).or(page.locator('[aria-label="Month"] button[aria-label^="Monday"]')).first();
     await monday.click();
-    await page.locator('[aria-label="Week"] button[aria-pressed="true"]').filter({ hasText: /^Mon/ }).waitFor();
-    await shot(page, 'schedule-day', variant, 'Schedule view after tapping Monday in the week strip');
-  });
-  await attempt('schedule-rotation-open', variant, async () => {
-    await go('schedule', 'Schedule');
-    const rotation = page.getByRole('region', { name: /Rotation|Daily bell schedule/ });
-    await rotation.locator('button[aria-expanded]').nth(1).click();
-    await rotation.getByRole('button', { name: /^Adjust / }).waitFor();
-    await rotation.scrollIntoViewIfNeeded();
-    await shot(page, 'schedule-rotation-open', variant, 'Schedule view with the second rotation day opened: periods, Show date and Adjust');
+    await page.locator('[aria-label="Month"] button[aria-pressed="true"][aria-label^="Monday"]').waitFor();
+    await shot(page, 'schedule-day', variant, 'Schedule view after tapping a Monday in the month grid');
   });
   await attempt('tasks', variant, async () => { await go('tasks', 'Tasks'); await shot(page, 'tasks', variant, 'Tasks list: overdue, today, tomorrow, later, no date, completed'); });
   await attempt('tasks-edit', variant, async () => {
@@ -289,6 +281,14 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await shot(page, 'classes-edit', variant, 'Class edit dialog for Algebra II', false);
   });
   await attempt('school', variant, async () => { await go('school', fixture.schoolName); await shot(page, 'school', variant, 'School view for Lincoln High School (locked, 10+ members)'); });
+  await attempt('school-rotation-open', variant, async () => {
+    await go('school', fixture.schoolName);
+    const rotation = page.getByRole('region', { name: /^(Rotation|Daily bell schedule)$/ });
+    await rotation.locator('button[aria-expanded]').nth(1).click();
+    await rotation.getByRole('button', { name: /^Adjust / }).waitFor();
+    await rotation.scrollIntoViewIfNeeded();
+    await shot(page, 'school-rotation-open', variant, 'School view with the second rotation day opened: periods, Show date and Adjust');
+  });
   await attempt('school-proposal', variant, async () => {
     await go('school', fixture.schoolName);
     const heading = page.getByRole('heading', { name: 'Proposed changes' });
@@ -347,7 +347,12 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await go('today', /Maya/);
     await openAccount(page);
     await shot(page, 'account', variant, 'Account sheet opened from the avatar/account button', false);
-    await attempt('account-theme', variant, async () => {
+    await attempt('account-calendars', variant, async () => {
+      const feeds = page.getByRole('dialog').getByRole('region', { name: 'Connected calendars' });
+      await feeds.scrollIntoViewIfNeeded();
+      await shot(page, 'account-calendars', variant, 'Account sheet scrolled to Connected calendars', false);
+    });
+  await attempt('account-theme', variant, async () => {
       const accent = page.getByRole('dialog').getByRole('radiogroup', { name: 'Accent color' });
       await accent.scrollIntoViewIfNeeded();
       await shot(page, 'account-theme', variant, 'Account sheet scrolled to the theme picker (appearance + accent)', false);

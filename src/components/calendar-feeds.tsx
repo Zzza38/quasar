@@ -5,21 +5,21 @@ import { api, errorMessage } from '@/client/api';
 import { formatTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
-import { Button, Callout, Chip, ErrorText, Hint, Modal, Panel, Section } from './primitives';
+import { Button, Callout, Chip, ErrorText, Eyebrow, Hint, Modal, Panel } from './primitives';
 import { FeedGuide, FeedSubscribeForm } from './feed-guide';
 
-export function CalendarFeeds({ state }: { state: AppState }) {
+/**
+ * The Connected calendars block of the Account sheet. `openAdd` counts requests to open the Add dialog (the setup
+ * checklist's "Add calendar" raises it through the shell), so the same request is not replayed on a remount.
+ */
+export function CalendarFeeds({ state, openAdd = 0 }: { state: AppState; openAdd?: number }) {
   const [adding, setAdding] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
-  const wantsAdd = state.params.get('feed') === 'add';
-  const { navigate } = state;
-  // ?feed=add is one-shot: strip it in place once the dialog opens, so a reload, resume or Back does not reopen it.
   useEffect(() => {
-    if (!wantsAdd) return;
+    if (openAdd === 0) return;
     setAdding(true);
     document.getElementById('calendar-feeds-title')?.scrollIntoView({ block: 'start' });
-    navigate('schedule', undefined, { replace: true });
-  }, [wantsAdd, navigate]);
+  }, [openAdd]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState('');
   // The in-place confirmation for removing a feed (docs/CHAT.md §Dialogs: no native confirm()).
@@ -32,7 +32,11 @@ export function CalendarFeeds({ state }: { state: AppState }) {
     finally { setPending(null); }
   };
   const stamp = (value: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: state.timeZone }).format(new Date(value));
-  return <Section id="calendar-feeds-title" title="Connected calendars" icon="calendar" description="Subscribe to an iCal link and its events show up as tasks." action={<Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setAdding(true); }}>Add calendar</Button>}>
+  return <section aria-labelledby="calendar-feeds-title" className="grid gap-3">
+    <div className="flex items-center justify-between gap-3">
+      <div className="grid gap-0.5"><h3 id="calendar-feeds-title" className="contents"><Eyebrow>Connected calendars</Eyebrow></h3><Hint>Subscribe to an iCal link and its events show up as tasks.</Hint></div>
+      <Button size="sm" icon="plus" disabled={!state.online || pending !== null} onClick={() => { setError(''); setAdding(true); }}>Add calendar</Button>
+    </div>
     {!state.online && <Hint>Connect to the internet to manage calendars. Saved events are still available offline.</Hint>}
     {(state.context.importConflicts ?? []).map((conflict) => {
       const local = state.snapshot.entities.find((entry) => entry.id === conflict.entityId)?.data;
@@ -86,5 +90,5 @@ export function CalendarFeeds({ state }: { state: AppState }) {
         <FeedSubscribeForm accountId={state.context.user.id} online={state.online} schoolTimeZone={state.timeZone} autoFocus onSubscribed={async () => { await state.refresh(); setAdding(false); }} />
       </div>
     </Modal>
-  </Section>;
+  </section>;
 }
