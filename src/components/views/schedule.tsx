@@ -90,7 +90,7 @@ export function ScheduleView({ state }: { state: AppState }) {
             const label = `${formatDate(entry, { weekday: 'long' })}: ${!day ? 'outside the supported dates' : day.closed ? 'no school' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`}${dueCount ? `, ${dueCount} due` : ''}${adjusted.has(entry) ? ', adjusted by you' : ''}`;
             return <button key={entry} type="button" aria-pressed={active} aria-label={label} onClick={() => pickDate(entry)}
               className={cn('relative grid min-h-[3rem] content-center justify-items-center gap-px rounded-lg px-0.5 pt-1 pb-2 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[3.5rem]',
-                active ? 'bg-primary-soft text-primary-soft-foreground' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
+                active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/60' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
               {/* Today is the one filled number; the selected day is the tinted cell. Together they still read as one shape. */}
               <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums', isToday && 'bg-primary text-primary-foreground')}>{Number(entry.slice(8))}</span>
               {/* Phones drop the word so "Day 10" fits in a 48px column; "A"/"B" style labels show unchanged. */}
