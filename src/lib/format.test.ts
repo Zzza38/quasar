@@ -186,16 +186,16 @@ describe('reminder labels', () => {
 });
 
 describe('month grid', () => {
-  it('describes a month and lays it out from the Monday on or before the 1st', () => {
+  it('describes a month and lays it out from the Sunday on or before the 1st', () => {
     expect(monthOf('2026-10-05')).toEqual({ start: '2026-10-01', days: 31, label: 'October 2026' });
     expect(monthOf('2028-02-10').days).toBe(29);
     const grid = monthGrid('2026-10-05');
     expect(grid).toHaveLength(42);
-    expect(grid[0]).toBe('2026-09-28');
-    expect(grid[3]).toBe('2026-10-01');
-    expect(grid[41]).toBe('2026-11-08');
-    // June 2026 starts on a Monday, so the grid starts on the 1st itself.
-    expect(monthGrid('2026-06-15')[0]).toBe('2026-06-01');
+    expect(grid[0]).toBe('2026-09-27');
+    expect(grid[4]).toBe('2026-10-01');
+    expect(grid[41]).toBe('2026-11-07');
+    // November 2026 starts on a Sunday, so the grid starts on the 1st itself.
+    expect(monthGrid('2026-11-15')[0]).toBe('2026-11-01');
     expect(sameMonth('2026-10-01', '2026-10-31')).toBe(true);
     expect(sameMonth('2026-10-31', '2026-11-01')).toBe(false);
   });

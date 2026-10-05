@@ -26,11 +26,11 @@ export function monthOf(date: string): { start: string; days: number; label: str
   return { start: first.toString(), days: first.daysInMonth, label: first.toLocaleString('en-US', { month: 'long', year: 'numeric' }) };
 }
 
-/** Six Monday-to-Sunday weeks (42 dates) covering the month, starting on the Monday on or before the 1st. */
+/** Six Sunday-to-Saturday weeks (42 dates) covering the month, starting on the Sunday on or before the 1st (US calendars). */
 export function monthGrid(date: string): string[] {
   const start = Temporal.PlainDate.from(monthOf(date).start);
-  const monday = start.subtract({ days: start.dayOfWeek - 1 });
-  return Array.from({ length: 42 }, (_, index) => monday.add({ days: index }).toString());
+  const sunday = start.subtract({ days: start.dayOfWeek % 7 });
+  return Array.from({ length: 42 }, (_, index) => sunday.add({ days: index }).toString());
 }
 
 /** Same month and year. */
