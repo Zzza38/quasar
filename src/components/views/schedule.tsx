@@ -14,7 +14,7 @@ import { PeriodSheet } from '../period-sheet';
 import { LunchDay } from '../lunch-menu';
 import { ImportedEvents } from '../imported-events';
 
-const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function ScheduleView({ state }: { state: AppState }) {
   const { schedule: school, personal, now, today } = state;
@@ -89,12 +89,13 @@ export function ScheduleView({ state }: { state: AppState }) {
             const caption = !day ? '' : day.closed ? (weekend ? '' : '–') : rotation ? day.cycleDayLabel : '';
             const label = `${formatDate(entry, { weekday: 'long' })}: ${!day ? 'outside the supported dates' : day.closed ? 'no school' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`}${dueCount ? `, ${dueCount} due` : ''}${adjusted.has(entry) ? ', adjusted by you' : ''}`;
             return <button key={entry} type="button" aria-pressed={active} aria-label={label} onClick={() => pickDate(entry)}
-              className={cn('relative grid min-h-[3.25rem] content-start justify-items-center gap-0.5 rounded-xl px-0.5 py-1.5 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[4rem]',
-                active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/70' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
-              <span className={cn('grid size-7 place-items-center rounded-full text-[13.5px] font-bold tabular-nums', isToday && 'inset-ring-[1.5px] inset-ring-primary dark:inset-ring-primary/80', isToday && !active && 'bg-primary-soft text-primary-soft-foreground')}>{Number(entry.slice(8))}</span>
+              className={cn('relative grid min-h-[3rem] content-center justify-items-center gap-px rounded-lg px-0.5 pt-1 pb-2 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[3.5rem]',
+                active ? 'bg-primary-soft text-primary-soft-foreground' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
+              {/* Today is the one filled number; the selected day is the tinted cell. Together they still read as one shape. */}
+              <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums', isToday && 'bg-primary text-primary-foreground')}>{Number(entry.slice(8))}</span>
               {/* Phones drop the word so "Day 10" fits in a 48px column; "A"/"B" style labels show unchanged. */}
-              <small className={cn('max-w-full truncate text-[10.5px] font-semibold', !active && 'text-muted-foreground')}><span className="max-sm:hidden">{caption}</span><span className="sm:hidden">{caption.replace(/^Day\s+/i, '')}</span></small>
-              <span aria-hidden="true" className={cn('size-1.5 rounded-full', dueCount ? 'bg-primary' : 'bg-transparent')} />
+              <small className={cn('h-[15px] max-w-full truncate text-[10.5px] font-semibold leading-[15px]', !active && 'text-muted-foreground')}><span className="max-sm:hidden">{caption}</span><span className="sm:hidden">{caption.replace(/^Day\s+/i, '')}</span></small>
+              {dueCount ? <span aria-hidden="true" className="absolute bottom-1 size-1.5 rounded-full bg-primary" /> : null}
               {adjusted.has(entry) && <Icon name="edit" size={9} aria-hidden="true" className="absolute top-1 right-1 text-muted-foreground" />}
             </button>;
           })}
