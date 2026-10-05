@@ -266,6 +266,14 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await page.locator('[aria-label="Week"] button[aria-pressed="true"]').filter({ hasText: /^Mon/ }).waitFor();
     await shot(page, 'schedule-day', variant, 'Schedule view after tapping Monday in the week strip');
   });
+  await attempt('schedule-rotation-open', variant, async () => {
+    await go('schedule', 'Schedule');
+    const rotation = page.getByRole('region', { name: /Rotation|Daily bell schedule/ });
+    await rotation.locator('button[aria-expanded]').nth(1).click();
+    await rotation.getByRole('button', { name: /^Adjust / }).waitFor();
+    await rotation.scrollIntoViewIfNeeded();
+    await shot(page, 'schedule-rotation-open', variant, 'Schedule view with the second rotation day opened: periods, Show date and Adjust');
+  });
   await attempt('tasks', variant, async () => { await go('tasks', 'Tasks'); await shot(page, 'tasks', variant, 'Tasks list: overdue, today, tomorrow, later, no date, completed'); });
   await attempt('tasks-edit', variant, async () => {
     await go('tasks', 'Tasks');
