@@ -179,13 +179,17 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
 /**
  * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
  * tapped. Minutes round up in both modes (see minutesLeft). The shared leading text
- * stays put; the differing tails slide open/closed.
+ * stays put; the differing tails slide open/closed. While hovered the button keeps at
+ * least its width from when the pointer entered: the seconds form is usually narrower,
+ * and the right-aligned button would otherwise shrink out from under a pointer near
+ * its left edge, end the hover, grow back and flicker.
  */
 function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
-  const [hover, setHover] = useState(false);
+  const [hoverWidth, setHoverWidth] = useState<number | null>(null);
   const [focus, setFocus] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [tick, setTick] = useState(() => Date.now());
+  const hover = hoverWidth !== null;
   const precise = hover || focus || pinned;
   useEffect(() => {
     if (!precise) return;
@@ -200,8 +204,9 @@ function Countdown({ label, target, minutes }: { label: string; target: string; 
   // Refresh the clock in the same event as the state change so the first precise frame is current.
   const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };
   return <button type="button" className="display-number inline-flex cursor-pointer items-baseline whitespace-pre rounded-xl text-[30px] font-extrabold leading-none text-white outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:text-[38px]"
+    style={hoverWidth === null ? undefined : { minWidth: hoverWidth }}
     aria-label={precise ? `${label} ${exact} (${seconds >= 3600 ? 'hours, minutes and seconds' : 'minutes and seconds'})` : `${label} ${compact}`} aria-pressed={pinned} title={pinned ? 'Hide seconds' : 'Show seconds'}
-    onPointerEnter={(event) => { if (event.pointerType !== 'touch') show(setHover, true)(); }} onPointerLeave={show(setHover, false)}
+    onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHoverWidth(event.currentTarget.getBoundingClientRect().width); }} onPointerLeave={() => setHoverWidth(null)}
     onFocus={(event) => show(setFocus, event.currentTarget.matches(':focus-visible'))()} onBlur={show(setFocus, false)} onClick={show(setPinned, !pinned)}>
     <small aria-hidden="true" className="mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white">{label}</small>
     <span aria-hidden="true">{compact.slice(0, shared)}</span>
