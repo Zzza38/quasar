@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clampDate, dateSchema, describeDayIssues, displayPeriodLabel, FIRST_DATE, LAST_DATE, resolveDay, resolveDayInRange, type ResolvedPeriod } from '@/domain/schedule';
 import { addDays, classColor, formatDate, formatRange, relativeDate, weekOf } from '@/lib/format';
-import { cn } from '@/lib/utils';
+import { cn, scrollToId } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState } from '../app-state';
 import { Icon } from '../icon';
 import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, effectiveSchedule } from '../overrides';
@@ -67,7 +67,7 @@ export function ScheduleView({ state }: { state: AppState }) {
       </div>} />
 
     {/* Less side padding on phones: the seven day tiles need the width. */}
-    <Card role="region" aria-label="Week"><CardContent className="grid gap-3 max-sm:px-2">
+    <Card id="schedule-week" role="region" aria-label="Week" className="scroll-mt-20"><CardContent className="grid gap-3 max-sm:px-2">
       <div className="flex items-center justify-between gap-2">
         <IconButton label="Previous week" icon="chevronLeft" size="lg" onClick={() => setDate(addDays(date, -7))} />
         <strong className="text-sm font-bold tracking-tight">{formatDate(week[0].date)} – {formatDate(week[6].date, { year: true })}</strong>
@@ -89,8 +89,9 @@ export function ScheduleView({ state }: { state: AppState }) {
       </span>}>
       {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
       {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
-      {selected && !selected.closed && <LunchDay state={state} date={date} />}
       {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, date, period)} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} />}
+      {/* Under the timeline, as on Today: the classes are what this card is for. */}
+      {selected && !selected.closed && <LunchDay state={state} date={date} />}
       {issueText && <Hint tone="danger">{issueText}{override && selected?.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' Edit the adjustment to fix this.' : ''}</Hint>}
       {due.length > 0 && <section className="grid gap-2 border-t border-foreground/[0.06] pt-4" aria-labelledby="schedule-due-title">
         <h3 id="schedule-due-title" className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">{dueTitle}</h3>
@@ -101,7 +102,7 @@ export function ScheduleView({ state }: { state: AppState }) {
     </Section>
 
     <Section id="rotation-title" title={rotation ? 'Rotation' : 'Daily bell schedule'} description={rotation ? 'Every day of the cycle and when it comes up next.' : undefined}>
-      <RotationOverview state={state} onAdjust={setAdjustCycleDay} onJump={setDate} />
+      <RotationOverview state={state} onAdjust={setAdjustCycleDay} onJump={(value) => { setDate(value); scrollToId('schedule-week'); }} />
     </Section>
 
     {(personal.dateOverrides.length > 0 || personal.cycleDayOverrides.length > 0) && <Section id="adjustments-title" title="Your adjustments" icon="edit">
@@ -144,20 +145,17 @@ export function RotationOverview({ state, onAdjust, onJump }: { state: AppState;
       const expanded = open === day.id;
       const next = nextDates.get(day.id);
       const isToday = next === today;
-      return <div key={day.id} className={cn('grid gap-0 self-start overflow-hidden rounded-2xl bg-muted/70 ring-1 ring-inset ring-foreground/[0.04] transition-colors', isToday && 'bg-primary-soft/60 ring-primary/30', expanded && 'bg-card shadow-card ring-foreground/[0.06]')}>
-        <div className="flex items-center gap-2 p-3">
-          <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : day.id)}>
-            <span className={cn('grid size-9 shrink-0 place-items-center rounded-xl text-[13px] font-extrabold tabular-nums', isToday ? 'bg-primary text-primary-foreground' : 'bg-card text-foreground shadow-card ring-1 ring-foreground/[0.06]')}>{multi ? index + 1 : <Icon name="calendar" size={16} />}</span>
-            <span className="grid min-w-0 flex-1">
-              <strong className="flex items-center gap-1.5 text-sm font-bold"><span className="truncate">{day.label}</span>{override && <Chip tone="now">Adjusted</Chip>}</strong>
-              <Hint className="truncate">{slots.length === 0 ? 'No periods' : <>{slots.length} periods<span className="max-sm:hidden"> · {formatRange(slots[0].start, slots[slots.length - 1].end)}</span></>}</Hint>
-            </span>
-            <Icon name="chevronDown" size={16} className={cn('shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
-          </button>
-          {multi && onJump && !next && <span className="w-[5.75rem] shrink-0" aria-hidden="true" />}
-          {next && multi && onJump && <Button size="sm" variant={isToday ? 'soft' : 'ghost'} className="w-[5.75rem] shrink-0 justify-end whitespace-nowrap px-2 text-xs tabular-nums" onClick={() => onJump(next)} aria-label={`${nextLabel(next, today)}: show ${day.label} on ${formatDate(next)}`}>{nextLabel(next, today)}</Button>}
-          <IconButton size="sm" icon="edit" onClick={() => onAdjust(day.id)} label={`Adjust ${day.label}`} />
-        </div>
+      return <div key={day.id} className={cn('grid self-start overflow-hidden rounded-2xl bg-muted/70 ring-1 ring-inset ring-foreground/[0.04] transition-colors', isToday && 'ring-primary/40', expanded && 'bg-card shadow-card ring-foreground/[0.06]', expanded && isToday && 'ring-primary/40')}>
+        {/* One control per row: the row opens the day, and the jump and adjust actions live inside it. */}
+        <button type="button" className="flex min-w-0 items-center gap-3 rounded-2xl p-3 text-left outline-none transition-colors hover:bg-foreground/[0.03] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : day.id)}>
+          <span className={cn('grid size-9 shrink-0 place-items-center rounded-xl text-[13px] font-extrabold tabular-nums', isToday ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/50' : 'bg-card text-foreground shadow-card ring-1 ring-foreground/[0.06]')}>{multi ? index + 1 : <Icon name="calendar" size={16} />}</span>
+          <span className="grid min-w-0 flex-1">
+            <strong className="flex items-center gap-1.5 text-sm font-bold"><span className="truncate">{day.label}</span>{override && <Chip tone="now">Adjusted</Chip>}</strong>
+            <Hint className="truncate">{slots.length === 0 ? 'No periods' : <>{slots.length} periods<span className="max-sm:hidden"> · {formatRange(slots[0].start, slots[slots.length - 1].end)}</span></>}</Hint>
+          </span>
+          {next && multi && <span className={cn('shrink-0 whitespace-nowrap text-xs tabular-nums', isToday ? 'font-bold text-primary-soft-foreground' : 'font-semibold text-muted-foreground')}><span className="sr-only">Next: </span>{nextLabel(next, today)}</span>}
+          <Icon name="chevronDown" size={16} className={cn('shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
+        </button>
         {expanded && <ul className="grid gap-1 border-t border-foreground/[0.05] px-3 py-3 text-sm">
           {slots.map((slot) => {
             const period = schedule.periods.find((entry) => entry.id === slot.periodId);
@@ -166,6 +164,10 @@ export function RotationOverview({ state, onAdjust, onJump }: { state: AppState;
           })}
           {slots.length === 0 && <li className="text-xs text-muted-foreground">No periods on this day.</li>}
         </ul>}
+        {expanded && <div className="flex flex-wrap justify-end gap-2 border-t border-foreground/[0.05] px-3 py-2.5">
+          {next && multi && onJump && <Button size="sm" icon="calendar" onClick={() => onJump(next)}>{isToday ? 'Show today' : `Show ${formatDate(next, { weekday: 'short' })}`}</Button>}
+          <Button size="sm" icon="edit" onClick={() => onAdjust(day.id)}>Adjust {day.label}</Button>
+        </div>}
       </div>;
     })}
   </div>;
