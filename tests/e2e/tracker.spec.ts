@@ -87,6 +87,25 @@ test('countdown reveals live seconds on hover and keyboard focus', async ({ page
   await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
 });
 
+test('countdown stays revealed while hovered near its left edge', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
+  await page.goto('/');
+  const countdown = page.getByRole('button', { name: /^Ends in/ });
+  await expect(countdown).toHaveAccessibleName('Ends in 9 min');
+  // "8:23" is narrower than "9 min", so the right-aligned button used to shrink out from under this point and flicker.
+  const box = (await countdown.boundingBox())!;
+  await countdown.hover({ position: { x: 4, y: box.height / 2 } });
+  await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
+  // The flicker cycles every few frames, so sample often for a full second rather than once.
+  for (let check = 0; check < 20; check++) {
+    await page.waitForTimeout(50);
+    expect(await countdown.getAttribute('aria-label')).toBe('Ends in 8:23 (minutes and seconds)');
+  }
+  await page.mouse.move(0, 0);
+  await expect(countdown).toHaveAccessibleName('Ends in 9 min');
+});
+
 test.describe('touch countdown', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 
