@@ -20,6 +20,24 @@ export function weekOf(date: string): string[] {
   return Array.from({ length: 7 }, (_, index) => start.add({ days: index }).toString());
 }
 
+/** The month containing the date: its first day, length and "October 2026". */
+export function monthOf(date: string): { start: string; days: number; label: string } {
+  const first = Temporal.PlainDate.from(date).with({ day: 1 });
+  return { start: first.toString(), days: first.daysInMonth, label: first.toLocaleString('en-US', { month: 'long', year: 'numeric' }) };
+}
+
+/** Six Sunday-to-Saturday weeks (42 dates) covering the month, starting on the Sunday on or before the 1st (US calendars). */
+export function monthGrid(date: string): string[] {
+  const start = Temporal.PlainDate.from(monthOf(date).start);
+  const sunday = start.subtract({ days: start.dayOfWeek % 7 });
+  return Array.from({ length: 42 }, (_, index) => sunday.add({ days: index }).toString());
+}
+
+/** Same month and year. */
+export function sameMonth(a: string, b: string): boolean {
+  return a.slice(0, 7) === b.slice(0, 7);
+}
+
 export function daysBetween(from: string, to: string): number {
   return Temporal.PlainDate.from(from).until(Temporal.PlainDate.from(to)).days;
 }

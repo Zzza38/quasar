@@ -8,7 +8,8 @@ import { cn, scrollToId } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon, type IconName } from '../icon';
 import { LunchMenuSection } from '../lunch-menu';
-import { PrivateScheduleSheet } from '../overrides';
+import { CycleDayAdjustmentSheet, PrivateScheduleSheet } from '../overrides';
+import { RotationOverview } from '../rotation-overview';
 import { ProposalsSection } from '../proposals';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Modal, Panel, Section, Segmented, Spacer, Textarea } from '../primitives';
@@ -45,6 +46,8 @@ export function SchoolView({ state }: { state: AppState }) {
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
+  const rotation = sharedSchedule.cycleDays.length > 1;
   // "Wrong time?" on Today lands here: open the shared editor, or, when editing is locked, point at proposals
   // (the Verify callout there covers unverified members) where the school votes, and otherwise at the correction form. The param is
   // cleared afterwards so a remount does not reopen the editor or scroll again.
@@ -109,6 +112,10 @@ export function SchoolView({ state }: { state: AppState }) {
       {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
     </Section>
 
+    <Section id="rotation-title" title={rotation ? 'Rotation' : 'Daily bell schedule'} icon="calendar" description={rotation ? 'Every day of the cycle and when it comes up next. Open a day to see its periods or adjust it for yourself.' : 'Open the day to see its periods or adjust it for yourself.'}>
+      <RotationOverview state={state} onAdjust={setAdjustCycleDay} onJump={(date) => state.navigate('schedule', { date })} />
+    </Section>
+
     <LunchMenuSection state={state} />
 
     {voting && <ProposalsSection state={state} />}
@@ -121,6 +128,7 @@ export function SchoolView({ state }: { state: AppState }) {
     </div>
 
     <SharedEditorSheet accountId={context.user.id} open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />
+    <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={sharedSchedule} personal={personal} save={state.savePersonal} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={sharedSchedule} personal={personal} save={state.savePersonal} />
   </div>;
 }

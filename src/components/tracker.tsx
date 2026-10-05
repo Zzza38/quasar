@@ -27,6 +27,7 @@ import { PeopleView } from './views/people';
 import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
+import { CalendarFeeds } from './calendar-feeds';
 
 /* ---------- Path routing: Today at "/", every other view at "/<view>", rendered by the server ---------- */
 
@@ -70,7 +71,8 @@ function usePathRoute(initial?: Route) {
     if (options?.replace) window.history.replaceState(window.history.state, '', next);
     else if (current !== next) window.history.pushState(null, '', next);
     setRoute({ view, params: new URLSearchParams(params) });
-    if (view === shownView.current) window.scrollTo({ top: 0 });
+    // Re-opening the current view scrolls up; stripping a one-shot param in place keeps the position (and any scroll the param started).
+    if (view === shownView.current && !options?.replace) window.scrollTo({ top: 0 });
   }, []);
   return { ...route, navigate };
 }
@@ -247,7 +249,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   return <Shell key={accountKey} session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
-    gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}>
+    gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}
+    calendarSettings={(openAdd) => <CalendarFeeds state={state} openAdd={openAdd} />}>
     {/* The grade prompt would crowd the chat column; it shows again on every other view. */}
     {!personal.grade && state.personalValid && !onMessages && <div className="mb-4 flex flex-wrap items-center gap-4 rounded-2xl bg-card p-4 shadow-card ring-2 ring-primary/40">
       <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name="school" size={18} /></span>

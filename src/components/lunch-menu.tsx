@@ -73,8 +73,9 @@ export function useLunchMenu(state: Pick<AppState, 'online' | 'context'>, date: 
 function DayMenu({ day, compact }: { day: MenuDay; compact?: boolean }) {
   return <div className="grid gap-2">
     {day.notes.map((note) => <p key={note} className="text-sm font-semibold">{note}</p>)}
-    {day.sections.length > 0 && <dl className={cn('grid gap-x-4 gap-y-2', compact ? 'sm:grid-cols-2' : '')}>
-      {day.sections.map((section, index) => <div key={`${section.title}-${index}`} className="grid gap-0.5">
+    {/* Compact (under a timeline): a label column beside the dishes, so a long entrée does not push the next label out of line. */}
+    {day.sections.length > 0 && <dl className={cn('grid gap-x-4 gap-y-2', compact && 'sm:grid-cols-[minmax(5.5rem,max-content)_1fr] sm:items-baseline sm:gap-y-1.5')}>
+      {day.sections.map((section, index) => <div key={`${section.title}-${index}`} className={cn('grid gap-0.5', compact && 'sm:contents')}>
         <dt className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">{section.title || 'Menu'}</dt>
         <dd className="text-sm leading-relaxed">{section.items.join(' · ')}</dd>
       </div>)}
