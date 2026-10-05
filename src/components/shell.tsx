@@ -177,13 +177,17 @@ export interface ShellProps {
   onChatPush: (enabled: boolean) => Promise<void>;
   children: ReactNode;
   gradeSettings?: ReactNode;
+  /** The Connected calendars block; receives how many times the sheet was asked to open the Add dialog. */
+  calendarSettings?: (openAdd: number) => ReactNode;
 }
 
-export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings }: ShellProps) {
+export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings, calendarSettings }: ShellProps) {
   const home = (event: MouseEvent<HTMLAnchorElement>) => { if (!followsInPage(event)) return; event.preventDefault(); if (view === 'today') scrollTopIfActive(true); else navigate('today'); };
   const [account, setAccount] = useState(false);
+  // The checklist's "Add calendar" asks for the sheet with the Add dialog open; the count is what CalendarFeeds watches.
+  const [openAddFeed, setOpenAddFeed] = useState(0);
   useEffect(() => {
-    const open = () => setAccount(true);
+    const open = (event: Event) => { setAccount(true); if ((event as CustomEvent<{ feed?: string }>).detail?.feed === 'add') setOpenAddFeed((count) => count + 1); };
     window.addEventListener(OPEN_ACCOUNT_EVENT, open);
     return () => window.removeEventListener(OPEN_ACCOUNT_EVENT, open);
   }, []);
@@ -346,6 +350,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
           <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
+          {calendarSettings && calendarSettings(openAddFeed)}
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
