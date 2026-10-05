@@ -325,7 +325,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
       {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
     </SidebarInset>
 
-    <Sheet open={account} onOpenChange={setAccount}>
+    {/* Closing forgets a pending Add-calendar request, so reopening the sheet later does not replay it. */}
+    <Sheet open={account} onOpenChange={(open) => { setAccount(open); if (!open) setOpenAddFeed(0); }}>
       {/* data-[side=right]: prefixes so these beat the sheet's own w-3/4 and sm:max-w-sm (full width on phones). */}
       <SheetContent side="right" className="gap-0 border-l-0 p-0 text-foreground shadow-pop data-[side=right]:w-full data-[side=right]:sm:max-w-md">
         <SheetHeader className="border-b px-5 py-4">

@@ -62,7 +62,6 @@ export function ScheduleView({ state }: { state: AppState }) {
   const pickDate = (value: string) => { if (value && dateSchema.safeParse(value).success) setDate(value); };
   const pageMonth = (direction: -1 | 1) => setPaged(clampDate(addDays(month.start, direction < 0 ? -1 : month.days)));
   const issueText = selected ? describeDayIssues(selected.issues).join(' ') : '';
-  const onThisMonth = sameMonth(shown, today);
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'} />
@@ -74,7 +73,7 @@ export function ScheduleView({ state }: { state: AppState }) {
           <IconButton label="Previous month" icon="chevronLeft" size="lg" onClick={() => pageMonth(-1)} />
           <div className="grid justify-items-center gap-0.5 text-center">
             <strong className="text-[15px] font-bold tracking-tight">{month.label}</strong>
-            {!onThisMonth && <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => setPaged(null)}>Back to {sameMonth(date, today) ? 'this month' : formatDate(date)}</button>}
+            {paged !== null && !sameMonth(paged, date) && <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => setPaged(null)}>Back to {date === today ? 'today' : formatDate(date)}</button>}
           </div>
           <IconButton label="Next month" icon="chevronRight" size="lg" onClick={() => pageMonth(1)} />
         </div>
