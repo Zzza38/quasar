@@ -61,12 +61,12 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await page.goto('/classes');
   // A real PNG for the browser's image decoder: a screenshot of the page itself.
   const PNG = await page.screenshot({ type: 'png' });
-  await page.getByRole('button', { name: 'Scan timetable' }).click();
+  await page.getByRole('button', { name: 'Import schedule' }).click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog.getByRole('heading', { name: 'Scan your timetable' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Import your schedule' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Read schedule' })).toBeDisabled();
-  await expect(dialog.getByText('Take up to three photos of a printed or on-screen schedule')).toBeVisible();
-  const input = dialog.getByLabel('Choose a timetable photo');
+  await expect(dialog.getByText('Upload the schedule PDF from your school portal')).toBeVisible();
+  const input = dialog.getByLabel('Choose a schedule PDF or picture');
   const file = (name: string) => ({ name, mimeType: 'image/png', buffer: PNG });
   // Both halves of a wide timetable in one pick.
   await input.setInputFiles([file('left-half.png'), file('right-half.png')]);
@@ -74,16 +74,16 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(thumbnails).toHaveCount(2);
   await expect(dialog.getByRole('img', { name: 'Your timetable photo', exact: true })).toBeVisible();
   await expect(dialog.getByRole('img', { name: 'Your timetable photo 2', exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Add another photo' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Add another file' })).toBeVisible();
 
   // Picking more than fit keeps the first one that fits and says why.
   await input.setInputFiles([file('back.png'), file('extra.png')]);
   await expect(thumbnails).toHaveCount(3);
-  await expect(dialog.getByText('You can add up to three photos.')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Add another photo' })).toHaveCount(0);
+  await expect(dialog.getByText('Up to three pages or photos are read. Keep the pages that show your classes.')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Add another file' })).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Remove photo 3' }).click();
   await expect(thumbnails).toHaveCount(2);
-  await expect(dialog.getByText('You can add up to three photos.')).toHaveCount(0);
+  await expect(dialog.getByText('Up to three pages or photos are read. Keep the pages that show your classes.')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Remove photo 1' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Remove photo 2' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Read schedule' }).click();
@@ -126,3 +126,34 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(cards.filter({ hasText: 'Algebra II' }).getByText('C', { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('scan-placed.png'), fullPage: true });
 });
+
+test('reads a schedule PDF: renders its pages and sends its text for exact names', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  // A real two-page PDF, printed by Chromium from a small timetable page.
+  const maker = await context.newPage();
+  await maker.setContent(`<h1>10-Day Schedule</h1><table border="1"><tr><th>Block</th><th>Day 1</th><th>Day 2</th></tr>
+    <tr><td>A</td><td>Algebra II (Ms. Ortiz, 204)</td><td>World History</td></tr></table>
+    <div style="break-before: page"><h2>Notes</h2><p>Advisory meets in room 12.</p></div>`);
+  const pdf = await maker.pdf({ format: 'Letter' });
+  await maker.close();
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  // Platform instructions before anything is uploaded.
+  await expect(dialog.getByRole('tab', { name: 'Veracross' })).toHaveAttribute('aria-selected', 'true');
+  await dialog.getByRole('tab', { name: 'PowerSchool' }).click();
+  await expect(dialog.getByText('My Schedule', { exact: true })).toBeVisible();
+  const before = requests.length;
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'schedule.pdf', mimeType: 'application/pdf', buffer: pdf });
+  await expect(dialog.getByRole('img', { name: /^Page \d of schedule\.pdf$/ })).toHaveCount(2);
+  await expect(dialog.getByRole('tab', { name: 'PowerSchool' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  const sent = requests[before];
+  expect(sent.images).toHaveLength(2);
+  for (const url of sent.images) expect(url).toMatch(/^data:image\/jpeg;base64,/);
+  expect(sent.prompt).toContain("This is that PDF's own text");
+  expect(sent.prompt).toContain('Algebra II (Ms. Ortiz, 204)');
+  expect(sent.prompt).toContain('Advisory meets in room 12.');
+});
+
