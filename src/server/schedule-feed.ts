@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { parseICalendar } from '@/domain/ical';
@@ -40,7 +41,9 @@ export interface ScheduleFeedPreview {
   unmatched: number;
 }
 interface Row { owner_id: string; source: string; url_encrypted: string; state: string | null; summary: string | null; created_at: string; last_attempt_at: string | null;
-  last_success_at: string | null; next_refresh_at: string; last_error: string | null; failure_count: number; lease_until: string | null }
+  last_success_at: string | null; next_refresh_at: string; last_error: string | null; failure_count: number; lease_until: string | null; lease_token: string | null }
+/** Thrown inside a sync's transaction when its lease is gone (the student disconnected or reconnected meanwhile): nothing is written. */
+class LeaseLost extends Error {}
 
 const fail = (code: 'NOT_FOUND' | 'BAD_REQUEST' | 'TOO_MANY_REQUESTS' | 'PRECONDITION_FAILED', message: string): never => { throw new TRPCError({ code, message }); };
 export const NO_SCHOOL_MESSAGE = 'Join your school in Quasar first. Your class schedule is matched against its blocks.';
@@ -87,9 +90,11 @@ export class ScheduleFeedService {
 
   /**
    * Reads the feed and writes it into the student's timetable in one transaction, reading the timetable again inside
-   * it, so an edit saved while the feed was downloading is kept. Throws NOTHING_MATCHED_MESSAGE when no meeting lines up.
+   * it, so an edit saved while the feed was downloading is kept. `record` saves the feed row in the same transaction,
+   * so the timetable and the sync state that explains it are written together or not at all. Throws
+   * NOTHING_MATCHED_MESSAGE when no meeting lines up.
    */
-  private async apply(owner: string, url: string, previous: ImportState | null, choices: ImportChoices = {}): Promise<{ state: ImportState; summary: ImportSummary }> {
+  private async apply(owner: string, url: string, previous: ImportState | null, choices: ImportChoices, record: (result: { state: ImportState; summary: ImportSummary }) => void): Promise<{ state: ImportState; summary: ImportSummary }> {
     const before = this.timetable(owner) ?? fail('PRECONDITION_FAILED', NO_SCHOOL_MESSAGE);
     const { items, windowStart, windowEnd } = await this.fetchItems(url, before.school.timeZone);
     return this.db.transaction(() => {
@@ -99,6 +104,7 @@ export class ScheduleFeedService {
       const result = applyScheduleImport(current.personal, reading, previous, choices);
       const next = personalScheduleSchema.parse(result.personal);
       if (JSON.stringify(next) !== JSON.stringify(current.personal)) writeEntity(this.db, owner, { id: 'personal', kind: 'personal', version: current.version + 1, data: next, deleted: false });
+      record(result);
       return { state: result.state, summary: result.summary };
     }).immediate();
   }
@@ -143,17 +149,21 @@ export class ScheduleFeedService {
   async connect(owner: string, raw: z.infer<typeof connectScheduleFeedSchema>): Promise<ScheduleFeedStatus> {
     const input = connectScheduleFeedSchema.parse(raw);
     const { url, previous } = this.begin(owner, input);
-    let result: { state: ImportState; summary: ImportSummary };
-    try { result = await this.apply(owner, url, previous, input.choices ?? {}); } catch (error) { return fail('BAD_REQUEST', feedError(error)); }
-    const stamp = this.now().toISOString();
-    this.db.prepare(`INSERT INTO schedule_feeds(owner_id,source,url_encrypted,state,summary,created_at,last_attempt_at,last_success_at,next_refresh_at)
-      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET source=excluded.source,url_encrypted=excluded.url_encrypted,state=excluded.state,summary=excluded.summary,
-      last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,next_refresh_at=excluded.next_refresh_at,last_error=NULL,failure_count=0,lease_until=NULL`)
-      .run(owner, input.source, encrypt(url, this.secret()), JSON.stringify(result.state), JSON.stringify(result.summary), stamp, stamp, stamp, this.nextRefresh());
+    const encrypted = encrypt(url, this.secret());
+    try {
+      await this.apply(owner, url, previous, input.choices ?? {}, result => {
+        const stamp = this.now().toISOString();
+        // Clearing the lease also fences off a sync of the old link still in flight: it can no longer save.
+        this.db.prepare(`INSERT INTO schedule_feeds(owner_id,source,url_encrypted,state,summary,created_at,last_attempt_at,last_success_at,next_refresh_at)
+          VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET source=excluded.source,url_encrypted=excluded.url_encrypted,state=excluded.state,summary=excluded.summary,
+          last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,next_refresh_at=excluded.next_refresh_at,last_error=NULL,failure_count=0,lease_until=NULL,lease_token=NULL`)
+          .run(owner, input.source, encrypted, JSON.stringify(result.state), JSON.stringify(result.summary), stamp, stamp, stamp, this.nextRefresh());
+      });
+    } catch (error) { return fail('BAD_REQUEST', feedError(error)); }
     return scheduleFeedStatus(this.db, owner)!;
   }
 
-  /** Stops syncing. The classes and blocks it filled stay as they are. */
+  /** Stops syncing. The classes and blocks it filled stay as they are; a sync in flight finds its lease gone and saves nothing. */
   disconnect(owner: string): void {
     this.db.prepare('DELETE FROM schedule_feeds WHERE owner_id=?').run(owner);
   }
@@ -170,40 +180,57 @@ export class ScheduleFeedService {
 
   private nextRefresh() { return new Date(this.now().getTime() + SCHEDULE_FEED_INTERVAL_MS).toISOString(); }
 
-  /** One sync. Holds a five-minute lease so the worker and a Sync now press never run the same feed at once. */
+  /**
+   * One sync. Holds a five-minute lease so the worker and a Sync now press never run the same feed at once, and every
+   * write it makes is fenced by the lease's token: after a disconnect or reconnect it saves nothing.
+   */
   private async sync(row: Row): Promise<void> {
     const now = this.now();
+    const token = randomUUID();
     const leaseUntil = new Date(now.getTime() + 5 * 60_000).toISOString();
-    const leased = this.db.prepare('UPDATE schedule_feeds SET lease_until=?,last_attempt_at=? WHERE owner_id=? AND (lease_until IS NULL OR lease_until<=?)').run(leaseUntil, now.toISOString(), row.owner_id, now.toISOString());
+    const leased = this.db.prepare('UPDATE schedule_feeds SET lease_until=?,lease_token=?,last_attempt_at=? WHERE owner_id=? AND (lease_until IS NULL OR lease_until<=?)').run(leaseUntil, token, now.toISOString(), row.owner_id, now.toISOString());
     if (leased.changes === 0) fail('TOO_MANY_REQUESTS', 'Your class schedule is syncing right now. Check back in a minute.');
+    const release = (sql: string, ...values: unknown[]) => this.db.prepare(`UPDATE schedule_feeds SET ${sql},lease_until=NULL,lease_token=NULL WHERE owner_id=? AND lease_token=?`).run(...values, row.owner_id, token);
     try {
       let url: string;
       try { url = decrypt(row.url_encrypted, this.secret()); } catch { throw new TRPCError({ code: 'PRECONDITION_FAILED', message: KEY_CHANGED_MESSAGE }); }
       const previous = row.state ? importStateSchema.parse(JSON.parse(row.state)) : null;
-      const { state, summary } = await this.apply(row.owner_id, url, previous);
-      this.db.prepare('UPDATE schedule_feeds SET state=?,summary=?,last_success_at=?,next_refresh_at=?,last_error=NULL,failure_count=0,lease_until=NULL WHERE owner_id=?')
-        .run(JSON.stringify(state), JSON.stringify(summary), now.toISOString(), this.nextRefresh(), row.owner_id);
+      await this.apply(row.owner_id, url, previous, {}, ({ state, summary }) => {
+        if (release('state=?,summary=?,last_success_at=?,next_refresh_at=?,last_error=NULL,failure_count=0', JSON.stringify(state), JSON.stringify(summary), now.toISOString(), this.nextRefresh()).changes === 0) throw new LeaseLost();
+      });
     } catch (error) {
+      if (error instanceof LeaseLost) return;
       if (isBusy(error)) {
-        try { this.db.prepare('UPDATE schedule_feeds SET next_refresh_at=?,lease_until=NULL WHERE owner_id=?').run(new Date(now.getTime() + 60_000).toISOString(), row.owner_id); } catch { /* the lease expires on its own */ }
+        try { release('next_refresh_at=?', new Date(now.getTime() + 60_000).toISOString()); } catch { /* the lease expires on its own */ }
         return;
       }
       // Retry after an hour, doubling up to a day, so a portal outage does not leave the timetable stale for long.
       const retry = Math.min(SCHEDULE_FEED_INTERVAL_MS, 3600_000 * 2 ** Math.min(row.failure_count, 5));
-      const message = feedError(error);
-      this.db.prepare('UPDATE schedule_feeds SET last_error=?,failure_count=failure_count+1,next_refresh_at=?,lease_until=NULL WHERE owner_id=?')
-        .run(message, new Date(now.getTime() + retry).toISOString(), row.owner_id);
+      release('last_error=?,failure_count=failure_count+1,next_refresh_at=?', feedError(error), new Date(now.getTime() + retry).toISOString());
     }
   }
 
-  /** The worker's step: every feed that is due, one at a time. Returns how many it tried. */
-  async refreshDue(limit = 200): Promise<number> {
+  /**
+   * The worker's step: the feeds that are due, a few at a time, starting no new sync once `budgetMs` has passed so the
+   * reminder and chat steps after it are not held up; feeds it did not reach stay due for the next cycle. Returns how
+   * many it tried.
+   */
+  async refreshDue(limit = 200, { concurrency = 3, budgetMs = 20_000 }: { concurrency?: number; budgetMs?: number } = {}): Promise<number> {
     const now = this.now().toISOString();
     const rows = this.db.prepare('SELECT * FROM schedule_feeds WHERE next_refresh_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY next_refresh_at LIMIT ?').all(now, now, limit) as Row[];
     if (rows.length) encryptionKey(this.secret());
-    for (const row of rows) {
-      try { await this.sync(row); } catch (error) { if (!(error instanceof TRPCError && error.code === 'TOO_MANY_REQUESTS')) throw error; }
-    }
-    return rows.length;
+    const deadline = Date.now() + budgetMs;
+    let next = 0, tried = 0, failure: unknown = null;
+    const lane = async () => {
+      // The first round always starts, so a zero or exhausted budget still makes progress.
+      while (next < rows.length && (next < concurrency || Date.now() < deadline)) {
+        const row = rows[next++];
+        tried += 1;
+        try { await this.sync(row); } catch (error) { if (!(error instanceof TRPCError && error.code === 'TOO_MANY_REQUESTS')) failure ??= error; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, rows.length)) }, lane));
+    if (failure) throw failure;
+    return tried;
   }
 }
