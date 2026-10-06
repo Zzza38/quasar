@@ -250,17 +250,3 @@ export function censorSlurs(text: string): string {
 export function slurNotice(text: string): string | null {
   return hasSlur(text) ? SLUR_NOTICE : null;
 }
-
-/* ---------- The ICE prank ---------- */
-
-const IMMIGRANTS = /(?<![a-z])immigrants?(?![a-z])/i;
-
-/** True when the message mentions "immigrant" or "immigrants". Nothing is reported anywhere; it only shows the joke line. */
-export function mentionsImmigrants(text: string): boolean {
-  return IMMIGRANTS.test(text);
-}
-
-/** The joke line shown under a message that mentions immigrants: a cartoon klaxon, the owner's exact wording. Nothing is stored, sent or reported anywhere. */
-export function icePrankNotice(): string {
-  return 'ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...';
-}

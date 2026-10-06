@@ -212,7 +212,37 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await expect(badge(bob)).toHaveAccessibleDescription('');
 });
 
-test('global chat: everyone posts, slurs are censored, the owner edits and removes with reasons, and the ICE line is a joke', async ({ browser }, testInfo) => {
+test('synthetic phone keyboard sizing keeps typing visible without scrolling the page', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']], messages: Array.from({ length: 20 }, (_, index) => ['alice', 'bob', `Message ${index}`] as [Name, Name, string]) });
+  const page = await phone(browser, f.bob);
+  await page.goto(`/messages?with=${f.alice}`);
+  const composer = page.getByRole('textbox', { name: 'Message Alice' });
+  await expect(composer).toBeVisible();
+
+  // iOS shrinks the visual viewport for the keyboard while keeping the layout viewport tall.
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport!, 'height', { configurable: true, value: 360 });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  await expect.poll(() => page.locator('.app').evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(360);
+  await composer.focus();
+  await composer.pressSequentially('A message with enough text to wrap onto another line.');
+  await composer.press('Enter');
+  await composer.pressSequentially('Another line while the keyboard is open.');
+  await expect(composer).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => composer.evaluate(element => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360);
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByRole('log', { name: 'Messages with Alice' })).toContainText('Another line while the keyboard is open.');
+  await expect(composer).toHaveValue('');
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
+  await page.getByRole('button', { name: 'Back to chats' }).click();
+  await expect(page.getByRole('heading', { name: 'Messages', exact: true })).toBeVisible();
+  await expect.poll(() => page.locator('.app').evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(844);
+});
+
+test('global chat: everyone posts, slurs are censored, the owner edits and removes with reasons', async ({ browser }, testInfo) => {
   const f = seed();
   const alice = await signedIn(browser, f.alice);
   await alice.goto('/messages');
@@ -232,10 +262,6 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
   await aliceComposer.press('Enter');
   await expect(aliceLog.getByText('shut up ******', { exact: true })).toBeVisible();
   await expect(aliceLog.getByText(/r3tard/)).toHaveCount(0);
-  await aliceComposer.fill('we learned about immigrants today');
-  await aliceComposer.press('Enter');
-  await expect(aliceLog.getByText('we learned about immigrants today', { exact: true })).toBeVisible();
-  await expect(aliceLog.getByText('ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...')).toBeVisible();
 
   // Bob (never a friend of Alice) reads the room with names, and the room counts as one unread chat.
   const bob = await phone(browser, f.bob);
@@ -559,8 +585,12 @@ test('friend groups: creating, formatting, typing, read receipts and the admin r
   await alice.getByRole('button', { name: 'Formatting' }).click();
   await composer.fill('bring goggles tomorrow');
   await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(6, 13));
+  const scrollBeforeFormatting = await alice.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
   await alice.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Bold' }).click();
   await expect(composer).toHaveValue('bring **goggles** tomorrow');
+  await expect(composer).toBeFocused();
+  await expect.poll(() => composer.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([8, 15]);
+  await expect.poll(() => alice.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))).toEqual(scrollBeforeFormatting);
   await composer.press('Enter');
   const sent = aliceLog.getByRole('listitem').filter({ hasText: 'bring goggles tomorrow' });
   await expect(sent.locator('strong', { hasText: 'goggles' })).toBeVisible();

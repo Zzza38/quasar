@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { censorSlurs, foldConfusables, hasSlur, icePrankNotice, mentionsImmigrants, normalizeForFilter, slurNotice, SLUR_NOTICE } from './chat-filter';
+import { censorSlurs, foldConfusables, hasSlur, normalizeForFilter, slurNotice, SLUR_NOTICE } from './chat-filter';
 
 describe('chat filter', () => {
   it('lets ordinary swearing through', () => {
@@ -125,13 +125,6 @@ describe('chat filter', () => {
     expect(normalizeForFilter('a b')).toBe('a b');
   });
 
-  it('spots immigrants for the prank', () => {
-    expect(mentionsImmigrants('we talked about immigrants in history')).toBe(true);
-    expect(mentionsImmigrants('an Immigrant family')).toBe(true);
-    expect(mentionsImmigrants('immigration policy')).toBe(false);
-    expect(mentionsImmigrants('emigrants')).toBe(false);
-    expect(icePrankNotice()).toBe('ALERT! ALERT! WORD "IMMIGRANT" DETECTED. Reporting to ICE...');
-  });
 });
 
 describe('foldConfusables', () => {

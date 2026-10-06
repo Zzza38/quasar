@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REPORT_CATEGORIES, type ReportCategory } from '@/domain/chat';
-import { censorSlurs, icePrankNotice, mentionsImmigrants, slurNotice } from '@/domain/chat-filter';
+import { censorSlurs, slurNotice } from '@/domain/chat-filter';
 import { parseMarkdown, plainText, type Block, type Inline } from '@/domain/markdown';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts, pluralize } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -808,7 +808,6 @@ function GlobalThread({ state, phone, onChange }: { state: AppState; phone: bool
 type LogItem =
   | { kind: 'day'; key: string; label: string }
   | { kind: 'unread'; key: string }
-  | { kind: 'notice'; key: string; text: string }
   | { kind: 'message'; key: string; message: ChatMessage; date: string; time: string; showTime: boolean; showName: boolean };
 
 function buildItems(messages: ChatMessage[], initialReadSeq: number | null, timeZone: string, today: string, named: boolean): LogItem[] {
@@ -828,8 +827,6 @@ function buildItems(messages: ChatMessage[], initialReadSeq: number | null, time
     // In a room or group, the name (and picture) sits over the first bubble of someone else's run.
     const showName = named && !message.fromMe && (!previous || newDay || senderKey(previous) !== senderKey(message) || gap(message, previous));
     items.push({ kind: 'message', key: `m-${message.seq}`, message, date, time, showTime, showName });
-    // The ICE prank (§11): a joke line under any message that mentions immigrants. Nothing is reported anywhere.
-    if (message.body && mentionsImmigrants(message.body)) items.push({ kind: 'notice', key: `ice-${message.seq}`, text: icePrankNotice() });
   });
   return items;
 }
@@ -994,7 +991,6 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
         {items.map((item) => {
           if (item.kind === 'day') return <li key={item.key} role="none" className="flex justify-center py-2"><span className="rounded-full bg-muted px-2.5 py-0.5 text-[11.5px] font-semibold text-muted-foreground">{item.label}</span></li>;
           if (item.kind === 'unread') return <li key={item.key} role="none" className="flex items-center gap-2 py-2 text-[11.5px] font-bold text-primary"><span aria-hidden="true" className="h-px flex-1 bg-primary/40" />New messages<span aria-hidden="true" className="h-px flex-1 bg-primary/40" /></li>;
-          if (item.kind === 'notice') return <li key={item.key} className="flex justify-center px-2 py-1"><span className="max-w-[48ch] rounded-xl bg-warning-soft px-3 py-1.5 text-center text-[12.5px] font-medium text-foreground/80 ring-1 ring-inset ring-foreground/[0.06]">{item.text}</span></li>;
           const { message } = item;
           const status = message.fromMe && message.seq === lastMineSeq ? receiptStatus(message.seq, receipts, mode === 'group') : null;
           return <Bubble key={item.key} message={message} date={item.date} time={item.time} showTime={item.showTime} showName={item.showName} status={status} online={state.online} mode={mode} canModerate={canModerate}
@@ -1149,14 +1145,14 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
     // Censored locally too, so the pending bubble never shows the slur while the send is out. Links stay whole, as the server stores them.
     chat.send(censorBody(normalized));
     update('');
-    field.current?.focus();
+    field.current?.focus({ preventScroll: true });
   };
   const format = (marker: string) => {
     const element = field.current;
     if (!element) return;
     const next = wrapSelection(element.value, element.selectionStart, element.selectionEnd, marker);
     update(next.value);
-    requestAnimationFrame(() => { element.focus(); element.setSelectionRange(next.start, next.end); });
+    requestAnimationFrame(() => { element.focus({ preventScroll: true }); element.setSelectionRange(next.start, next.end); });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
@@ -1176,7 +1172,7 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
     <div className="flex items-end gap-2">
       <IconButton label="Formatting" icon="textFormat" aria-pressed={tools} aria-expanded={tools} disabled={!online} className="size-10 shrink-0 rounded-full aria-pressed:bg-primary-soft aria-pressed:text-primary-soft-foreground" onClick={() => setTools((current) => !current)} />
       <div className="grid min-w-0 flex-1 gap-1">
-        <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="max-h-[7.5rem] min-h-10 resize-none py-2 text-base leading-6 md:text-base" autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}
+        <Textarea ref={field} aria-label={`Message ${name}`} rows={1} className="field-sizing-fixed max-h-[7.5rem] min-h-10 resize-none py-2 text-base leading-6 md:text-base" autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}
           placeholder={online ? 'Message' : 'Offline'} disabled={!online} enterKeyHint={fine ? 'send' : 'enter'} value={draft}
           onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} onBlur={() => { if (!normalized) chat.signalTyping(false); }} />
         {notice && <Hint role="status" className="px-1">{notice}</Hint>}
