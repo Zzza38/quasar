@@ -393,6 +393,9 @@ describe('close-ups and unclear photos', () => {
     expect(await sharp(left).metadata()).toMatchObject({ format: 'jpeg', width: 1600, height: 1600 });
     expect((await sharp(left).stats()).channels[0].mean).toBeLessThan(15);
     await expect(closeUp(photo, { photo: 1, left: 0.999, top: 0.999, width: 0.001, height: 0.001 })).rejects.toThrow();
+    // An image that decodes far larger than the browser ever sends is refused before any crop.
+    const huge = { mediaType: 'image/png' as const, image: (await sharp({ create: { width: 5000, height: 4000, channels: 3, background: '#fff' } }).png({ compressionLevel: 9 }).toBuffer()).toString('base64') };
+    await expect(closeUp(huge, { photo: 1, left: 0, top: 0, width: 1, height: 1 })).rejects.toThrow();
   });
 
   it('sends close-ups back after the tool results, then reads the final answer', async () => {

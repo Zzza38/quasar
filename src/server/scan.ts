@@ -120,6 +120,11 @@ export const SCAN_DEADLINE_MS = 110_000;
 export const MAX_ZOOM_ROUNDS = 3;
 export const MAX_CLOSE_UPS = 6;
 const CLOSE_UP_EDGE = 1600;
+/**
+ * Decoded size cap for close-up sources. The browser sends photos at most 1600 px on the long edge, so 16 megapixels is
+ * generous, while an image built to decode far larger than its upload size (sharp's own default allows 268 MP) is refused.
+ */
+export const CLOSE_UP_MAX_PIXELS = 16_000_000;
 const TROUBLE = 'The scanning service is having trouble right now. Try again in a few minutes, or add your classes by hand.';
 export const lookCloserSchema = z.object({
   photo: z.number().int().min(1),
@@ -150,11 +155,12 @@ const LOOK_CLOSER_TOOL = {
 /** A region of a photo as a JPEG, enlarged to at most CLOSE_UP_EDGE on its long edge. Throws for a region outside the photo. */
 export async function closeUp(photo: ScanImage, region: z.infer<typeof lookCloserSchema>): Promise<string> {
   const input = Buffer.from(photo.image, 'base64');
-  const { width = 0, height = 0 } = await sharp(input).metadata();
+  const { width = 0, height = 0 } = await sharp(input, { limitInputPixels: CLOSE_UP_MAX_PIXELS }).metadata();
+  if (width * height > CLOSE_UP_MAX_PIXELS) throw new Error('Photo is too large to crop.');
   const left = Math.floor(region.left * width), top = Math.floor(region.top * height);
   const right = Math.min(width, Math.ceil((region.left + region.width) * width)), bottom = Math.min(height, Math.ceil((region.top + region.height) * height));
   if (right - left < 8 || bottom - top < 8) throw new Error('Region is outside the photo or too small.');
-  let image = sharp(input).extract({ left, top, width: right - left, height: bottom - top });
+  let image = sharp(input, { limitInputPixels: CLOSE_UP_MAX_PIXELS }).extract({ left, top, width: right - left, height: bottom - top });
   if (region.rotate) image = image.rotate(region.rotate);
   if (region.enhance) image = image.grayscale().normalise().sharpen();
   const output = await image.resize({ width: CLOSE_UP_EDGE, height: CLOSE_UP_EDGE, fit: 'inside' }).jpeg({ quality: 85 }).toBuffer();

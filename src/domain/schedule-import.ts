@@ -141,7 +141,9 @@ export function applyScheduleImport(personal: PersonalSchedule, reading: FeedRea
   const assignments = { ...personal.assignments };
   const state: ImportState = { classes: {}, assignments: {} };
   const summary: ImportSummary = { classes: 0, blocks: 0, added: [], kept: 0, cleared: 0, unmatched: reading.unmatched };
-  const owns = (periodId: string) => !previous || assignments[periodId] === undefined || assignments[periodId] === previous.assignments[periodId];
+  // A block is the sync's while it holds what the last sync left there, empty included; a block the student filled,
+  // changed or cleared since is theirs.
+  const owns = (periodId: string) => !previous || assignments[periodId] === previous.assignments[periodId];
   for (const imported of reading.classes) {
     const earlier = previous?.classes[imported.key];
     const leaveOut = () => { state.classes[imported.key] = { classId: earlier?.classId ?? '', ...(earlier?.room ? { room: earlier.room } : {}), removed: true }; };

@@ -130,4 +130,46 @@ describe('class schedule feed', () => {
     expect(nameOf(f, 'B')).toBe('English 10');
     expect(await f.feeds.refreshDue()).toBe(0);
   });
+
+  it('writes nothing when saving the feed row fails, so classes never outlive their sync state', async () => {
+    const f = fixture();
+    const before = f.personal();
+    f.db.exec("CREATE TRIGGER no_feeds BEFORE INSERT ON schedule_feeds BEGIN SELECT RAISE(ABORT, 'disk full'); END;");
+    await expect(f.feeds.connect(f.owner, { source: 'veracross', url: URL })).rejects.toThrow();
+    expect(f.personal()).toEqual(before);
+  });
+
+  it('saves nothing from a sync still downloading when the student disconnects', async () => {
+    const f = fixture();
+    await f.feeds.connect(f.owner, { source: 'veracross', url: URL });
+    const filled = f.personal();
+    let release!: (value: Awaited<ReturnType<typeof fetchFeed>>) => void;
+    f.fetcher.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    f.advance(SCHEDULE_FEED_INTERVAL_MS);
+    const running = f.feeds.refreshDue();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    f.feeds.disconnect(f.owner);
+    release({ status: 200, text: classSchedule({ ...TITLES, D: 'World History' }) });
+    await running;
+    expect(f.personal()).toEqual(filled);
+    expect(scheduleFeedStatus(f.db, f.owner)).toBeNull();
+  });
+
+  it('starts no new sync once its time budget is spent; the rest stay due', async () => {
+    const f = fixture();
+    await f.feeds.connect(f.owner, { source: 'veracross', url: URL });
+    const others = [f.service, f.service].map(() => {
+      const id = randomUUID();
+      f.db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${id}@example.com`, 'Student', 'Student Name', new Date().toISOString());
+      f.db.prepare('UPDATE users SET school_id=(SELECT school_id FROM users WHERE id=?) WHERE id=?').run(f.owner, id);
+      return id;
+    });
+    for (const id of others) await f.feeds.connect(id, { source: 'veracross', url: URL });
+    f.advance(SCHEDULE_FEED_INTERVAL_MS);
+    expect(await f.feeds.refreshDue(200, { concurrency: 1, budgetMs: 0 })).toBe(1);
+    expect(await f.feeds.refreshDue(200, { concurrency: 1, budgetMs: 0 })).toBe(1);
+    expect(await f.feeds.refreshDue(200, { concurrency: 3, budgetMs: 0 })).toBe(1);
+    expect(await f.feeds.refreshDue()).toBe(0);
+  });
 });
+

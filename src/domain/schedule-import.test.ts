@@ -92,6 +92,19 @@ describe('applying a class schedule to the timetable', () => {
     expect(second.personal.classes.some(cls => cls.id === algebra)).toBe(true);
   });
 
+  it('keeps a block the student cleared after a sync empty, and fills a block the last sync left empty', () => {
+    const first = applyScheduleImport(emptyPersonalSchedule(), read(feed({ A: TITLES.A, B: TITLES.B, C: TITLES.C })), null);
+    const { D: _free, ...rest } = first.personal.assignments;
+    expect(_free).toBeUndefined();
+    const { A: _cleared, ...kept } = rest;
+    const second = applyScheduleImport({ ...first.personal, assignments: kept }, read(feed()), first.state);
+    expect(second.personal.assignments.A).toBeUndefined();
+    expect(second.summary.kept).toBe(1);
+    expect(second.personal.classes.find(cls => cls.id === second.personal.assignments.D)?.name).toBe('US History');
+    const third = applyScheduleImport(second.personal, read(feed()), second.state);
+    expect(third.personal.assignments.A).toBeUndefined();
+  });
+
   it('clears a block the feed now leaves free, unless the student filled it themselves', () => {
     const first = applyScheduleImport(emptyPersonalSchedule(), read(feed()), null);
     const dropped = feed({ A: TITLES.A, B: TITLES.B, C: TITLES.C });
