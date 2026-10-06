@@ -20,6 +20,7 @@ import { ClassColorPicker } from '../class-color-picker';
 import { ColorPicker } from '../ui/color-picker';
 import { SchoolDirectory } from '../school-directory';
 import { ScanScheduleSheet } from '../scan-schedule';
+import { ConnectScheduleFeedSheet, ScheduleFeedPanel } from '../schedule-feed';
 
 /** The white initial on a class avatar: light class colours are darkened just enough for 4.5:1, as on the Now card. */
 const initialBackground = (dot: string) => { const base = heroBase(dot); return `linear-gradient(135deg, ${base}, color-mix(in srgb, ${base} 75%, #0b1020))`; };
@@ -49,6 +50,8 @@ export function ClassesView({ state }: { state: AppState }) {
   const [directoryOpen, setDirectoryOpen] = useState(directoryParam === 'open');
   useEffect(() => { if (directoryParam === 'open') { setDirectoryOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [directoryParam, state]);
   const [scanOpen, setScanOpen] = useState(false);
+  const [veracrossOpen, setVeracrossOpen] = useState(false);
+  const feedConnected = !!state.context.scheduleFeed;
   const [scanEnabled, setScanEnabled] = useState(false);
   useEffect(() => {
     if (!state.online) return;
@@ -74,7 +77,7 @@ export function ClassesView({ state }: { state: AppState }) {
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'}` : undefined}
-      actions={<>{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan timetable</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></>} />
+      actions={<>{!feedConnected && <Button icon="calendar" disabled={!state.online || !state.personalValid} onClick={() => setVeracrossOpen(true)}>Connect Veracross</Button>}{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan timetable</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></>} />
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
       if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
       const added = classes.filter(cls => !personal.classes.some(existing => existing.id === cls.id || existing.directoryId === cls.directoryId));
@@ -82,6 +85,7 @@ export function ClassesView({ state }: { state: AppState }) {
     }} />}
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {!state.personalValid && <Callout tone="warning" icon="alert">Your saved personal schedule could not be read. Retry sync before editing.</Callout>}
+    <ScheduleFeedPanel state={state} />
 
     {personal.classes.length === 0 && <Card><EmptyState icon="book" title="No classes yet" action={<div className="flex flex-wrap justify-center gap-2"><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse the directory</Button>{scanEnabled && <Button icon="camera" disabled={!state.online} onClick={() => setScanOpen(true)}>Scan a photo</Button>}</div>}>Add the classes you take, then drop each one onto its period in the timetable.</EmptyState></Card>}
     {personal.classes.length > 0 && <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
@@ -155,6 +159,7 @@ export function ClassesView({ state }: { state: AppState }) {
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
+    <ConnectScheduleFeedSheet open={veracrossOpen} onClose={() => setVeracrossOpen(false)} state={state} />
     <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schoolId={state.context.school.id} online={state.online} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal} />
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
     <Modal open={resetOpen} onClose={() => setResetOpen(false)} busy={resetPending} title="Revert to the school timetable?"

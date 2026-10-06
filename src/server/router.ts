@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
 import { Service, type ClientOptions, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema, avatarUploadSchema, appealSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
+import { ScheduleFeedService, connectScheduleFeedSchema, previewScheduleFeedSchema } from './schedule-feed';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
@@ -180,6 +181,13 @@ export const appRouter = t.router({
     setEnabled: accountScoped.input(z.object({ id: z.uuid(), enabled: z.boolean() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).setEnabled(ctx.userId, input.id, input.enabled)),
     remove: accountScoped.input(z.object({ id: z.uuid() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).remove(ctx.userId, input.id)),
     resolve: accountScoped.input(z.object({ entityId: z.string().min(1).max(100), expectedVersion: z.number().int().positive(), choice: z.enum(['local', 'source']), revision: z.string().max(100).optional() })).mutation(({ ctx, input }) => new CalendarService(ctx.service.db).resolve(ctx.userId, input.entityId, input.expectedVersion, input.choice, input.revision)),
+  }),
+  // The class-schedule feed (Veracross) that fills the student's class blocks; its status comes with the workspace.
+  scheduleFeed: t.router({
+    preview: accountScoped.input(previewScheduleFeedSchema).mutation(({ ctx, input }) => new ScheduleFeedService(ctx.service.db).preview(ctx.userId, input)),
+    connect: accountScoped.input(connectScheduleFeedSchema).mutation(({ ctx, input }) => new ScheduleFeedService(ctx.service.db).connect(ctx.userId, input)),
+    sync: accountScoped.mutation(({ ctx }) => new ScheduleFeedService(ctx.service.db).syncNow(ctx.userId)),
+    disconnect: accountScoped.mutation(({ ctx }) => { new ScheduleFeedService(ctx.service.db).disconnect(ctx.userId); }),
   }),
   school: t.router({
     // Summaries only, without schedules (school.get serves the chosen one). The flag marks a client that expects

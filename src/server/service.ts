@@ -6,6 +6,7 @@ import { applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, perso
 import { completionTime, nextRecurringTask, stampCompletion, taskSchema, withoutCompletionEdit } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
+import { scheduleFeedStatus } from './schedule-feed';
 import { CommunityService, emailDomainsSchema, parseEmailDomains } from './community';
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
@@ -375,7 +376,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;

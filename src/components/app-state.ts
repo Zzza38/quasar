@@ -23,9 +23,10 @@ export function persistedContext(workspace: Workspace | WorkspaceContext): Works
  * field the client reads: a copy saved by an older build is then ignored (the network load replaces it) instead of
  * being read as the current shape and crashing a render. 2 is the first stamped version. The build before it saved
  * the context without a version; that copy is read as version 2 when it has `user.suggestedNames` (see cachedContext).
- * 3 adds `user.avatar` and the picture source (docs/CHAT.md §13) and `sanctions` (§14).
+ * 3 adds `user.avatar` and the picture source (docs/CHAT.md §13) and `sanctions` (§14). 4 adds `scheduleFeed`, the
+ * connected class schedule (src/server/schedule-feed.ts).
  */
-export const CONTEXT_VERSION = 3;
+export const CONTEXT_VERSION = 4;
 
 /** The record written to the device store: persistedContext stamped with CONTEXT_VERSION. */
 export function storedContext(workspace: Workspace | WorkspaceContext): Record<string, unknown> {
