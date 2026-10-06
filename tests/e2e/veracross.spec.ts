@@ -48,6 +48,12 @@ async function seed(connect: boolean) {
   } finally { db.close(); }
 }
 
+/** Import schedule → Veracross tab → Connect a calendar subscription. */
+async function openFeedSheet(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect a calendar subscription' }).click();
+}
+
 async function authenticate(context: BrowserContext, id: string) {
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id, authAt: Date.now() }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
@@ -56,7 +62,7 @@ async function authenticate(context: BrowserContext, id: string) {
 test('Connect Veracross explains where the link is and refuses a link it cannot use', async ({ page, context }) => {
   await authenticate(context, await seed(false));
   await page.goto('/classes');
-  await page.getByRole('button', { name: 'Connect Veracross' }).click();
+  await openFeedSheet(page);
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Connect Veracross' })).toBeVisible();
   await expect(dialog.getByText('Calendar Subscriptions', { exact: true })).toBeVisible();
@@ -75,7 +81,10 @@ test('a connected class schedule fills the blocks and can be synced and disconne
   await expect(classes.getByText('Room C1')).toBeVisible();
   await expect(page.getByText('Synced from Veracross')).toBeVisible();
   await expect(page.getByText('4 classes in 4 blocks.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Connect Veracross' })).toHaveCount(0);
+  // Already connected: the Veracross tab no longer offers a second subscription.
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Connect a calendar subscription' })).toHaveCount(0);
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
 
   // The saved link cannot be reached from here, so the sync fails and says so without touching the classes.
   await page.getByRole('button', { name: 'Sync now' }).click();
@@ -86,7 +95,9 @@ test('a connected class schedule fills the blocks and can be synced and disconne
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await page.getByRole('alert').filter({ hasText: 'Disconnect Veracross?' }).getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('Synced from Veracross')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Connect Veracross' })).toBeVisible();
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Connect a calendar subscription' })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
   await expect(classes.getByText('Biology', { exact: true })).toBeVisible();
 });
 
@@ -98,7 +109,7 @@ test('the review step lists each class with its block and sends only the ticked 
   let sent: Record<string, unknown> | null = null;
   await page.route('**/api/trpc/scheduleFeed.connect**', route => { sent = (Object.values(route.request().postDataJSON() as Record<string, unknown>)[0] ?? null) as Record<string, unknown>; return route.continue(); });
   await page.goto('/classes');
-  await page.getByRole('button', { name: 'Connect Veracross' }).click();
+  await openFeedSheet(page);
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Class Schedule link').fill('https://veracross.invalid/subscribe/class-schedule.ics');
   await dialog.getByRole('button', { name: 'Find my classes' }).click();

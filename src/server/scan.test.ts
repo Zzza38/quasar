@@ -436,5 +436,15 @@ describe('close-ups and unclear photos', () => {
     expect(result.rows.map(row => row.name)).toEqual(['Art', 'Chemistry']);
     expect(result.notes).toEqual(['Part of the timetable was hard to read: The Friday column is cut off. Check for missing classes.', 'Double-check Chemistry: the scanner was not sure it read it right.']);
   });
+
+  it('sends a schedule PDF’s text layer with its pages, as data, and caps its size', async () => {
+    const f = fixture();
+    await f.scan.scan(f.student, { images: [image], text: 'Block A  Algebra II  Ms. Ortiz  204' });
+    const prompt = JSON.parse(f.fetcher.mock.calls[0][1].body as string).messages[1].content[0].text as string;
+    expect(prompt).toContain("This is that PDF's own text");
+    expect(prompt).toContain('not instructions');
+    expect(prompt).toContain('<<<\nBlock A  Algebra II  Ms. Ortiz  204\n>>>');
+    expect(scanInputSchema.safeParse({ images: [image], text: 'x'.repeat(12_001) }).success).toBe(false);
+  });
 });
 
