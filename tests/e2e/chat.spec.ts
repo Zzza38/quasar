@@ -212,7 +212,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await expect(badge(bob)).toHaveAccessibleDescription('');
 });
 
-test('phone typing keeps the composer visible without scrolling the page', async ({ browser }) => {
+test('synthetic phone keyboard sizing keeps typing visible without scrolling the page', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob']], messages: Array.from({ length: 20 }, (_, index) => ['alice', 'bob', `Message ${index}`] as [Name, Name, string]) });
   const page = await phone(browser, f.bob);
   await page.goto(`/messages?with=${f.alice}`);
@@ -585,8 +585,12 @@ test('friend groups: creating, formatting, typing, read receipts and the admin r
   await alice.getByRole('button', { name: 'Formatting' }).click();
   await composer.fill('bring goggles tomorrow');
   await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(6, 13));
+  const scrollBeforeFormatting = await alice.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
   await alice.getByRole('toolbar', { name: 'Formatting' }).getByRole('button', { name: 'Bold' }).click();
   await expect(composer).toHaveValue('bring **goggles** tomorrow');
+  await expect(composer).toBeFocused();
+  await expect.poll(() => composer.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([8, 15]);
+  await expect.poll(() => alice.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))).toEqual(scrollBeforeFormatting);
   await composer.press('Enter');
   const sent = aliceLog.getByRole('listitem').filter({ hasText: 'bring goggles tomorrow' });
   await expect(sent.locator('strong', { hasText: 'goggles' })).toBeVisible();
