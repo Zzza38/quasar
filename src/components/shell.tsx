@@ -229,7 +229,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
 
   // The tooltip provider lives here rather than in the server layout: a client
   // boundary directly under <body> made the prerendered page fail to hydrate.
-  return <TooltipProvider><SidebarProvider open={navOpen} onOpenChange={setNavOpen} className="app app-canvas" style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties}>
+  return <TooltipProvider><SidebarProvider open={navOpen} onOpenChange={setNavOpen} className={cn('app app-canvas', immersive && 'max-lg:min-h-0')} style={{ '--sidebar-width': '15rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties}>
     <a className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg" href="#main" onClick={skipToMain}>Skip to content</a>
     {/* The single live region for sync status: the visible pills are hidden at one breakpoint or the other. */}
     <span role="status" aria-live="polite" className="sr-only">{statusLabel(sync)}</span>
