@@ -251,7 +251,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
           : <div className="grid aspect-[3/4] place-items-center rounded-2xl border border-dashed border-foreground/15 bg-muted/50 p-4 text-center text-xs text-muted-foreground">Straight-on, well lit, whole timetable in frame. A wide timetable can take up to three photos.</div>}
         {limited && <Callout tone="warning" icon="alert" role="status">You can add up to three photos.</Callout>}
         {photos.length < MAX_PHOTOS && <Button icon="camera" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>{photos.length === 0 ? 'Take or choose a photo' : 'Add another photo'}</Button>}
-        <Hint>Photos are sent to the scanning service once and are not stored.</Hint>
+        <Hint>Photos are sent to the scanning service for this scan only and are not stored.</Hint>
       </div>
       <div className="grid content-start gap-3">
         {!rows && <Hint>{photos.length > 0 ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}

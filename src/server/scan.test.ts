@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { DirectoryService } from './directory';
-import { ScanService, scanConfig, scanInputSchema, MAX_SCAN_IMAGES, SCAN_DAILY_LIMIT, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
+import sharp from 'sharp';
+import { ScanService, closeUp, scanConfig, scanInputSchema, MAX_CLOSE_UPS, MAX_SCAN_IMAGES, MAX_ZOOM_ROUNDS, SCAN_DAILY_LIMIT, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
 import { exampleSchedule } from '@/domain/example';
 
 const databases: Db[] = [];
@@ -290,7 +291,7 @@ describe('timetable scanning', () => {
     error.mockRestore();
   });
 
-  it('reports a busy upstream and a scan that runs past the 90 second limit', async () => {
+  it('reports a busy upstream and a scan that runs past the 110 second limit', async () => {
     const busy = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('slow down', { status: 429 })));
     await expect(busy.scan.scan(busy.student, image)).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS', message: 'The scanning service is busy. Try again in a minute.' });
     const aborted = (signal: AbortSignal | null | undefined) => new Promise<never>((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
@@ -299,13 +300,13 @@ describe('timetable scanning', () => {
       // The model never answers.
       const stalled = fixture(vi.fn<ScanFetch>().mockImplementation((_, init) => aborted(init.signal)));
       const first = expect(stalled.scan.scan(stalled.student, image)).rejects.toMatchObject({ code: 'TIMEOUT', message: expect.stringContaining('took too long') });
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(110_000);
       await first;
       // Headers arrive but the body is still streaming when the limit hits: still a timeout, not an unreadable answer.
       const error = vi.spyOn(console, 'error').mockImplementation(() => {});
       const streaming = fixture(vi.fn<ScanFetch>().mockImplementation(async (_, init) => ({ ok: true, status: 200, json: () => aborted(init.signal) }) as unknown as Response));
       const second = expect(streaming.scan.scan(streaming.student, image)).rejects.toMatchObject({ code: 'TIMEOUT', message: expect.stringContaining('took too long') });
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(110_000);
       await second;
       // A timeout is not the upstream's fault, so it logs no unreadable-body line.
       expect(error).not.toHaveBeenCalled();
@@ -338,3 +339,102 @@ describe('timetable scanning', () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+const reply = (message: Record<string, unknown>) => new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 });
+const look = (id: string, args: Record<string, unknown>) => ({ id, type: 'function', function: { name: 'look_closer', arguments: JSON.stringify(args) } });
+/** A real 400 × 200 PNG: left half black, right half white. */
+const picture = async () => ({ mediaType: 'image/png' as const, image: (await sharp({ create: { width: 400, height: 200, channels: 3, background: '#000' } })
+  .composite([{ input: { create: { width: 200, height: 200, channels: 3, background: '#fff' } }, left: 200, top: 0 }]).png().toBuffer()).toString('base64') });
+const bodyOf = (fetcher: Mock<ScanFetch>, call: number) => JSON.parse(fetcher.mock.calls[call][1].body as string);
+
+describe('cheapest routing on OpenRouter', () => {
+  it('adds :floor to OpenRouter models unless a variant is set or turned off, and leaves other providers alone', () => {
+    const openrouter = { SCAN_API_URL: 'https://openrouter.ai/api/v1/chat/completions', SCAN_MODEL: '~openai/gpt-luna-latest' };
+    expect(scanConfig(openrouter)).toMatchObject({ model: '~openai/gpt-luna-latest:floor', plainModel: '~openai/gpt-luna-latest' });
+    expect(scanConfig({ ...openrouter, SCAN_MODEL: 'openai/gpt-6-luna:nitro' })).toMatchObject({ model: 'openai/gpt-6-luna:nitro' });
+    expect(scanConfig({ ...openrouter, SCAN_MODEL_VARIANT: 'none' })).toEqual({ url: 'https://openrouter.ai/api/v1', key: '', model: '~openai/gpt-luna-latest' });
+    expect(() => scanConfig({ ...openrouter, SCAN_MODEL_VARIANT: 'floor; drop' })).toThrow('SCAN_MODEL_VARIANT');
+    expect(scanConfig({ SCAN_API_URL: 'http://127.0.0.1:11434/v1', SCAN_MODEL: 'qwen3-vl:8b' })).toEqual({ url: 'http://127.0.0.1:11434/v1', key: '', model: 'qwen3-vl:8b' });
+    expect(scanConfig({ ...openrouter, SCAN_ZOOM: 'off' })).toMatchObject({ zoom: false });
+  });
+
+  it('retries once without the variant, still sorted by price, when the provider refuses it', async () => {
+    const fetcher = vi.fn<ScanFetch>().mockResolvedValueOnce(new Response('{"error":{"message":"invalid model"}}', { status: 400 })).mockResolvedValue(answer([{ className: 'Art' }]));
+    const f = fixture(fetcher);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const scan = new ScanService(f.service, { ...config, model: 'm:floor', plainModel: 'm' }, fetcher);
+    expect((await scan.scan(f.student, image)).rows.map(row => row.name)).toEqual(['Art']);
+    expect(bodyOf(fetcher, 0)).toMatchObject({ model: 'm:floor' });
+    expect(bodyOf(fetcher, 0).provider).toBeUndefined();
+    expect(bodyOf(fetcher, 1)).toMatchObject({ model: 'm', provider: { sort: 'price' } });
+    error.mockRestore();
+  });
+});
+
+describe('close-ups and unclear photos', () => {
+  it('offers the look_closer tool, and leaves it out when zoom is off', async () => {
+    const f = fixture(vi.fn<ScanFetch>().mockImplementation(async () => answer([])));
+    await f.scan.scan(f.student, image);
+    const body = bodyOf(f.fetcher, 0);
+    expect(body.tools[0].function.name).toBe('look_closer');
+    expect(body.tool_choice).toBe('auto');
+    expect(body.messages[0].content).toContain('look_closer');
+    const off = new ScanService(f.service, { ...config, zoom: false }, f.fetcher);
+    await off.scan(f.student, image);
+    expect(bodyOf(f.fetcher, 1).tools).toBeUndefined();
+    expect(bodyOf(f.fetcher, 1).messages[0].content).not.toContain('look_closer');
+  });
+
+  it('crops, enlarges and enhances the region the model asks for', async () => {
+    const photo = await picture();
+    const right = await sharp(Buffer.from(await closeUp(photo, { photo: 1, left: 0.5, top: 0, width: 0.5, height: 1, enhance: true }), 'base64')).stats();
+    expect(right.channels[0].mean).toBeGreaterThan(240);
+    const left = Buffer.from(await closeUp(photo, { photo: 1, left: 0, top: 0, width: 0.25, height: 0.5, rotate: 90 }), 'base64');
+    expect(await sharp(left).metadata()).toMatchObject({ format: 'jpeg', width: 1600, height: 1600 });
+    expect((await sharp(left).stats()).channels[0].mean).toBeLessThan(15);
+    await expect(closeUp(photo, { photo: 1, left: 0.999, top: 0.999, width: 0.001, height: 0.001 })).rejects.toThrow();
+  });
+
+  it('sends close-ups back after the tool results, then reads the final answer', async () => {
+    const fetcher = vi.fn<ScanFetch>()
+      .mockResolvedValueOnce(reply({ content: null, tool_calls: [look('a', { photo: 1, left: 0, top: 0, width: 0.5, height: 1 }), look('b', { photo: 2, left: 0, top: 0, width: 1, height: 1 })] }))
+      .mockResolvedValueOnce(answer([{ className: 'Art', periodIds: [firstPeriod.id] }]));
+    const f = fixture(fetcher);
+    const result = await f.scan.scan(f.student, { images: [await picture()] });
+    expect(result.rows.map(row => row.name)).toEqual(['Art']);
+    const messages = bodyOf(fetcher, 1).messages as Array<{ role: string; tool_call_id?: string; content: unknown }>;
+    expect(messages.map(message => message.role)).toEqual(['system', 'user', 'assistant', 'tool', 'tool', 'user']);
+    expect(messages[3]).toMatchObject({ tool_call_id: 'a', content: 'Close-up 1 is attached in the next message.' });
+    expect(messages[4]).toMatchObject({ tool_call_id: 'b', content: expect.stringContaining('could not be made') });
+    const parts = messages[5].content as Array<{ type: string; image_url?: { url: string } }>;
+    expect(parts.filter(part => part.type === 'image_url')).toHaveLength(1);
+    expect(parts.find(part => part.image_url)?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it('stops offering close-ups after the round and close-up limits', async () => {
+    const photo = await picture();
+    const many = Array.from({ length: 4 }, (_, i) => look(`c${i}`, { photo: 1, left: 0, top: 0, width: 1, height: 1 }));
+    const fetcher = vi.fn<ScanFetch>().mockImplementation(async () => reply({ content: null, tool_calls: many }));
+    fetcher.mockImplementationOnce(async () => reply({ content: null, tool_calls: many })).mockImplementationOnce(async () => reply({ content: null, tool_calls: many }));
+    const f = fixture(fetcher);
+    // The model keeps asking; after the limit its tool calls are ignored and its (empty) text is the answer.
+    await expect(f.scan.scan(f.student, { images: [photo] })).rejects.toThrow('empty answer');
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(MAX_ZOOM_ROUNDS + 1);
+    const last = bodyOf(fetcher, fetcher.mock.calls.length - 1);
+    expect(last.tool_choice).toBe('none');
+    const attached = (last.messages as Array<{ role: string; content: unknown }>).filter(m => m.role === 'user').slice(1)
+      .flatMap(m => (m.content as Array<{ type: string }>).filter(part => part.type === 'image_url'));
+    expect(attached).toHaveLength(MAX_CLOSE_UPS);
+  });
+
+  it('refuses an unreadable photo with the reason, and flags rows the model was unsure of', async () => {
+    const blurry = fixture(vi.fn<ScanFetch>().mockResolvedValue(reply({ content: JSON.stringify({ rows: [], unreadable: 'The class names are too blurry to read' }) })));
+    await expect(blurry.scan.scan(blurry.student, image)).rejects.toMatchObject({ code: 'BAD_REQUEST',
+      message: 'This photo is too unclear to read reliably. The class names are too blurry to read. Retake it straight on in good light, or add your classes by hand.' });
+    const partial = fixture(vi.fn<ScanFetch>().mockResolvedValue(reply({ content: JSON.stringify({ rows: [{ className: 'Art' }, { className: 'Chemistry', unsure: true }], unreadable: 'The Friday column is cut off.' }) })));
+    const result = await partial.scan.scan(partial.student, image);
+    expect(result.rows.map(row => row.name)).toEqual(['Art', 'Chemistry']);
+    expect(result.notes).toEqual(['Part of the timetable was hard to read: The Friday column is cut off. Check for missing classes.', 'Double-check Chemistry: the scanner was not sure it read it right.']);
+  });
+});
+

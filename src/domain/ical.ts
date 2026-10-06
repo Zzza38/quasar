@@ -8,8 +8,14 @@ export type FeedItem = { uid:string; recurrenceId:string|null; title:string; not
    * next to a TZID DTSTART): that text, which is how imports before instant matching keyed the override, so a refresh
    * can move the override's existing task to recurrenceId instead of marking it removed.
    */
-  legacyRecurrenceId?:string };
-export type ParseCalendarOptions = {timeZone:string;windowStart?:string;windowEnd?:string};
+  legacyRecurrenceId?:string;
+  /** LOCATION, trimmed to 120 characters. Only read when ParseCalendarOptions.location asks for it. */
+  location?:string };
+/**
+ * `maxItems` raises the entry limit for a feed that is one event per class meeting (a school year of a class
+ * schedule is a few thousand); task feeds keep the default. `location` adds each entry's LOCATION to its item.
+ */
+export type ParseCalendarOptions = {timeZone:string;windowStart?:string;windowEnd?:string;maxItems?:number;location?:boolean};
 const MAX_ITEMS = 2000;
 const MAX_STEPS = 50_000;
 const MAX_TIMES_PER_DAY = 24;
@@ -70,7 +76,8 @@ export function parseICalendar(text:string, options:ParseCalendarOptions):FeedIt
   const calendar = new ICAL.Component(ICAL.parse(text));
   if(calendar.name !== 'vcalendar') throw new Error('Invalid calendar.');
   const components = [...calendar.getAllSubcomponents('vevent'),...calendar.getAllSubcomponents('vtodo')];
-  if(components.length > MAX_ITEMS) throw new Error('Calendar contains too many entries.');
+  const maxItems = options.maxItems ?? MAX_ITEMS;
+  if(components.length > maxItems) throw new Error('Calendar contains too many entries.');
   const groups = new Map<string,ICAL.Component[]>();
   for(const c of components) {
     // Validate raw dates before ICAL.Time normalizes overflowing fields (e.g. Feb 30).
@@ -120,6 +127,7 @@ export function parseICalendar(text:string, options:ParseCalendarOptions):FeedIt
     const title = feedTitle(value(c,'summary'));
     const notes = String(value(c,'description') || '').slice(0,10000);
     output.set(JSON.stringify([uid,recurrenceId]),{uid,recurrenceId,title,notes,startDate:s.date,startTime:s.time,endDate:endInRange?.date ?? null,endTime:endInRange?.time ?? null,dueDate:undated ? null : due.date,dueTime:undated ? null : due.time,timeZone:options.timeZone,allDay,cancelled:String(value(c,'status')).toUpperCase() === 'CANCELLED',url:webLink(value(c,'url')),...(legacyRecurrenceId ? {legacyRecurrenceId} : {})});
+    if(options.location) { const location = String(value(c,'location') ?? '').trim().slice(0,120).trim(); if(location) output.get(JSON.stringify([uid,recurrenceId]))!.location = location; }
     if(output.size > MAX_ITEMS) throw new Error('Calendar expands to more than 2000 occurrences.');
   };
   for(const group of groups.values()) {
