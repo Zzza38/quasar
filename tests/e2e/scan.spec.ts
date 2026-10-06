@@ -157,3 +157,41 @@ test('reads a schedule PDF: renders its pages and sends its text for exact names
   expect(sent.prompt).toContain('Advisory meets in room 12.');
 });
 
+
+test('keeps the text of same-named PDFs apart and reads only the pages it shows', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  const printed = async (html: string) => {
+    const maker = await context.newPage();
+    await maker.setContent(html);
+    const pdf = await maker.pdf({ format: 'Letter' });
+    await maker.close();
+    return pdf;
+  };
+  const front = await printed('<p>Front side: Algebra II in block A</p>');
+  const back = await printed('<p>Back side: World History in block B</p>');
+  const long = await printed(['one', 'two', 'three', 'four'].map((n, i) => `<p style="${i ? 'break-before: page' : ''}">Page ${n} marker</p>`).join(''));
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  const input = dialog.getByLabel('Choose a schedule PDF or picture');
+  // Two downloads that both kept the portal's file name.
+  await input.setInputFiles([{ name: 'schedule.pdf', mimeType: 'application/pdf', buffer: front }, { name: 'schedule.pdf', mimeType: 'application/pdf', buffer: back }]);
+  await expect(dialog.getByRole('img', { name: 'Page 1 of schedule.pdf' })).toHaveCount(2);
+  let before = requests.length;
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  expect(requests[before].prompt).toContain('Front side: Algebra II in block A');
+  expect(requests[before].prompt).toContain('Back side: World History in block B');
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'long.pdf', mimeType: 'application/pdf', buffer: long });
+  await expect(dialog.getByRole('img', { name: /^Page \d of long\.pdf$/ })).toHaveCount(3);
+  await expect(dialog.getByText('Up to three pages or photos are read.', { exact: false })).toBeVisible();
+  before = requests.length;
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  expect(requests[before].images).toHaveLength(3);
+  expect(requests[before].prompt).toContain('Page three marker');
+  expect(requests[before].prompt).not.toContain('Page four marker');
+});
