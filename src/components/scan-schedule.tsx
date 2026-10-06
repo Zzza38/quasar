@@ -16,8 +16,11 @@ import { ScheduleSourceGuide } from './schedule-sources';
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 /** `scanned` remembers the directory class the scanner guessed, so the link holds only while the name is the one it read. */
 type Draft = ScanRow & { include: boolean; scanned?: { name: string; directoryId: string }; correctName?: boolean; expectedVersion?: number; separate?: boolean };
-/** `pdf` names the PDF a page was rendered from, so removing its last page also drops that PDF's text. */
-type Photo = { image: string; mediaType: 'image/jpeg'; preview: string; pdf?: string };
+/**
+ * `pdf` is the PDF a page was rendered from: `id` is unique per upload (two files can share a name) and keys that PDF's
+ * text, so removing its last page also drops its text; `name` is for display.
+ */
+type Photo = { image: string; mediaType: 'image/jpeg'; preview: string; pdf?: { id: string; name: string } };
 const MAX_EDGE = 1600;
 /** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
 const MAX_PHOTOS = 3;
@@ -164,7 +167,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
-  /** The text layer of each uploaded PDF, by file name. */
+  /** The text layer of each uploaded PDF, by its upload ID (Photo.pdf.id). */
   const [pdfTexts, setPdfTexts] = useState<Record<string, string>>({});
   const [limited, setLimited] = useState(false);
   const [rows, setRows] = useState<Draft[] | null>(null);
@@ -192,8 +195,9 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
             // Each page becomes one of the scan's pictures; the PDF's text goes along so names are read exactly.
             const pdf = await readPdf(file, room);
             if (pdf.pages.length === 0) throw new Error('That PDF has no pages.');
-            prepared.push(...pdf.pages.map(page => ({ ...page, pdf: file.name })));
-            if (pdf.text) texts[file.name] = pdf.text;
+            const source = { id: crypto.randomUUID(), name: file.name };
+            prepared.push(...pdf.pages.map(page => ({ ...page, pdf: source })));
+            if (pdf.text) texts[source.id] = pdf.text;
             if (pdf.total > pdf.pages.length) skipped = true;
             room -= pdf.pages.length;
           } else { prepared.push(await prepareImage(file)); room -= 1; }
@@ -213,7 +217,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     const removed = photos[index];
     const next = photos.filter((_, i) => i !== index);
     setPhotos(next);
-    if (removed?.pdf && !next.some(photo => photo.pdf === removed.pdf)) setPdfTexts(({ [removed.pdf!]: _gone, ...rest }) => rest);
+    if (removed?.pdf && !next.some(photo => photo.pdf?.id === removed.pdf!.id)) setPdfTexts(({ [removed.pdf!.id]: _gone, ...rest }) => rest);
     setLimited(false); setRows(null); setNotes([]); setError('');
   };
   const scan = () => run(async () => {
@@ -285,7 +289,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
       <div className="grid content-start gap-2">
         <ul className={photos.length === 1 ? 'grid gap-2' : 'grid grid-cols-2 gap-2'} aria-label="Timetable photos">
           {photos.map((photo, index) => <li key={index} className="relative">
-              <img src={photo.preview} alt={photo.pdf ? `Page ${photos.slice(0, index + 1).filter(entry => entry.pdf === photo.pdf).length} of ${photo.pdf}` : index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
+              <img src={photo.preview} alt={photo.pdf ? `Page ${photos.slice(0, index + 1).filter(entry => entry.pdf?.id === photo.pdf!.id).length} of ${photo.pdf.name}` : index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
                 className={photos.length === 1 ? 'w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]' : 'aspect-[3/4] w-full rounded-xl bg-muted object-cover ring-1 ring-foreground/[0.06]'} />
               <IconButton label={photo.pdf ? `Remove page ${index + 1}` : `Remove photo ${index + 1}`} icon="x" size="sm" variant="secondary" disabled={pending} className="absolute right-1.5 top-1.5 rounded-full" onClick={() => remove(index)} />
             </li>)}
