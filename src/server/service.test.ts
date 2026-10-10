@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { openDatabase, type Db } from './db';
 import { MAX_SCHOOL_SCHEDULE_CHARS, namesSchema, reservedDisplayName, Service, SYNC_LIMITS } from './service';
 import { appRouter } from './router';
-import type { Schedule } from '@/domain/schedule';
+import { emptyPersonalSchedule, GRADES, resolveDay, type Schedule } from '@/domain/schedule';
 import type { Entity, Mutation } from '@/domain/sync';
 
 const schedule: Schedule = {
@@ -16,6 +16,25 @@ const schedule: Schedule = {
   anchorDate:'2026-09-08',anchorCycleDayId:'1',schoolWeekdays:[1,2,3,4,5],advanceWeekdays:[1,2,3,4,5],exceptions:[]
 };
 const task = {title:'Read chapter 1',dueDate:null,dueTime:null,classId:null,notes:'',completed:false};
+
+it('publishes, changes and removes admin closures for every grade without changing their timetables', () => {
+  const f = fixture();
+  const variants = Object.fromEntries(GRADES.map((grade) => [grade, { ...schedule, cycleDays: schedule.cycleDays.map((day) => ({ ...day, label: `Grade ${grade}` })) }]));
+  let school = f.service.updateSchool(f.owner, { schoolId: f.school.id, expectedVersion: 1, schedule: { ...schedule, gradeSchedules: variants }, approved: true, supportLocked: false }, true);
+  for (const advanceCycle of [false, true]) {
+    const { gradeSchedules: _variants, ...base } = school.schedule;
+    school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...base, exceptions: [{ date: '2026-10-12', kind: 'closure', advanceCycle }] }, approved: true, supportLocked: false }, true);
+    for (const grade of GRADES) {
+      expect(resolveDay(school.schedule, '2026-10-12', { ...emptyPersonalSchedule(), grade }).closed).toBe(true);
+      expect(school.schedule.gradeSchedules?.[grade]?.exceptions).toEqual(school.schedule.exceptions);
+      expect(school.schedule.gradeSchedules?.[grade]?.cycleDays).toEqual(variants[grade].cycleDays);
+    }
+    const saved = f.db.prepare('SELECT schedule FROM school_revisions WHERE school_id=? AND version=?').get(school.id, school.version) as { schedule: string };
+    expect(JSON.parse(saved.schedule)).toEqual(school.schedule);
+  }
+  school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...school.schedule, exceptions: [] }, approved: true, supportLocked: false }, true);
+  for (const grade of GRADES) expect(resolveDay(school.schedule, '2026-10-12', { ...emptyPersonalSchedule(), grade }).closed).toBe(false);
+});
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
 function fixture() {
