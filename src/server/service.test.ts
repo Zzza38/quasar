@@ -22,7 +22,8 @@ it('publishes, changes and removes admin closures for every grade without changi
   const variants = Object.fromEntries(GRADES.map((grade) => [grade, { ...schedule, cycleDays: schedule.cycleDays.map((day) => ({ ...day, label: `Grade ${grade}` })) }]));
   let school = f.service.updateSchool(f.owner, { schoolId: f.school.id, expectedVersion: 1, schedule: { ...schedule, gradeSchedules: variants }, approved: true, supportLocked: false }, true);
   for (const advanceCycle of [false, true]) {
-    school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...school.schedule, exceptions: [{ date: '2026-10-12', kind: 'closure', advanceCycle }] }, approved: true, supportLocked: false }, true);
+    const { gradeSchedules: _variants, ...base } = school.schedule;
+    school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...base, exceptions: [{ date: '2026-10-12', kind: 'closure', advanceCycle }] }, approved: true, supportLocked: false }, true);
     for (const grade of GRADES) {
       expect(resolveDay(school.schedule, '2026-10-12', { ...emptyPersonalSchedule(), grade }).closed).toBe(true);
       expect(school.schedule.gradeSchedules?.[grade]?.exceptions).toEqual(school.schedule.exceptions);

@@ -127,14 +127,15 @@ export function applyScheduleToGrades(current: Schedule, draft: Schedule, grades
 
 /** Admin closures apply school-wide, while each grade keeps its own rotation and bell times. */
 export function applySchoolClosures(current: Schedule, draft: Schedule): Schedule {
-  if (!draft.gradeSchedules) return draft;
+  const variants = draft.gradeSchedules ?? current.gradeSchedules;
+  if (!variants) return draft;
   const previous = new Map(current.exceptions.map((entry) => [entry.date, entry]));
   const next = new Map(draft.exceptions.map((entry) => [entry.date, entry]));
   const dates = [...new Set([...previous.keys(), ...next.keys()])].filter((date) => {
     const before = previous.get(date), after = next.get(date);
     return (before?.kind === 'closure' || after?.kind === 'closure') && JSON.stringify(before) !== JSON.stringify(after);
   });
-  const gradeSchedules = { ...draft.gradeSchedules };
+  const gradeSchedules = { ...variants };
   for (const grade of GRADES) {
     const variant = gradeSchedules[grade];
     if (!variant) continue;
