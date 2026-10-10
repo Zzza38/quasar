@@ -71,13 +71,17 @@ const SAFE_FEED_ERRORS=new Set(['Calendar exceeds the 2 MB limit.','The response
 export const FEED_ADD_HOURLY_LIMIT=20;
 export const FEED_ADD_DAILY_LIMIT=40;
 export const GENERIC_REFRESH_ERROR='Could not refresh this feed. Check that its URL is a public HTTPS iCalendar feed. Your saved items are unchanged.';
+/** The thrown reason when it is one of the fixed, URL-free feed errors that are safe to show, else null. */
+export function safeFeedReason(error:unknown):string|null {
+  const message=error instanceof Error?error.message:'';
+  return SAFE_FEED_ERRORS.has(message)||/^Calendar server returned HTTP \d{3}\.$/.test(message)||/^Invalid calendar [a-z-]{1,40}\.$/.test(message)?message:null;
+}
 export function refreshError(error:unknown):string {
   if(error instanceof FeedKeyError)return 'Could not refresh this feed because the server’s encryption key changed. Add the same calendar link again to reconnect it. Your saved items are unchanged.';
-  const message=error instanceof Error?error.message:'';
-  const safe=SAFE_FEED_ERRORS.has(message)||/^Calendar server returned HTTP \d{3}\.$/.test(message)||/^Invalid calendar [a-z-]{1,40}\.$/.test(message);
-  return safe?`Could not refresh this feed. ${message} Your saved items are unchanged.`:GENERIC_REFRESH_ERROR;
+  const safe=safeFeedReason(error);
+  return safe?`Could not refresh this feed. ${safe} Your saved items are unchanged.`:GENERIC_REFRESH_ERROR;
 }
-function encryptionKey(secret:string) {if(secret.length<32)throw new TRPCError({code:'PRECONDITION_FAILED',message:'Calendar encryption is not configured.'});return createHash('sha256').update('quasar-calendar-url\0'+secret).digest();}
+export function encryptionKey(secret:string) {if(secret.length<32)throw new TRPCError({code:'PRECONDITION_FAILED',message:'Calendar encryption is not configured.'});return createHash('sha256').update('quasar-calendar-url\0'+secret).digest();}
 /**
  * The url_hash that finds an account's existing subscription to a link. It is keyed with a NEXTAUTH_SECRET-derived key
  * and includes the owner, so a database reader cannot test a leaked or well-known feed URL against the rows or tell
@@ -86,8 +90,8 @@ function encryptionKey(secret:string) {if(secret.length<32)throw new TRPCError({
  * matches the rest (feeds saved under an older secret). The `k1:` prefix tells the two kinds apart.
  */
 function urlHash(owner:string,url:string,secret:string) {encryptionKey(secret);return 'k1:'+createHmac('sha256',createHash('sha256').update('quasar-calendar-url-hash\0'+secret).digest()).update(owner+'\0'+url).digest('hex');}
-function encrypt(value:string,secret:string) {const iv=randomBytes(12);const cipher=createCipheriv('aes-256-gcm',encryptionKey(secret),iv);const body=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),body]).toString('base64');}
-function decrypt(value:string,secret:string) {const data=Buffer.from(value,'base64');const cipher=createDecipheriv('aes-256-gcm',encryptionKey(secret),data.subarray(0,12));cipher.setAuthTag(data.subarray(12,28));return Buffer.concat([cipher.update(data.subarray(28)),cipher.final()]).toString('utf8');}
+export function encrypt(value:string,secret:string) {const iv=randomBytes(12);const cipher=createCipheriv('aes-256-gcm',encryptionKey(secret),iv);const body=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),body]).toString('base64');}
+export function decrypt(value:string,secret:string) {const data=Buffer.from(value,'base64');const cipher=createDecipheriv('aes-256-gcm',encryptionKey(secret),data.subarray(0,12));cipher.setAuthTag(data.subarray(12,28));return Buffer.concat([cipher.update(data.subarray(28)),cipher.final()]).toString('utf8');}
 
 export class CalendarService {
   constructor(readonly db:Db,readonly options:{secret?:string;fetcher?:typeof fetchFeed;now?:()=>Date}={}){}

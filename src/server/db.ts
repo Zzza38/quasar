@@ -481,6 +481,20 @@ function migrate(db: Db): void {
       INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(17, datetime('now'));
     `);
   }
+  // Migration 18: a class-schedule feed per account (src/server/schedule-feed.ts), such as Veracross "Class
+  // Schedules", that fills the student's class blocks once a day. `state` is what the last sync wrote (ImportState in
+  // src/domain/schedule-import.ts) and `summary` what it did, both JSON. The URL is encrypted like calendar feeds.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_feeds (
+      owner_id TEXT PRIMARY KEY REFERENCES users(id), source TEXT NOT NULL, url_encrypted TEXT NOT NULL,
+      state TEXT, summary TEXT, created_at TEXT NOT NULL, last_attempt_at TEXT, last_success_at TEXT,
+      next_refresh_at TEXT NOT NULL, last_error TEXT, failure_count INTEGER NOT NULL DEFAULT 0, lease_until TEXT, lease_token TEXT
+    );
+    CREATE INDEX IF NOT EXISTS schedule_feeds_due ON schedule_feeds(next_refresh_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(18, datetime('now'));
+  `);
+  // lease_token fences a sync's writes (src/server/schedule-feed.ts): added after the table first shipped to a dev database.
+  if (!(db.pragma('table_info(schedule_feeds)') as {name: string}[]).some(column => column.name === 'lease_token')) db.exec('ALTER TABLE schedule_feeds ADD COLUMN lease_token TEXT');
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
