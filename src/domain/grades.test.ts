@@ -52,6 +52,27 @@ describe('grade schedules', () => {
   });
 });
 
+it.each([false, true])('preserves saved grade exceptions on closure dates with grade maps included: %s', (includeGrades) => {
+  const replacement = { date: '2026-10-12', kind: 'replacement' as const, slots: exampleSchedule.cycleDays[0].slots, advanceCycle: false };
+  const specificClosure = { date: '2026-10-14', kind: 'closure' as const, advanceCycle: false };
+  const schoolClosure = { ...specificClosure, advanceCycle: true };
+  const current: Schedule = { ...exampleSchedule, exceptions: [schoolClosure], gradeSchedules: {
+    '9': { ...exampleSchedule, exceptions: [replacement, specificClosure] },
+    '10': { ...exampleSchedule, exceptions: [schoolClosure] },
+  } };
+  const { gradeSchedules: _variants, ...base } = current;
+  const draft: Schedule = { ...(includeGrades ? current : base), exceptions: [
+    { date: replacement.date, kind: 'closure', advanceCycle: false },
+  ] };
+  const added = applySchoolClosures(current, draft);
+  expect(added.gradeSchedules?.['9']?.exceptions).toEqual([replacement, specificClosure]);
+  expect(added.gradeSchedules?.['10']?.exceptions).toEqual([draft.exceptions[0]]);
+  const { gradeSchedules: _added, ...addedBase } = added;
+  const removed = applySchoolClosures(added, { ...(includeGrades ? added : addedBase), exceptions: [] });
+  expect(removed.gradeSchedules?.['9']?.exceptions).toEqual([replacement, specificClosure]);
+  expect(removed.gradeSchedules?.['10']?.exceptions).toEqual([]);
+});
+
 
 it('uses grade-nine lunch on Days 6–10 even when the old default has no lunch', () => {
   const fallback = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== 'lunch') })) };
