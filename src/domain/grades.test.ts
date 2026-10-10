@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule } from './example';
-import { applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema } from './schedule';
+import { applySchoolClosures, applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema, type Schedule } from './schedule';
+
+it('keeps unrelated grade exceptions and explicit grade edits when publishing school closures', () => {
+  const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };
+  const gradeClosure = { date: '2026-10-13', kind: 'closure' as const, advanceCycle: false };
+  const current: Schedule = { ...exampleSchedule, exceptions: [], gradeSchedules: { '9': { ...exampleSchedule, exceptions: [gradeClosure] } } };
+  const result = applySchoolClosures(current, { ...current, exceptions: [closure] });
+  expect(result.gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure, closure]);
+  const removed = applySchoolClosures(result, { ...result, exceptions: [] });
+  expect(removed.gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure]);
+  const explicit: Schedule = { ...current, exceptions: [closure], gradeSchedules: { '9': { ...current.gradeSchedules!['9']!, exceptions: [gradeClosure, { ...closure, advanceCycle: true }] } } };
+  expect(applySchoolClosures(current, explicit)).toEqual(explicit);
+});
+
+it('preserves grade schedules omitted by an admin draft and permits explicit removal', () => {
+  const gradeClosure = { date: '2026-10-13', kind: 'closure' as const, advanceCycle: false };
+  const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };
+  const current: Schedule = { ...exampleSchedule, exceptions: [], gradeSchedules: { '9': { ...exampleSchedule, exceptions: [gradeClosure] } } };
+  const { gradeSchedules: _variants, ...base } = current;
+  const result = applySchoolClosures(current, { ...base, exceptions: [closure] });
+  expect(result.gradeSchedules?.['9']).toEqual({ ...current.gradeSchedules!['9'], exceptions: [gradeClosure, closure] });
+  expect(applySchoolClosures(result, { ...base, exceptions: [] }).gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure]);
+  expect(applySchoolClosures(current, { ...base, gradeSchedules: {} }).gradeSchedules).toEqual({});
+});
 
 describe('grade schedules', () => {
   const changed = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map((day) => ({ ...day, label: `Junior ${day.label}` })) };
@@ -27,6 +50,27 @@ describe('grade schedules', () => {
     for (const grades of [[], ['9', '9'], ['K'], ['1'], ['8'], ['13']]) expect(gradesSchema.safeParse(grades).success).toBe(false);
     expect(scheduleSchema.safeParse({ ...exampleSchedule, gradeSchedules: { '9': { ...changed, periods: [] } } }).success).toBe(false);
   });
+});
+
+it.each([false, true])('preserves saved grade exceptions on closure dates with grade maps included: %s', (includeGrades) => {
+  const replacement = { date: '2026-10-12', kind: 'replacement' as const, slots: exampleSchedule.cycleDays[0].slots, advanceCycle: false };
+  const specificClosure = { date: '2026-10-14', kind: 'closure' as const, advanceCycle: false };
+  const schoolClosure = { ...specificClosure, advanceCycle: true };
+  const current: Schedule = { ...exampleSchedule, exceptions: [schoolClosure], gradeSchedules: {
+    '9': { ...exampleSchedule, exceptions: [replacement, specificClosure] },
+    '10': { ...exampleSchedule, exceptions: [schoolClosure] },
+  } };
+  const { gradeSchedules: _variants, ...base } = current;
+  const draft: Schedule = { ...(includeGrades ? current : base), exceptions: [
+    { date: replacement.date, kind: 'closure', advanceCycle: false },
+  ] };
+  const added = applySchoolClosures(current, draft);
+  expect(added.gradeSchedules?.['9']?.exceptions).toEqual([replacement, specificClosure]);
+  expect(added.gradeSchedules?.['10']?.exceptions).toEqual([draft.exceptions[0]]);
+  const { gradeSchedules: _added, ...addedBase } = added;
+  const removed = applySchoolClosures(added, { ...(includeGrades ? added : addedBase), exceptions: [] });
+  expect(removed.gradeSchedules?.['9']?.exceptions).toEqual([replacement, specificClosure]);
+  expect(removed.gradeSchedules?.['10']?.exceptions).toEqual([]);
 });
 
 
