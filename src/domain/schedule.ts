@@ -144,6 +144,8 @@ export function applySchoolClosures(current: Schedule, draft: Schedule): Schedul
       const original = current.gradeSchedules?.[grade]?.exceptions.find((entry) => entry.date === date);
       // An explicit grade edit in the same revision takes precedence.
       if (JSON.stringify(exceptions.get(date)) !== JSON.stringify(original)) continue;
+      // A saved grade-specific exception also takes precedence over the school calendar.
+      if (original && JSON.stringify(original) !== JSON.stringify(previous.get(date))) continue;
       const after = next.get(date);
       if (after?.kind === 'closure') exceptions.set(date, after);
       else if (JSON.stringify(exceptions.get(date)) === JSON.stringify(previous.get(date))) exceptions.delete(date);
