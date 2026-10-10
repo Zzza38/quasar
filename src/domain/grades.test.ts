@@ -14,6 +14,17 @@ it('keeps unrelated grade exceptions and explicit grade edits when publishing sc
   expect(applySchoolClosures(current, explicit)).toEqual(explicit);
 });
 
+it('preserves grade schedules omitted by an admin draft and permits explicit removal', () => {
+  const gradeClosure = { date: '2026-10-13', kind: 'closure' as const, advanceCycle: false };
+  const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };
+  const current: Schedule = { ...exampleSchedule, exceptions: [], gradeSchedules: { '9': { ...exampleSchedule, exceptions: [gradeClosure] } } };
+  const { gradeSchedules: _variants, ...base } = current;
+  const result = applySchoolClosures(current, { ...base, exceptions: [closure] });
+  expect(result.gradeSchedules?.['9']).toEqual({ ...current.gradeSchedules!['9'], exceptions: [gradeClosure, closure] });
+  expect(applySchoolClosures(result, { ...base, exceptions: [] }).gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure]);
+  expect(applySchoolClosures(current, { ...base, gradeSchedules: {} }).gradeSchedules).toEqual({});
+});
+
 describe('grade schedules', () => {
   const changed = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map((day) => ({ ...day, label: `Junior ${day.label}` })) };
   it('applies one schedule to multiple grades without changing other grades', () => {
