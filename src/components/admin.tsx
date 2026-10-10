@@ -356,6 +356,7 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
       </div>
       <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically, including current members the next time they open Quasar. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
     </Panel>
+    <p className="text-sm text-muted-foreground">Closures saved here apply to every grade. Each grade keeps its own rotation and bell times.</p>
     <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;

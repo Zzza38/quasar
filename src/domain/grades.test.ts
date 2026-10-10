@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule } from './example';
-import { applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema } from './schedule';
+import { applySchoolClosures, applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema, type Schedule } from './schedule';
+
+it('keeps unrelated grade exceptions and explicit grade edits when publishing school closures', () => {
+  const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };
+  const gradeClosure = { date: '2026-10-13', kind: 'closure' as const, advanceCycle: false };
+  const current: Schedule = { ...exampleSchedule, exceptions: [], gradeSchedules: { '9': { ...exampleSchedule, exceptions: [gradeClosure] } } };
+  const result = applySchoolClosures(current, { ...current, exceptions: [closure] });
+  expect(result.gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure, closure]);
+  const removed = applySchoolClosures(result, { ...result, exceptions: [] });
+  expect(removed.gradeSchedules?.['9']?.exceptions).toEqual([gradeClosure]);
+  const explicit: Schedule = { ...current, exceptions: [closure], gradeSchedules: { '9': { ...current.gradeSchedules!['9']!, exceptions: [gradeClosure, { ...closure, advanceCycle: true }] } } };
+  expect(applySchoolClosures(current, explicit)).toEqual(explicit);
+});
 
 describe('grade schedules', () => {
   const changed = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map((day) => ({ ...day, label: `Junior ${day.label}` })) };
