@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Db } from './db';
-import { applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { applySchoolClosures, applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
 import { completionTime, nextRecurringTask, stampCompletion, taskSchema, withoutCompletionEdit } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
@@ -339,7 +339,8 @@ export class Service {
         if (school.memberLocked || school.supportLocked || school.memberCount >= 10) fail('FORBIDDEN', 'This schedule is locked. Send a correction to support.');
       }
       if (school.version !== input.expectedVersion) fail('CONFLICT', 'The school schedule changed. Reload and review it before saving.');
-      const updatedSchedule = input.grades ? applyScheduleToGrades(school.schedule, input.schedule, input.grades) : input.schedule;
+      const updatedSchedule = input.grades ? applyScheduleToGrades(school.schedule, input.schedule, input.grades)
+        : asAdmin ? applySchoolClosures(school.schedule, input.schedule) : input.schedule;
       checkSchoolScheduleSize(updatedSchedule);
       const admin = asAdmin ? input as z.infer<typeof adminUpdateSchema> : null;
       this.db.prepare('UPDATE schools SET schedule=?,version=version+1,approved=?,support_locked=? WHERE id=?')
