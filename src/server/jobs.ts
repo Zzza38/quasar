@@ -3,11 +3,13 @@ import { pruneChat } from './chat';
 import { pruneGlobalChat } from './global-chat';
 import { pruneGroupChat } from './group-chat';
 import { NotificationService } from './notifications';
+import { ScheduleFeedService } from './schedule-feed';
 import type { Db } from './db';
 
-type Job = 'calendar' | 'notifications' | 'chat' | 'support';
+type Job = 'calendar' | 'schedule' | 'notifications' | 'chat' | 'support';
 type Jobs = {
   calendar: Pick<CalendarService, 'refreshDue'>;
+  schedule: Pick<ScheduleFeedService, 'refreshDue'>;
   notifications: Pick<NotificationService, 'deliverDue' | 'deliverChat' | 'deliverSupport'>;
   chat: { prune: (now: Date) => void };
 };
@@ -16,7 +18,7 @@ type Jobs = {
  * step ran but some pushes failed (each failure is caught per row, so a broken VAPID setup or a provider rejecting
  * every push would otherwise never reach the log). Only the step name and a count are reported, never provider text.
  */
-type Options = { intervalMs?: number; onError?: (job: Job, error: unknown) => void; onFailures?: (job: Exclude<Job, 'calendar'>, failed: number) => void };
+type Options = { intervalMs?: number; onError?: (job: Job, error: unknown) => void; onFailures?: (job: Exclude<Job, 'calendar' | 'schedule'>, failed: number) => void };
 
 const TOKEN = /^[A-Za-z0-9_.-]{1,64}$/;
 /**
@@ -35,23 +37,25 @@ export function errorSummary(error: unknown): string {
 
 /**
  * Single sequential loop: a slow cycle cannot overlap the following cycle. One cycle runs
- * calendar refresh → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
+ * calendar refresh → class-schedule sync → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
-  calendar: new CalendarService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
+  calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
 }): { stop: () => Promise<void> } {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void>;
-  const push = async (job: Exclude<Job, 'calendar'>, run: () => Promise<{ failed: number }>) => {
+  const push = async (job: Exclude<Job, 'calendar' | 'schedule'>, run: () => Promise<{ failed: number }>) => {
     const { failed } = await run();
     if (failed > 0) options.onFailures?.(job, failed);
   };
   const cycle = async () => {
     try { await jobs.calendar.refreshDue(); } catch (error) { options.onError?.('calendar', error); }
+    if (stopped) return;
+    try { await jobs.schedule.refreshDue(); } catch (error) { options.onError?.('schedule', error); }
     if (stopped) return;
     try { await push('notifications', () => jobs.notifications.deliverDue()); } catch (error) { options.onError?.('notifications', error); }
     if (stopped) return;

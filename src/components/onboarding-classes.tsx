@@ -75,7 +75,7 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
       </form>
       <div className="grid content-end gap-2">
         <Button icon="search" disabled={!online || disabled} title={!online ? 'Connect to browse the directory.' : undefined} onClick={() => setDirectoryOpen(true)}>Pick from schoolmates’ classes</Button>
-        {scanEnabled && <Button icon="camera" disabled={!online || disabled} onClick={() => setScanOpen(true)}>Scan a photo of my timetable</Button>}
+        {scanEnabled && <Button icon="calendar" disabled={!online || disabled} onClick={() => setScanOpen(true)}>Import my schedule PDF or photo</Button>}
       </div>
     </div>
 

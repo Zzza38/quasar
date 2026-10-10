@@ -10,11 +10,17 @@ import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Toggle } from './ui/toggle';
 import { ClassNameInput, useClassDirectory, type DirectoryEntry } from './class-name-input';
+import { isPdf, readPdf, MAX_PDF_TEXT } from './pdf-pages';
+import { ScheduleSourceGuide } from './schedule-sources';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 /** `scanned` remembers the directory class the scanner guessed, so the link holds only while the name is the one it read. */
 type Draft = ScanRow & { include: boolean; scanned?: { name: string; directoryId: string }; correctName?: boolean; expectedVersion?: number; separate?: boolean };
-type Photo = { image: string; mediaType: 'image/jpeg'; preview: string };
+/**
+ * `pdf` is the PDF a page was rendered from: `id` is unique per upload (two files can share a name) and keys that PDF's
+ * text, so removing its last page also drops its text; `name` is for display.
+ */
+type Photo = { image: string; mediaType: 'image/jpeg'; preview: string; pdf?: { id: string; name: string } };
 const MAX_EDGE = 1600;
 /** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
 const MAX_PHOTOS = 3;
@@ -149,43 +155,75 @@ export function applyScan(personal: PersonalSchedule, rows: Draft[]): PersonalSc
   return { ...personal, classes, assignments };
 }
 
-export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, schedule, personal, disabled, onSave }: {
-  open: boolean; onClose: () => void; accountId: string; schoolId: string; online: boolean; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>;
+/**
+ * Import a schedule from a PDF the school portal gives out, a screenshot, or photos of a printed copy. Platform tabs
+ * say where each portal keeps its schedule. `onConnectFeed` offers the Veracross calendar subscription as well.
+ */
+export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, schedule, personal, disabled, onSave, onConnectFeed }: {
+  open: boolean; onClose: () => void; accountId: string; schoolId: string; online: boolean; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>; onConnectFeed?: () => void;
 }) {
   const { directory, error: directoryError, reload } = useClassDirectory(schoolId, open && online);
   const entries = (directory?.classes ?? []).filter(entry => !personal.grade || entry.grades.includes(personal.grade));
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
+  /** The text layer of each uploaded PDF, by its upload ID (Photo.pdf.id). */
+  const [pdfTexts, setPdfTexts] = useState<Record<string, string>>({});
   const [limited, setLimited] = useState(false);
   const [rows, setRows] = useState<Draft[] | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
-  useEffect(() => { if (!open) { setPhotos([]); setLimited(false); setRows(null); setNotes([]); setError(''); setSavedNotice(''); } }, [open]);
+  useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setLimited(false); setRows(null); setNotes([]); setError(''); setSavedNotice(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
     if (files.length === 0) return;
-    const accepted = files.slice(0, Math.max(0, MAX_PHOTOS - photos.length));
-    setLimited(accepted.length < files.length);
-    if (accepted.length === 0) return;
+    setLimited(false);
     void run(async () => {
       const prepared: Photo[] = [];
+      const texts: Record<string, string> = {};
       const failed: { name: string; message: string }[] = [];
-      for (const file of accepted) {
-        try { prepared.push(await prepareImage(file)); } catch (err) { failed.push({ name: file.name, message: errorMessage(err) }); }
+      let room = MAX_PHOTOS - photos.length;
+      let skipped = false;
+      for (const file of files) {
+        if (room <= 0) { skipped = true; break; }
+        try {
+          if (isPdf(file)) {
+            // Each page becomes one of the scan's pictures; the PDF's text goes along so names are read exactly.
+            const pdf = await readPdf(file, room);
+            if (pdf.pages.length === 0) throw new Error('That PDF has no pages.');
+            const source = { id: crypto.randomUUID(), name: file.name };
+            prepared.push(...pdf.pages.map(page => ({ ...page, pdf: source })));
+            if (pdf.text) texts[source.id] = pdf.text;
+            if (pdf.total > pdf.pages.length) skipped = true;
+            room -= pdf.pages.length;
+          } else { prepared.push(await prepareImage(file)); room -= 1; }
+        } catch (err) { failed.push({ name: file.name, message: errorMessage(err) }); }
       }
-      // Keep whatever was readable; a new set of photos needs a fresh read, so any earlier result is dropped.
-      if (prepared.length) { setPhotos(current => [...current, ...prepared].slice(0, MAX_PHOTOS)); setRows(null); setNotes([]); }
-      if (failed.length) throw new Error(photoError(accepted.length, failed, prepared.length));
+      setLimited(skipped);
+      // Keep whatever was readable; a new set of pictures needs a fresh read, so any earlier result is dropped.
+      if (prepared.length) {
+        setPhotos(current => [...current, ...prepared].slice(0, MAX_PHOTOS));
+        setPdfTexts(current => ({ ...current, ...texts }));
+        setRows(null); setNotes([]);
+      }
+      if (failed.length) throw new Error(photoError(files.length, failed, prepared.length));
     });
   };
-  const remove = (index: number) => { setPhotos(current => current.filter((_, i) => i !== index)); setLimited(false); setRows(null); setNotes([]); setError(''); };
+  const remove = (index: number) => {
+    const removed = photos[index];
+    const next = photos.filter((_, i) => i !== index);
+    setPhotos(next);
+    if (removed?.pdf && !next.some(photo => photo.pdf?.id === removed.pdf!.id)) setPdfTexts(({ [removed.pdf!.id]: _gone, ...rest }) => rest);
+    setLimited(false); setRows(null); setNotes([]); setError('');
+  };
   const scan = () => run(async () => {
     if (photos.length === 0) return;
-    const result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })) });
+    const text = Object.values(pdfTexts).join('\n\n').slice(0, MAX_PDF_TEXT);
+    const result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}) });
     setRows(result.rows.map(draftRow));
     setNotes(result.notes);
   });
@@ -228,33 +266,41 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
 
   if (savedNotice) return <Modal open={open} onClose={onClose} title="Classes added" footer={<Button variant="primary" onClick={onClose}>Done</Button>}><Callout tone="success" role="status">{savedNotice}</Callout></Modal>;
 
-  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Scan your timetable" description="Take up to three photos of a printed or on-screen schedule, for example both halves of a wide timetable. Check what was read, then add the classes to your timetable."
+  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Import your schedule" description="Upload the schedule PDF from your school portal, a screenshot, or photos of a printed copy. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
       {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || !online || !directory || unresolved || ready.length === 0} onClick={() => void save()}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
         : <Button variant="primary" icon="sparkle" busy={pending} disabled={!online || photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
-    <input ref={fileRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true" multiple aria-label="Choose a timetable photo" onChange={choose} />
+    <input ref={fileRef} type="file" accept="application/pdf,.pdf,image/*" className="sr-only" tabIndex={-1} aria-hidden="true" multiple aria-label="Choose a schedule PDF or picture" onChange={choose} />
+    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true" aria-label="Take a timetable photo" onChange={choose} />
     {error && <Callout tone="danger" icon="alert" role="alert" actions={rows ? <Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory matches</Button> : undefined}>{error}</Callout>}
     {directoryError && <Callout tone="warning" role="alert" actions={<Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory</Button>}>{directoryError}</Callout>}
     {rows && directory && <Hint>{directory.canEdit ? 'Existing directory classes are reused. New included classes are also added to the school directory when you add them to your timetable.' : 'The school directory is locked. You can reuse its classes; new classes and spelling corrections will stay in your personal copy.'}</Hint>}
     {unresolved && <Hint tone="danger">Confirm the possible directory matches below before adding your classes.</Hint>}
     {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
-    <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+    {photos.length === 0 && !rows ? <div className="grid gap-4">
+      {/* Nothing picked yet: where to get the schedule comes first, then the pickers, so phones see the steps. */}
+      <ScheduleSourceGuide onConnectFeed={onConnectFeed} />
+      <div className="flex flex-wrap gap-2">
+        <Button icon="plus" disabled={pending} onClick={() => fileRef.current?.click()}>Upload PDF or image</Button>
+        <Button icon="camera" disabled={pending} onClick={() => cameraRef.current?.click()}>Take a photo</Button>
+      </div>
+      <Hint>A schedule PDF works best. A screenshot or a straight-on, well-lit photo works too. Files are sent to the scanning service for this scan only and are not stored.</Hint>
+    </div> : <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
       <div className="grid content-start gap-2">
-        {photos.length > 0
-          ? <ul className={photos.length === 1 ? 'grid gap-2' : 'grid grid-cols-2 gap-2'} aria-label="Timetable photos">
-            {photos.map((photo, index) => <li key={index} className="relative">
-              <img src={photo.preview} alt={index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
+        <ul className={photos.length === 1 ? 'grid gap-2' : 'grid grid-cols-2 gap-2'} aria-label="Timetable photos">
+          {photos.map((photo, index) => <li key={index} className="relative">
+              <img src={photo.preview} alt={photo.pdf ? `Page ${photos.slice(0, index + 1).filter(entry => entry.pdf?.id === photo.pdf!.id).length} of ${photo.pdf.name}` : index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
                 className={photos.length === 1 ? 'w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]' : 'aspect-[3/4] w-full rounded-xl bg-muted object-cover ring-1 ring-foreground/[0.06]'} />
-              <IconButton label={`Remove photo ${index + 1}`} icon="x" size="sm" variant="secondary" disabled={pending} className="absolute right-1.5 top-1.5 rounded-full" onClick={() => remove(index)} />
+              <IconButton label={photo.pdf ? `Remove page ${index + 1}` : `Remove photo ${index + 1}`} icon="x" size="sm" variant="secondary" disabled={pending} className="absolute right-1.5 top-1.5 rounded-full" onClick={() => remove(index)} />
             </li>)}
-          </ul>
-          : <div className="grid aspect-[3/4] place-items-center rounded-2xl border border-dashed border-foreground/15 bg-muted/50 p-4 text-center text-xs text-muted-foreground">Straight-on, well lit, whole timetable in frame. A wide timetable can take up to three photos.</div>}
-        {limited && <Callout tone="warning" icon="alert" role="status">You can add up to three photos.</Callout>}
-        {photos.length < MAX_PHOTOS && <Button icon="camera" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>{photos.length === 0 ? 'Take or choose a photo' : 'Add another photo'}</Button>}
-        <Hint>Photos are sent to the scanning service once and are not stored.</Hint>
+        </ul>
+        {limited && <Callout tone="warning" icon="alert" role="status">Up to three pages or photos are read. Keep the pages that show your classes.</Callout>}
+        {photos.length < MAX_PHOTOS && <Button icon="plus" size="sm" disabled={pending} onClick={() => fileRef.current?.click()}>Add another file</Button>}
+        {photos.length < MAX_PHOTOS && <Button icon="camera" size="sm" disabled={pending} onClick={() => cameraRef.current?.click()}>Take a photo</Button>}
+        <Hint>Files are sent to the scanning service for this scan only and are not stored.</Hint>
       </div>
       <div className="grid content-start gap-3">
-        {!rows && <Hint>{photos.length > 0 ? 'Ready. Tap Read schedule.' : 'Add a photo to begin.'}</Hint>}
+        {!rows && <Hint>Ready. Tap Read schedule.</Hint>}
         {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
         {rows && rows.length > 0 && <>
           <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread, pick every period each class meets in, and untick what you do not take.</Hint>
@@ -306,6 +352,6 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
           </ul>
         </>}
       </div>
-    </div>
+    </div>}
   </Modal>;
 }

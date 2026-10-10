@@ -59,7 +59,7 @@ export function FeedGuide({ initial = 'schoology', compact }: { initial?: string
   const [sourceId, setSourceId] = useState(initial);
   const source = FEED_SOURCES.find((entry) => entry.id === sourceId) ?? FEED_SOURCES[0];
   return <Tabs value={source.id} onValueChange={setSourceId} className="grid gap-3">
-    <TabsList variant="line" aria-label="Where is your homework?" className="h-auto w-auto flex-wrap justify-start gap-1.5 rounded-none p-0">
+    <TabsList variant="line" aria-label="Where is your homework?" className="h-auto w-auto flex-wrap justify-start gap-1.5 rounded-none p-0 group-data-horizontal/tabs:h-auto">
       {FEED_SOURCES.map((entry) => <TabsTrigger key={entry.id} value={entry.id}
         className="h-auto flex-none rounded-full border-0 bg-card px-3 py-1.5 font-semibold text-muted-foreground ring-1 ring-inset ring-foreground/[0.08] transition-colors after:hidden hover:bg-muted hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:ring-primary data-[state=active]:hover:bg-primary data-[state=active]:hover:text-primary-foreground">{entry.name}</TabsTrigger>)}
     </TabsList>

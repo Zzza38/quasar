@@ -18,7 +18,9 @@ WORKDIR /app
 ENV NODE_ENV=production DATABASE_PATH=/app/data/quasar.sqlite
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json tsconfig.json ./
+# src/lib too: domain code imports its pure helpers (src/domain/schedule-import.ts uses lib/format's slugId).
 COPY --chown=node:node src/domain ./src/domain
+COPY --chown=node:node src/lib ./src/lib
 COPY --chown=node:node src/server ./src/server
 COPY --chown=node:node scripts/worker.ts ./scripts/worker.ts
 RUN mkdir -p /app/data && chown node:node /app/data
