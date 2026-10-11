@@ -4,7 +4,7 @@ import { scheduleSchema, type Schedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { addDays } from '@/lib/format';
 import type { TaskItem } from './app-state';
-import { groupTasks, nextSchoolDate } from './task-groups';
+import { DATED_GROUPS, groupTasks, nextSchoolDate } from './task-groups';
 
 function item(title: string, dueDate: string | null, dueTime: string | null = null): TaskItem {
   const task: Task = { title, dueDate, dueTime, classId: null, notes: '', completed: false };
@@ -58,8 +58,9 @@ describe('groupTasks', () => {
       ['Overdue', ['Late']],
       ['Today', ['Quiz']],
       ['Tomorrow', ['Saturday game']],
+      ['Before school resumes', ['Sunday reading']],
       ['Monday', ['Unit 1 HW 4', 'Catcher chapters']],
-      ['Next 7 days', ['Sunday reading', 'Vocab quiz', 'Next Friday']],
+      ['Next 7 days', ['Vocab quiz', 'Next Friday']],
       ['Later', ['Project']],
       ['No due date', ['Someday']],
     ]);
@@ -84,12 +85,28 @@ describe('groupTasks', () => {
     expect(titles(groups)).toEqual([['Tomorrow', ['Friday']], ['Monday', ['Monday']]]);
   });
 
+  it('keeps Monday holiday deadlines ahead of Tuesday schoolwork', () => {
+    const closed = schedule({ exceptions: [{ date: '2026-10-12', kind: 'closure', advanceCycle: false }] });
+    const groups = groupTasks([
+      item('Tuesday homework', '2026-10-13'),
+      item('Monday video', '2026-10-12', '23:59'),
+      item('Wednesday quiz', '2026-10-14'),
+    ], { ...context, schedule: closed, today: '2026-10-10' });
+    expect(titles(groups)).toEqual([
+      ['Before school resumes', ['Monday video']],
+      ['Tuesday', ['Tuesday homework']],
+      ['Next 7 days', ['Wednesday quiz']],
+    ]);
+    expect(DATED_GROUPS.has(groups[0].key)).toBe(false);
+    expect(groups.flatMap((group) => group.items)).toHaveLength(3);
+  });
+
   it('places the first day back after a long break after Next 7 days, with its date in the title', () => {
     const closures = Array.from({ length: 12 }, (_, index) => ({ date: addDays('2026-12-21', index), kind: 'closure' as const, advanceCycle: false }));
     const closed = schedule({ exceptions: closures });
     // Friday 2026-12-18; school is closed through 2027-01-01, so Monday 2027-01-04 is the first day back.
-    const groups = groupTasks([item('Weekend', '2026-12-20'), item('Midweek', '2026-12-23'), item('Back', '2027-01-04'), item('After', '2027-01-06')], { ...context, schedule: closed, today: '2026-12-18' });
-    expect(titles(groups)).toEqual([['Next 7 days', ['Weekend', 'Midweek']], ['Monday, Jan 4', ['Back']], ['Later', ['After']]]);
+    const groups = groupTasks([item('Weekend', '2026-12-20'), item('Midweek', '2026-12-23'), item('Break homework', '2026-12-29'), item('Back', '2027-01-04'), item('After', '2027-01-06')], { ...context, schedule: closed, today: '2026-12-18' });
+    expect(titles(groups)).toEqual([['Next 7 days', ['Weekend', 'Midweek']], ['Before school resumes', ['Break homework']], ['Monday, Jan 4', ['Back']], ['Later', ['After']]]);
   });
 
   it('keeps the incoming order inside each group so a priority sort survives', () => {
