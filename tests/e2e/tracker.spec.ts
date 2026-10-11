@@ -616,6 +616,56 @@ test('closing a dialog with unsaved changes asks inside the dialog before discar
   await expect(page.getByRole('button', { name: 'Edit Draft that should survive', exact: true })).toHaveCount(0);
 });
 
+test('holiday deadlines appear before the next school day on desktop and mobile', async ({ page, context }, testInfo) => {
+  const schedule = structuredClone(exampleSchedule);
+  schedule.exceptions.push({ date: '2026-10-12', kind: 'closure', advanceCycle: false });
+  const fixture = seed(undefined, true, schedule);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db);
+    for (const [title, dueDate] of [
+      ['Tuesday homework', '2026-10-13'],
+      ['Monday video', '2026-10-12'],
+      ['Wednesday quiz', '2026-10-14'],
+    ]) {
+      service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
+        data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
+    }
+  } finally { db.close(); }
+  await authenticate(context, fixture.id);
+  await page.clock.setFixedTime(new Date('2026-10-10T16:00:00Z'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/tasks');
+  const before = page.getByRole('region', { name: /^Before school resumes/ });
+  const school = page.getByRole('region', { name: /^Tuesday/ });
+  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(before).toContainText('Monday video');
+    await expect(before).toContainText('Mon, Oct 12');
+    await expect(before).toContainText('11:59 PM');
+    await expect(school).toContainText('Tuesday homework');
+    await expect(school).toContainText('Next school day');
+    await expect(week).toContainText('Wednesday quiz');
+    await expect(page.locator('[id^="group-"]')).toHaveText([
+      /Before school resumes · 1/, /Tuesday · 1Next school day/, /Next 7 days · 1/,
+    ]);
+    expect((await before.boundingBox())!.y).toBeLessThan((await school.boundingBox())!.y);
+    expect((await school.boundingBox())!.y).toBeLessThan((await week.boundingBox())!.y);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`holiday-deadlines-${width}.png`), fullPage: true });
+  }
+  await before.getByLabel('Mark Monday video complete', { exact: true }).click();
+  await expect(before).toHaveCount(0);
+  await expect(school).toContainText('Tuesday homework');
+  await expect(week).toContainText('Wednesday quiz');
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  await expect(before).toHaveCount(0);
+  await expect(school).toContainText('Tuesday homework');
+  await expect(week).toContainText('Wednesday quiz');
+});
+
 test('imported homework stays visible and grayed in the calendar after completion and refresh', async ({ page, context }) => {
   const fixture = seed();
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);

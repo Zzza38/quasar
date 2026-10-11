@@ -47,7 +47,7 @@ export function withoutBlankSubtasks(task: Task): Task {
   return task.subtasks ? { ...task, subtasks: task.subtasks.filter((item) => item.title.trim() !== '') } : task;
 }
 
-const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'next-school-day': 'bg-warning', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
+const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'before-school': 'bg-success', 'next-school-day': 'bg-warning', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
 
 export function TasksView({ state }: { state: AppState }) {
   const items = useMemo(() => taskItems(state.snapshot.entities), [state.snapshot.entities]);

@@ -22,7 +22,7 @@ export function nextSchoolDate(schedule: Schedule, personal: PersonalSchedule, f
   return null;
 }
 
-export type TaskGroupKey = 'overdue' | 'today' | 'tomorrow' | 'next-school-day' | 'week' | 'later' | 'undated';
+export type TaskGroupKey = 'overdue' | 'today' | 'tomorrow' | 'before-school' | 'next-school-day' | 'week' | 'later' | 'undated';
 
 export interface TaskGroup {
   key: TaskGroupKey;
@@ -39,8 +39,9 @@ export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorr
  * The Tasks page groups, in display order, with empty groups dropped. Open tasks fall into Overdue, Today,
  * Tomorrow, the next school day, Next 7 days, Later or No due date. The next school day gets its own group
  * whenever it is not tomorrow, so on a Friday (or before a holiday) Monday's work is not lumped in with the
- * rest of the week. Work due on the days off in between still reads as Tomorrow or by its date. When a break
- * pushes the next school day past the week window, its group follows Next 7 days so groups stay in date order.
+ * rest of the week. Work due on days off before school resumes goes ahead of that group, with date chips.
+ * When a break pushes the next school day past the week window, Next 7 days comes first, then any remaining
+ * work before school resumes, then the next school day and Later. Groups stay in date order.
  * Items keep their incoming order within each group.
  */
 export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule }): TaskGroup[] {
@@ -63,14 +64,21 @@ export function groupTasks(items: TaskItem[], context: { today: string; nowTime:
     detail: 'Next school day',
     items: on(school),
   } : null;
+  const beforeSchool: TaskGroup | null = separate ? {
+    key: 'before-school',
+    title: 'Before school resumes',
+    items: between(schoolDelta <= 7 ? 2 : 8, schoolDelta - 1),
+  } : null;
   const groups: Array<TaskGroup | null> = [
     { key: 'overdue', title: 'Overdue', items: items.filter(late) },
     { key: 'today', title: 'Today', items: on(today) },
     { key: 'tomorrow', title: 'Tomorrow', items: on(tomorrow) },
+    schoolDelta <= 7 ? beforeSchool : null,
     schoolDelta <= 7 ? schoolGroup : null,
-    { key: 'week', title: 'Next 7 days', items: between(2, 7) },
+    { key: 'week', title: 'Next 7 days', items: between(separate && schoolDelta <= 7 ? schoolDelta + 1 : 2, 7) },
+    schoolDelta > 7 ? beforeSchool : null,
     schoolDelta > 7 ? schoolGroup : null,
-    { key: 'later', title: 'Later', items: between(8, Number.POSITIVE_INFINITY) },
+    { key: 'later', title: 'Later', items: between(separate ? Math.max(8, schoolDelta + 1) : 8, Number.POSITIVE_INFINITY) },
     { key: 'undated', title: 'No due date', items: items.filter((item) => !item.task.dueDate) },
   ];
   return groups.filter((group): group is TaskGroup => group !== null && group.items.length > 0);
