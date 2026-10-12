@@ -200,7 +200,7 @@
       radial-gradient(color-mix(in srgb, var(--foreground) 9%, transparent) 1px, transparent 1px) 0 0 / 22px 22px,
       var(--background);
   }
-  /* Frosted bars (mobile top bar, floating tab dock). */
+  /* Frosted floating tab dock. */
   .glass { background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4); }
   /* Hero surface used by the "now / up next" card. */
   .hero-card { position: relative; isolation: isolate; overflow: hidden; }
