@@ -65,9 +65,9 @@ export function BrandLockup({ height = 120, className }: { height?: number; clas
   </span>;
 }
 
-export function Brand({ compact, className, href = '/', onClick }: { compact?: boolean; className?: string; href?: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void }) {
+export function Brand({ compact, className, markSize = 32, href = '/', onClick }: { compact?: boolean; className?: string; markSize?: number; href?: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void }) {
   return <a className={cn('inline-flex items-center gap-2.5 text-[17px] font-extrabold tracking-tight text-foreground no-underline hover:no-underline', className)} href={href} onClick={onClick} aria-label="Quasar home">
-    <BrandMark />
+    <BrandMark size={markSize} />
     {!compact && <span>Quasar</span>}
   </a>;
 }
@@ -98,15 +98,15 @@ const STATUS_TONES = {
   accent: 'bg-primary-soft text-primary-soft-foreground',
 } as const;
 
-export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName, className }: { sync: SyncState; online: boolean; onRetry: () => void; onConflicts: () => void; labelClassName?: string; className?: string }) {
+export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = false, labelClassName, className }: { sync: SyncState; online: boolean; onRetry: () => void; onConflicts: () => void; iconOnly?: boolean; labelClassName?: string; className?: string }) {
   const tone = sync.kind === 'saved' ? 'success' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'danger' : sync.kind === 'offline' ? 'neutral' : 'accent';
   const icon: IconName = sync.kind === 'saved' ? 'checkCircle' : sync.kind === 'offline' ? 'cloudOff' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'alert' : sync.kind === 'pending' ? 'cloud' : 'refresh';
   const label = statusLabel(sync);
   const clickable = sync.kind === 'conflict' || sync.kind === 'failed' || (sync.kind === 'pending' && online);
-  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', className);
+  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', iconOnly && 'size-11 gap-0 bg-transparent p-0 [&>svg]:size-4!', iconOnly && clickable && 'hover:bg-muted', className);
   const inner = <>
     {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
-    <span className={cn('truncate', labelClassName)}>{label}</span>
+    <span className={cn('truncate', labelClassName, iconOnly && 'sr-only')}>{label}</span>
   </>;
   // Announcements come from the one live region in Shell (the pill renders twice and remounts when it
   // becomes clickable), so the pill itself stays quiet: a plain button when it acts, a silent status otherwise.
@@ -115,7 +115,7 @@ export function StatusPill({ sync, online, onRetry, onConflicts, labelClassName,
       <button type="button" aria-label={`${label}. ${sync.kind === 'conflict' ? 'Review' : 'Retry now'}`} title={sync.kind === 'conflict' ? 'Review the changes that need a choice' : 'Retry now'} onClick={sync.kind === 'conflict' ? onConflicts : onRetry}>{inner}</button>
     </Badge>;
   }
-  return <Badge variant="secondary" className={classes} aria-label={label} role="status" aria-live="off">{inner}</Badge>;
+  return <Badge variant="secondary" className={classes} aria-label={label} title={iconOnly ? label : undefined} role="status" aria-live="off">{inner}</Badge>;
 }
 
 /* ---------- Navigation ---------- */
@@ -293,18 +293,18 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
 
     <SidebarInset className="min-w-0 bg-transparent">
       <header className="app-topbar glass sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-foreground/[0.06] pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:hidden">
-        <Brand onClick={home} />
-        <div className="flex items-center gap-2">
-          <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="hidden min-[480px]:inline" />
+        <Brand onClick={home} markSize={28} className="min-h-11 gap-2 text-base" />
+        <div className="flex shrink-0 items-center gap-0.5">
+          <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} iconOnly />
           {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
               it would become the accessible description whenever there is no unread count. */}
           <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
-            className={cn('relative grid size-10 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-foreground hover:bg-muted')}>
-            <Icon name="message" size={21} strokeWidth={onMessages ? 2.4 : 2} />
+            className={cn('relative grid size-11 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
+            <Icon name="message" size={20} strokeWidth={onMessages ? 2.4 : 2} />
             {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
           </a>
-          <button type="button" className="grid size-10 shrink-0 place-items-center rounded-full outline-none pointer-coarse:size-11 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
-            <UserAvatar user={context.user} className="size-8" />
+          <button type="button" className="grid size-11 shrink-0 place-items-center rounded-full outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
+            <UserAvatar user={context.user} className="size-7" />
           </button>
         </div>
       </header>
