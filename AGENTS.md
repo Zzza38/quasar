@@ -16,6 +16,8 @@ Read the production database path from `/srv/NAS/Private/school-schedule-tracker
 
 Keep the copy in the dev checkout's ignored `data/` directory. Stop any dev server using the destination before replacing it. Never point a dev server at the production database or overwrite the production database. If the production database is unavailable, report the blocker instead of launching with an empty database.
 
+Production snapshots contain private account data. Bind preview servers to loopback and expose them only on the owner's private Tailscale network, with the app's Google sign-in and account authorization checks intact. Keep snapshot files at mode `0600`; never commit them or include them in CI artifacts. When retiring a preview, stop its server and remove its snapshots, archived copies, and SQLite companion files from the dev checkout. Production database copies are not authorized for public preview links.
+
 # UI rule: every form control is shadcn/ui
 
 **Never write a raw `<input>`, `<select>`, `<textarea>`, or `<option>`-driven native dropdown in app code.** Native controls render OS-drawn popups (light-theme lists on a dark app, wrong fonts, no theming), so any `<input>` you are tempted to write MUST be replaced with the shadcn/ui equivalent:
