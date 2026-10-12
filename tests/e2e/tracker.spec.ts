@@ -568,6 +568,54 @@ test('custom accent controls persist, follow appearance and restore presets', as
   expect(await primary()).toBe('');
 });
 
+test('accent drags keep the picker still, save on release and preserve hue at black', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.getByRole('button', { name: width === 390 ? 'Account' : /Browser Student/, exact: width === 390 }).click();
+    await dialog(page).getByRole('radio', { name: 'Ocean', exact: true }).click();
+    const area = dialog(page).getByRole('group', { name: 'Saturation and brightness', exact: true });
+    const hex = dialog(page).getByRole('textbox', { name: 'Custom accent hex color' });
+    await area.scrollIntoViewIfNeeded();
+    const box = (await area.boundingBox())!;
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      (window as unknown as { accentWrites: number }).accentWrites = 0;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === 'quasar.accent') (window as unknown as { accentWrites: number }).accentWrites++;
+        return original.call(this, key, value);
+      };
+    });
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.3);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.6, { steps: 20 });
+    await expect(page.locator('html')).toHaveAttribute('data-accent', 'custom');
+    const during = (await area.boundingBox())!;
+    expect(during.y).toBeCloseTo(box.y, 1);
+    expect(await page.evaluate(() => (window as unknown as { accentWrites: number }).accentWrites)).toBe(0);
+    const marker = await area.locator('span').evaluate(el => ({ left: el.style.left, top: el.style.top }));
+    expect(parseFloat(marker.left)).toBeCloseTo(80, 0);
+    expect(parseFloat(marker.top)).toBeCloseTo(60, 0);
+    await page.mouse.up();
+    expect(await page.evaluate(() => (window as unknown as { accentWrites: number }).accentWrites)).toBe(1);
+    expect(await page.evaluate(() => localStorage.getItem('quasar.accent'))).toBe(await hex.inputValue());
+    await hex.fill('#000000');
+    const hue = dialog(page).getByRole('slider', { name: 'Hue', exact: true });
+    await hue.press('Home');
+    await hue.press('ArrowRight');
+    await hue.press('ArrowRight');
+    await expect(hue).toHaveAttribute('aria-valuenow', '2');
+    await expect(hex).toHaveValue('#000000');
+    await area.focus();
+    await area.press('Shift+ArrowUp');
+    await expect(hex).not.toHaveValue('#000000');
+    await expect(hue).toHaveAttribute('aria-valuenow', '2');
+    await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog(page)).toBeHidden();
+  }
+});
+
 test('sign-in page fits desktop and mobile screens', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const width of [1280, 390]) {

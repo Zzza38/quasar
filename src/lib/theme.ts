@@ -61,6 +61,12 @@ export function saveAccent(accent: AccentId): void {
   if (isAccent(accent)) save('accent', ACCENT_KEY, isCustomAccent(accent) ? accent.toLowerCase() as AccentId : accent);
 }
 
+/** Paints a drag preview without writing storage or rerendering theme subscribers. */
+export function previewAccent(accent: string): void {
+  const appearance = document.documentElement.dataset.appearancePreference ?? null;
+  if (isAccent(accent)) apply(isAppearance(appearance) ? appearance : 'system', accent);
+}
+
 function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
   const dark = appearance === 'dark' || (appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   const root = document.documentElement;
@@ -125,7 +131,7 @@ export function useTheme() {
   const [state, setState] = useState<{ appearance: Appearance; accent: AccentId } | null>(null);
   const [resolved, setResolved] = useState<'light' | 'dark'>('light');
   useEffect(() => {
-    const load = () => { const stored = readStored(); setState(stored); setResolved(apply(stored.appearance, stored.accent)); };
+    const load = () => { const stored = readStored(); setState(stored); setResolved(document.documentElement.dataset.appearance === 'dark' ? 'dark' : 'light'); };
     load();
     window.addEventListener(THEME_EVENT, load);
     return () => window.removeEventListener(THEME_EVENT, load);

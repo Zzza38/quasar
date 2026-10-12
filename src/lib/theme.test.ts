@@ -40,6 +40,19 @@ describe('theme choice', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
   afterEach(() => { vi.unstubAllGlobals(); });
 
+  it('previews colors without saving them until the gesture commits', async () => {
+    const storage = memoryStorage({ 'quasar.accent': 'ocean', 'quasar.appearance': 'dark' });
+    const { theme, dataset, properties } = await page(storage);
+    new Function(theme.themeBootScript)();
+    theme.previewAccent('#facc15');
+    expect(dataset.accent).toBe('custom');
+    expect(properties['--primary-foreground']).toBe('#0b0d12');
+    expect(storage.values['quasar.accent']).toBe('ocean');
+    expect(theme.readStored().accent).toBe('ocean');
+    theme.saveAccent('#facc15');
+    expect(storage.values['quasar.accent']).toBe('#facc15');
+  });
+
   it('restores a custom palette before paint and matches the runtime palette in both appearances', async () => {
     for (const appearance of ['light', 'dark']) {
       const { theme, dataset, properties } = await page(memoryStorage({ 'quasar.accent': '#facc15', 'quasar.appearance': appearance }));
