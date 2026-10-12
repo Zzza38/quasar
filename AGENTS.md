@@ -8,6 +8,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
+# Dev servers use a production database copy
+
+Every time you launch a dev or branch preview server, first create a fresh copy of the production database and use that copy as the server's `DATABASE_PATH`. This includes previews served through Tailscale and branch previews run with `next start`.
+
+Read the production database path from `/srv/NAS/Private/school-schedule-tracker/.env.local`. Use SQLite's backup API to create a consistent snapshot, including committed data still in the WAL. Do not copy the live database file with `cp`.
+
+Keep the copy in the dev checkout's ignored `data/` directory. Stop any dev server using the destination before replacing it. Never point a dev server at the production database or overwrite the production database. If the production database is unavailable, report the blocker instead of launching with an empty database.
+
 # UI rule: every form control is shadcn/ui
 
 **Never write a raw `<input>`, `<select>`, `<textarea>`, or `<option>`-driven native dropdown in app code.** Native controls render OS-drawn popups (light-theme lists on a dark app, wrong fonts, no theming), so any `<input>` you are tempted to write MUST be replaced with the shadcn/ui equivalent:
