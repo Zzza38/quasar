@@ -1530,7 +1530,9 @@ test('existing students choose their grade and see lunch throughout the second r
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await choose(dialog(page).getByLabel('Your grade', { exact: true }), 'Grade 10');
   await expect(dialog(page).getByLabel('Your grade', { exact: true })).toHaveText('Grade 10');
-  await page.keyboard.press('Escape');
+  // Close the sheet explicitly rather than racing Escape against the select's dismissal.
+  await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog(page)).toBeHidden();
   await expect(page.getByRole('group', { name: 'Day 10 time canvas', exact: true }).getByRole('button', { name: 'Day 10, 10:15–10:45 AM: Lunch', exact: true })).toBeVisible();
 });
 
