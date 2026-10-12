@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { customAccentTokens, CUSTOM_ACCENT_PROPERTIES, isAccent, isCustomAccent, type AccentId, type PresetAccentId } from './accent';
+export type { AccentId } from './accent';
 
 /**
  * Appearance and accent are device preferences stored in localStorage so they
@@ -9,9 +11,8 @@ import { useEffect, useState } from 'react';
  */
 
 export type Appearance = 'system' | 'light' | 'dark';
-export type AccentId = 'ocean' | 'indigo' | 'grape' | 'forest' | 'sunset' | 'rose' | 'graphite';
 
-export const ACCENTS: ReadonlyArray<{ id: AccentId; label: string; swatch: string }> = [
+export const ACCENTS: ReadonlyArray<{ id: PresetAccentId; label: string; swatch: string }> = [
   { id: 'ocean', label: 'Ocean', swatch: '#0e7490' },
   { id: 'indigo', label: 'Indigo', swatch: '#4f46e5' },
   { id: 'grape', label: 'Grape', swatch: '#7e22ce' },
@@ -25,7 +26,6 @@ import { ACCENT_KEY, APPEARANCE_KEY, DEFAULT_ACCENT, THEME_COLORS, THEME_COLOR_S
 export { DEFAULT_ACCENT, THEME_COLORS, themeBootScript };
 
 function isAppearance(value: string | null): value is Appearance { return value === 'system' || value === 'light' || value === 'dark'; }
-function isAccent(value: string | null): value is AccentId { return ACCENTS.some((accent) => accent.id === value); }
 
 type ThemeChoice = { appearance: Appearance; accent: AccentId };
 
@@ -57,14 +57,21 @@ function save<K extends keyof ThemeChoice>(field: K, key: string, value: ThemeCh
 /** Stores and paints an appearance choice. */
 export function saveAppearance(appearance: Appearance): void { save('appearance', APPEARANCE_KEY, appearance); }
 /** Stores and paints an accent choice. */
-export function saveAccent(accent: AccentId): void { save('accent', ACCENT_KEY, accent); }
+export function saveAccent(accent: AccentId): void {
+  if (isAccent(accent)) save('accent', ACCENT_KEY, isCustomAccent(accent) ? accent.toLowerCase() as AccentId : accent);
+}
 
 function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
   const dark = appearance === 'dark' || (appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   const root = document.documentElement;
   root.dataset.appearance = dark ? 'dark' : 'light';
   root.dataset.appearancePreference = appearance;
-  root.dataset.accent = accent;
+  root.dataset.accent = isCustomAccent(accent) ? 'custom' : accent;
+  const tokens = isCustomAccent(accent) ? customAccentTokens(accent, dark) : {};
+  for (const property of CUSTOM_ACCENT_PROPERTIES) {
+    if (tokens[property]) root.style.setProperty(property, tokens[property]);
+    else root.style.removeProperty(property);
+  }
   document.querySelectorAll(THEME_COLOR_SELECTOR).forEach((meta) => meta.setAttribute('content', THEME_COLORS[dark ? 'dark' : 'light']));
   return dark ? 'dark' : 'light';
 }

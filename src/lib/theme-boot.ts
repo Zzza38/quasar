@@ -4,7 +4,7 @@
  * src/lib/theme.ts re-exports them for client code.
  */
 
-import type { AccentId } from './theme';
+import { ACCENT_IDS, customAccentTokens, CUSTOM_ACCENT_PROPERTIES, type AccentId } from './accent';
 
 export const DEFAULT_ACCENT: AccentId = 'ocean';
 export const APPEARANCE_KEY = 'quasar.appearance';
@@ -19,4 +19,4 @@ export const THEME_COLORS = { light: '#f4f5f9', dark: '#0b0d12' } as const;
 export const THEME_COLOR_SELECTOR = 'meta[name="theme-color"]';
 
 /** Inline in <head>; must stay dependency-free and tolerate blocked storage. */
-export const themeBootScript = `(function(){try{var a=localStorage.getItem(${JSON.stringify(APPEARANCE_KEY)})||'system';var c=localStorage.getItem(${JSON.stringify(ACCENT_KEY)})||${JSON.stringify(DEFAULT_ACCENT)};var d=a==='dark'||(a==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.dataset.appearance=d?'dark':'light';r.dataset.appearancePreference=a;r.dataset.accent=c;var m=document.querySelectorAll(${JSON.stringify(THEME_COLOR_SELECTOR)});for(var i=0;i<m.length;i++)m[i].setAttribute('content',d?${JSON.stringify(THEME_COLORS.dark)}:${JSON.stringify(THEME_COLORS.light)});}catch(e){}})();`;
+export const themeBootScript = `(function(){try{var a=localStorage.getItem(${JSON.stringify(APPEARANCE_KEY)})||'system';var c=localStorage.getItem(${JSON.stringify(ACCENT_KEY)})||${JSON.stringify(DEFAULT_ACCENT)};if(!['system','light','dark'].includes(a))a='system';var custom=/^#[\\da-f]{6}$/i.test(c);if(!custom&&!${JSON.stringify(ACCENT_IDS)}.includes(c))c=${JSON.stringify(DEFAULT_ACCENT)};var d=a==='dark'||(a==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.dataset.appearance=d?'dark':'light';r.dataset.appearancePreference=a;r.dataset.accent=custom?'custom':c;var tokens=custom?(${customAccentTokens.toString()})(c,d):{};${JSON.stringify(CUSTOM_ACCENT_PROPERTIES)}.forEach(function(p){if(tokens[p])r.style.setProperty(p,tokens[p]);else r.style.removeProperty(p);});var m=document.querySelectorAll(${JSON.stringify(THEME_COLOR_SELECTOR)});for(var i=0;i<m.length;i++)m[i].setAttribute('content',d?${JSON.stringify(THEME_COLORS.dark)}:${JSON.stringify(THEME_COLORS.light)});}catch(e){}})();`;

@@ -535,6 +535,39 @@ test('remaining screens render without horizontal overflow on desktop and mobile
   await page.screenshot({ path: testInfo.outputPath('admin-review.png') });
 });
 
+test('custom accent controls persist, follow appearance and restore presets', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  const hex = dialog(page).getByRole('textbox', { name: 'Custom accent hex color' });
+  await hex.fill('#facc15');
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'custom');
+  const primary = () => page.evaluate(() => document.documentElement.style.getPropertyValue('--primary'));
+  const light = await primary();
+  await dialog(page).getByRole('radio', { name: 'Dark', exact: true }).click();
+  expect(await primary()).not.toBe(light);
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'custom');
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(hex).toHaveValue('#facc15');
+  await hex.fill('#zzzzzz');
+  await hex.blur();
+  await expect(hex).toHaveValue('#facc15');
+  await dialog(page).getByRole('group', { name: 'Saturation and brightness', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(hex).not.toHaveValue('#facc15');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await dialog(page).getByRole('radio', { name: 'Indigo', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'indigo');
+  expect(await primary()).toBe('');
+  await hex.fill('#123456');
+  await dialog(page).getByRole('button', { name: 'Reset accent', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'ocean');
+  expect(await primary()).toBe('');
+});
+
 test('sign-in page fits desktop and mobile screens', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const width of [1280, 390]) {
