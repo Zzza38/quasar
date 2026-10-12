@@ -292,7 +292,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     </Sidebar>
 
     <SidebarInset className="min-w-0 bg-transparent">
-      <header className="app-topbar glass sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-foreground/[0.06] pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:hidden">
+      <header className="app-topbar sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-foreground/[0.06] bg-background pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:hidden">
         <Brand onClick={home} markSize={28} className="min-h-11 gap-2 text-base" />
         <div className="flex shrink-0 items-center gap-0.5">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} iconOnly />
