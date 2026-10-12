@@ -1,13 +1,19 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { useId } from 'react';
+import { isCustomAccent } from '@/lib/accent';
 import { Icon } from './icon';
 import { ACCENTS, useTheme, type AccentId, type Appearance } from '@/lib/theme';
-import { ChoiceGroup, ChoiceItem, IconButton, Segmented } from './primitives';
+import { Button, ChoiceGroup, ChoiceItem, Hint, IconButton, Segmented } from './primitives';
 import { Label } from './ui/label';
+import { ColorPicker } from './ui/color-picker';
 
 export function ThemePicker() {
   const theme = useTheme();
+  const colorId = useId();
+  const custom = isCustomAccent(theme.accent);
+  const color = custom ? theme.accent : ACCENTS.find((accent) => accent.id === theme.accent)!.swatch;
   return <div className="grid gap-4">
     <div className="grid gap-1.5">
       <Label className="text-[13px] font-semibold text-foreground/80">Appearance</Label>
@@ -26,6 +32,14 @@ export function ThemePicker() {
           </ChoiceItem>;
         })}
       </ChoiceGroup>
+      <div className="mt-2 grid gap-3 rounded-xl border bg-card p-3">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={colorId} className="text-[13px] font-semibold">Custom color</Label>
+          {custom && <Button size="sm" variant="ghost" onClick={() => theme.setAccent('ocean')}>Reset accent</Button>}
+        </div>
+        <ColorPicker id={colorId} label="Custom accent hex color" value={color} onValueChange={(value) => theme.setAccent(value as AccentId)} />
+        <Hint>Changes apply instantly and save on this device. Shades adjust for readable text in light and dark mode.</Hint>
+      </div>
     </div>
   </div>;
 }
