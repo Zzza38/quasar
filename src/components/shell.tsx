@@ -46,12 +46,12 @@ function followsInPage(event: MouseEvent<HTMLAnchorElement>): boolean {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 }
 
-/** The Quasar mark: a flat Q that takes the current text colour, with the sparkle in the theme's primary colour. */
+/** The Quasar mark: a flat Q that takes the current text colour, with the fixed indigo brand sparkle. */
 export function BrandMark({ size = 32, className }: { size?: number; className?: string }) {
   return <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true" focusable="false" className={cn('shrink-0 select-none', className)} style={{ width: size, height: size }}>
     <g fill="none" stroke="currentColor" strokeWidth="9.5"><circle cx="30" cy="30" r="21" /><path d="M42 42 L54.5 54.5" /></g>
     <circle cx="54.5" cy="54.5" r="4.75" fill="currentColor" />
-    <path d="M30 16.5 C31.4 25.8 34.2 28.6 43.5 30 C34.2 31.4 31.4 34.2 30 43.5 C28.6 34.2 25.8 31.4 16.5 30 C25.8 28.6 28.6 25.8 30 16.5 Z" fill="var(--primary)" />
+    <path d="M30 16.5 C31.4 25.8 34.2 28.6 43.5 30 C34.2 31.4 31.4 34.2 30 43.5 C28.6 34.2 25.8 31.4 16.5 30 C25.8 28.6 28.6 25.8 30 16.5 Z" fill="#4f46e5" />
   </svg>;
 }
 

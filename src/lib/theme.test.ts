@@ -11,13 +11,15 @@ function meta(content: string) {
 /** A browser-like page with the given localStorage and OS scheme, and a fresh copy of the theme module. */
 async function page(storage: Storage, osDark = false) {
   const dataset: Record<string, string> = {};
+  const properties: Record<string, string> = {};
+  const style = { setProperty: (key: string, value: string) => { properties[key] = value; }, removeProperty: (key: string) => { delete properties[key]; } };
   const metas = [meta('#f4f5f9'), meta('#0b0d12')];
   vi.stubGlobal('localStorage', storage);
-  vi.stubGlobal('document', { documentElement: { dataset }, querySelectorAll: (selector: string) => selector === 'meta[name="theme-color"]' ? metas : [] });
+  vi.stubGlobal('document', { documentElement: { dataset, style }, querySelectorAll: (selector: string) => selector === 'meta[name="theme-color"]' ? metas : [] });
   vi.stubGlobal('window', { matchMedia: () => ({ matches: osDark }), dispatchEvent: () => true });
   vi.stubGlobal('CustomEvent', class { constructor(readonly type: string) {} });
   vi.resetModules();
-  return { theme: await import('./theme'), dataset, colors: () => metas.map((tag) => tag.attributes.content) };
+  return { theme: await import('./theme'), dataset, properties, colors: () => metas.map((tag) => tag.attributes.content) };
 }
 
 const blocked: Storage = {
@@ -37,6 +39,52 @@ function memoryStorage(initial: Record<string, string> = {}, full = false): Stor
 describe('theme choice', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
   afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('previews colors without saving them until the gesture commits', async () => {
+    const storage = memoryStorage({ 'quasar.accent': 'ocean', 'quasar.appearance': 'dark' });
+    const { theme, dataset, properties } = await page(storage);
+    new Function(theme.themeBootScript)();
+    theme.previewAccent('#facc15');
+    expect(dataset.accent).toBe('custom');
+    expect(properties['--primary-foreground']).toBe('#0b0d12');
+    expect(storage.values['quasar.accent']).toBe('ocean');
+    expect(theme.readStored().accent).toBe('ocean');
+    theme.saveAccent('#facc15');
+    expect(storage.values['quasar.accent']).toBe('#facc15');
+  });
+
+  it('restores a custom palette before paint and matches the runtime palette in both appearances', async () => {
+    for (const appearance of ['light', 'dark']) {
+      const { theme, dataset, properties } = await page(memoryStorage({ 'quasar.accent': '#facc15', 'quasar.appearance': appearance }));
+      new Function(theme.themeBootScript)();
+      expect(dataset.accent).toBe('custom');
+      expect(Object.keys(properties)).toHaveLength(5);
+      const beforePaint = { ...properties };
+      theme.saveAppearance(appearance as 'light' | 'dark');
+      expect(properties).toEqual(beforePaint);
+      theme.saveAccent('indigo');
+      expect(dataset.accent).toBe('indigo');
+      expect(properties).toEqual({});
+    }
+  });
+
+  it('rejects malformed stored colors and ignores invalid updates', async () => {
+    const { theme, dataset, properties } = await page(memoryStorage({ 'quasar.accent': '#zzzzzz' }));
+    new Function(theme.themeBootScript)();
+    expect(dataset.accent).toBe('ocean');
+    expect(theme.readStored().accent).toBe('ocean');
+    theme.saveAccent('#bad');
+    expect(properties).toEqual({});
+    expect(theme.readStored().accent).toBe('ocean');
+  });
+
+  it('keeps custom colors usable when storage is blocked', async () => {
+    const { theme, dataset, properties } = await page(blocked);
+    theme.saveAccent('#ABCDEF');
+    expect(theme.readStored().accent).toBe('#abcdef');
+    expect(dataset.accent).toBe('custom');
+    expect(properties['--primary']).toMatch(/^#[\da-f]{6}$/);
+  });
 
   it('stores and paints a choice when storage works', async () => {
     const storage = memoryStorage();
