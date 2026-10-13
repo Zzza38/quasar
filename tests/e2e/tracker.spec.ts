@@ -539,6 +539,8 @@ test('custom accent controls persist, follow appearance and restore presets', as
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  const sparkle = page.getByRole('link', { name: 'Quasar home', exact: true }).locator('svg > path');
+  await expect(sparkle).toHaveCSS('fill', 'rgb(79, 70, 229)');
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   const hex = dialog(page).getByRole('textbox', { name: 'Custom accent hex color' });
   await hex.fill('#facc15');
@@ -548,6 +550,7 @@ test('custom accent controls persist, follow appearance and restore presets', as
   await dialog(page).getByRole('radio', { name: 'Dark', exact: true }).click();
   expect(await primary()).not.toBe(light);
   await page.keyboard.press('Escape');
+  await expect(sparkle).toHaveCSS('fill', 'rgb(79, 70, 229)');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'custom');
   await page.getByRole('button', { name: 'Account', exact: true }).click();
