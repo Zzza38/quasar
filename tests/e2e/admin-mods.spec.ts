@@ -82,6 +82,28 @@ test('per-user admin overrides reach the selected account live, persist through 
     await page.getByRole('button', { name: 'Open Mod Target', exact: true }).click();
     await page.getByRole('button', { name: 'Fixing their account', exact: true }).click();
     for (const mod of MODS) await expect(page.getByRole('combobox', { name: `${mod.name} override`, exact: true })).toHaveText('User choice');
+    await visitor.keyboard.press('Escape');
+    await choose(page.getByRole('combobox', { name: 'RGB Mode override', exact: true }), 'Force on');
+    await expect(visitor.locator('html')).toHaveAttribute('data-rgb-mode', 'true');
+    let held = false, finished = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await visitor.route(/\/api\/trpc\/[^?]*mods[^?]*\?/, async route => {
+      if (held) { await route.continue(); return; }
+      const response = await route.fetch();
+      held = true;
+      await gate;
+      await route.fulfill({ response });
+      finished = true;
+    });
+    await expect.poll(() => held).toBe(true);
+    await visitorContext.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true }]);
+    await visitor.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'nextauth.message' })));
+    await expect(visitor.locator('html')).not.toHaveAttribute('data-rgb-mode', 'true');
+    release();
+    await expect.poll(() => finished).toBe(true);
+    await expect(visitor.locator('html')).not.toHaveAttribute('data-rgb-mode', 'true');
+    await choose(page.getByRole('combobox', { name: 'RGB Mode override', exact: true }), 'User choice');
   } finally {
     await visitorContext.close();
     await anonymous.close();
