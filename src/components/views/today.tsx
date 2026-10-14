@@ -1,5 +1,6 @@
 'use client';
 
+import { AttentionGap } from '../attention-videos';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
@@ -102,7 +103,8 @@ export function TodayView({ state }: { state: AppState }) {
         {displayDay && displayDay.issues.length > 0 && <Hint tone="danger">{describeDayIssues(displayDay.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
 
-      <Section title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
+      <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] self-stretch">
+      <Section data-attention-after="today-tasks" title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
         <QuickAdd today={today} classes={personal.classes} suggestedClassId={suggestedClassId}
           onAdd={(title, extra) => state.saveTask(crypto.randomUUID(), { title, dueDate: extra.dueDate ?? null, dueTime: null, classId: extra.classId ?? null, notes: '', completed: false })} />
         {shown.length === 0 && <EmptyState icon="checkCircle" title="Nothing due soon">Add anything you need to get done. Homework, forms, practice.</EmptyState>}
@@ -112,6 +114,8 @@ export function TodayView({ state }: { state: AppState }) {
           ? <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{dueSoon.length - shown.length} more</Button>
           : later > 0 && <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{later} due later</Button>}
       </Section>
+        <AttentionGap zone="today-tasks" top={12} />
+      </div>
     </div>
     {state.personalValid && <PeriodSheet state={state} period={changePeriod} date={displayDate} onClose={() => setChangePeriod(null)} onAdjustDay={() => { setChangePeriod(null); setAdjustDay(true); }} />}
     <DateAdjustmentSheet open={adjustDay} onClose={() => setAdjustDay(false)} date={displayDate} school={schedule} personal={personal} save={state.savePersonal} />

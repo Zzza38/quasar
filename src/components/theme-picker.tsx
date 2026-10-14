@@ -1,5 +1,6 @@
 'use client';
 
+import { AttentionGap } from './attention-videos';
 import { cn } from '@/lib/utils';
 import { useId } from 'react';
 import { isCustomAccent } from '@/lib/accent';
@@ -15,11 +16,14 @@ export function ThemePicker() {
   const custom = isCustomAccent(theme.accent);
   const color = custom ? theme.accent : ACCENTS.find((accent) => accent.id === theme.accent)!.swatch;
   return <div className="grid gap-4">
-    <div className="grid gap-1.5">
+    <div className="flex items-stretch gap-2">
+      <div className="grid gap-1.5">
       <Label className="text-[13px] font-semibold text-foreground/80">Appearance</Label>
       <Segmented<Appearance> label="Appearance" value={theme.appearance} onChange={theme.setAppearance} options={[
         { value: 'system', label: 'System' }, { value: 'light', label: <span className="inline-flex items-center gap-1.5"><Icon name="sun" size={14} />Light</span> }, { value: 'dark', label: <span className="inline-flex items-center gap-1.5"><Icon name="moon" size={14} />Dark</span> },
       ]} />
+      </div>
+      <AttentionGap zone="account-look" minWidth={96} className="flex-1" />
     </div>
     <div className="grid gap-1.5">
       <Label className="text-[13px] font-semibold text-foreground/80">Accent color</Label>

@@ -14,7 +14,7 @@ describe('response security headers', () => {
 
   it('keeps scripts, fetches and plugins on this origin and lets the theme-boot inline script run', () => {
     expect(directives.get('default-src')).toEqual(["'self'"]);
-    expect(directives.get('script-src')).toEqual(["'self'", "'unsafe-inline'"]);
+    expect(directives.get('script-src')).toEqual(["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"]);
     expect(directives.get('connect-src')).toEqual(["'self'"]);
     expect(directives.get('object-src')).toEqual(["'none'"]);
     expect(directives.get('frame-ancestors')).toEqual(["'none'"]);

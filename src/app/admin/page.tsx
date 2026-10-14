@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Admin, type AdminBoot } from '@/components/admin';
-import { recentSignIn } from '@/lib/admin-session';
+import { adminSignInAllowed } from '@/lib/admin-session';
 import { getAuth } from '@/server/auth';
 import { getDb } from '@/server/db';
 import { Service } from '@/server/service';
@@ -17,7 +17,7 @@ export default async function AdminPage() {
   try {
     const { userId, authAt } = await getAuth();
     const isAdmin = !!userId && new Service(getDb()).isAdmin(userId);
-    initial = { accountId: userId, isAdmin, adminReady: isAdmin && recentSignIn(authAt) };
+    initial = { accountId: userId, isAdmin, adminReady: isAdmin && adminSignInAllowed(authAt) };
   } catch {
     initial = undefined; // The client checks the session itself.
   }

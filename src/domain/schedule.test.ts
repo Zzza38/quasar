@@ -378,9 +378,10 @@ describe("exception lookups", () => {
       .sort((left, right) => left.date.localeCompare(right.date));
     const boundary = boundaries.findLast((entry) => entry.date <= dateString) ?? boundaries[0];
     const [from, to, sign] = dateString >= boundary.date ? [boundary.date, dateString, 1] : [dateString, boundary.date, -1];
+    const exceptionsByDate = new Map(school.exceptions.map(entry => [entry.date, entry]));
     let count = 0;
     for (let day = Temporal.PlainDate.from(from); day.toString() < to; day = day.add({ days: 1 })) {
-      const exception = school.exceptions.find((entry) => entry.date === day.toString());
+      const exception = exceptionsByDate.get(day.toString());
       count += exception ? Number(exception.advanceCycle) : Number(school.advanceWeekdays.includes(day.dayOfWeek));
     }
     const start = school.cycleDays.findIndex((entry) => entry.id === boundary.cycleDayId);

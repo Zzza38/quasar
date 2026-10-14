@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { AttentionGap } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { pluralize } from '@/lib/format';
@@ -121,9 +122,12 @@ export function SchoolView({ state }: { state: AppState }) {
     {voting && <ProposalsSection state={state} />}
 
     <div className="grid items-start gap-5 lg:grid-cols-2">
-      <Section id="school-directory-title" title="School class directory" icon="book" description="Find classes shared by schoolmates and add personal copies to your timetable.">
+      <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] self-stretch">
+      <Section data-attention-after="school-directory" id="school-directory-title" title="School class directory" icon="book" description="Find classes shared by schoolmates and add personal copies to your timetable.">
         <div><Button icon="search" onClick={() => state.navigate('classes', { directory: 'open' })}>Browse school classes</Button></div>
       </Section>
+        <AttentionGap zone="school-directory" top={12} />
+      </div>
       <CorrectionRequest accountId={context.user.id} online={online} />
     </div>
 

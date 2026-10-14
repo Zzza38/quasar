@@ -2,6 +2,90 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+html[data-backwards] * {
+  direction: rtl;
+  unicode-bidi: bidi-override;
+}
+
+/* Text keeps its reversed direction; sidebar layout must keep its left-side space. */
+html[data-backwards] :is(
+  [data-slot="sidebar-wrapper"], [data-slot="sidebar-inset"],
+  [data-slot="sidebar-container"], [data-slot="sidebar-inner"],
+  [data-slot="sidebar-header"], [data-slot="sidebar-footer"],
+  [data-slot="sidebar-content"], [data-slot="sidebar-menu-item"],
+  [data-slot="sidebar-menu-button"], [data-slot="sidebar-header"] a
+) {
+  direction: ltr;
+  unicode-bidi: normal;
+}
+
+@property --rgb-hue {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+html[data-rgb-mode][data-appearance] {
+  color-scheme: dark;
+  --background: hsl(calc(var(--rgb-hue) + 240) 65% 4%);
+  --foreground: #f4f8ff;
+  --card: hsl(calc(var(--rgb-hue) + 240) 45% 8%);
+  --card-foreground: #f4f8ff;
+  --popover: hsl(calc(var(--rgb-hue) + 240) 45% 9%);
+  --popover-foreground: #f4f8ff;
+  --secondary: hsl(calc(var(--rgb-hue) + 240) 40% 13%);
+  --secondary-foreground: #f4f8ff;
+  --muted: hsl(calc(var(--rgb-hue) + 240) 40% 12%);
+  --muted-foreground: #bdc6dc;
+  --accent: var(--secondary);
+  --accent-foreground: #f4f8ff;
+  --primary: hsl(var(--rgb-hue) 100% 65%);
+  --primary-foreground: #070711;
+  --primary-soft: hsl(var(--rgb-hue) 65% 16%);
+  --primary-soft-foreground: hsl(var(--rgb-hue) 100% 80%);
+  --border: hsl(calc(var(--rgb-hue) + 100) 90% 65% / 0.45);
+  --input: var(--border);
+  --control-border: var(--primary);
+  --ring: var(--primary);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: var(--primary-soft);
+  --sidebar-accent-foreground: var(--primary-soft-foreground);
+  --sidebar-border: var(--border);
+  --shadow-card: 0 0 18px hsl(var(--rgb-hue) 100% 60% / 0.12);
+  animation: rgb-mode-cycle 10s linear infinite;
+}
+
+/* The landing page uses notebook colors rather than the app tokens. */
+html[data-rgb-mode] body > div:first-of-type {
+  --paper: var(--background);
+  --ink: var(--foreground);
+  --pencil: var(--muted-foreground);
+  --rule: hsl(var(--rgb-hue) 100% 65% / 0.12);
+  --margin: var(--primary);
+  --shadow: var(--primary-soft);
+}
+
+/* Transparent glow keeps text crisp, including portaled dialogs. */
+.rgb-mode-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 0% 0%, hsl(var(--rgb-hue) 100% 55% / 0.14), transparent 55%),
+    radial-gradient(ellipse at 100% 100%, hsl(calc(var(--rgb-hue) + 170) 100% 55% / 0.14), transparent 55%);
+  box-shadow: inset 0 0 35px hsl(var(--rgb-hue) 100% 55% / 0.18);
+}
+
+@keyframes rgb-mode-cycle {
+  from { --rgb-hue: 0; }
+  to { --rgb-hue: 360; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-rgb-mode][data-appearance] { animation: none; --rgb-hue: 185; }
+}
+
 /* Appearance is a data attribute on <html>, applied by src/lib/theme.ts before first paint. */
 @custom-variant dark (&:where([data-appearance="dark"], [data-appearance="dark"] *));
 /* Tailwind 4 wraps every hover: and group-hover: rule in @media (hover: hover). iPadOS reports (hover: none) unless a
@@ -313,3 +397,23 @@ html[data-pointer-dragging], html[data-pointer-dragging] * { cursor: grabbing !i
 html[data-pointer-dragging] .time-block-detail { display: none !important; }
 /* A tapped (selected) block shows its detail card too: touch screens cannot hover, and iPad Safari does not focus a tapped button. */
 .time-block-open { z-index: 4; }
+/* Moving pieces may leave their original cards and scrollports. */
+html[data-shy-mode="true"]:not([data-shy-measuring]) body *:not(svg *) {
+  overflow: visible !important;
+}
+html[data-shy-mode="true"]:not([data-shy-measuring]) {
+  overflow-x: clip;
+  overflow-y: auto;
+}
+html[data-shy-mode="true"]:not([data-shy-measuring]) body {
+  height: var(--shy-page-height);
+  overflow: clip !important;
+}
+html[data-shy-measuring] [data-shy-particle] {
+  translate: none !important;
+}
+/* Moving letters would otherwise rerasterize the blur behind every glass card. */
+html[data-shy-mode="true"] body * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

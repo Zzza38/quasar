@@ -14,7 +14,7 @@ const isDev = process.env.NODE_ENV === "development";
  */
 export const contentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   // data: covers the timetable scan previews (canvas.toDataURL in scan-schedule.tsx) and inline SVG/icon data URLs.
   // Google profile pictures (docs/CHAT.md §13) are served from Google's CDN; uploaded ones from /api/avatars.
