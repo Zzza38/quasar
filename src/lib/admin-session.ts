@@ -9,3 +9,8 @@ export const ADMIN_REAUTH_MESSAGE = 'For your security, sign in with Google agai
 export function recentSignIn(authAt: number | null | undefined, now = Date.now()): boolean {
   return typeof authAt === 'number' && authAt <= now + 60_000 && now - authAt < ADMIN_SIGN_IN_MAX_AGE_MS;
 }
+
+/** Development still requires an owner session, but does not require reauthentication. */
+export function adminSignInAllowed(authAt: number | null | undefined): boolean {
+  return process.env.NODE_ENV === 'development' || recentSignIn(authAt);
+}

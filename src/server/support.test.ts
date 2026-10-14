@@ -10,7 +10,7 @@ import { exampleSchedule } from '@/domain/example';
 import type { Entity } from '@/domain/sync';
 
 const databases: Db[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.restoreAllMocks(); });
+afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 const task = { title: 'Essay', dueDate: '2026-10-01', dueTime: '09:00', classId: null, notes: '', completed: false, reminder: { minutesBefore: 30, timeZone: 'UTC' } };
 function fixture({ ownerSub = '' } = {}) {
   const db = openDatabase(':memory:'); databases.push(db);
@@ -35,6 +35,22 @@ function fixture({ ownerSub = '' } = {}) {
 }
 
 describe('owner access', () => {
+  it('accepts an existing owner session in development while retaining account and owner checks', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const f = fixture();
+    const owner = f.caller(f.owner, null);
+    expect(await owner.session()).toMatchObject({ isAdmin: true, adminReady: true });
+    expect(await owner.admin.schools()).toHaveLength(2);
+    expect(await owner.admin.security()).toMatchObject({ until: null });
+    await expect(owner.admin.setModOverride({ accountId: f.owner, mod: 'rgb', state: 'on' })).resolves.toMatchObject({ rgb: 'on' });
+    await expect(owner.admin.setModOverride({ accountId: f.alice, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(f.caller(f.alice, null).admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller(null, null).admin.schools()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(await owner.session()).toMatchObject({ adminReady: false });
+    await expect(owner.admin.schools()).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(owner.admin.setModOverride({ accountId: f.owner, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+  });
   it('needs a Google sign-in within the last two hours for every owner tool', async () => {
     const f = fixture();
     for (const ago of [null, ADMIN_SIGN_IN_MAX_AGE_MS + 1000]) {

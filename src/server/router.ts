@@ -13,8 +13,9 @@ import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSch
 import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
-import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, recentSignIn } from '@/lib/admin-session';
+import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
+import { modOverrideSchema, readModOverrides, setModOverride } from './mods';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -59,7 +60,7 @@ const authenticated = t.procedure.use(({ ctx, next }) => {
  */
 const admin = authenticated.use(({ ctx, path, next }) => {
   if (!ctx.service.isAdmin(ctx.userId)) { recordDenied(ctx.service, ctx.userId, path); ctx.service.admin(ctx.userId); }
-  if (!recentSignIn(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
+  if (!adminSignInAllowed(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
   return next({ ctx });
 });
 /**
@@ -80,7 +81,7 @@ const accountScoped = authenticated.use(requiresField('accountId')).input(z.obje
 /** Owner mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
 const adminScoped = accountScoped.use(({ ctx, path, next }) => {
   if (!ctx.service.isAdmin(ctx.userId)) { recordDenied(ctx.service, ctx.userId, path); ctx.service.admin(ctx.userId); }
-  if (!recentSignIn(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
+  if (!adminSignInAllowed(ctx.authAt)) throw new TRPCError({ code: 'FORBIDDEN', message: ADMIN_REAUTH_MESSAGE });
   return next({ ctx });
 });
 /** The owner moderating the public Global chat from the Messages view: an owner check without the recent sign-in. */
@@ -92,11 +93,12 @@ const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
 export const appRouter = t.router({
+  mods: t.procedure.query(({ ctx }) => readModOverrides(ctx.service)),
   // `adminReady`: the owner signed in recently enough to use the owner tools (see `admin` above).
   session: t.procedure.query(({ ctx }) => {
     if (!ctx.userId) return null;
     const isAdmin = ctx.service.isAdmin(ctx.userId);
-    return { user: ctx.service.user(ctx.userId), isAdmin, adminReady: isAdmin && recentSignIn(ctx.authAt) };
+    return { user: ctx.service.user(ctx.userId), isAdmin, adminReady: isAdmin && adminSignInAllowed(ctx.authAt) };
   }),
   profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
   // Profile pictures (docs/CHAT.md §13): an uploaded picture, or back to the Google picture or initials.
@@ -228,6 +230,7 @@ export const appRouter = t.router({
     }),
   }),
   admin: t.router({
+    setModOverride: adminScoped.input(modOverrideSchema).mutation(({ ctx, input }) => setModOverride(ctx.service, ctx.userId, input)),
     schools: admin.query(({ctx}) => ctx.service.schools('', -1)),
     update: admin.input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
     requests: admin.query(({ctx}) => ctx.service.requests(ctx.userId)),
@@ -249,7 +252,7 @@ export const appRouter = t.router({
     bans: admin.query(({ ctx }) => ctx.service.bans(ctx.userId)),
     liftBan: adminScoped.input(z.object({ userId: z.uuid(), schoolId: z.uuid() })).mutation(({ ctx, input }) => { ctx.service.liftBan(ctx.userId, input.userId, input.schoolId); }),
     // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
-    security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
+    security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: process.env.NODE_ENV === 'development' ? null : (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
     renameSchool: adminScoped.input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),
     // Whole-log view; each member's own rows come with admin.users.view.
     auditLog: admin.input(auditQuerySchema).query(({ ctx, input }) => support(ctx.service).auditLog(ctx.userId, input)),
