@@ -50,7 +50,6 @@ function watchPlayback(listener: () => void) {
 function AttentionVideo({ zone }: { zone: string }) {
   const reducedMotion = useReducedMotion();
   const reduced = useRef(reducedMotion);
-  reduced.current = reducedMotion;
   const ref = useRef<HTMLVideoElement>(null);
   const visible = useRef(false);
   const [loaded, setLoaded] = useState(false);
@@ -64,6 +63,7 @@ function AttentionVideo({ zone }: { zone: string }) {
   };
 
   useEffect(() => {
+    reduced.current = reducedMotion;
     if (ref.current) playback(ref.current);
   }, [reducedMotion]);
 
