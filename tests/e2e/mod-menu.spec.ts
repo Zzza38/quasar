@@ -441,6 +441,13 @@ test('manually placed videos use existing blank space without changing layout', 
   expect(playback.time).toBeGreaterThan(0);
   expect(playback.time).toBeLessThan(playback.duration);
   expect(playback).toMatchObject({ paused: false, loop: true, muted: true });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).paused)).toBe(true);
+  const pausedTime = await video.evaluate(element => (element as HTMLVideoElement).currentTime);
+  await page.waitForTimeout(300);
+  expect(await video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBe(pausedTime);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).paused)).toBe(false);
   await page.locator('[data-attention-after="today-tasks"]').evaluate(element => { const rect = element.getBoundingClientRect(); window.scrollTo(0, window.scrollY + rect.bottom - 180); });
   await expect(page.locator('[data-attention-slot="today-tasks"]').first()).toBeVisible();
   const snapshot = async (name: string) => {

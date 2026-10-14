@@ -4,6 +4,18 @@ test('force update removes stale app code and preserves device data and sign-in 
   await page.goto('/');
   await context.addCookies([{ name: 'update-test-cookie', value: 'preserve-me', domain: 'localhost', path: '/', httpOnly: true }]);
   await page.evaluate(async () => {
+    await navigator.serviceWorker.register('/sw.js');
+    const registration = await navigator.serviceWorker.ready;
+    const worker = registration.active!;
+    if (worker.state !== 'activated') await new Promise<void>(resolve => {
+      const activated = () => {
+        if (worker.state !== 'activated') return;
+        worker.removeEventListener('statechange', activated);
+        resolve();
+      };
+      worker.addEventListener('statechange', activated);
+      activated();
+    });
     localStorage.setItem('update-test-setting', 'preserve-me');
     for (const name of ['quasar-public-shell-old', 'whatsnext-public-shell-old', 'unrelated-cache']) {
       const cache = await caches.open(name);
@@ -21,12 +33,11 @@ test('force update removes stale app code and preserves device data and sign-in 
         transaction.onerror = () => { db.close(); reject(transaction.error); };
       };
     });
-    await navigator.serviceWorker.register('/sw.js');
-    await navigator.serviceWorker.ready;
   });
   const response = await page.request.get('/update');
   expect(response.headers()['cache-control']).toContain('no-store');
   expect(await response.text()).not.toContain('/_next/static/');
+  expect(await page.evaluate(() => caches.keys())).toEqual(expect.arrayContaining(['quasar-public-shell-old', 'whatsnext-public-shell-old']));
   await page.goto('/update');
   await expect(page).toHaveURL(/\/today\?quasar-update=\d+/);
   await expect(page.locator('html[data-hydrated]')).toBeAttached();

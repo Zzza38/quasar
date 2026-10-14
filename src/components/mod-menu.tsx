@@ -6,12 +6,14 @@ import { setAttentionMode as setAttentionEnabled } from './attention-videos';
 import { ShyParticles } from './shy-particles';
 import { useModOverrides } from '@/client/mod-overrides';
 import type { ModId } from '@/domain/mods';
+import { useReducedMotion } from '@/client/reduced-motion';
 
 const KONAMI_CODE = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
 
 export function ModMenu() {
   const [open, setOpen] = useState(false);
   const overrides = useModOverrides();
+  const reducedMotion = useReducedMotion();
   const [choices, setChoices] = useState({ rgb: false, attention: false, backwards: false, shy: false });
   const effective = (mod: ModId) => overrides[mod] === 'default' ? choices[mod] : overrides[mod] === 'on';
   const choose = (mod: ModId, value: boolean) => {
@@ -71,10 +73,11 @@ export function ModMenu() {
   return <>
     {rgbMode && <div className="rgb-mode-overlay" aria-hidden="true" />}
 
-    {shy && <ShyParticles />}
+    {shy && !reducedMotion && <ShyParticles />}
     <Modal open={open} onClose={() => setOpen(false)} title="Mod menu" description="Secret code accepted. Choose a mod below."
     footer={<Button onClick={() => setOpen(false)}>Close menu</Button>}>
       <Panel>
+        {reducedMotion && <p className="mb-3 text-sm text-muted-foreground">Reduced motion is enabled. Gameplay videos stay paused and I'm Shy movement stays off.</p>}
         <Toggle label="RGB Mode" checked={rgbMode} onChange={value => choose('rgb', value)} disabled={overrides.rgb !== 'default'}
           description={forced('rgb') ?? 'Cycle neon colors across a dark screen. Toggle off to restore normal colors.'} />
       </Panel>
