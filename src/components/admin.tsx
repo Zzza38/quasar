@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
+import { AdminMods } from './admin-mods';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -125,7 +126,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   useEffect(() => { void refresh(); }, [refresh]);
   // When the support session runs out, everything loaded leaves the screen at once rather than at the next click.
   useEffect(() => {
-    if (!security) return;
+    if (!security || security.until === null) return;
     const timer = setTimeout(() => void refresh(), Math.max(0, security.until - Date.now()) + 1000);
     return () => clearTimeout(timer);
   }, [security, refresh]);
@@ -188,7 +189,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   return <div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
-        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip>{security && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
+        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip>{security && security.until !== null && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
         <div className="flex shrink-0 items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => void refresh()}><span className="max-sm:sr-only">Refresh</span></Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
       </div>
     </header>
@@ -208,8 +209,12 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
         <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
         <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
+        <TabsTrigger value="mods" className={TAB_CLASS}>Mods</TabsTrigger>
         <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
       </TabsList></div>
+      <TabsContent value="mods" className="grid gap-5">
+        <AdminMods accountId={accountId} onAccessChange={refresh} />
+      </TabsContent>
       <TabsContent value="schools" className="grid gap-5">
       <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}

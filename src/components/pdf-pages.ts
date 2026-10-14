@@ -21,7 +21,7 @@ export async function readPdf(file: File, maxPages: number): Promise<{ pages: Pd
   const pdfjs = await import('pdfjs-dist');
   // The worker is bundled from the package and served from this site, which the CSP's worker-src 'self' allows.
   if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
-  // useWasm off: the CSP does not allow WebAssembly, and pdf.js has JavaScript fallbacks for the decoders it covers.
+  // Keep the scan's existing JavaScript decoder fallbacks without fetching extra WASM decoder assets.
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), useWasm: false });
   // One try for loading and rendering, so a PDF that fails to open still has its loading task (and worker) destroyed.
   try {

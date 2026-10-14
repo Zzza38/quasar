@@ -1,5 +1,6 @@
 'use client';
 
+import { AttentionGap } from './attention-videos';
 import { useRef, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { MemberAvatar } from './member-avatar';
@@ -44,13 +45,14 @@ export function AvatarSettings({ accountId, user, online, onChanged }: { account
   return <div className="grid gap-3">
     <div className="flex flex-wrap items-center gap-3">
       <MemberAvatar name={user.displayName} src={user.avatar} size="lg" />
-      <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+      <div className="flex min-w-0 flex-wrap gap-2">
         {/* The only raw input allowed (AGENTS.md): a hidden file picker a shadcn Button opens. */}
         <input ref={input} type="file" accept="image/*" className="sr-only" tabIndex={-1} aria-hidden="true" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void upload(file); }} />
         <Button size="sm" icon="imageUp" busy={busy === 'upload'} disabled={!online || busy !== null} onClick={() => input.current?.click()}>Upload photo</Button>
         {user.hasGooglePicture && user.avatarSource !== 'google' && <Button size="sm" variant="ghost" busy={busy === 'google'} disabled={!online || busy !== null} onClick={() => void run('google', () => api.avatar.clear.mutate({ accountId, source: 'google' }))}>Use Google photo</Button>}
         {user.avatarSource !== 'none' && <Button size="sm" variant="ghost" busy={busy === 'none'} disabled={!online || busy !== null} onClick={() => void run('none', () => api.avatar.clear.mutate({ accountId, source: 'none' }))}>Use my initial</Button>}
       </div>
+      <AttentionGap zone="account-photo" minWidth={96} className="flex-1 self-stretch" />
     </div>
     <Hint>{user.avatarSource === 'upload' ? 'Schoolmates and friends see the photo you uploaded.' : user.avatarSource === 'google' ? 'Schoolmates and friends see your Google profile photo.' : 'Schoolmates and friends see your initial. Upload a photo or use your Google one.'}</Hint>
     {error && <Hint tone="danger" role="alert">{error}</Hint>}

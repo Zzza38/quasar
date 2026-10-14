@@ -6,6 +6,7 @@
  */
 
 import { Children, createContext, Fragment, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { AttentionGap } from './attention-videos';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Icon, Spinner, type IconName } from './icon';
@@ -70,13 +71,14 @@ export function Eyebrow({ children, className }: { children: ReactNode; classNam
 
 /** Page title row used by every view: eyebrow, h1, description and right-aligned actions. */
 export function PageHeader({ title, eyebrow, description, actions, aside, className }: { title: ReactNode; eyebrow?: ReactNode; description?: ReactNode; actions?: ReactNode; aside?: ReactNode; className?: string }) {
-  return <header className={cn('flex flex-wrap items-end justify-between gap-x-6 gap-y-3', className)}>
+  return <header data-attention-zone="page-header" className={cn('flex flex-wrap items-end justify-between gap-x-6 gap-y-3', className)}>
     <div className="grid min-w-0 gap-1">
       {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
       <h1>{title}</h1>
       {description && <p className="text-sm text-muted-foreground">{description}</p>}
       {aside && <div className="mt-1 flex flex-wrap gap-1.5">{aside}</div>}
     </div>
+    <AttentionGap zone="page-header" minWidth={80} className="-mx-3 flex-1 self-stretch" />
     {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
   </header>;
 }

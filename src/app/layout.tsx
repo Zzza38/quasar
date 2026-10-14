@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Manrope } from 'next/font/google';
 import { ThemeSync } from '@/lib/theme';
+import { ModMenu } from '@/components/mod-menu';
 import { themeBootScript } from '@/lib/theme-boot';
 import { SITE_DESCRIPTION, SITE_KEYWORDS, SITE_NAME, SITE_TITLE, siteOrigin, socialMetadata } from '@/server/site';
 import './globals.css';
@@ -45,6 +46,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     {/* A raw inline script: next/script queues even beforeInteractive scripts until its runtime
         loads, which paints the light theme first. This runs synchronously before any styles apply. */}
     <head><script id="theme-boot" dangerouslySetInnerHTML={{ __html: themeBootScript }} /></head>
-    <body><ThemeSync />{children}</body>
+    <body><ThemeSync />{children}<ModMenu /></body>
   </html>;
 }
