@@ -5,14 +5,16 @@ import { api } from './api';
 import { DEFAULT_MOD_OVERRIDES, type ModOverrides } from '@/domain/mods';
 
 const EVENT = 'quasar:mod-overrides';
-export function publishModOverrides(overrides: ModOverrides) {
-  window.dispatchEvent(new CustomEvent(EVENT, { detail: overrides }));
+export function publishModOverrides(accountId: string, overrides: ModOverrides) {
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: { accountId, overrides } }));
 }
 
 /** Server overrides survive reloads; session choices remain local to the mod menu. */
-export function useModOverrides() {
-  const [overrides, setOverrides] = useState<ModOverrides>(DEFAULT_MOD_OVERRIDES);
+export function useModOverrides(accountId: string | null | undefined) {
+  const [snapshot, setSnapshot] = useState<{ accountId: string | null | undefined; overrides: ModOverrides }>({ accountId, overrides: DEFAULT_MOD_OVERRIDES });
   useEffect(() => {
+    setSnapshot({ accountId, overrides: DEFAULT_MOD_OVERRIDES });
+    if (!accountId) return;
     let disposed = false;
     let pending = false;
     let generation = 0;
@@ -22,14 +24,17 @@ export function useModOverrides() {
       const started = generation;
       try {
         const next = await api.mods.query();
-        if (!disposed && started === generation) setOverrides(previous =>
-          Object.keys(next).every(key => next[key as keyof ModOverrides] === previous[key as keyof ModOverrides]) ? previous : next);
+        if (!disposed && started === generation && next.accountId === accountId) {
+          setSnapshot(previous => Object.keys(next.overrides).every(key => next.overrides[key as keyof ModOverrides] === previous.overrides[key as keyof ModOverrides]) ? previous : { accountId, overrides: next.overrides });
+        }
       } catch { /* Keep the last server decision while offline; the next poll retries. */ }
       finally { pending = false; }
     };
     const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ accountId: string; overrides: ModOverrides }>).detail;
+      if (detail.accountId !== accountId) return;
       generation++;
-      setOverrides((event as CustomEvent<ModOverrides>).detail);
+      setSnapshot({ accountId, overrides: detail.overrides });
     };
     const resume = () => { void refresh(); };
     window.addEventListener(EVENT, changed);
@@ -44,6 +49,6 @@ export function useModOverrides() {
       window.removeEventListener('focus', resume);
       document.removeEventListener('visibilitychange', resume);
     };
-  }, []);
-  return overrides;
+  }, [accountId]);
+  return snapshot.accountId === accountId ? snapshot.overrides : DEFAULT_MOD_OVERRIDES;
 }

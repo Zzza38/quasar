@@ -15,7 +15,7 @@ import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSc
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
-import { modOverrideSchema, readModOverrides, setModOverride } from './mods';
+import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -93,7 +93,7 @@ const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
 export const appRouter = t.router({
-  mods: t.procedure.query(({ ctx }) => readModOverrides(ctx.service)),
+  mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
   // `adminReady`: the owner signed in recently enough to use the owner tools (see `admin` above).
   session: t.procedure.query(({ ctx }) => {
     if (!ctx.userId) return null;
@@ -230,6 +230,10 @@ export const appRouter = t.router({
     }),
   }),
   admin: t.router({
+    modOverrides: admin.input(z.object({ userId: z.uuid() })).query(({ ctx, input }) => {
+      assertModTarget(ctx.service, input.userId);
+      return readModOverrides(ctx.service, input.userId);
+    }),
     setModOverride: adminScoped.input(modOverrideSchema).mutation(({ ctx, input }) => setModOverride(ctx.service, ctx.userId, input)),
     schools: admin.query(({ctx}) => ctx.service.schools('', -1)),
     update: admin.input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
