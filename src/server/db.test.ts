@@ -37,8 +37,29 @@ describe('openDatabase migrations', () => {
     const db = openDatabase(path);
     try {
       const versions = (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map(row => row.version);
-      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
       expect(db.inTransaction).toBe(false);
+    } finally { db.close(); }
+  });
+
+  it('adds account mod policies without copying legacy global decisions, and cascades deleted targets', () => {
+    const path = tempPath();
+    const old = openDatabase(path);
+    old.exec("INSERT INTO users(id,google_sub,email,created_at) VALUES('owner','owner','owner@example.com','now'),('member','member','member@example.com','now')");
+    old.exec("INSERT INTO mod_overrides(mod,state,updated_at,updated_by) VALUES('rgb','on','now','owner')");
+    old.exec('DROP TABLE user_mod_overrides; DELETE FROM schema_migrations WHERE version=20');
+    old.close();
+    const db = openDatabase(path);
+    try {
+      expect(db.prepare('SELECT * FROM user_mod_overrides').all()).toEqual([]);
+      expect(db.prepare('SELECT state FROM mod_overrides WHERE mod=?').get('rgb')).toEqual({ state: 'on' });
+      const insert = db.prepare('INSERT INTO user_mod_overrides(user_id,mod,state,updated_at,updated_by) VALUES(?,?,?,?,?)');
+      insert.run('member', 'rgb', 'off', 'now', 'owner');
+      expect(() => insert.run('missing', 'rgb', 'on', 'now', 'owner')).toThrow(/FOREIGN KEY/);
+      expect(() => insert.run('member', 'unknown', 'on', 'now', 'owner')).toThrow(/CHECK/);
+      expect(() => insert.run('member', 'shy', 'unknown', 'now', 'owner')).toThrow(/CHECK/);
+      db.prepare('DELETE FROM users WHERE id=?').run('member');
+      expect(db.prepare('SELECT * FROM user_mod_overrides').all()).toEqual([]);
     } finally { db.close(); }
   });
 
