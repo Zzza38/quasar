@@ -42,14 +42,14 @@ describe('owner access', () => {
     expect(await owner.session()).toMatchObject({ isAdmin: true, adminReady: true });
     expect(await owner.admin.schools()).toHaveLength(2);
     expect(await owner.admin.security()).toMatchObject({ until: null });
-    await expect(owner.admin.setModOverride({ accountId: f.owner, mod: 'rgb', state: 'on' })).resolves.toMatchObject({ rgb: 'on' });
-    await expect(owner.admin.setModOverride({ accountId: f.alice, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(owner.admin.setModOverride({ accountId: f.owner, userId: f.alice, mod: 'rgb', state: 'on' })).resolves.toMatchObject({ rgb: 'on' });
+    await expect(owner.admin.setModOverride({ accountId: f.alice, userId: f.alice, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     await expect(f.caller(f.alice, null).admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller(null, null).admin.schools()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     vi.stubEnv('NODE_ENV', 'production');
     expect(await owner.session()).toMatchObject({ adminReady: false });
     await expect(owner.admin.schools()).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
-    await expect(owner.admin.setModOverride({ accountId: f.owner, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(owner.admin.setModOverride({ accountId: f.owner, userId: f.alice, mod: 'rgb', state: 'off' })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
   });
   it('needs a Google sign-in within the last two hours for every owner tool', async () => {
     const f = fixture();
