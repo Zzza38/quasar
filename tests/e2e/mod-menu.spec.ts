@@ -476,22 +476,26 @@ test('manually placed videos use existing blank space without changing layout', 
     await page.evaluate(() => window.scrollTo(0, 0));
     if (name === 'School') await expect(page.locator('#school-directory-title')).toBeVisible();
     else await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
-    if (['Schedule', 'Tasks', 'Classes', 'People'].includes(name)) expect(await page.locator('[data-attention-slot="page-header"]').count()).toBeGreaterThanOrEqual(1);
+    await enterCode(page);
+    await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    if (name === 'People') {
+      await expect(page.getByText('No requests waiting.', { exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'No friends yet', exact: true })).toBeVisible();
+      await expect(page.getByText('Nobody else has joined yet. Invite your schoolmates.', { exact: true })).toBeVisible();
+    }
     const layout = () => page.evaluate(() => ({
       height: document.documentElement.scrollHeight,
       cards: [...document.querySelectorAll('.app-main [data-slot="card"], .app-main li, .app-main header')].map(element => element.getBoundingClientRect().toJSON()),
     }));
-    const enabled = await layout();
+    const withoutVideos = await layout();
     await enterCode(page);
     await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
-    expect(await layout()).toEqual(enabled);
-    await enterCode(page);
-    await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
-    await page.keyboard.press('Escape');
-    await page.getByRole('dialog').waitFor({ state: 'hidden' });
-    expect(await layout()).toEqual(enabled);
+    expect(await layout()).toEqual(withoutVideos);
+    if (['Schedule', 'Tasks', 'Classes', 'People'].includes(name)) expect(await page.locator('[data-attention-slot="page-header"]').count()).toBeGreaterThanOrEqual(1);
     await snapshot(name.toLowerCase());
     if (name === 'Classes') {
       await page.locator('[data-attention-zone="classes-grid"]').evaluate(element => { const rect = element.getBoundingClientRect(); window.scrollTo(0, window.scrollY + rect.bottom - 350); });
