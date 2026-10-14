@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { AttentionGap } from './attention-videos';
 import { PanelLeft } from 'lucide-react';
 import { cn, scrollToId } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
@@ -253,7 +254,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <TooltipContent side="right" sideOffset={8} className="rounded-full border bg-popover px-3 py-1.5 font-semibold text-popover-foreground shadow-float">Open sidebar</TooltipContent>
         </Tooltip>}
       </SidebarHeader>
-      <SidebarContent className="pt-2">
+      <SidebarContent data-attention-zone="sidebar" className="pt-2">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1" aria-label="Main">
@@ -273,6 +274,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        <AttentionGap zone="sidebar" top={8} className="mx-3 flex-1 group-data-[collapsible=icon]:hidden" />
       </SidebarContent>
       <SidebarFooter className="gap-3 px-3 pb-4 group-data-[collapsible=icon]:px-2">
         <div className="flex group-data-[collapsible=icon]:justify-center">
@@ -310,6 +312,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
       </header>
       {/* On Messages the desktop main area is a viewport-high column so only the list and the log scroll.
           A phone thread (immersive) is a fixed-height column sized to the visual viewport by useChatViewport. */}
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_min(100%,1120px)_minmax(0,1fr)]">
+      <AttentionGap zone="left-gutter" top={8} className="mx-3" />
       <div className={cn('app-main mx-auto w-full max-w-[1120px] px-4 pt-5 outline-none lg:px-8 lg:pt-8',
         immersive ? 'flex flex-col pb-0 max-lg:h-[var(--chat-h,calc(100dvh_-_3.5rem))]' : 'pb-[calc(var(--nav-h)+28px)]',
         onMessages ? 'lg:flex lg:h-dvh lg:flex-col lg:pb-8' : 'lg:pb-12')} id="main" tabIndex={-1}>
@@ -321,6 +325,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
         {children}
+      </div>
+      <AttentionGap zone="right-gutter" top={8} className="mx-3" />
       </div>
       {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
     </SidebarInset>
@@ -335,11 +341,12 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         </SheetHeader>
         {/* auto-rows-max: the summary hides its overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
         <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-          <div className="flex items-center gap-3.5">
+          <div data-attention-zone="account-profile" className="flex items-center gap-3.5">
             <UserAvatar user={context.user} size="lg" />
             <div className="min-w-0"><strong className="block truncate text-[16px] font-bold">{displayName}</strong><Hint className="truncate">{context.user.fullName}</Hint><Hint className="truncate">{context.user.email}</Hint></div>
+            <AttentionGap zone="account-profile" minWidth={96} className="flex-1 self-stretch" />
           </div>
-          {context.user.displayName && <div className="grid gap-3"><Eyebrow>Profile photo</Eyebrow><AvatarSettings accountId={context.user.id} online={online} onChanged={session.initialize}
+          {context.user.displayName && <div data-attention-zone="account-photo" className="grid gap-3"><Eyebrow>Profile photo</Eyebrow><AvatarSettings accountId={context.user.id} online={online} onChanged={session.initialize}
             user={{ displayName: context.user.displayName, avatar: context.user.avatar ?? null, avatarSource: context.user.avatarSource ?? 'none', hasGooglePicture: context.user.hasGooglePicture ?? false }} /></div>}
           <dl className="grid shrink-0 overflow-hidden rounded-2xl bg-muted/80 text-sm ring-1 ring-inset ring-foreground/[0.04] *:flex *:items-center *:justify-between *:gap-3 *:px-4 *:py-2.5 *:not-first:border-t *:not-first:border-foreground/[0.05]">
             <div><dt className="text-muted-foreground">School</dt><dd className="text-right font-semibold">{context.school?.name ?? 'Not chosen yet'}</dd></div>
@@ -349,7 +356,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             {session.storagePersistent === false && <div><dt className="text-muted-foreground">Device storage</dt><dd className="text-right font-semibold">The browser may clear it if space runs low</dd></div>}
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
-          <div className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
+          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
           <div className="grid gap-2 border-t pt-5">

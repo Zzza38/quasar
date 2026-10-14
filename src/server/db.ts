@@ -495,6 +495,15 @@ function migrate(db: Db): void {
   `);
   // lease_token fences a sync's writes (src/server/schedule-feed.ts): added after the table first shipped to a dev database.
   if (!(db.pragma('table_info(schedule_feeds)') as {name: string}[]).some(column => column.name === 'lease_token')) db.exec('ALTER TABLE schedule_feeds ADD COLUMN lease_token TEXT');
+  // Migration 19: owner-controlled global mod policy survives reloads and server restarts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mod_overrides (
+      mod TEXT PRIMARY KEY CHECK(mod IN ('rgb','attention','backwards','shy')),
+      state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(19, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AttentionGap } from '../attention-videos';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import { sameClass, type ClassLike } from '@/domain/class-match';
@@ -111,9 +112,12 @@ export function PeopleView({ state }: { state: AppState }) {
   const membersLoading = online && members === null && !failed.members;
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
-    <header className="grid gap-1">
+    <header data-attention-zone="page-header" className="flex items-stretch gap-4">
+      <div className="grid min-w-0 gap-1">
       <h1>People</h1>
       <p className="text-sm text-muted-foreground">{context.school.name} · {pluralize(context.school.memberCount, 'member')} · {pluralize(context.community?.friendCount ?? 0, 'friend')}</p>
+      </div>
+      <AttentionGap zone="page-header" minWidth={80} className="flex-1" />
     </header>
     {!online && <Callout tone="neutral" icon="cloudOff">Connect to browse schoolmates and manage friends.</Callout>}
     {(error || failed.friends || failed.members) && <Callout tone="danger" icon="alert" role="alert">{error || failed.friends || failed.members}</Callout>}

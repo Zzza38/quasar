@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AttentionClassCells } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, cycleDaysWithPeriod, displayPeriodLabel, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
@@ -89,7 +90,7 @@ export function ClassesView({ state }: { state: AppState }) {
     <ScheduleFeedPanel state={state} />
 
     {personal.classes.length === 0 && <Card><EmptyState icon="book" title="No classes yet" action={<div className="flex flex-wrap justify-center gap-2"><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse the directory</Button>{scanEnabled && <Button icon="calendar" disabled={!state.online} onClick={() => setScanOpen(true)}>Import a schedule PDF</Button>}</div>}>Add the classes you take, then drop each one onto its period in the timetable.</EmptyState></Card>}
-    {personal.classes.length > 0 && <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
+    {personal.classes.length > 0 && <ul data-attention-zone="classes-grid" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
       {personal.classes.map((cls) => {
         const periods = knownPeriods.filter((period) => personal.assignments[period.id] === cls.id);
         const days = new Set(periods.flatMap((period) => meets.get(period.id) ?? []));
@@ -119,6 +120,7 @@ export function ClassesView({ state }: { state: AppState }) {
           </>}</ClassColorPicker>
         </li>;
       })}
+      <AttentionClassCells count={personal.classes.length} />
     </ul>}
 
     {/* overflow-clip: a card that hides its overflow becomes the scrollport of the sticky palette and selection bar, so they would scroll away. */}
