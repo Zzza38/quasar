@@ -504,6 +504,17 @@ function migrate(db: Db): void {
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(19, datetime('now'));
   `);
+  // Migration 20: policies target individual accounts. Old global decisions do not apply to any account.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_mod_overrides (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy')),
+      state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY(user_id, mod)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

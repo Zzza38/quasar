@@ -7,12 +7,18 @@ import { ShyParticles } from './shy-particles';
 import { useModOverrides } from '@/client/mod-overrides';
 import type { ModId } from '@/domain/mods';
 import { useReducedMotion } from '@/client/reduced-motion';
+import { useModAccount } from '@/client/mod-account';
 
 const KONAMI_CODE = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
 
 export function ModMenu() {
+  const accountId = useModAccount();
+  return <AccountModMenu key={accountId ?? 'signed-out'} accountId={accountId} />;
+}
+
+function AccountModMenu({ accountId }: { accountId: string | null | undefined }) {
   const [open, setOpen] = useState(false);
-  const overrides = useModOverrides();
+  const overrides = useModOverrides(accountId);
   const reducedMotion = useReducedMotion();
   const [choices, setChoices] = useState({ rgb: false, attention: false, backwards: false, shy: false });
   const effective = (mod: ModId) => overrides[mod] === 'default' ? choices[mod] : overrides[mod] === 'on';

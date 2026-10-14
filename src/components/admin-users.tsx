@@ -11,6 +11,7 @@ import { Button, Callout, Chip, ColorDot, Field, Hint, IconButton, Input, Modal,
 import { ColorPicker } from './ui/color-picker';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { AdminMods } from './admin-mods';
 
 /**
  * The owner's user console (/admin → People): find any member, open their whole record, and change it. The server
@@ -244,7 +245,7 @@ export function MemberRecord({ accountId, target, reason, schools, refreshKey, o
             suspend: (suspended, why) => api.admin.users.suspend.mutate({ accountId, userId, suspended, reason: why }),
             signOut: (why) => api.admin.users.signOut.mutate({ accountId, userId, reason: why }),
             removeBrowsers: (why) => api.admin.users.removeBrowsers.mutate({ accountId, userId, reason: why }),
-          }} /></TabsContent>
+          }} /><AdminMods key={userId} accountId={accountId} userId={userId} onAccessChange={onChanged} /></TabsContent>
         <TabsContent value="school"><SchoolTab record={record} schools={schools} busy={busy} ask={confirmWithReason}
           onVerify={(verified) => void run(() => api.admin.users.setVerified.mutate({ accountId, userId, verified }))}
           actions={{

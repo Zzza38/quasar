@@ -17,7 +17,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
-import { AdminMods } from './admin-mods';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -209,12 +208,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
         <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
         <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
-        <TabsTrigger value="mods" className={TAB_CLASS}>Mods</TabsTrigger>
         <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
       </TabsList></div>
-      <TabsContent value="mods" className="grid gap-5">
-        <AdminMods accountId={accountId} onAccessChange={refresh} />
-      </TabsContent>
       <TabsContent value="schools" className="grid gap-5">
       <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}
