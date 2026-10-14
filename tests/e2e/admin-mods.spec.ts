@@ -11,6 +11,7 @@ async function choose(select: Locator, option: string) {
 }
 
 test('admin overrides reach another visitor live, persist through reload, and lock every mod', async ({ page, context, browser }) => {
+  test.setTimeout(90_000);
   const id = randomUUID();
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
@@ -53,6 +54,17 @@ test('admin overrides reach another visitor live, persist through reload, and lo
       await expect(toggle).not.toBeChecked();
       await visitor.keyboard.press('Escape');
     }
+    await visitor.emulateMedia({ reducedMotion: 'reduce' });
+    for (const name of ['What Is an Attention Span', "I'm Shy"]) await choose(page.getByRole('combobox', { name: `${name} override`, exact: true }), 'Force on');
+    for (const key of ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a']) await visitor.keyboard.press(key);
+    for (const name of ['What Is an Attention Span', "I'm Shy"]) {
+      const toggle = visitor.getByRole('switch', { name, exact: true });
+      await expect(toggle).toBeChecked();
+      await expect(toggle).toBeDisabled();
+    }
+    await expect(visitor.locator('html')).not.toHaveAttribute('data-shy-mode', 'true');
+    await expect(visitor.getByText('Reduced motion is enabled.', { exact: false })).toBeVisible();
+    for (const name of ['What Is an Attention Span', "I'm Shy"]) await choose(page.getByRole('combobox', { name: `${name} override`, exact: true }), 'User choice');
     await page.reload();
     await page.getByRole('tab', { name: 'Mods', exact: true }).click();
     for (const mod of MODS) await expect(page.getByRole('combobox', { name: `${mod.name} override`, exact: true })).toHaveText('User choice');

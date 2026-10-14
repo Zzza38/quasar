@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { cn } from '@/lib/utils';
+import { useReducedMotion } from '@/client/reduced-motion';
 
 let enabled = false;
 const listeners = new Set<() => void>();
@@ -47,16 +48,24 @@ function watchPlayback(listener: () => void) {
 }
 
 function AttentionVideo({ zone }: { zone: string }) {
+  const reducedMotion = useReducedMotion();
+  const reduced = useRef(reducedMotion);
+  reduced.current = reducedMotion;
   const ref = useRef<HTMLVideoElement>(null);
   const visible = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const playback = (element: HTMLVideoElement) => {
     if (visible.current && !document.hidden && (!dialogRoot || dialogRoot.contains(element))) {
       setLoaded(true);
-      void element.play().catch(() => {});
+      if (reduced.current) element.pause();
+      else void element.play().catch(() => {});
     }
     else element.pause();
   };
+
+  useEffect(() => {
+    if (ref.current) playback(ref.current);
+  }, [reducedMotion]);
 
   useEffect(() => {
     const element = ref.current;
