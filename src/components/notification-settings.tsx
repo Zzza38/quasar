@@ -85,6 +85,35 @@ export function reminderPanel({ supported, online, permission, config, checking,
   return { description, disabled: !online || checking || (!enabled && (!config?.enabled || permission === 'denied')) };
 }
 
+/** Whether this browser can receive push at all (a secure context with a worker and PushManager, in production). */
+export function pushSupported(): boolean {
+  return typeof window !== 'undefined' && serviceWorkerEnabled && window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+}
+
+/** `quasar-push:<account>` holds the endpoint this browser enrolled for the account (the setup checklist reads it too). */
+export const pushStorageKey = (accountId: string) => `quasar-push:${accountId}`;
+
+/**
+ * Enrols this browser for push during a click: the worker, then subscribe() (which shows the permission prompt itself;
+ * Safari only allows it while the click's activation is live), then the server. Resolves 'denied' when the student
+ * refused, 'enabled' when the endpoint is stored. Shared by the account sheet and the Messages nudge.
+ */
+export async function enablePush(accountId: string, publicKey: string): Promise<'enabled' | 'denied'> {
+  const registration = await readyRegistration();
+  let subscription = await registration.pushManager.getSubscription();
+  try {
+    subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationKey(publicKey) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'NotAllowedError') return 'denied';
+    throw error;
+  }
+  const data = subscription.toJSON();
+  if (!data.keys?.p256dh || !data.keys?.auth) throw new Error('The browser did not provide push credentials');
+  await api.notifications.subscribe.mutate({ accountId, endpoint: subscription.endpoint, keys: { p256dh: data.keys.p256dh, auth: data.keys.auth } });
+  rememberEnrollment(pushStorageKey(accountId), subscription.endpoint);
+  return 'enabled';
+}
+
 // Registration normally happened at sign-in for offline use; registering again
 // is a no-op. Waiting on `ready` alone can hang forever if activation fails.
 async function readyRegistration(): Promise<ServiceWorkerRegistration> {
@@ -110,12 +139,12 @@ export function NotificationSettings({ accountId, online, chatPush, onChatPush }
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState('');
   useEffect(() => { if (chatChoice !== null && chatChoice === chatPush && !chatBusy) setChatChoice(null); }, [chatChoice, chatPush, chatBusy]);
-  const storageKey = `quasar-push:${accountId}`;
+  const storageKey = pushStorageKey(accountId);
   // The server's push setup is kept while offline (the chat switch then shows as disabled); another account starts over.
   useEffect(() => { setConfig(null); setChatChoice(null); setChatError(''); }, [accountId]);
   useEffect(() => {
     let alive = true;
-    const supported = serviceWorkerEnabled && window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+    const supported = pushSupported();
     setSupported(supported); setEnabled(false); setError(''); setChecking(online && supported);
     if (supported) setPermission(Notification.permission);
     if (!online) return;
@@ -135,27 +164,9 @@ export function NotificationSettings({ accountId, online, chatPush, onChatPush }
     if (!config?.publicKey) return;
     setBusy(true); setError('');
     try {
-      const registration = await readyRegistration();
-      // Safari only allows subscribing while the click's user activation is
-      // still live, and a separate Notification.requestPermission() call
-      // consumes it. subscribe() shows the permission prompt itself in every
-      // browser, so it is the first and only prompting step.
-      let subscription = await registration.pushManager.getSubscription();
-      try {
-        subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationKey(config.publicKey) });
-      } catch (error) {
-        setPermission(Notification.permission);
-        if (error instanceof DOMException && error.name === 'NotAllowedError') {
-          if (Notification.permission !== 'denied') setError('Notifications were not allowed. Try again and choose Allow.');
-          return;
-        }
-        throw error;
-      }
+      const outcome = await enablePush(accountId, config.publicKey);
       setPermission(Notification.permission);
-      const data = subscription.toJSON();
-      if (!data.keys?.p256dh || !data.keys?.auth) throw new Error('The browser did not provide push credentials');
-      await api.notifications.subscribe.mutate({ accountId, endpoint: subscription.endpoint, keys: { p256dh: data.keys.p256dh, auth: data.keys.auth } });
-      localStorage.setItem(storageKey, subscription.endpoint);
+      if (outcome === 'denied') { if (Notification.permission !== 'denied') setError('Notifications were not allowed. Try again and choose Allow.'); return; }
       setEnabled(true);
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
