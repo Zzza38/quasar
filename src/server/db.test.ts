@@ -37,7 +37,7 @@ describe('openDatabase migrations', () => {
     const db = openDatabase(path);
     try {
       const versions = (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map(row => row.version);
-      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
       for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
         expect((db.pragma(`table_info(${table})`) as { name: string; notnull: number }[]).find(column => column.name === 'reply_to_seq')).toMatchObject({ notnull: 0 });
       }
@@ -64,6 +64,37 @@ describe('openDatabase migrations', () => {
       expect(() => insert.run('missing', 'rgb', 'on', 'now', 'owner')).toThrow(/FOREIGN KEY/);
       expect(() => insert.run('member', 'unknown', 'on', 'now', 'owner')).toThrow(/CHECK/);
       expect(() => insert.run('member', 'shy', 'unknown', 'now', 'owner')).toThrow(/CHECK/);
+      db.prepare('DELETE FROM users WHERE id=?').run('member');
+      expect(db.prepare('SELECT * FROM user_mod_overrides').all()).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  it('widens an older account mod policy table to accept the Spin mod while keeping its rows', () => {
+    const path = tempPath();
+    const old = openDatabase(path);
+    old.exec("INSERT INTO users(id,google_sub,email,created_at) VALUES('owner','owner','owner@example.com','now'),('member','member','member@example.com','now')");
+    old.exec(`
+      DROP TABLE user_mod_overrides;
+      CREATE TABLE user_mod_overrides (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy')),
+        state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+        updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+        PRIMARY KEY(user_id, mod)
+      );
+      INSERT INTO user_mod_overrides(user_id,mod,state,updated_at,updated_by) VALUES('member','rgb','on','then','owner');
+      DELETE FROM schema_migrations WHERE version=21;
+    `);
+    expect(() => old.prepare('INSERT INTO user_mod_overrides(user_id,mod,state,updated_at,updated_by) VALUES(?,?,?,?,?)').run('member', 'spin', 'on', 'now', 'owner')).toThrow(/CHECK/);
+    old.close();
+    const db = openDatabase(path);
+    try {
+      expect(db.prepare('SELECT user_id, mod, state, updated_at, updated_by FROM user_mod_overrides').all()).toEqual([{ user_id: 'member', mod: 'rgb', state: 'on', updated_at: 'then', updated_by: 'owner' }]);
+      const insert = db.prepare('INSERT INTO user_mod_overrides(user_id,mod,state,updated_at,updated_by) VALUES(?,?,?,?,?)');
+      insert.run('member', 'spin', 'on', 'now', 'owner');
+      expect(() => insert.run('member', 'unknown', 'on', 'now', 'owner')).toThrow(/CHECK/);
+      expect(() => insert.run('member', 'rgb', 'off', 'now', 'owner')).toThrow(/UNIQUE|PRIMARY KEY/);
+      expect(db.prepare('SELECT version FROM schema_migrations WHERE version=21').get()).toEqual({ version: 21 });
       db.prepare('DELETE FROM users WHERE id=?').run('member');
       expect(db.prepare('SELECT * FROM user_mod_overrides').all()).toEqual([]);
     } finally { db.close(); }

@@ -19,6 +19,22 @@ html[data-backwards] :is(
   unicode-bidi: normal;
 }
 
+/* Spin: every element turns around its own center, and so does every letter (split by src/components/spin-letters.tsx).
+   Important declarations beat component enter animations; the reduced-motion rule in the base layer still wins. */
+html[data-spin-mode] body *:where(:not(svg *, script, style, .rgb-mode-overlay, [data-spin-text], [data-spin-text] > span, [data-shy-text], [data-shy-text] > span)) {
+  animation: spin-mode-turn 5s linear infinite !important;
+}
+html[data-spin-mode] body *:nth-child(even) {
+  animation-direction: reverse !important;
+}
+html[data-spin-mode] :is([data-spin-glyph], [data-shy-glyph]) {
+  display: inline-block;
+  animation-duration: 1.6s !important;
+}
+@keyframes spin-mode-turn {
+  to { transform: rotate(1turn); }
+}
+
 @property --rgb-hue {
   syntax: '<number>';
   inherits: true;

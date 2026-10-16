@@ -508,14 +508,33 @@ function migrate(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_mod_overrides (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy')),
+      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
       state TEXT NOT NULL CHECK(state IN ('default','on','off')),
       updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
       PRIMARY KEY(user_id, mod)
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
   `);
-  // Migration 21: replies and tapbacks for all three chat kinds (docs/CHAT.md §15).
+  // Migration 21: the Spin mod joins the account policy. SQLite cannot widen a CHECK in place, so a table created
+  // before 'spin' existed is rebuilt around its rows; a fresh database already has the wider constraint.
+  const policySql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_mod_overrides'").get() as { sql: string }).sql;
+  if (!policySql.includes("'spin'")) {
+    db.exec(`
+      CREATE TABLE user_mod_overrides_next (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
+        state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+        updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+        PRIMARY KEY(user_id, mod)
+      );
+      INSERT INTO user_mod_overrides_next SELECT user_id, mod, state, updated_at, updated_by FROM user_mod_overrides;
+      DROP TABLE user_mod_overrides;
+      ALTER TABLE user_mod_overrides_next RENAME TO user_mod_overrides;
+    `);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'))");
+
+  // Migration 22: replies and tapbacks for all three chat kinds (docs/CHAT.md §15).
   for (const [messages, reactions, parent, key] of [
     ['chat_messages', 'chat_reactions', 'chat_threads', 'thread_id'],
     ['chat_group_messages', 'chat_group_reactions', 'chat_groups', 'group_id'],
@@ -553,10 +572,10 @@ function migrate(db: Db): void {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_reaction_changes_user_time ON chat_reaction_changes(user_id, created_at);
-    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
   `);
 
-  // Migration 22: durable visibility reset thresholds, shared by every tab and server process.
+  // Migration 23: durable visibility reset thresholds, shared by every tab and server process.
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_visibility_resets (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -565,7 +584,7 @@ function migrate(db: Db): void {
       revision INTEGER NOT NULL,
       PRIMARY KEY(user_id, kind, scope)
     );
-    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'));
   `);
   for (const [operation, row] of [['INSERT', 'NEW'], ['DELETE', 'OLD']] as const) {
     db.exec(`CREATE TRIGGER IF NOT EXISTS blocks_chat_${operation.toLowerCase()} AFTER ${operation} ON blocks BEGIN
