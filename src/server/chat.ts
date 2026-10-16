@@ -1,3 +1,6 @@
+import { notifyChat } from './chat-events';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema } from './chat-extras';
+import type { MessageExtras, Reaction } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -32,7 +35,7 @@ const SELF = 'You cannot message yourself.';
 const NOTHING_TO_REPORT = 'This chat has no messages to report.';
 
 export type ChatPeer = { id: string; displayName: string; fullName: string | null; verified: boolean; avatar: string | null };
-export type ChatMessage = { id: string; seq: number; fromMe: boolean; body: string | null; createdAt: string;
+export type ChatMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: 'sender' | 'support' | null };
 /** A messaging pause the student is under: when it ends (null: until lifted), support's reason, and whether they appealed (§14). */
 export type ChatPause = { until: string | null; reason: string; appealed: boolean };
@@ -58,7 +61,7 @@ export type EvidenceItem = { seq: number; senderName: string; fromReported: bool
 export type StoredItem = { seq: number; fromReported: boolean; body: string; createdAt: string; deletedBy: 'sender' | 'support' | null; anchor: boolean; senderId?: string };
 
 type ThreadRow = { id: string; user_low: string; user_high: string; revision: number; last_message_at: string | null; created_at: string };
-type MessageRow = { seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
+type MessageRow = { reply_to_seq: number | null; seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
   deleted_at: string | null; deleted_by: 'sender' | 'support' | null; revision: number };
 type PeerRow = AvatarRow & { display_name: string; full_name: string; school_id: string | null };
 type MemberRow = { last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
@@ -68,7 +71,8 @@ export const chatThreadSchema = chatUserSchema.extend({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: rawBodySchema });
+export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: rawBodySchema, replyTo: replySchema });
+export const chatReactSchema = chatUserSchema.extend(reactionSchema.shape);
 export const chatDeleteSchema = chatUserSchema.extend({ messageId: z.uuid() });
 export const chatReadSchema = chatUserSchema.extend({ seq: z.number().int().min(0) });
 export const chatMuteSchema = chatUserSchema.extend({ muted: z.boolean() });
@@ -208,7 +212,7 @@ export class ChatService {
     this.db.prepare('UPDATE chat_members SET delivered_seq=max(delivered_seq, ?) WHERE thread_id=? AND user_id=? AND delivered_seq<?').run(seq, threadId, viewerId, seq);
   }
   private message(viewerId: string, row: MessageRow): ChatMessage {
-    return { id: row.id, seq: row.seq, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null };
+    return { ...messageExtras(this.db, 'peer', viewerId, row.seq), id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null };
   }
   private latestPage(threadId: string, before?: number): { rows: MessageRow[]; hasEarlier: boolean } {
     const rows = (before === undefined
@@ -328,23 +332,25 @@ export class ChatService {
    */
   typing(viewerId: string, otherId: string, typing: boolean): { typing: boolean } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.access(viewerId, otherId);
       const thread = this.ensureThread(viewerId, otherId);
       this.db.prepare('UPDATE chat_members SET typing_until=? WHERE thread_id=? AND user_id=?').run(typing ? this.iso(CHAT.typingMs) : null, thread.id, viewerId);
       return { typing };
     }).immediate();
+    notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
   }
 
-  send(viewerId: string, otherId: string, clientId: string, raw: string): { message: ChatMessage } {
+  send(viewerId: string, otherId: string, clientId: string, raw: string, replyTo?: number): { message: ChatMessage } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
     const body = parseBody(raw);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.access(viewerId, otherId);
       const existing = this.db.prepare('SELECT * FROM chat_messages WHERE sender_id=? AND id=?').get(viewerId, clientId) as MessageRow | undefined;
       if (existing) {
         const thread = this.findThread(viewerId, otherId);
-        if (!thread || existing.thread_id !== thread.id || existing.body !== body) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if (!thread || existing.thread_id !== thread.id || existing.body !== body || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
@@ -358,40 +364,66 @@ export class ChatService {
         if (started.n >= CHAT.newChatsPerDay) fail('TOO_MANY_REQUESTS', TOO_MANY_NEW_CHATS_MESSAGE);
       }
       const thread = this.ensureThread(viewerId, otherId);
+      validateReply(this.db, 'peer', viewerId, replyTo, thread.id);
       const revision = this.bumpRevision(thread.id);
       const createdAt = this.iso();
-      const row = this.db.prepare('INSERT INTO chat_messages(id,thread_id,sender_id,body,created_at,revision) VALUES(?,?,?,?,?,?) RETURNING *').get(clientId, thread.id, viewerId, body, createdAt, revision) as MessageRow;
+      const row = this.db.prepare('INSERT INTO chat_messages(id,thread_id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?) RETURNING *').get(clientId, thread.id, viewerId, body, createdAt, revision, replyTo ?? null) as MessageRow;
       this.db.prepare('UPDATE chat_threads SET last_message_at=? WHERE id=?').run(createdAt, thread.id);
       this.db.prepare('UPDATE chat_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), first_sent_at=coalesce(first_sent_at, ?), typing_until=NULL WHERE thread_id=? AND user_id=?').run(row.seq, row.seq, createdAt, thread.id, viewerId);
       return { message: this.message(viewerId, row) };
     }).immediate();
+    notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
   }
 
-  delete(viewerId: string, otherId: string, messageId: string): { deleted: true } {
+
+  react(viewerId: string, otherId: string, seq: number, emoji: Reaction | null): { message: ChatMessage } {
+    const result = this.db.transaction(() => {
+      this.access(viewerId, otherId);
+      const thread = this.member(viewerId, otherId);
+      this.notPaused(viewerId);
+      const row = this.db.prepare('SELECT deleted_at FROM chat_messages WHERE seq=?').get(seq) as { deleted_at: string | null } | undefined;
+      if (!row || row.deleted_at || !targetExists(this.db, 'peer', viewerId, seq, thread.id)) return fail('NOT_FOUND', CLOSED);
+      changeReaction(this.db, 'peer', viewerId, seq, emoji, this.iso());
+      this.db.prepare('UPDATE chat_messages SET revision=? WHERE seq=?').run(this.bumpRevision(thread.id), seq);
+      return { message: this.message(viewerId, this.db.prepare('SELECT * FROM chat_messages WHERE seq=?').get(seq) as MessageRow) };
+    }).immediate();
+    notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
+  }
+
+  delete(viewerId: string, otherId: string, messageId: string): { deleted: true; message: ChatMessage } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.access(viewerId, otherId);
       const thread = this.member(viewerId, otherId);
       const row = this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? AND sender_id=? AND id=?').get(thread.id, viewerId, messageId) as MessageRow | undefined;
       if (!row) return fail('NOT_FOUND', CLOSED);
-      if (row.deleted_at) return { deleted: true as const };
+      if (row.deleted_at) return { deleted: true as const, message: this.message(viewerId, row) };
       const revision = this.bumpRevision(thread.id);
       this.db.prepare("UPDATE chat_messages SET deleted_at=?, deleted_by='sender', revision=? WHERE seq=?").run(this.iso(), revision, row.seq);
-      return { deleted: true as const };
+      return { deleted: true as const, message: this.message(viewerId, this.db.prepare('SELECT * FROM chat_messages WHERE seq=?').get(row.seq) as MessageRow) };
     }).immediate();
+    notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
   }
 
   read(viewerId: string, otherId: string, seq: number): { unreadChats: number; unreadAt: string } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
-    return this.db.transaction(() => {
+    let changed = false;
+    const result = this.db.transaction(() => {
       this.access(viewerId, otherId);
       const thread = this.findThread(viewerId, otherId);
       if (thread) {
+        const before = this.memberRow(thread.id, viewerId)?.last_read_seq;
         this.db.prepare(`UPDATE chat_members SET last_read_seq=max(last_read_seq, min(?, (SELECT coalesce(max(seq), 0) FROM chat_messages WHERE thread_id=?)))
           WHERE thread_id=? AND user_id=?`).run(seq, thread.id, thread.id, viewerId);
+        changed = this.memberRow(thread.id, viewerId)?.last_read_seq !== before;
       }
       return this.unreadChats(viewerId);
     }).immediate();
+    if (changed) notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
   }
 
   /** Mute is the viewer's own setting, so a paused student can still use it. Returns the new badge count (muted chats are left out of it). */
@@ -483,6 +515,8 @@ export class ChatService {
   }
   redactMessage(adminId: string, reportId: string, seq: number): void {
     this.service.admin(adminId);
+    let groupId: string | null = null;
+    let recipients: string[] = [];
     this.db.transaction(() => {
       const report = this.evidenceReport(reportId);
       const target = report.items.find(entry => entry.seq === seq);
@@ -497,10 +531,19 @@ export class ChatService {
         const revision = this.bumpRevision(report.thread_id!);
         this.db.prepare("UPDATE chat_messages SET deleted_at=coalesce(deleted_at, ?), deleted_by='support', revision=? WHERE seq=?").run(this.iso(), revision, seq);
       }
+      groupId = report.group_id;
+      recipients = groupId
+        ? (this.db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=? AND left_at IS NULL').all(groupId) as { user_id: string }[]).map(row => row.user_id)
+        : (this.db.prepare('SELECT user_id FROM chat_members WHERE thread_id=?').all(report.thread_id) as { user_id: string }[]).map(row => row.user_id);
       const items = report.items.map(entry => entry.seq === seq ? { ...entry, deletedBy: 'support' as const } : entry);
       this.db.prepare('UPDATE reports SET evidence=? WHERE id=?').run(JSON.stringify(items), reportId);
       this.audit(adminId, 'chat.redact', report.school_id, { reportId, seq });
     }).immediate();
+    if (groupId) notifyChat(recipients, { kind: 'group', key: groupId });
+    else for (const recipient of recipients) {
+      const other = recipients.find(id => id !== recipient);
+      if (other) notifyChat([recipient], { kind: 'peer', key: other });
+    }
   }
   pauseChat(adminId: string, raw: z.infer<typeof pauseChatSchema>): void {
     this.service.admin(adminId);

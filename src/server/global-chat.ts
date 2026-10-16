@@ -1,3 +1,6 @@
+import { notifyChat } from './chat-events';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision } from './chat-extras';
+import type { MessageExtras, Reaction } from '@/domain/chat';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, bodyError, censorBody, normalizeBody, rawBodySchema } from '@/domain/chat';
@@ -24,7 +27,7 @@ const MISSING = 'That message is gone.';
 
 export type GlobalDeletedBy = 'sender' | 'owner' | null;
 export type GlobalSender = { id: string; displayName: string; verified: boolean; avatar: string | null };
-export type GlobalMessage = { id: string; seq: number; fromMe: boolean; body: string | null; createdAt: string;
+export type GlobalMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: GlobalDeletedBy; editedAt: string | null;
   /** The owner's reason for editing or removing this message (may be empty); null when the owner didn't touch it. */
   reason: string | null; sender: GlobalSender };
@@ -34,7 +37,7 @@ export type GlobalSummary = {
   unread: number; muted: boolean;
 };
 
-type MessageRow = { seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
+type MessageRow = { reply_to_seq: number | null; seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
   deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type MemberRow = { last_read_seq: number; muted: number };
@@ -43,10 +46,11 @@ export const globalThreadSchema = z.object({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema });
+export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema, replyTo: replySchema });
 export const globalMessageSchema = z.object({ messageId: z.uuid() });
 /** The owner's reason, shown to everyone. Ignored when a sender deletes their own message. */
 export const reasonSchema = z.string().trim().max(200).default('');
+export const globalReactSchema = reactionSchema;
 export const globalDeleteSchema = globalMessageSchema.extend({ reason: reasonSchema });
 export const globalEditSchema = globalMessageSchema.extend({ body: rawBodySchema, reason: reasonSchema });
 export const globalReadSchema = z.object({ seq: z.number().int().min(0) });
@@ -134,7 +138,8 @@ export class GlobalChatService {
   }
   private message(viewerId: string, row: MessageRow): GlobalMessage {
     return {
-      id: row.id, seq: row.seq, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
+      ...messageExtras(this.db, 'global', viewerId, row.seq),
+      id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at,
       reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null,
       sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
@@ -182,7 +187,7 @@ export class GlobalChatService {
       const base = { peer: null, room: this.room(viewerId), revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts: [] as Receipt[] };
       const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
       if (cursor.after !== undefined) {
-        const changes = cursor.after > revision ? null
+        const changes = cursor.after > revision || cursor.after < visibilityResetRevision(this.db, 'global', viewerId, 'global') ? null
           : this.db.prepare(`${MESSAGE_SQL} WHERE ${NOT_BLOCKED_SENDER_SQL('?')} AND c.revision>? ORDER BY c.seq LIMIT ?`).all(viewerId, cursor.after, CHAT.maxChanges + 1) as MessageRow[];
         if (changes && changes.length <= CHAT.maxChanges) return { ...base, messages: toMessages(changes), hasEarlier: false, reset: false };
         const page = this.latestPage(viewerId);
@@ -193,13 +198,13 @@ export class GlobalChatService {
     })();
   }
 
-  send(viewerId: string, clientId: string, raw: string): { message: GlobalMessage } {
+  send(viewerId: string, clientId: string, raw: string, replyTo?: number): { message: GlobalMessage } {
     const body = parseGlobalBody(raw);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.service.ready(viewerId);
       const existing = this.db.prepare(`${MESSAGE_SQL} WHERE c.sender_id=? AND c.id=?`).get(viewerId, clientId) as MessageRow | undefined;
       if (existing) {
-        if (existing.body !== body && !existing.edited_at) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if ((existing.body !== body && !existing.edited_at) || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       // IDs are unique across the room (owner Remove and Edit address messages by ID), so another member's ID is refused.
@@ -208,31 +213,50 @@ export class GlobalChatService {
       const sent = (since: number) => countSentSince(this.db, viewerId, this.iso(-since));
       if (sent(60_000) >= CHAT.perMinute) fail('TOO_MANY_REQUESTS', 'You’re sending messages too fast. Wait a minute and try again.');
       if (sent(DAY) >= CHAT.perDay) fail('TOO_MANY_REQUESTS', 'You reached today’s message limit. Try again tomorrow.');
+      validateReply(this.db, 'global', viewerId, replyTo);
       const revision = this.bumpRevision();
       const createdAt = this.iso();
-      const { seq } = this.db.prepare('INSERT INTO global_messages(id,sender_id,body,created_at,revision) VALUES(?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, createdAt, revision) as { seq: number };
+      const { seq } = this.db.prepare('INSERT INTO global_messages(id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, createdAt, revision, replyTo ?? null) as { seq: number };
       this.db.prepare('UPDATE global_chat SET last_message_at=? WHERE id=1').run(createdAt);
       this.ensureMember(viewerId);
       this.db.prepare('UPDATE global_members SET last_read_seq=max(last_read_seq, ?) WHERE user_id=?').run(seq, viewerId);
       return { message: this.message(viewerId, this.db.prepare(`${MESSAGE_SQL} WHERE c.seq=?`).get(seq) as MessageRow) };
     }).immediate();
+    notifyChat([], { kind: 'global', key: 'global' });
+    return result;
+  }
+
+  react(viewerId: string, seq: number, emoji: Reaction | null): { message: GlobalMessage } {
+    const result = this.db.transaction(() => {
+      this.service.ready(viewerId);
+      this.notPaused(viewerId);
+      const row = this.db.prepare('SELECT deleted_at FROM global_messages WHERE seq=?').get(seq) as { deleted_at: string | null } | undefined;
+      if (!row || row.deleted_at || !targetExists(this.db, 'global', viewerId, seq)) return fail('NOT_FOUND', MISSING);
+      changeReaction(this.db, 'global', viewerId, seq, emoji, this.iso());
+      this.db.prepare('UPDATE global_messages SET revision=? WHERE seq=?').run(this.bumpRevision(), seq);
+      return { message: this.message(viewerId, this.db.prepare(`${MESSAGE_SQL} WHERE c.seq=?`).get(seq) as MessageRow) };
+    }).immediate();
+    notifyChat([], { kind: 'global', key: 'global' });
+    return result;
   }
 
   /** The sender deletes their own message; the owner deletes anyone's, with a reason everyone can see (audited). */
-  delete(viewerId: string, messageId: string, rawReason = ''): { deleted: true } {
+  delete(viewerId: string, messageId: string, rawReason = ''): { deleted: true; message: GlobalMessage } {
     const reason = reasonSchema.parse(rawReason);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.service.ready(viewerId);
       const row = this.find(messageId);
       if (!row) return fail('NOT_FOUND', MISSING);
       const owner = this.service.isAdmin(viewerId);
       if (row.sender_id !== viewerId && !owner) fail('FORBIDDEN', 'Only the owner can delete other people’s messages.');
-      if (row.deleted_at) return { deleted: true as const };
+      if (row.deleted_at) return { deleted: true as const, message: this.message(viewerId, row) };
       const by = row.sender_id === viewerId ? 'sender' : 'owner';
       this.db.prepare('UPDATE global_messages SET deleted_at=?, deleted_by=?, reason=?, revision=? WHERE seq=?').run(this.iso(), by, by === 'owner' ? reason : null, this.bumpRevision(), row.seq);
       if (by === 'owner') this.audit(viewerId, 'global.delete', { seq: row.seq, senderId: row.sender_id, reason });
-      return { deleted: true as const };
+      return { deleted: true as const, message: this.message(viewerId, this.find(messageId)!) };
     }).immediate();
+    notifyChat([], { kind: 'global', key: 'global' });
+    return result;
   }
 
   /** Owner only: replaces the text of any message, with a reason everyone can see. The filter applies to the new text; the edit is audited. */
@@ -240,7 +264,7 @@ export class GlobalChatService {
     this.service.admin(adminId);
     const body = parseGlobalBody(raw);
     const reason = reasonSchema.parse(rawReason);
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       const row = this.find(messageId);
       if (!row || row.deleted_at) return fail('NOT_FOUND', MISSING);
       if (row.body !== body || (row.reason ?? '') !== reason) {
@@ -249,6 +273,8 @@ export class GlobalChatService {
       }
       return { message: this.message(adminId, this.find(messageId)!) };
     }).immediate();
+    notifyChat([], { kind: 'global', key: 'global' });
+    return result;
   }
 
   /** Also returns the Messages badge count (the room counts as one chat), stamped like chat.read's, so the badge updates at once. */

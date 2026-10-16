@@ -61,11 +61,18 @@ export type Auth = { userId: string | null; authAt: number | null };
  * out everywhere since this session began (users.session_epoch; sessions from before the epoch existed count as 0).
  */
 export async function getAuth(): Promise<Auth> {
-  return authFromSession(getDb(), await getServerSession(authOptions));
+  return (await getAuthValidator())();
 }
-export function authFromSession(db: Db, session: Pick<Session, 'user' | 'epoch' | 'authAt'> | null, now = Date.now()): Auth {
+/** Captures this request's signed session, then rechecks expiry and account revocation on every call. */
+export async function getAuthValidator(): Promise<() => Auth> {
+  const session = await getServerSession(authOptions);
+  const db = getDb();
+  return () => authFromSession(db, session);
+}
+export function authFromSession(db: Db, session: (Pick<Session, 'user' | 'epoch' | 'authAt'> & Partial<Pick<Session, 'expires'>>) | null, now = Date.now()): Auth {
   const userId = session?.user?.id || null;
   if (!userId) return { userId: null, authAt: null };
+  if (session?.expires && !(Date.parse(session.expires) > now)) return { userId: null, authAt: null };
   const row = db.prepare('SELECT session_epoch, suspended_at FROM users WHERE id=?').get(userId) as { session_epoch: number; suspended_at: string | null } | undefined;
   if (!row || row.suspended_at || row.session_epoch !== (session?.epoch ?? 0)) return { userId: null, authAt: null };
   const authAt = session?.authAt ?? null;

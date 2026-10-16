@@ -53,13 +53,15 @@ Sources read before writing:
 
 **D9. Messages are text only. `https://` links are clickable. Nothing is ever fetched.** There are no images, files, reactions or previews. *Amended 2026-09-25 by §13:* text carries a small markdown subset (bold, italic, strikethrough, code, quotes, lists), rendered as React nodes with no HTML; links are unchanged, and `[text](url)` is deliberately not supported because it would hide the host. An `https://` URL renders as `<a href target="_blank" rel="noopener noreferrer nofollow ugc">`, and the link text is always the full URL, so the host is always visible (only a slur-shaped word in it shows as asterisks, while the `href` keeps the real address; §11). `http://`, `javascript:`, `data:` and every other scheme stay plain text. The server never fetches a URL from a message. This follows two of the three judges. Copying Google Docs links by long-press is the kind of friction students leave apps over. *Owner can change:* `CHAT.linkify = false` renders links as plain text.
 
+*Amended 2026-10-16 by the owner (§15):* reactions and quoted replies are now available in one-to-one chats, friend groups and the Global room. Images, files and fetched link previews are still out.
+
 **D10. There is no presence, no typing indicator and no read receipts.** "Online now", "typing…" and "seen" tell a stalker or a pressuring friend exactly when a student is active. A schedule app gains nothing from them.
 
 *Reversed 2026-09-25 by the owner (§13):* one-to-one chats and friend groups now show "Delivered", "Read" (or "Read by n") under the sender's newest message and a "typing…" row. The safety reasoning above still holds; the owner weighed it against students expecting these from every other messaging app. The Global chat room has neither. There is still no "online now" or "last seen". A per-account switch to turn receipts off is the natural next step if the concern turns out to be real.
 
 **D11. The phone dock keeps its 6 tabs. "Messages" is a top-bar icon on phones and a 7th sidebar item on desktop.** Both surfaces use the one name "Messages". The reasons are in §7.
 
-**D12. Delivery is polling over the existing tRPC endpoint.** There is no SSE, no WebSocket and no tRPC subscription. The reasons are in §6.
+**D12. Delivery uses SSE-triggered polling over the existing tRPC endpoint.** Amended 2026-10-16: an authenticated, same-origin SSE connection wakes the existing polls immediately. The old intervals remain the fallback. There is no WebSocket or tRPC subscription. See §6.
 
 **D13. Push notifications are generic, delayed, capped, quiet at night, and can be switched off two ways.**
 - The payload has no names and no text. It always shows "You have new messages."
@@ -428,7 +430,7 @@ export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: s
 
 ```ts
 export type ChatPeer = { id: string; displayName: string; fullName: string | null; verified: boolean };
-export type ChatMessage = { id: string; seq: number; fromMe: boolean; body: string | null; createdAt: string;
+export type ChatMessage = { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: 'sender' | 'support' | null };                       // body null when deleted or hidden
 export type ChatPause = { until: string | null };                  // ISO; null = until lifted
 export type InboxRow =
@@ -452,8 +454,8 @@ Every `chat.*` procedure is **`accountScoped`**, so every input also carries `ac
 | --- | --- | --- | --- |
 | `chat.inbox` | query | none | `{ rows: InboxRow[]; unreadChats: number; unreadAt: string; pause: ChatPause \| null; global: GlobalSummary }`. `global` is the global room's `{ lastMessage, unread, muted }` summary (§11), added by the router. `unreadAt` is the server's ISO time when the count was computed (§6). `rows` holds, in order: open rows with messages, newest first; closed rows (`last_message_at` within 30 days), newest first; then friends with no messages, by name. A thread with `last_message_at IS NULL`, created by `mute`, counts as "no messages" and never becomes a closed row. |
 | `chat.thread` | query | `{ userId, after?: z.number().int().min(0), before?: z.number().int().positive() }`, with a refine that forbids both | `{ peer: ChatPeer; messages: ChatMessage[] /* ascending seq */; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause \| null }`. See the cursor rules after this table. |
-| `chat.send` | mutation | `{ userId, clientId: z.uuid(), body: rawBodySchema }`, then `parseBody` in the service | `{ message: ChatMessage }`. **It deliberately returns no revision.** The client advances its cursor only from polls, so it can never skip the other person's messages. |
-| `chat.delete` | mutation | `{ userId, messageId: z.uuid() }` | `{ deleted: true }` |
+| `chat.send` | mutation | `{ userId, clientId: z.uuid(), body: rawBodySchema }`, then `parseBody` in the service | `{ message: ChatMessage }`. The message includes its per-message `revision`. The client advances its polling cursor only from thread responses, so it cannot skip incoming messages. |
+| `chat.delete` | mutation | `{ userId, messageId: z.uuid() }` | `{ deleted: true, message: ChatMessage }` |
 | `chat.read` | mutation | `{ userId, seq: z.number().int().min(0) }` | `{ unreadChats: number; unreadAt: string }` |
 | `chat.mute` | mutation | `{ userId, muted: z.boolean() }` | `{ muted: boolean; unreadChats: number; unreadAt: string }`. Muted chats are left out of the badge, so the new count comes back with the answer (§6). |
 | `chat.report` | mutation | `{ userId, category: reportCategorySchema, note: z.string().trim().max(2000).default(''), seq: z.number().int().positive().optional(), block: z.boolean() }` | `{ blocked: boolean }`. With `seq`, the snapshot is the anchored window. Without it, the latest 30. |
@@ -538,16 +540,15 @@ Every link also wraps `fetch` in `timedFetch` (`api.ts`): a request that has no 
 
 ## 6. Delivery
 
-### Transport: polling
+### Transport: SSE-triggered polling
 
-SSE, WebSockets and tRPC subscriptions were rejected for five reasons:
-1. Production runs through a Cloudflare tunnel, and the dev server through tailnet `serve`. Long-lived streams there need heartbeats inside proxy idle limits, and every deploy drops them. A reconnect-and-catch-up path is needed either way. Building only that path gives one code path to test, not two.
-2. Push runs in a separate worker process (`scripts/worker.ts`). A stream would need an in-process event bus that breaks as soon as there are two server processes.
-3. A Next 16 route handler can return a streaming `Response`, but it would bypass tRPC's `accountScoped` middleware, and every event would need a fresh permission recheck.
-4. `httpSubscriptionLink` would add a second transport with its own failure modes.
-5. A thread poll is one indexed range read plus three small permission lookups, which SQLite handles trivially at pilot scale.
+Amended 2026-10-16: `GET /api/chat/events` streams notifications from an in-process bus cached on `globalThis`, shared across Next route and service modules in the single production Node process. Writes notify only after their SQLite transaction commits. Each event wakes the existing tRPC poll, which still checks permissions and returns message revisions. The intervals below remain the fallback for disconnections, missed events, deploys and changes originating outside this process. Multiple web processes would need a shared bus.
 
-The `revision` cursor is already the right shape for `Last-Event-ID`. If streaming is added later, the data model does not change and polling stays as the fallback.
+The route resolves the validated session account with `getUserId()`, exactly the account that tRPC's `accountScoped` requires. There is no acting-account override or caller-selected account. Signed-out requests return 401; cross-site requests return 403. The stream sends `retry: 3000` first and a comment heartbeat every 25 seconds, with `Cache-Control: no-cache, no-transform`, `Connection: keep-alive` and `X-Accel-Buffering: no`. Each account may have eight streams; opening another closes its oldest. Abort, cancellation and stalled readers release their subscription and timer. CSP permits same-origin connections and the service worker does not intercept API routes.
+
+Frames use `event: chat` and JSON data with exactly `{ "kind": "peer" | "group" | "global", "key": string }`. No message text, names, reaction contents or typing state travel in a frame. Peer changes notify the other member with the actor's user ID as `key`, including typing and read receipts. Group changes notify current members with the group ID; read changes exclude the reader. Global changes broadcast to every subscribed account with `{ "kind": "global", "key": "global" }`. Global has no typing or receipt events. Mute changes are silent. Support redactions notify the affected conversation's members.
+
+`src/client/chat-events.ts` exports `connectChatEvents(onEvent, onState?)` and `ChatEvent`, without React. EventSource handles ordinary network reconnects; a terminal closed connection retries from 3 seconds up to 30 seconds. The helper closes after a minute hidden, reopens when visible, and returns a disposer. The client integration should dispatch the existing `quasar:chat-activity` event or call the matching thread's `pollNow` on a notification. Poll immediately on reconnect too, because notifications are not replayed. Keep one shared connection per page where possible; separate inbox and thread consumers should share it. The authorized tRPC response remains the source of message data.
 
 ### Poll schedule
 
@@ -565,6 +566,7 @@ The `revision` cursor is already the right shape for `Last-Event-ID`. If streami
 - After 2 consecutive failures the header shows "Reconnecting…".
 
 **An immediate poll fires on:**
+- an SSE chat notification or reconnection;
 - `visibilitychange` to visible;
 - `state.online` turning true. This is an effect dependency, not a raw `online` listener, because `use-workspace` flips `online` in its own listener and a raw listener would race it and skip the poll;
 - opening a thread;
@@ -709,6 +711,7 @@ A top-bar messages icon is the pattern students know from Instagram, and it can 
 - The name is a button, `aria-label="Open {name}’s profile"`, that goes to `/people?member={id}`. Under it, a small line with the Chip "Verified" (success) or "Not verified" (outline), plus the full name when the phase-3 rule allows.
 - IconButton "Mute notifications" / "Unmute notifications" (icon `bellOff` / `bell`).
 - Ghost Buttons "Report" and "Block". "Report" is hidden while the thread has no messages (§3.1).
+- *Note (2026-10-16):* since the friend-groups release the mute, report and block controls live in a header "⋯" DropdownMenu as menu items ("View profile", "Mute notifications" / "Unmute notifications", "Report {name}", "Block {name}"; groups add "Members", "Rename group", "Leave group"), and a closed row's Report is a menu item "Report {name}" under "More options for {name}". Playwright uses those menuitem names. The Global room header keeps a standalone mute IconButton.
 - While polling fails: Hint `role="status"` "Reconnecting…".
 
 **Log:**
@@ -866,6 +869,20 @@ Add `message: MessageCircle`, `send: SendHorizontal` and `bellOff: BellOff`.
 
 ---
 
+### Amendments 2026-10-16: messaging-app look and feel
+
+The owner asked for the view to act like iMessage and WhatsApp. The paragraphs above describe the first version; where they disagree with this list, this list wins.
+
+- **Runs and tails.** Consecutive messages from one sender within `RUN_GAP_MS` form a run: 2 px apart inside the run, about 10 px between runs, the corners facing a neighbour tightened, and an SVG tail on the last bubble of the run. Their bubbles use the card colour so they read on the wallpaper. New bubbles rise in over 160 ms unless the student prefers reduced motion.
+- **Timestamps.** The per-run time labels are gone. A centred muted cluster header ("Today 8:30 AM", "Yesterday 4:05 PM", "Mon 3:02 PM") opens each day and each gap longer than `RUN_GAP_MS`; a tap on a bubble toggles that bubble's own small time. The `title` on each bubble still carries the full timestamp. The delivery or read caption stays under the viewer's newest own message, 12 px and right-aligned.
+- **Message actions.** The inline action row and the always-visible "⋯" are replaced by a sheet anchored to the bubble. It opens from a long press (about 400 ms, cancelled by movement or scrolling), a right-click, or the "Message actions" IconButton, which is visually hidden until hover or keyboard focus but stays in the DOM. The sheet holds the six-tapback strip ("React with heart", "React with thumbs up", and so on, `aria-pressed` for the viewer's own), then "Reply to message", "Add as task", "Copy", "Report message", "Edit message" (owner, room only) and "Delete message" / "Remove message". Picking a row closes the sheet; "Added to Tasks." shows as a caption under the bubble.
+- **Reactions and replies (§15).** Tapback pills hang off the bubble's bottom corner opposite the tail; each is a button named like "❤️ 2, you reacted", soft primary with a ring for the viewer's own, and tapping toggles it. Double-tap on a bubble toggles ❤️. Swipe right on a bubble (56 px, cancelled by vertical drags) or the Reply row sets the composer's reply target, shown as a quote strip with "Cancel reply"; Escape clears it. A bubble with `replyTo` shows a quote card above its text; tapping it scrolls to and briefly highlights the target, loading older pages first if needed, and a gone target reads "Message unavailable".
+- **Composer.** A pill-shaped Textarea with the Send arrow inside its right end (disabled while the draft is empty) and an "Aa" button on the left. Enter sends on every device; Shift+Enter, Ctrl+Enter and Cmd+Enter insert a newline, and a composing IME keeps its Enter. `enterKeyHint` is "send" everywhere. Selecting text in the field floats the Formatting toolbar over the selection; the "Aa" button pins the same toolbar above the field; a hint under it appears the first three times it opens (a localStorage counter, no text, so D5 holds).
+- **Wallpaper.** The log's frame carries `.chat-wallpaper`, a 240 px tile of pencils, books, calculators, rulers and stars masked out of the text colour at about 7 %, so it follows both themes. The header and composer are translucent bars over it.
+- **Chat list.** 44 px avatars, inset hairlines between rows, 13 px section labels, and the soft primary token for the selected row on desktop. Every accessible name from the list above is unchanged.
+- **Notifications nudge.** `useChatNotifications` (`chat-notifications.tsx`) combines push support, `Notification.permission`, the server's VAPID config, the browser's subscription and the account's `chatPush` flag. When notifications are effectively off on this device, a Callout "You'll miss replies" / "Message notifications are off on this device." tops the chat list and a one-line version sits above each composer, with "Turn on" (the account sheet's `enablePush` flow) and "Not now" (rests it for 24 h via a localStorage timestamp; a bell-off Chip "Notifications off for this device" in the thread header brings it back). A denied permission turns the button into "How to allow", which opens a short Modal. Nothing shows when the server has no push config.
+- **Live delivery (D12, §6).** `use-chat.ts` opens one `EventSource` per signed-in account while any inbox or thread hook is mounted. Every event re-polls the inbox, and a thread polls when the event is about its conversation; each connect or reconnect polls everything once, because the stream replays nothing. While connected the fallback intervals relax to 15 s (thread) and 30 s (inbox); disconnected, the original 4 s and 10 s return. Measured delivery on the test server is 150 to 270 ms. Friendship changes and appeal results are not chat events and still arrive on the inbox fallback.
+
 ## 8. File plan
 
 | File | Change | Est. lines |
@@ -919,7 +936,7 @@ These are never cut:
 - pauses;
 - every rate and push cap;
 - `splitLink` and `UNIQUE(sender_id, id)`;
-- no revision returned from `send`;
+- `send` returns the message revision, but never advances the polling cursor;
 - the router allowlist test and the revocation tests.
 
 ---
@@ -978,7 +995,7 @@ These are never cut:
    - Only the sender can delete: bob deleting alice's message gives `NOT_FOUND`.
    - Both people see `body: null, deletedBy: 'sender'`.
    - `thread({ after: previous revision })` returns the deletion.
-   - `send` returns no `revision` key.
+   - `send.message.revision` matches the stored row, and only thread responses advance the polling cursor.
    - With 120 messages: the first page is the latest 50 with `hasEarlier`; `before` walks back until `hasEarlier` is false; more than 200 changes returns `reset: true`. `after` greater than the thread's revision (and `after: 5` on a pair with no thread) also returns `reset: true`.
 9. **Reports.**
    - The header report holds the latest 30 from both people, including one deleted before the report (text present, `deletedBy: 'sender'`). A message whose text was erased is excluded.
@@ -1128,6 +1145,8 @@ Added 2026-09-24. One room, **Global chat**, that every member with names entere
 
 **Tests.** `src/domain/chat-filter.test.ts` (swearing passes, slurs and obfuscations fail, innocent words pass), `src/server/global-chat.test.ts` (access, filter, delete and edit permissions with reasons and audit rows, revision polling, paging, unread and mute, limits and pauses, retry IDs, retention, account scoping) and the "global chat" test in `tests/e2e/chat.spec.ts`.
 
+A block or unblock advances the room revision and records a durable per-viewer visibility reset threshold in `chat_visibility_resets`, migration 22. An incremental poll whose `after` cursor predates that threshold returns the latest full page with the existing `reset: true` flag. The client replaces its loaded window, removing blocked senders and re-resolving quotes without their text or identity. Every tab with an older cursor resets independently; a poll never consumes the threshold. No new thread response field is required. Affected messages and replies also receive the new message revision, so delayed mutation responses cannot overwrite those refreshed rows. Unblocking uses the same replacement flow to restore visible messages.
+
 ## 12. Friend groups (migration 17)
 
 Added 2026-09-25. A **group** is a named chat of up to `CHAT.groupMaxMembers` (20) people. The student who creates it is its **admin**: only they add people (their own accepted friends, with no block between the two of them), remove people and rename it; anyone can leave, and when the admin leaves the member who has been in the group longest becomes admin (the last member leaving deletes the group). A member sees the messages sent since they joined, so adding someone never exposes earlier chatter; someone removed and re-added starts again from that moment. Members can tap a name to open that person's profile, where Block and Report a member live as before.
@@ -1145,6 +1164,8 @@ Added 2026-09-25. A **group** is a named chat of up to `CHAT.groupMaxMembers` (2
 **API (`group` router, all account-scoped).** `create({ name, memberIds })`, `rename`, `addMembers`, `removeMember`, `leave`, `thread({ groupId, after? | before? })` (the same page shape as `chat.thread`, with `group: { id, name, createdAt, role, members }` and `receipts`), `send`, `delete`, `read`, `mute`, `typing`, `report({ groupId, category, note, seq, block })`. `chat.inbox` gains `groups: GroupSummary[]`. Errors are fixed strings: "You are not in this group." (`NOT_FOUND`, for strangers and people who left), "Only the group admin can do that." (`FORBIDDEN`), "You can only add your friends to a group." (`BAD_REQUEST`, the same wording whether the person is not a friend or a block exists, so it is no probe), "A group can have up to 20 people.", "You created 5 groups today. Try again tomorrow.".
 
 **Tests.** `src/server/group-chat.test.ts` and the two group tests in `tests/e2e/chat.spec.ts`.
+
+Group polls use the same visibility reset thresholds as the Global room in §11. A block or unblock advances each current group's revision and records the blocker's threshold for that group. Polls with older cursors return the latest full page with `reset: true`, which makes the client replace all loaded rows and suppress blocked quotes, including their sender names and `fromMe`. Other members keep their own visibility rules.
 
 ## 13. Profile pictures, formatting, receipts and typing (migration 17)
 
@@ -1167,3 +1188,81 @@ Added 2026-09-25 at the owner's request: a student always sees why support pause
 - `support.appeal({ kind: 'pause' | 'ban', schoolId?, message })` inserts a `support_requests` row of `kind` `appeal:pause` or `appeal:ban` (a new column; existing requests and feedback have `''`), one open appeal per sanction (`CONFLICT` "You already sent an appeal. Support will review it."), under the existing five-open-requests cap. It appears in the owner's "Correction requests and appeals" inbox with an "Appeal: …" chip, the student's name and buttons **Lift pause** / **Lift removal** (which resolve the appeal) or **Keep as is** (which only resolves it).
 - `admin.bans` and `admin.liftBan({ userId, schoolId })` back a new **Removed members** section on `/admin`; lifting a removal deletes the `school_bans` row, resolves the open appeal and writes `member.restore` to `audit_log`. `admin.liftChatPause` now also resolves an open pause appeal.
 - Tests: `src/server/sanctions.test.ts`, and the appeal steps of the harassment scenario in `tests/e2e/chat.spec.ts`.
+
+## 15. Replies and reactions (migration 21)
+
+Added 2026-10-16 at the owner's request. One-to-one chats, friend groups and the Global room now support quoted replies and the same six tapbacks as iMessage. Neither feature changes the report snapshot or the owner's access to private text.
+
+**Replies.** Every `send` accepts optional `replyTo`, a positive message seq in that thread. A missing target or a target in another thread gets `BAD_REQUEST` "That message is no longer available." Group targets must be visible to the sender: sent since their current join time, from someone they have not blocked. The Global room also excludes blocked senders. A deleted or support-hidden target remains a valid quote. Retry IDs still identify the original body and quote, and an already-stored retry does not revalidate a target that retention has since removed or spend quota.
+
+Every message returned by `thread`, `send`, `react`, `delete` or Global `edit` carries `replyTo: null | { seq, fromMe, senderName, preview }`. The server resolves the target through a self-join when it reads the message. The name is the target sender's current display name, and the client chooses whether to show "You" from `fromMe`. The preview strips the supported markdown with `plainText`, censors slurs including those inside https URLs, collapses whitespace, trims and cuts to 140 characters. It is null when the target is deleted, hidden, erased, no longer present, before the reader's group join time or from someone the reader blocked. Whenever the target is unavailable, the quote retains its seq but has `senderName: ''`, `fromMe: false` and `preview: null`. This includes soft deletion, support hiding, retention, pre-join group history and blocked senders, so a quote cannot disclose an unavailable sender's identity. The client should show its unavailable-message copy for a null preview.
+
+**Reactions.** `REACTIONS` in `src/domain/chat.ts` fixes the display order to `['❤️', '👍', '👎', '😂', '‼️', '❓']`; `Reaction` is its element type. Each member has at most one reaction on a message, including their own messages. The same emoji toggles off, a different one replaces it, and null removes it. Other emoji get `BAD_REQUEST`. Deleted or hidden messages get `NOT_FOUND`. All three mutations recheck the thread's read permissions and messaging pause inside an immediate transaction. Groups also enforce join-time and block visibility, and the room enforces its one-way block rule. Closed private chats keep `NOT_FOUND` "This chat is closed." The rolling limit is `CHAT.reactionsPerMinute`, 60 requests per member across all chat kinds. Removing a reaction uses the same budget, so toggle spam cannot bypass it. Excess requests get `TOO_MANY_REQUESTS` "You’re reacting too fast. Wait a minute and try again."
+
+Every message carries `reactions: { emoji: Reaction; count: number; mine: boolean }[]`, in `REACTIONS` order, or an empty array. Counts include every member who reacted; `mine` is specific to the viewer. Reactions add no message seq, read marker, unread count, list activity time, preview, push or badge update. The mutation returns the complete message with the caller's new reaction summary, so the client can merge it immediately.
+
+**Delivery.** A reaction increments the thread or room revision and stamps that revision on the existing message. The next `thread({ after: previousRevision })` therefore resends that message. Every message row carries `revision: number`, the stored per-message revision used by the poll cursor. Clients merge rows by seq with newest-revision-wins and reject a row with a lower revision, including delayed send or reaction responses that arrive after deletion. The thread response revision is the polling cursor; a send response must never advance it. `delete` returns `{ deleted: true, message }`, including on an idempotent retry, so its tombstone can be merged immediately. Migration triggers also resend replies when their target is edited, deleted or hard-deleted, so an open quote loses its preview on the next poll without waiting for a full reload. A hard-deleted target's seq deliberately stays in `reply_to_seq`; it is not a foreign key that would delete or detach the reply. Reaction summaries and quotes are resolved for the viewer on every read; report evidence keeps its existing frozen-body shape.
+
+**API.** These are account-scoped mutations. All UUID fields are strings, and `seq` and `replyTo` are positive integers. Existing message fields are unchanged; each message type now includes `MessageExtras`.
+
+```ts
+import type { Reaction, MessageExtras } from '@/domain/chat';
+import type { ChatMessage } from '@/server/chat';
+import type { GroupMessage } from '@/server/group-chat';
+import type { GlobalMessage } from '@/server/global-chat';
+
+// Inputs to the tRPC procedures, including account binding:
+type PeerSend = { accountId: string; userId: string; clientId: string; body: string; replyTo?: number };
+type GroupSend = { accountId: string; groupId: string; clientId: string; body: string; replyTo?: number };
+type GlobalSend = { accountId: string; clientId: string; body: string; replyTo?: number };
+type PeerReact = { accountId: string; userId: string; seq: number; emoji: Reaction | null };
+type GroupReact = { accountId: string; groupId: string; seq: number; emoji: Reaction | null };
+type GlobalReact = { accountId: string; seq: number; emoji: Reaction | null };
+
+// chat.send(PeerSend), chat.react(PeerReact) -> { message: ChatMessage }
+// group.send(GroupSend), group.react(GroupReact) -> { message: GroupMessage }
+// global.send(GlobalSend), global.react(GlobalReact) -> { message: GlobalMessage }
+// chat.thread, group.thread and global.thread keep their existing input/page shapes.
+// Their messages now carry the required MessageExtras fields:
+type Extras = {
+  replyTo: null | { seq: number; fromMe: boolean; senderName: string; preview: string | null };
+  reactions: { emoji: Reaction; count: number; mine: boolean }[];
+};
+```
+
+**Data.** Migration 21 is additive and safe to reopen. It adds nullable `reply_to_seq INTEGER` to `chat_messages`, `chat_group_messages` and `global_messages`, with an index on that column in each table. The reaction table DDL is below; each message foreign key cascades through message retention and thread deletion. No extra retention SQL is needed in `jobs.ts`. The short-lived rate-limit rows record no message or emoji and are pruned to the last minute on each reaction request.
+
+```sql
+ALTER TABLE chat_messages ADD COLUMN reply_to_seq INTEGER;
+ALTER TABLE chat_group_messages ADD COLUMN reply_to_seq INTEGER;
+ALTER TABLE global_messages ADD COLUMN reply_to_seq INTEGER;
+
+CREATE TABLE chat_reactions (
+  message_seq INTEGER NOT NULL REFERENCES chat_messages(seq) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+  PRIMARY KEY(message_seq, user_id)
+);
+CREATE TABLE chat_group_reactions (
+  message_seq INTEGER NOT NULL REFERENCES chat_group_messages(seq) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+  PRIMARY KEY(message_seq, user_id)
+);
+CREATE TABLE global_reactions (
+  message_seq INTEGER NOT NULL REFERENCES global_messages(seq) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+  PRIMARY KEY(message_seq, user_id)
+);
+CREATE TABLE chat_reaction_changes (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX chat_reaction_changes_user_time ON chat_reaction_changes(user_id, created_at);
+```
+
+**Tests.** The existing `chat.test.ts`, `group-chat.test.ts` and `global-chat.test.ts` cover quote validation and read-time previews, retry IDs, deleted and retained targets, tapback toggles and replacements, own-message reactions, emoji validation, missing and deleted messages, pauses, the rolling rate limit and revision polls. Group coverage checks pre-join and blocked targets. `router.test.ts` exercises the real procedure inputs and account binding; `db.test.ts` checks migration reopening, nullable reply columns and cascading message foreign keys.
+
+
+SSE session and capacity handling: the server captures the signed session at connection, then revalidates its expiry, sign-in age, account suspension and session epoch before every event and every 25-second heartbeat. Invalid sessions receive a final `event: bye`, then the stream closes and leaves the bus. The client closes its EventSource and retries after a randomized 5 to 10 seconds. When the eight-stream account cap evicts the oldest stream, it sends `event: capacity` with `retry: 3600000` before closing. The client treats capacity as terminal, reports disconnected, and opens no replacement until the page has been hidden and becomes visible again, or the connection is manually recreated. Polling continues while SSE is disconnected.
