@@ -97,7 +97,7 @@ function AccountModMenu({ accountId }: { accountId: string | null | undefined })
       </Panel>
       <Panel>
         <Toggle label="What Is an Attention Span" checked={attentionMode} onChange={value => choose('attention', value)} disabled={overrides.attention !== 'default'}
-          description={forced('attention') ?? 'Play muted Subway Surfers and slime ASMR videos in the page layout when there is already room. Each tile picks one, starts at a random point and loops.'} />
+          description={forced('attention') ?? 'Play muted Subway Surfers and slime ASMR videos in the page layout when there is already room. Tiles alternate between them, each starting at a random point and looping.'} />
       </Panel>
       <Panel>
         <Toggle label="Backwards" checked={backwards} onChange={value => choose('backwards', value)} disabled={overrides.backwards !== 'default'}

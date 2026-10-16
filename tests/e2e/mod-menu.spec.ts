@@ -500,9 +500,12 @@ test('manually placed videos use existing blank space without changing layout', 
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
   const clips = ['/mods/attention-span.mp4', '/mods/slime-asmr.mp4'];
   for (const clip of clips) expect((await page.request.head(clip)).status()).toBe(200);
-  const sources = await page.locator('video[data-attention-slot]').evaluateAll(elements => elements.map(element => element.getAttribute('src')).filter((source): source is string => !!source));
-  expect(sources.length).toBeGreaterThan(0);
-  expect(sources.every(source => clips.includes(source))).toBe(true);
+  // The three sidebar tiles alternate clips, so both appear there on every run.
+  const sidebar = page.locator('video[data-attention-slot="sidebar"]');
+  await expect.poll(() => sidebar.evaluateAll(elements => elements.filter(element => element.getAttribute('src')).length)).toBe(3);
+  const sources = await sidebar.evaluateAll(elements => elements.map(element => element.getAttribute('src')));
+  expect(sources.every(source => source && clips.includes(source))).toBe(true);
+  expect(new Set(sources)).toEqual(new Set(clips));
   const playback = await video.evaluate(element => {
     const video = element as HTMLVideoElement;
     return { time: video.currentTime, duration: video.duration, paused: video.paused, loop: video.loop, muted: video.muted };
