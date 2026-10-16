@@ -78,7 +78,7 @@ describe('per-account mod overrides', () => {
     f.db.close();
     const reopened = openDatabase(path); databases.push(reopened);
     const caller = appRouter.createCaller({ service: new Service(reopened, 'owner@example.com'), userId: f.member });
-    expect(await caller.mods()).toEqual({ accountId: f.member, overrides: { rgb: 'default', attention: 'off', backwards: 'default', shy: 'on' } });
+    expect(await caller.mods()).toEqual({ accountId: f.member, overrides: { rgb: 'default', attention: 'off', backwards: 'default', shy: 'on', spin: 'default' } });
     const audits = reopened.prepare("SELECT actor_id,detail FROM audit_log WHERE action='admin.modOverride' ORDER BY id").all() as { actor_id: string; detail: string }[];
     expect(audits).toHaveLength(4);
     expect(audits.every(row => row.actor_id === f.owner)).toBe(true);

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Button, Modal, Panel, Toggle } from './primitives';
 import { setAttentionMode as setAttentionEnabled } from './attention-videos';
 import { ShyParticles } from './shy-particles';
+import { SpinLetters } from './spin-letters';
 import { useModOverrides } from '@/client/mod-overrides';
 import type { ModId } from '@/domain/mods';
 import { useReducedMotion } from '@/client/reduced-motion';
@@ -20,13 +21,13 @@ function AccountModMenu({ accountId }: { accountId: string | null | undefined })
   const [open, setOpen] = useState(false);
   const overrides = useModOverrides(accountId);
   const reducedMotion = useReducedMotion();
-  const [choices, setChoices] = useState({ rgb: false, attention: false, backwards: false, shy: false });
+  const [choices, setChoices] = useState({ rgb: false, attention: false, backwards: false, shy: false, spin: false });
   const effective = (mod: ModId) => overrides[mod] === 'default' ? choices[mod] : overrides[mod] === 'on';
   const choose = (mod: ModId, value: boolean) => {
     if (overrides[mod] === 'default') setChoices(previous => ({ ...previous, [mod]: value }));
   };
   const forced = (mod: ModId) => overrides[mod] === 'default' ? null : `Admin forced this mod ${overrides[mod]}.`;
-  const rgbMode = effective('rgb'), attentionMode = effective('attention'), backwards = effective('backwards'), shy = effective('shy');
+  const rgbMode = effective('rgb'), attentionMode = effective('attention'), backwards = effective('backwards'), shy = effective('shy'), spin = effective('spin');
 
   useEffect(() => {
     if (rgbMode) document.documentElement.setAttribute('data-rgb-mode', 'true');
@@ -44,6 +45,12 @@ function AccountModMenu({ accountId }: { accountId: string | null | undefined })
     else document.documentElement.removeAttribute('data-backwards');
     return () => document.documentElement.removeAttribute('data-backwards');
   }, [backwards]);
+
+  useEffect(() => {
+    if (spin) document.documentElement.setAttribute('data-spin-mode', 'true');
+    else document.documentElement.removeAttribute('data-spin-mode');
+    return () => document.documentElement.removeAttribute('data-spin-mode');
+  }, [spin]);
 
   useEffect(() => {
     let entered: string[] = [];
@@ -80,16 +87,17 @@ function AccountModMenu({ accountId }: { accountId: string | null | undefined })
     {rgbMode && <div className="rgb-mode-overlay" aria-hidden="true" />}
 
     {shy && !reducedMotion && <ShyParticles />}
+    {spin && !reducedMotion && <SpinLetters />}
     <Modal open={open} onClose={() => setOpen(false)} title="Mod menu" description="Secret code accepted. Choose a mod below."
     footer={<Button onClick={() => setOpen(false)}>Close menu</Button>}>
       <Panel>
-        {reducedMotion && <p className="mb-3 text-sm text-muted-foreground">Reduced motion is enabled. Gameplay videos stay paused and I'm Shy movement stays off.</p>}
+        {reducedMotion && <p className="mb-3 text-sm text-muted-foreground">Reduced motion is enabled. Videos stay paused, I'm Shy movement stays off, and Spin stays still.</p>}
         <Toggle label="RGB Mode" checked={rgbMode} onChange={value => choose('rgb', value)} disabled={overrides.rgb !== 'default'}
           description={forced('rgb') ?? 'Cycle neon colors across a dark screen. Toggle off to restore normal colors.'} />
       </Panel>
       <Panel>
         <Toggle label="What Is an Attention Span" checked={attentionMode} onChange={value => choose('attention', value)} disabled={overrides.attention !== 'default'}
-          description={forced('attention') ?? 'Play muted Subway Surfers videos in the page layout when there is already room. Each starts at a random point and loops.'} />
+          description={forced('attention') ?? 'Play muted Subway Surfers and slime ASMR videos in the page layout when there is already room. Each tile picks one, starts at a random point and loops.'} />
       </Panel>
       <Panel>
         <Toggle label="Backwards" checked={backwards} onChange={value => choose('backwards', value)} disabled={overrides.backwards !== 'default'}
@@ -98,6 +106,10 @@ function AccountModMenu({ accountId }: { accountId: string | null | undefined })
       <Panel>
         <Toggle label={<span className="text-[9px]">I'm Shy</span>} checked={shy} onChange={value => choose('shy', value)} disabled={overrides.shy !== 'default'}
           description={forced('shy') ?? 'Every visible UI piece roams across the screen. The cursor pushes every piece, with quadratic falloff at a distance. Pieces push apart at close range and glide with friction.'} />
+      </Panel>
+      <Panel>
+        <Toggle label="Spin" checked={spin} onChange={value => choose('spin', value)} disabled={overrides.spin !== 'default'}
+          description={forced('spin') ?? 'Everything turns in place, every UI element and every individual letter, including this menu. Neighbours spin opposite ways.'} />
       </Panel>
     </Modal>
   </>;

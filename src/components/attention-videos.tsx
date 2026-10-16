@@ -22,6 +22,8 @@ const TILES: Record<string, { count: number; direction: 'rows' | 'columns' }> = 
   'school-directory': { count: 2, direction: 'rows' },
   'account-look': { count: 2, direction: 'columns' },
 };
+// Each tile picks one clip. Both are muted gameplay or slime footage served from public/mods.
+const SOURCES = ['/mods/attention-span.mp4', '/mods/slime-asmr.mp4'];
 const GAP = 8;
 const MIN_HEIGHT = 32;
 const playbackListeners = new Set<() => void>();
@@ -53,6 +55,7 @@ function AttentionVideo({ zone }: { zone: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const visible = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  const [source] = useState(() => SOURCES[Math.floor(Math.random() * SOURCES.length)]!);
   const playback = (element: HTMLVideoElement) => {
     if (visible.current && !document.hidden && (!dialogRoot || dialogRoot.contains(element))) {
       setLoaded(true);
@@ -90,7 +93,7 @@ function AttentionVideo({ zone }: { zone: string }) {
   }, []);
 
   return <video ref={element => { ref.current = element; if (element) { element.muted = true; element.defaultMuted = true; } }}
-    data-attention-slot={zone} src={loaded ? '/mods/attention-span.mp4' : undefined} muted loop playsInline preload="metadata" disablePictureInPicture
+    data-attention-slot={zone} src={loaded ? source : undefined} muted loop playsInline preload="metadata" disablePictureInPicture
     className="pointer-events-none block h-full min-h-0 w-full min-w-0 rounded-lg object-cover"
     onLoadedMetadata={event => {
       const element = event.currentTarget;

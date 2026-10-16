@@ -169,6 +169,64 @@ test('Backwards preserves the sidebar space and icon positions in expanded and c
   expect((await inset.boundingBox())!.x).toBeGreaterThanOrEqual(collapsedSide.x + collapsedSide.width);
 });
 
+test('Spin rotates every element and every letter, including the menu, then restores the page', async ({ page }) => {
+  await page.goto('/help');
+  await page.evaluate(() => document.fonts.ready);
+  const heading = page.locator('h1').first();
+  const originalHeading = (await heading.textContent())!;
+  await enterCode(page);
+  const menu = page.getByRole('dialog', { name: 'Mod menu', exact: true });
+  const toggle = menu.getByRole('switch', { name: 'Spin', exact: true });
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await expect(page.locator('html')).toHaveAttribute('data-spin-mode', 'true');
+  await expect(heading.locator('[data-spin-glyph]')).toHaveCount(originalHeading.replace(/\s/g, '').length);
+  await expect(heading).toHaveText(originalHeading);
+  await expect(menu.locator('[data-spin-glyph]').first()).toBeVisible();
+  const motion = await page.evaluate(() => {
+    const elements = [...document.body.querySelectorAll<HTMLElement>('*')]
+      .filter(element => !element.parentElement?.closest('svg') && !element.matches('script, style, [data-spin-text], [data-spin-text] > span'));
+    const glyph = document.querySelector<HTMLElement>('h1 [data-spin-glyph]')!;
+    const even = document.querySelector<HTMLElement>('h1 [data-spin-glyph]:nth-child(even)')!;
+    const animation = glyph.getAnimations()[0]!;
+    const running = animation.playState;
+    animation.pause();
+    animation.currentTime = 400;
+    return { total: elements.length, spinning: elements.filter(element => getComputedStyle(element).animationName === 'spin-mode-turn').length,
+      glyphDuration: getComputedStyle(glyph).animationDuration, headingDuration: getComputedStyle(glyph.closest('h1')!).animationDuration,
+      oddDirection: getComputedStyle(glyph).animationDirection, evenDirection: getComputedStyle(even).animationDirection,
+      dialog: getComputedStyle(document.querySelector('[role="dialog"]')!).animationName, running, rotated: getComputedStyle(glyph).transform };
+  });
+  expect(motion.total).toBeGreaterThan(50);
+  expect(motion.spinning).toBe(motion.total);
+  expect(motion).toMatchObject({ glyphDuration: '1.6s', headingDuration: '5s', oddDirection: 'normal', evenDirection: 'reverse', dialog: 'spin-mode-turn', running: 'running' });
+  expect(motion.rotated).not.toBe('none');
+  expect(motion.rotated).not.toBe('matrix(1, 0, 0, 1, 0, 0)');
+  // Text React rewrites is split again around the new words.
+  await heading.evaluate(element => { (element.firstChild as Text).data = 'Changed'; });
+  await expect(heading.locator('[data-spin-glyph]')).toHaveCount(7);
+  await expect(heading).toHaveText('Changed');
+  // Playwright never considers a perpetually turning switch stable, so turn it off from the keyboard like a user could.
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect(page.locator('html')).not.toHaveAttribute('data-spin-mode', 'true');
+  await expect(page.locator('[data-spin-glyph], [data-spin-text]')).toHaveCount(0);
+  await expect(heading).toHaveText('Changed');
+  await expect(heading).toHaveCSS('animation-name', 'none');
+});
+
+test('Spin keeps the page still when reduced motion is preferred', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/help');
+  await enterCode(page);
+  const menu = page.getByRole('dialog', { name: 'Mod menu', exact: true });
+  await menu.getByRole('switch', { name: 'Spin', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-spin-mode', 'true');
+  await expect(menu.getByText('Spin stays still')).toBeVisible();
+  await expect(page.locator('[data-spin-glyph]')).toHaveCount(0);
+  await expect(page.locator('h1').first()).toHaveCSS('animation-name', 'none');
+});
+
 test('Attention Span leaves pages without manually assigned placements alone', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/help');
@@ -434,6 +492,11 @@ test('manually placed videos use existing blank space without changing layout', 
   await expect(page.locator('[data-attention-slot="sidebar"]')).toHaveCount(3);
   const video = page.locator('[data-attention-slot="sidebar"]').first();
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
+  const clips = ['/mods/attention-span.mp4', '/mods/slime-asmr.mp4'];
+  for (const clip of clips) expect((await page.request.head(clip)).status()).toBe(200);
+  const sources = await page.locator('video[data-attention-slot]').evaluateAll(elements => elements.map(element => element.getAttribute('src')).filter((source): source is string => !!source));
+  expect(sources.length).toBeGreaterThan(0);
+  expect(sources.every(source => clips.includes(source))).toBe(true);
   const playback = await video.evaluate(element => {
     const video = element as HTMLVideoElement;
     return { time: video.currentTime, duration: video.duration, paused: video.paused, loop: video.loop, muted: video.muted };
