@@ -59,9 +59,11 @@ test('per-user admin overrides reach the selected account live, persist through 
       await expect(toggle).toBeDisabled();
       await choose(select, 'User choice');
       await expect(toggle).toBeEnabled();
-      await toggle.click();
+      // Keyboard toggling: Playwright never considers a switch stable once Spin keeps it turning.
+      await toggle.focus();
+      await visitor.keyboard.press('Space');
       await expect(toggle).toBeChecked();
-      await toggle.click();
+      await visitor.keyboard.press('Space');
       await expect(toggle).not.toBeChecked();
       await visitor.keyboard.press('Escape');
     }
