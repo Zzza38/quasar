@@ -126,6 +126,18 @@ const CLOSE_UP_EDGE = 1600;
  */
 export const CLOSE_UP_MAX_PIXELS = 16_000_000;
 const TROUBLE = 'The scanning service is having trouble right now. Try again in a few minutes, or add your classes by hand.';
+const OUT_OF_CREDIT = 'The scanning service is out of credit. Tell whoever runs Quasar, or add your classes by hand.';
+/**
+ * Upstream failures answer 503, never 502: Cloudflare replaces an origin 502 (and 504) body with its own HTML error
+ * page, so a BAD_GATEWAY message would reach the browser as a bare error the client can only call "unreachable".
+ */
+const UPSTREAM = 'SERVICE_UNAVAILABLE' as const;
+/**
+ * Output cap per completion. Without it OpenRouter reserves the model's full output window (65k tokens on GPT
+ * Luna) and refuses the request outright with a 402 when the account cannot cover that much, even though a
+ * timetable's JSON answer plus low reasoning fits comfortably in a few thousand tokens.
+ */
+export const SCAN_MAX_TOKENS = 16_000;
 export const lookCloserSchema = z.object({
   photo: z.number().int().min(1),
   left: z.number().min(0).max(1), top: z.number().min(0).max(1),
@@ -224,7 +236,7 @@ export class ScanService {
         if (calls.length === 0) {
           const content = message.content;
           const body = typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
-          if (!body.trim()) throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service returned an empty answer. Try a clearer photo.' });
+          if (!body.trim()) throw new TRPCError({ code: UPSTREAM, message: 'The scanning service returned an empty answer. Try a clearer photo.' });
           return body;
         }
         // Every requested call needs a tool result, including any past the close-up limit.
@@ -253,7 +265,7 @@ export class ScanService {
       // Checked first: the timer also covers reading the body, and a body cut off by it would otherwise surface as an unreadable answer.
       if (controller.signal.aborted) throw new TRPCError({ code: 'TIMEOUT', message: 'The scan took too long. Try again with a smaller or clearer photo.' });
       if (error instanceof TRPCError) throw error;
-      throw new TRPCError({ code: 'BAD_GATEWAY', message: 'Could not reach the scanning service.' });
+      throw new TRPCError({ code: UPSTREAM, message: 'Could not reach the scanning service.' });
     } finally { clearTimeout(timeout); }
   }
 
@@ -273,6 +285,7 @@ export class ScanService {
         ...(this.plain && config.plainModel ? { provider: { sort: 'price' } } : {}),
         ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
         response_format: { type: 'json_object' },
+        max_tokens: SCAN_MAX_TOKENS,
         ...(config.reasoning ? { reasoning_effort: config.reasoning } : {}),
         // Once a close-up was asked for, the tool stays listed so the history's tool calls stay valid.
         ...(config.zoom !== false ? { tools: [LOOK_CLOSER_TOOL], tool_choice: zoom ? 'auto' : 'none' } : {}),
@@ -290,14 +303,15 @@ export class ScanService {
       const detail = (await response.text().catch(() => '')).slice(0, 300);
       if (response.status === 429) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'The scanning service is busy. Try again in a minute.' });
       console.error(`[scan] upstream returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
-      throw new TRPCError({ code: 'BAD_GATEWAY', message: TROUBLE });
+      // OpenRouter's "requires more credits" answer: the account is empty, so retrying will not help the student.
+      throw new TRPCError({ code: UPSTREAM, message: response.status === 402 ? OUT_OF_CREDIT : TROUBLE });
     }
     const payload = await response.json().catch(() => null) as { choices?: Array<{ message?: ChatMessage }> } | null;
     // A 200 that is not a chat completion (a proxy's HTML page, an error object) is the service's fault, not the photo's.
     if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
       // A body cut off by the timer reads as null too; request reports that as a timeout, not an upstream fault.
       if (!signal.aborted) console.error('[scan] upstream returned an unreadable body');
-      throw new TRPCError({ code: 'BAD_GATEWAY', message: TROUBLE });
+      throw new TRPCError({ code: UPSTREAM, message: TROUBLE });
     }
     return payload.choices[0]?.message ?? {};
   }
@@ -305,7 +319,7 @@ export class ScanService {
   /** Validates the model's answer against the real schedule so nothing unverified reaches the client. */
   interpret(body: string, schedule: Schedule, directory: DirectoryClass[], images = 1): ScanResult {
     const parsed = responseSchema.safeParse(parseJson(body));
-    if (!parsed.success) throw new TRPCError({ code: 'BAD_GATEWAY', message: 'The scanning service answered in an unexpected format. Try again.' });
+    if (!parsed.success) throw new TRPCError({ code: UPSTREAM, message: 'The scanning service answered in an unexpected format. Try again.' });
     // The model's own reason, kept to one short plain sentence: it is shown to the student as written.
     const reason = parsed.data.unreadable?.replace(/\s+/g, ' ').trim().slice(0, 200).replace(/[.!]*$/, '.');
     if (reason && reason !== '.' && parsed.data.rows.length === 0) {
