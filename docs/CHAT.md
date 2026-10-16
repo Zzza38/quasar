@@ -1145,7 +1145,7 @@ Added 2026-09-24. One room, **Global chat**, that every member with names entere
 
 **Tests.** `src/domain/chat-filter.test.ts` (swearing passes, slurs and obfuscations fail, innocent words pass), `src/server/global-chat.test.ts` (access, filter, delete and edit permissions with reasons and audit rows, revision polling, paging, unread and mute, limits and pauses, retry IDs, retention, account scoping) and the "global chat" test in `tests/e2e/chat.spec.ts`.
 
-A block or unblock advances the room revision and records a durable per-viewer visibility reset threshold in `chat_visibility_resets`, migration 22. An incremental poll whose `after` cursor predates that threshold returns the latest full page with the existing `reset: true` flag. The client replaces its loaded window, removing blocked senders and re-resolving quotes without their text or identity. Every tab with an older cursor resets independently; a poll never consumes the threshold. No new thread response field is required. Affected messages and replies also receive the new message revision, so delayed mutation responses cannot overwrite those refreshed rows. Unblocking uses the same replacement flow to restore visible messages.
+A block or unblock advances the room revision and records a durable per-viewer visibility reset threshold in `chat_visibility_resets`, migration 23. An incremental poll whose `after` cursor predates that threshold returns the latest full page with the existing `reset: true` flag. The client replaces its loaded window, removing blocked senders and re-resolving quotes without their text or identity. Every tab with an older cursor resets independently; a poll never consumes the threshold. No new thread response field is required. Affected messages and replies also receive the new message revision, so delayed mutation responses cannot overwrite those refreshed rows. Unblocking uses the same replacement flow to restore visible messages.
 
 ## 12. Friend groups (migration 17)
 
@@ -1189,7 +1189,7 @@ Added 2026-09-25 at the owner's request: a student always sees why support pause
 - `admin.bans` and `admin.liftBan({ userId, schoolId })` back a new **Removed members** section on `/admin`; lifting a removal deletes the `school_bans` row, resolves the open appeal and writes `member.restore` to `audit_log`. `admin.liftChatPause` now also resolves an open pause appeal.
 - Tests: `src/server/sanctions.test.ts`, and the appeal steps of the harassment scenario in `tests/e2e/chat.spec.ts`.
 
-## 15. Replies and reactions (migration 21)
+## 15. Replies and reactions (migration 22)
 
 Added 2026-10-16 at the owner's request. One-to-one chats, friend groups and the Global room now support quoted replies and the same six tapbacks as iMessage. Neither feature changes the report snapshot or the owner's access to private text.
 
@@ -1230,7 +1230,7 @@ type Extras = {
 };
 ```
 
-**Data.** Migration 21 is additive and safe to reopen. It adds nullable `reply_to_seq INTEGER` to `chat_messages`, `chat_group_messages` and `global_messages`, with an index on that column in each table. The reaction table DDL is below; each message foreign key cascades through message retention and thread deletion. No extra retention SQL is needed in `jobs.ts`. The short-lived rate-limit rows record no message or emoji and are pruned to the last minute on each reaction request.
+**Data.** Migration 22 is additive and safe to reopen. It adds nullable `reply_to_seq INTEGER` to `chat_messages`, `chat_group_messages` and `global_messages`, with an index on that column in each table. The reaction table DDL is below; each message foreign key cascades through message retention and thread deletion. No extra retention SQL is needed in `jobs.ts`. The short-lived rate-limit rows record no message or emoji and are pruned to the last minute on each reaction request.
 
 ```sql
 ALTER TABLE chat_messages ADD COLUMN reply_to_seq INTEGER;
