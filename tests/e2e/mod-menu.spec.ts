@@ -206,12 +206,18 @@ test('Spin rotates every element and every letter, including the menu, then rest
   await heading.evaluate(element => { (element.firstChild as Text).data = 'Changed'; });
   await expect(heading.locator('[data-spin-glyph]')).toHaveCount(7);
   await expect(heading).toHaveText('Changed');
+  // A page clearing its text is not Spin's placeholder: the old letters must go instead of lingering or coming back.
+  await heading.evaluate(element => { (element.firstChild as Text).data = ''; });
+  await expect(heading.locator('[data-spin-glyph]')).toHaveCount(0);
+  await expect(heading).toHaveText('');
+  await heading.evaluate(element => { (element.firstChild as Text).data = 'Again'; });
+  await expect(heading.locator('[data-spin-glyph]')).toHaveCount(5);
   // Playwright never considers a perpetually turning switch stable, so turn it off from the keyboard like a user could.
   await toggle.focus();
   await page.keyboard.press('Space');
   await expect(page.locator('html')).not.toHaveAttribute('data-spin-mode', 'true');
   await expect(page.locator('[data-spin-glyph], [data-spin-text]')).toHaveCount(0);
-  await expect(heading).toHaveText('Changed');
+  await expect(heading).toHaveText('Again');
   await expect(heading).toHaveCSS('animation-name', 'none');
 });
 

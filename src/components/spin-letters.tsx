@@ -11,22 +11,28 @@ export function SpinLetters() {
   useEffect(() => {
     const runs = new Map<Text, TextRun>();
     const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    // Text nodes the page wrote to since the last split. Spin's own placeholder writes happen while the observer is off.
+    const rewritten = new Set<Text>();
     let frame = 0;
-    const observer = new MutationObserver(() => { if (!frame) frame = requestAnimationFrame(split); });
+    const observer = new MutationObserver(records => {
+      for (const record of records) if (record.type === 'characterData' && runs.has(record.target as Text)) rewritten.add(record.target as Text);
+      if (!frame) frame = requestAnimationFrame(split);
+    });
     const observe = () => observer.observe(document.body, { childList: true, characterData: true, subtree: true });
 
     function split() {
       frame = 0;
       observer.disconnect();
-      // React keeps writing to its original Text node. A node with new text is split again below; a node whose
-      // wrapper React removed is restored so the page never loses words.
+      // React keeps writing to its original Text node. A rewritten node is split again below, even when the page
+      // cleared it to an empty string; only Spin's own placeholder is restored when its wrapper went missing.
       for (const [node, run] of runs) {
-        if (!node.isConnected || !run.wrapper.isConnected || node.data) {
-          if (node.isConnected && !node.data) node.data = run.original;
+        if (rewritten.has(node) || !node.isConnected || !run.wrapper.isConnected || node.data) {
+          if (node.isConnected && !node.data && !rewritten.has(node)) node.data = run.original;
           run.wrapper.remove();
           runs.delete(node);
         }
       }
+      rewritten.clear();
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const nodes: Text[] = [];
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -64,7 +70,7 @@ export function SpinLetters() {
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame);
-      for (const [node, run] of runs) { if (node.isConnected && !node.data) node.data = run.original; run.wrapper.remove(); }
+      for (const [node, run] of runs) { if (node.isConnected && !node.data && !rewritten.has(node)) node.data = run.original; run.wrapper.remove(); }
     };
   }, []);
   return null;
