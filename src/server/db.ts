@@ -508,13 +508,31 @@ function migrate(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_mod_overrides (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy')),
+      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
       state TEXT NOT NULL CHECK(state IN ('default','on','off')),
       updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
       PRIMARY KEY(user_id, mod)
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
   `);
+  // Migration 21: the Spin mod joins the account policy. SQLite cannot widen a CHECK in place, so a table created
+  // before 'spin' existed is rebuilt around its rows; a fresh database already has the wider constraint.
+  const policySql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_mod_overrides'").get() as { sql: string }).sql;
+  if (!policySql.includes("'spin'")) {
+    db.exec(`
+      CREATE TABLE user_mod_overrides_next (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
+        state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+        updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+        PRIMARY KEY(user_id, mod)
+      );
+      INSERT INTO user_mod_overrides_next SELECT user_id, mod, state, updated_at, updated_by FROM user_mod_overrides;
+      DROP TABLE user_mod_overrides;
+      ALTER TABLE user_mod_overrides_next RENAME TO user_mod_overrides;
+    `);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
