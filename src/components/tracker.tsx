@@ -28,6 +28,7 @@ import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
 import { CalendarFeeds } from './calendar-feeds';
+import { useScheduleLock } from './schedule-lock';
 
 /* ---------- Path routing: Today at "/", every other view at "/<view>", rendered by the server ---------- */
 
@@ -145,6 +146,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   const [, rereadSetup] = useState(0);
   const userId = context?.user.id;
 
+  const scheduleLock = useScheduleLock(userId, personal, personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value)));
   const chatUnread = useChatUnread(userId, context?.community);
   // Unsent chat messages and drafts live only in memory; a finished sign-out or a lost session forgets them.
   // Not when sign-out starts: it can still fail and leave the student signed in, with their unsent text kept.
@@ -191,7 +193,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   const sessionNotice = session.error ? <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout> : null;
   const logoutDialog = <LogoutDialog session={session} />;
   // Refuses every write while the saved personal schedule is unreadable, so its empty fallback never replaces it.
-  const savePersonal = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
+  const savePersonal = scheduleLock.savePersonal;
 
   // Every signed-in screen is keyed by account, so a switch to another account never keeps the previous one's
   // wizard drafts, prefilled names or screen state.
@@ -226,6 +228,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     snapshot,
     personal,
     personalValid: parsedPersonal.success,
+    requestScheduleEdit: scheduleLock.requestEdit,
     schedule: scheduleForGrade(school.schedule, personal.grade),
     timeZone,
     now,
@@ -264,6 +267,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
         onAcknowledge={async () => { await api.school.acknowledge.mutate({ accountId, version: context.review!.version }); await session.initialize(); }}
         onOpenClasses={() => route.navigate('classes')} />}
     </div>
+    {scheduleLock.dialog}
     {route.view === 'today' && <TodayView state={state} />}
     {route.view === 'schedule' && <ScheduleView state={state} />}
     {route.view === 'tasks' && <TasksView state={state} />}
