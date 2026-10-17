@@ -166,6 +166,7 @@ export const classSchema = z.strictObject({
 
 export const personalScheduleSchema = z.strictObject({
   grade: gradeSchema.optional(),
+  scheduleLocked: z.boolean().optional(),
   classes: z.array(classSchema).max(300),
   assignments: z.record(idSchema, idSchema),
   cycleDayOverrides: z.array(z.strictObject({ cycleDayId: idSchema, slots: slotsSchema })).max(366),
