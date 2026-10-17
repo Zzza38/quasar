@@ -6,6 +6,7 @@ import { addDays, formatDate, formatRange, monthGrid, monthOf, relativeDate, sam
 import { cn } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState } from '../app-state';
 import { Icon } from '../icon';
+import { editSchedule, ScheduleLockButton } from '../schedule-lock';
 import { DateAdjustmentSheet, effectiveSchedule } from '../overrides';
 import { Button, Chip, Hint, IconButton, Input, PageHeader, Section } from '../primitives';
 import { Card, CardContent } from '../ui/card';
@@ -64,7 +65,7 @@ export function ScheduleView({ state }: { state: AppState }) {
   const issueText = selected ? describeDayIssues(selected.issues).join(' ') : '';
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
-    <PageHeader title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'} />
+    <PageHeader actions={<ScheduleLockButton state={state} />} title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'} />
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(21rem,2fr)_minmax(0,3fr)]">
       {/* Less side padding on phones: seven columns need the width. Sticky on wide screens so paging and the day stay side by side. */}
@@ -107,7 +108,7 @@ export function ScheduleView({ state }: { state: AppState }) {
         </div>
       </CardContent></Card>
 
-      <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => setAdjustDate(date)}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
+      <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => editSchedule(state, () => setAdjustDate(date))}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
         title={<>{isRelative ? relative : relativeDate(date, today, { weekday: 'long' })}{isRelative ? <span className="font-medium text-muted-foreground"> · {formatDate(date, { weekday: 'long' })}</span> : ''}</>}
         description={<span className="flex flex-wrap gap-1.5 pt-1">
           {selected?.closed ? <Chip icon="coffee">No school</Chip> : selected ? <Chip tone="accent" icon="layers">{selected.cycleDayLabel}</Chip> : null}
@@ -117,7 +118,7 @@ export function ScheduleView({ state }: { state: AppState }) {
         </span>}>
         {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
         {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
-        {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, date, period)} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} />}
+        {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, date, period)} onPeriodSelect={state.personalValid ? (period) => editSchedule(state, () => setChangePeriod(period)) : undefined} />}
         {/* Under the timeline, as on Today: the classes are what this card is for. */}
         {selected && !selected.closed && <LunchDay state={state} date={date} />}
         {issueText && <Hint tone="danger">{issueText}{override && selected?.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' Edit the adjustment to fix this.' : ''}</Hint>}

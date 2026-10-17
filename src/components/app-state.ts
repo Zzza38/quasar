@@ -144,6 +144,7 @@ export interface AppState {
   snapshot: WorkspaceSnapshot;
   personal: PersonalSchedule;
   personalValid: boolean;
+  requestScheduleEdit?: (edit: () => void) => Promise<void>;
   /** The school's schedule; `personal.customSchedule` is applied by the domain functions automatically. */
   schedule: Schedule;
   timeZone: string;
