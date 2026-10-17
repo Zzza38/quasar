@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { clampDate, describeDayIssues, REMOVED_PERIOD_LABEL, resolveDay, resolveDayInRange, rotationNeverAdvances, scheduleSchema, withCycleDay, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
+import { clampDate, describeDayIssues, gradeLabel, REMOVED_PERIOD_LABEL, resolveDay, resolveDayInRange, rotationNeverAdvances, scheduleSchema, withCycleDay, type Grade, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
 import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
 import { Icon } from './icon';
 import { ScheduleGrid } from './schedule-grid';
@@ -21,20 +21,23 @@ export function describeIssues(schedule: Schedule): string[] {
   const parsed = scheduleSchema.safeParse(schedule);
   if (parsed.success) return [];
   const messages = parsed.error.issues.map((issue) => {
-    const [root, index, ...rest] = issue.path as Array<string | number>;
+    const path = issue.path as Array<string | number>;
+    const grade = path[0] === 'gradeSchedules' ? path[1] as Grade : undefined;
+    const source = grade ? schedule.gradeSchedules?.[grade] ?? schedule : schedule;
+    const [root, index, ...rest] = grade ? path.slice(2) : path;
     let prefix = '';
-    if (root === 'periods' && typeof index === 'number') prefix = `${schedule.periods[index]?.label || `Period ${index + 1}`}: `;
+    if (root === 'periods' && typeof index === 'number') prefix = `${source.periods[index]?.label || `Period ${index + 1}`}: `;
     else if (root === 'periods') prefix = 'Periods: ';
     else if (root === 'cycleDays' && typeof index === 'number') {
-      const day = schedule.cycleDays[index];
+      const day = source.cycleDays[index];
       prefix = `${day?.label || `Day ${index + 1}`}${rest[0] === 'slots' && typeof rest[1] === 'number' ? `, slot ${rest[1] + 1}` : ''}: `;
     } else if (root === 'cycleDays') prefix = 'Rotation days: ';
-    else if (root === 'exceptions' && typeof index === 'number') prefix = `Exception on ${schedule.exceptions[index]?.date || `#${index + 1}`}: `;
+    else if (root === 'exceptions' && typeof index === 'number') prefix = `Exception on ${source.exceptions[index]?.date || `#${index + 1}`}: `;
     else if (root === 'anchorDate' || root === 'anchorCycleDayId') prefix = 'Starting point: ';
     else if (root === 'timeZone') prefix = 'Time zone: ';
     else if (root === 'schoolWeekdays') prefix = 'School days: ';
     else if (root === 'advanceWeekdays') prefix = 'Advance days: ';
-    return `${prefix}${issue.message}`;
+    return `${grade ? `${gradeLabel(grade)}: ` : ''}${prefix}${issue.message}`;
   });
   return [...new Set(messages)];
 }
@@ -89,7 +92,7 @@ export function SlotsEditor({ slots, periods, onChange, disabled, emptyText = 'N
 
 /* ---------- Editor ---------- */
 
-export function ScheduleEditor({ value, onChange, disabled, personal, initialSection = 'basics' }: { personal?: PersonalSchedule; value: Schedule; onChange: (value: Schedule) => void; disabled?: boolean; initialSection?: Section }) {
+export function ScheduleEditor({ value, onChange, disabled, personal, initialSection = 'basics', exceptionEditor }: { personal?: PersonalSchedule; value: Schedule; onChange: (value: Schedule) => void; disabled?: boolean; initialSection?: Section; exceptionEditor?: { content: ReactNode; count: number } }) {
   const [section, setSection] = useState<Section>(initialSection);
   const issues = useMemo(() => describeIssues(value), [value]);
   const set = (patch: Partial<Schedule>) => onChange({ ...value, ...patch });
@@ -108,7 +111,7 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
         <TabsTrigger value="basics" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Basics</TabsTrigger>
         <TabsTrigger value="periods" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Periods · {value.periods.length}</TabsTrigger>
         <TabsTrigger value="days" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Days · {value.cycleDays.length}</TabsTrigger>
-        <TabsTrigger value="exceptions" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Exceptions · {value.exceptions.length}</TabsTrigger>
+        <TabsTrigger value="exceptions" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Exceptions · {exceptionEditor?.count ?? value.exceptions.length}</TabsTrigger>
         <TabsTrigger value="preview" className="rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary">Preview</TabsTrigger>
       </TabsList>
     </div>
@@ -121,7 +124,7 @@ export function ScheduleEditor({ value, onChange, disabled, personal, initialSec
     <TabsContent value="basics"><Basics value={value} set={set} disabled={disabled} sameAdvance={matching && !customAdvance} setCustomAdvance={setCustomAdvance} /></TabsContent>
     <TabsContent value="periods"><Periods value={value} set={set} disabled={disabled} /></TabsContent>
     <TabsContent value="days"><Days value={value} set={set} disabled={disabled} personal={personal} /></TabsContent>
-    <TabsContent value="exceptions"><Exceptions value={value} set={set} disabled={disabled} /></TabsContent>
+    <TabsContent value="exceptions">{exceptionEditor?.content ?? <Exceptions value={value} set={set} disabled={disabled} />}</TabsContent>
     <TabsContent value="preview"><Preview value={value} /></TabsContent>
   </Tabs>;
 }
