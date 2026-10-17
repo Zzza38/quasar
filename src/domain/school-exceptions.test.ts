@@ -106,3 +106,68 @@ it.each([{ grades: ['9'] as const }, { grades: GRADES }])('keeps inherited regul
   expect(scheduleForGrade(result, '12')).toEqual(scheduleForGrade(current, '12'));
   expect(result.exceptions).toEqual(current.exceptions);
 });
+
+it.each([{ grades: ['9'] as const }, { grades: GRADES }])('removes resets for a deleted rotation day from inherited variants for $grades', ({ grades }) => {
+  const removedId = exampleSchedule.cycleDays[0].id;
+  const retainedId = exampleSchedule.cycleDays[1].id;
+  const reset = { date, kind: 'reset' as const, cycleDayId: removedId, advanceCycle: true };
+  const retained = { ...reset, date: '2026-10-13', cycleDayId: retainedId };
+  const specific = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, label: `Senior ${day.label}` })) };
+  let current: Schedule = { ...exampleSchedule, gradeSchedules: { '12': specific } };
+  current = setSchoolExceptionForGrades(current, null, reset, [...grades]);
+  current = setSchoolExceptionForGrades(current, null, retained, ['9']);
+  current = setSchoolExceptionForGrades(current, null, { ...closure, date: '2026-10-14' }, ['10']);
+  const draft = {
+    ...current,
+    cycleDays: current.cycleDays.filter(day => day.id !== removedId),
+    anchorCycleDayId: current.anchorCycleDayId === removedId ? retainedId : current.anchorCycleDayId,
+    exceptions: current.exceptions.filter(exception => !(exception.kind === 'reset' && exception.cycleDayId === removedId)),
+  };
+  const result = applySchoolDefaultEdits(current, draft);
+  expect(scheduleSchema.parse(result)).toEqual(result);
+  for (const grade of ['9', '10', '11'] as const) {
+    expect(scheduleForGrade(result, grade).exceptions).toEqual(scheduleForGrade(current, grade).exceptions.filter(exception => exception !== reset));
+    expect(scheduleForGrade(result, grade).cycleDays).toEqual(draft.cycleDays);
+  }
+  expect(scheduleForGrade(result, '12')).toEqual(scheduleForGrade(current, '12'));
+});
+
+it.each([
+  { grades: ['9'] as const, kind: 'replacement' as const },
+  { grades: GRADES, kind: 'replacement' as const },
+  { grades: ['9'] as const, kind: 'reset' as const },
+  { grades: GRADES, kind: 'reset' as const },
+])('removes deleted periods from $kind exception slots for $grades', ({ grades, kind }) => {
+  const slots = exampleSchedule.cycleDays[0].slots;
+  const removedId = slots[0].periodId;
+  const exception = kind === 'replacement'
+    ? { date, kind, slots, advanceCycle: true }
+    : { date, kind, slots, cycleDayId: exampleSchedule.cycleDays[0].id, advanceCycle: true };
+  const specific = { ...exampleSchedule, timeZone: 'America/Los_Angeles' };
+  let current: Schedule = { ...exampleSchedule, gradeSchedules: { '12': specific } };
+  current = setSchoolExceptionForGrades(current, null, exception, [...grades]);
+  current = setSchoolExceptionForGrades(current, null, { ...closure, date: '2026-10-13' }, ['10']);
+  const draft = {
+    ...current,
+    periods: current.periods.filter(period => period.id !== removedId),
+    cycleDays: current.cycleDays.map(day => ({ ...day, slots: day.slots.filter(slot => slot.periodId !== removedId) })),
+    exceptions: current.exceptions.map(entry => 'slots' in entry && entry.slots ? { ...entry, slots: entry.slots.filter(slot => slot.periodId !== removedId) } : entry),
+  };
+  const result = applySchoolDefaultEdits(current, draft);
+  expect(scheduleSchema.parse(result)).toEqual(result);
+  for (const grade of ['9', '10', '11'] as const) {
+    expect(scheduleForGrade(result, grade).exceptions).toEqual(scheduleForGrade(current, grade).exceptions.map(entry => 'slots' in entry && entry.slots ? { ...entry, slots: entry.slots.filter(slot => slot.periodId !== removedId) } : entry));
+    expect(scheduleForGrade(result, grade).periods).toEqual(draft.periods);
+  }
+  expect(scheduleForGrade(result, '12')).toEqual(scheduleForGrade(current, '12'));
+});
+
+it('preserves unrelated invalid exception references while editing regular fields', () => {
+  const invalidReset = { date, kind: 'reset' as const, cycleDayId: 'unfinished-day', advanceCycle: true };
+  const invalidReplacement = { date: '2026-10-13', kind: 'replacement' as const, slots: [{ id: 'unfinished-slot', periodId: 'unfinished-period', start: '08:00', end: '09:00' }], advanceCycle: true };
+  let current = setSchoolExceptionForGrades(exampleSchedule, null, invalidReset, ['9']);
+  current = setSchoolExceptionForGrades(current, null, invalidReplacement, ['9']);
+  const result = applySchoolDefaultEdits(current, { ...current, timeZone: 'America/Chicago' });
+  expect(scheduleForGrade(result, '9').exceptions).toEqual([invalidReset, invalidReplacement]);
+  expect(scheduleForGrade(result, '9').timeZone).toBe('America/Chicago');
+});

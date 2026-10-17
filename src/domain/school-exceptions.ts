@@ -62,12 +62,19 @@ export function applySchoolDefaultEdits(current: Schedule, draft: Schedule): Sch
   const before = JSON.stringify(regular(current));
   const next = regular(draft);
   if (JSON.stringify(next) === before || !draft.gradeSchedules) return draft;
+  const removedDays = new Set(current.cycleDays.filter(day => !draft.cycleDays.some(nextDay => nextDay.id === day.id)).map(day => day.id));
+  const removedPeriods = new Set(current.periods.filter(period => !draft.periods.some(nextPeriod => nextPeriod.id === period.id)).map(period => period.id));
   const gradeSchedules = { ...draft.gradeSchedules };
   for (const grade of GRADES) {
     const prior = current.gradeSchedules?.[grade];
     const variant = gradeSchedules[grade];
     if (prior && variant && JSON.stringify(regular(prior)) === before) {
-      gradeSchedules[grade] = { ...next, exceptions: variant.exceptions };
+      const exceptions = variant.exceptions
+        .filter(exception => exception.kind !== 'reset' || !removedDays.has(exception.cycleDayId))
+        .map(exception => 'slots' in exception && exception.slots
+          ? { ...exception, slots: exception.slots.filter(slot => !removedPeriods.has(slot.periodId)) }
+          : exception);
+      gradeSchedules[grade] = { ...next, exceptions };
     }
   }
   return { ...draft, gradeSchedules };
