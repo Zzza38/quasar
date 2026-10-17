@@ -72,6 +72,7 @@ export function personalFields(schedule: Schedule): FieldSpec<Record<string, unk
   const parse = (value: Record<string, unknown>) => { const parsed = personalScheduleSchema.safeParse(value); return parsed.success ? parsed.data : null; };
   const periodLabel = (id: string) => schedule.periods.find((period) => period.id === id)?.label ?? id;
   return [
+    { key: 'scheduleLocked', label: 'Schedule lock', render: (value) => parse(value)?.scheduleLocked ? 'Locked' : 'Unlocked' },
     { key: 'classes', label: 'Classes', render: (value) => { const personal = parse(value); return personal ? personal.classes.map((item) => [item.name, item.room && `Rm ${item.room}`, item.teacher, item.color].filter(Boolean).join(' · ')).join('; ') || null : 'Unreadable'; } },
     { key: 'assignments', label: 'Period assignments', render: (value) => { const personal = parse(value); return personal ? Object.entries(personal.assignments).map(([period, classId]) => `${periodLabel(period)} → ${personal.classes.find((item) => item.id === classId)?.name ?? classId}`).join('; ') || null : null; } },
     { key: 'cycleDayOverrides', label: 'Rotation-day adjustments', render: (value) => { const personal = parse(value); return personal ? personal.cycleDayOverrides.map((entry) => schedule.cycleDays.find((day) => day.id === entry.cycleDayId)?.label ?? entry.cycleDayId).join(', ') || null : null; } },

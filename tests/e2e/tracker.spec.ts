@@ -1681,3 +1681,34 @@ function seedOwnerId(db: ReturnType<typeof openDatabase>): string {
   db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, 'browser-owner@example.com', 'Owner', 'Owner Person', new Date().toISOString());
   return id;
 }
+
+test('schedule lock persists and requires approval before editing', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/schedule');
+  await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Adjust this day', exact: true }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock schedule?' });
+  await expect(unlock).toBeVisible();
+  await unlock.getByRole('button', { name: 'Keep locked' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Adjust this day', exact: true }).click();
+  await unlock.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await expect(unlock).not.toBeVisible();
+  await expect(dialog(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
+  await page.getByRole('link', { name: 'Classes', exact: true }).click();
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(unlock).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await unlock.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+});
