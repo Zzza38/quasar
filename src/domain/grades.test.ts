@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule } from './example';
-import { applySchoolClosures, applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema, type Schedule } from './schedule';
+import { applySchoolClosures, applySchoolExceptions, applyScheduleToGrades, emptyPersonalSchedule, GRADES, gradesSchema, resolveDay, scheduleForGrade, scheduleSchema, type Schedule } from './schedule';
+
+it('publishes replacement and reset dates to grades and retains each grade rotation', () => {
+  const variant = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map(day => ({ ...day, label: `Ninth ${day.label}` })) };
+  let current: Schedule = { ...exampleSchedule, gradeSchedules: { '9': variant } };
+  const replacement = { date: '2026-10-12', kind: 'replacement' as const, slots: [{ id: 'late', periodId: 'A', start: '10:00', end: '11:00' }], advanceCycle: false };
+  current = applySchoolExceptions(current, { ...current, exceptions: [replacement] });
+  expect(resolveDay(current, replacement.date, { ...emptyPersonalSchedule(), grade: '9' }).periods.map(period => period.start)).toEqual(['10:00']);
+  const reset = { date: replacement.date, kind: 'reset' as const, cycleDayId: 'day-4', advanceCycle: true };
+  current = applySchoolExceptions(current, { ...current, exceptions: [reset] });
+  const resetDay = resolveDay(current, reset.date, { ...emptyPersonalSchedule(), grade: '9' });
+  expect(resetDay.cycleDayLabel).toBe('Ninth Day 4');
+  expect(resetDay.periods[0].start).toBe('08:00');
+  expect(resolveDay(current, '2026-10-13', { ...emptyPersonalSchedule(), grade: '9' }).cycleDayId).toBe('day-5');
+  current = applySchoolExceptions(current, { ...current, exceptions: [] });
+  expect(current.gradeSchedules?.['9']).toEqual(variant);
+});
+
+it('preserves explicit grade exceptions when school replacements or resets change', () => {
+  const date = '2026-10-12';
+  const specific = { date, kind: 'closure' as const, advanceCycle: false };
+  const current: Schedule = { ...exampleSchedule, gradeSchedules: { '9': { ...exampleSchedule, exceptions: [specific] }, '10': exampleSchedule } };
+  const reset = { date, kind: 'reset' as const, cycleDayId: 'day-3', advanceCycle: true };
+  const result = applySchoolExceptions(current, { ...current, exceptions: [reset] });
+  expect(resolveDay(result, date, { ...emptyPersonalSchedule(), grade: '9' }).closed).toBe(true);
+  expect(resolveDay(result, date, { ...emptyPersonalSchedule(), grade: '10' }).cycleDayId).toBe('day-3');
+});
 
 it('keeps unrelated grade exceptions and explicit grade edits when publishing school closures', () => {
   const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };

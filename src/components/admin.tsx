@@ -10,6 +10,8 @@ import { REPORT_CATEGORIES } from '@/domain/chat';
 import { browserTimeZone, formatDate, formatTime, instantParts, pluralize } from '@/lib/format';
 import { Icon } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
+import { SchoolExceptions } from './school-exceptions';
+import { applySchoolDefaultEdits, schoolExceptionGroups } from '@/domain/school-exceptions';
 import { Brand, CenteredNotice } from './shell';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer, StatTile, Textarea, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
@@ -345,7 +347,10 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm font-semibold text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
       setPending(true); setError(''); setSaved(false);
-      try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked, emailDomains: domainList }); setSaved(true); await onSaved(); }
+      try {
+        const updated = await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), exceptionGradesExplicit: true, approved, supportLocked, emailDomains: domainList });
+        setDraft(updated.schedule); setSaved(true); await onSaved();
+      }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
     <Panel className="grid gap-3">
@@ -356,8 +361,7 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
       </div>
       <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically, including current members the next time they open Quasar. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
     </Panel>
-    <p className="text-sm text-muted-foreground">Closures saved here apply to every grade unless it has a separate exception for that date. Each grade keeps its own rotation and bell times.</p>
-    <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
+    <ScheduleEditor value={draft} onChange={next => setDraft(applySchoolDefaultEdits(draft, next))} disabled={pending} initialSection="preview" exceptionEditor={{ count: schoolExceptionGroups(draft).length, content: <SchoolExceptions value={draft} onChange={setDraft} disabled={pending} /> }} />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;
 }

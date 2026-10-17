@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Db } from './db';
-import { applySchoolClosures, applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { applySchoolExceptions, applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
 import { completionTime, nextRecurringTask, stampCompletion, taskSchema, withoutCompletionEdit } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
@@ -84,7 +84,11 @@ const nameSchema = (max: number) => z.string().max(max * 8).transform(cleanName)
 export const namesSchema = z.object({ displayName: nameSchema(80), fullName: nameSchema(160) });
 export const createSchoolSchema = z.object({ name: z.string().trim().min(2).max(160), location: z.string().trim().min(2).max(200), schedule: scheduleSchema });
 export const schoolUpdateSchema = z.object({ schoolId: z.string().uuid(), expectedVersion: z.number().int().positive(), schedule: scheduleSchema, grades: gradesSchema.optional() });
-export const adminUpdateSchema = schoolUpdateSchema.extend({ approved: z.boolean(), supportLocked: z.boolean(), emailDomains: emailDomainsSchema.optional() });
+export const adminUpdateSchema = schoolUpdateSchema.extend({
+  approved: z.boolean(), supportLocked: z.boolean(), emailDomains: emailDomainsSchema.optional(),
+  // The grade-aware editor already writes each grade's exceptions, including deliberate exclusions.
+  exceptionGradesExplicit: z.boolean().optional(),
+});
 export const joinSchema = z.object({ schoolId: z.string().uuid(), choice: z.enum(['approved', 'community', 'personal']), personalSchedule: scheduleSchema.optional(), grade: gradeSchema.optional() });
 const entitySchema = z.object({ id: z.string().min(1).max(100), kind: z.enum(['task', 'personal']), version: z.number().int().positive(), data: z.record(z.string(), z.unknown()), deleted: z.boolean() });
 export const mutationSchema = z.object({ mutationId: z.string().uuid(), id: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), kind: z.enum(['task', 'personal']), base: entitySchema.nullable(), data: z.record(z.string(), z.unknown()).nullable() });
@@ -340,10 +344,10 @@ export class Service {
         if (school.memberLocked || school.supportLocked || school.memberCount >= 10) fail('FORBIDDEN', 'This schedule is locked. Send a correction to support.');
       }
       if (school.version !== input.expectedVersion) fail('CONFLICT', 'The school schedule changed. Reload and review it before saving.');
-      const updatedSchedule = input.grades ? applyScheduleToGrades(school.schedule, input.schedule, input.grades)
-        : asAdmin ? applySchoolClosures(school.schedule, input.schedule) : input.schedule;
-      checkSchoolScheduleSize(updatedSchedule);
       const admin = asAdmin ? input as z.infer<typeof adminUpdateSchema> : null;
+      const updatedSchedule = input.grades ? applyScheduleToGrades(school.schedule, input.schedule, input.grades)
+        : asAdmin && !admin?.exceptionGradesExplicit ? applySchoolExceptions(school.schedule, input.schedule) : input.schedule;
+      checkSchoolScheduleSize(updatedSchedule);
       this.db.prepare('UPDATE schools SET schedule=?,version=version+1,approved=?,support_locked=? WHERE id=?')
         .run(JSON.stringify(updatedSchedule), admin ? Number(admin.approved) : 0, admin ? Number(admin.supportLocked) : Number(school.supportLocked), school.id);
       this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, JSON.stringify(updatedSchedule), id, now());
