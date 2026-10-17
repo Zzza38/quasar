@@ -161,11 +161,12 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await hi.getByRole('button', { name: 'Add as task' }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'Added to Tasks.' })).toBeVisible();
 
-  // On a touch screen Enter inserts a newline; the Send button sends.
+  // Enter sends on a touch screen too; Shift+Enter is the newline.
   await bobComposer.fill('Hey');
-  await bobComposer.press('Enter');
+  await bobComposer.press('Shift+Enter');
   await expect(bobComposer).toHaveValue(/\n/);
-  await bob.getByRole('button', { name: 'Send', exact: true }).click();
+  await bobComposer.press('Backspace');
+  await bobComposer.press('Enter');
   await expect(bobLog.getByText('Hey', { exact: true })).toBeVisible();
   await expect(bobComposer).toHaveValue('');
 
@@ -227,7 +228,7 @@ test('synthetic phone keyboard sizing keeps typing visible without scrolling the
   await expect.poll(() => page.locator('.app').evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(360);
   await composer.focus();
   await composer.pressSequentially('A message with enough text to wrap onto another line.');
-  await composer.press('Enter');
+  await composer.press('Shift+Enter');
   await composer.pressSequentially('Another line while the keyboard is open.');
   await expect(composer).toBeFocused();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
@@ -337,7 +338,8 @@ test('a blocked chat can be reopened: unblock sends a request, and acceptance br
   // Until Alice answers, the row stays closed and now offers a plain friend request.
   await expectClosedRow(bob, 'Alice', 'Add friend');
   respondAs(f.alice, f.bob, true);
-  await expect(bob.getByRole('button', { name: 'Open chat with Alice' })).toBeVisible({ timeout: 20_000 });
+  // An acceptance is not a chat event, so the list learns of it from its fallback poll (30 s while the stream is live).
+  await expect(bob.getByRole('button', { name: 'Open chat with Alice' })).toBeVisible({ timeout: 40_000 });
   await bob.getByRole('button', { name: 'Open chat with Alice' }).click();
   await expect(bob.getByRole('log', { name: 'Messages with Alice' })).toContainText('see you at practice');
   await expect(bob.getByRole('textbox', { name: 'Message Alice' })).toBeVisible();
@@ -551,7 +553,7 @@ test('the harasser blocking first still leaves the victim a report path, and sup
   await appeal.getByRole('button', { name: 'Send appeal' }).click();
   await expect(appeal).toHaveCount(0);
   await expect(bob.getByText('Appeal sent. Support will review it.').first()).toBeVisible({ timeout: 20_000 });
-  await expect(bob.getByRole('button', { name: 'Appeal' })).toHaveCount(0, { timeout: 20_000 });
+  await expect(bob.getByRole('button', { name: 'Appeal' })).toHaveCount(0, { timeout: 40_000 });
 
   // The owner sees the appeal in the inbox and lifts the pause from it; Bob can send again.
   await owner.reload();
@@ -638,6 +640,96 @@ test('friend groups: creating, formatting, typing, read receipts and the admin r
   await expect(cara.getByText('You’re not in this group anymore.')).toBeVisible({ timeout: 20_000 });
   await expect(cara.getByRole('textbox', { name: 'Message Bio lab crew' })).toHaveCount(0);
   await expect(alice.getByText('2 members')).toBeVisible();
+});
+
+test('reactions and replies: a tapback shows on both sides and toggles off, a reply quotes its target and jumps to it', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']], messages: [['bob', 'alice', 'Did you finish the pre-lab?'], ['bob', 'alice', 'Question 4 is weird']] });
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto(`/messages?with=${f.bob}`);
+  const aliceLog = alice.getByRole('log', { name: 'Messages with Bob' });
+  const target = aliceLog.getByRole('listitem').filter({ hasText: 'Did you finish the pre-lab?' });
+  await expect(target).toBeVisible();
+
+  // React from the action sheet: the strip's toggle, then the pill under the bubble with the viewer in it.
+  await target.hover();
+  await target.getByRole('button', { name: 'Message actions' }).click();
+  const heart = target.getByRole('button', { name: 'React with heart' });
+  await expect(heart).toHaveAttribute('aria-pressed', 'false');
+  await heart.click();
+  const myPill = target.getByRole('button', { name: '❤️ 1, you reacted' });
+  await expect(myPill).toBeVisible();
+  await expect(target.getByRole('button', { name: 'React with heart' })).toHaveCount(0);
+
+  // Bob sees it after a poll, with the count but without "you reacted"; a second reaction from him makes it two.
+  const bob = await phone(browser, f.bob);
+  await bob.goto(`/messages?with=${f.alice}`);
+  const bobLog = bob.getByRole('log', { name: 'Messages with Alice' });
+  const bobsOwn = bobLog.getByRole('listitem').filter({ hasText: 'Did you finish the pre-lab?' });
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 1' })).toBeVisible({ timeout: 10_000 });
+  await bobsOwn.getByRole('button', { name: '❤️ 1' }).click();
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 2, you reacted' })).toBeVisible();
+  await expect(target.getByRole('button', { name: '❤️ 2, you reacted' })).toBeVisible({ timeout: 10_000 });
+
+  // Tapping the pill toggles Alice's reaction off; Bob's stays.
+  await target.getByRole('button', { name: '❤️ 2, you reacted' }).click();
+  await expect(target.getByRole('button', { name: '❤️ 1' })).toBeVisible();
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 1, you reacted' })).toBeVisible({ timeout: 10_000 });
+
+  // Reply from the action sheet: the composer shows the quote strip, the sent bubble carries the quote card.
+  // The reply's quote repeats the target's text, so the reply is excluded by its own text (an open action sheet adds text too).
+  const second = aliceLog.getByRole('listitem').filter({ hasText: 'Question 4 is weird', hasNotText: 'It wants grams' });
+  await second.hover();
+  await second.getByRole('button', { name: 'Message actions' }).click();
+  await second.getByRole('button', { name: 'Reply to message' }).click();
+  const strip = alice.getByRole('status').filter({ hasText: 'Question 4 is weird' });
+  await expect(strip).toContainText('Bob');
+  const composer = alice.getByRole('textbox', { name: 'Message Bob' });
+  await expect(composer).toBeFocused();
+  await composer.fill('It wants grams');
+  await composer.press('Enter');
+  await expect(strip).toHaveCount(0);
+  const sent = aliceLog.getByRole('listitem').filter({ hasText: 'It wants grams' });
+  const quote = sent.getByRole('button', { name: 'Quoted Bob: Question 4 is weird' });
+  await expect(quote).toBeVisible({ timeout: 15_000 });
+  await expect(bobLog.getByRole('listitem').filter({ hasText: 'It wants grams' }).getByRole('button', { name: 'Quoted You: Question 4 is weird' })).toBeVisible({ timeout: 10_000 });
+
+  // Tapping the quote highlights the message it points at.
+  await quote.click();
+  await expect(second).toHaveAttribute('data-highlighted', 'true');
+  await expect(second).not.toHaveAttribute('data-highlighted', 'true', { timeout: 5_000 });
+
+  // Escape in the composer drops a pending reply without sending anything.
+  await second.hover();
+  await second.getByRole('button', { name: 'Message actions' }).click();
+  await second.getByRole('button', { name: 'Reply to message' }).click();
+  await expect(alice.getByRole('button', { name: 'Cancel reply' })).toBeVisible();
+  await composer.press('Escape');
+  await expect(alice.getByRole('button', { name: 'Cancel reply' })).toHaveCount(0);
+});
+
+test('instant delivery: a message reaches the other side through the event stream well under the poll interval', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']], messages: [['alice', 'bob', 'ready?']] });
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto(`/messages?with=${f.bob}`);
+  const bob = await phone(browser, f.bob);
+  await bob.goto(`/messages?with=${f.alice}`);
+  const bobLog = bob.getByRole('log', { name: 'Messages with Alice' });
+  await expect(bobLog).toContainText('ready?');
+  // Let both streams connect before timing anything.
+  await alice.waitForTimeout(1_500);
+  const composer = alice.getByRole('textbox', { name: 'Message Bob' });
+  const latencies: number[] = [];
+  for (const text of ['ping one', 'ping two', 'ping three']) {
+    await composer.fill(text);
+    const sentAt = Date.now();
+    await composer.press('Enter');
+    await expect(bobLog.getByText(text, { exact: true })).toBeVisible({ timeout: 5_000 });
+    latencies.push(Date.now() - sentAt);
+  }
+  console.log(`event-stream delivery latency ms: ${latencies.join(', ')}`);
+  // Polling alone would take up to 15 s while the stream is connected; the stream makes each hop sub-second.
+  expect(Math.min(...latencies)).toBeLessThan(1_500);
+  expect(Math.max(...latencies)).toBeLessThan(3_000);
 });
 
 test('a group message can be reported, and the snapshot names every sender', async ({ browser }) => {

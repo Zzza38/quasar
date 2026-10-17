@@ -16,6 +16,7 @@ import { CommunityService } from '../src/server/community';
 import { ProposalService } from '../src/server/proposals';
 import { ChatService } from '../src/server/chat';
 import { exampleSchedule } from '../src/domain/example';
+import { generateVAPIDKeys } from 'web-push';
 
 const PORT = 3120;
 const BASE = `http://localhost:${PORT}`;
@@ -32,7 +33,9 @@ Object.assign(process.env, {
   DATABASE_PATH: DB_PATH, NEXTAUTH_SECRET: SECRET, NEXTAUTH_URL: BASE, OWNER_EMAIL,
   GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-client-secret',
   SCAN_API_URL: '', SCAN_API_KEY: '', SCAN_MODEL: '', SCAN_MODEL_REASONING: '', SCAN_MODEL_TEMPERATURE: '',
-  VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', VAPID_SUBJECT: '',
+  // A throwaway pair, generated per run: the server then reports push as configured, so the Messages notifications
+  // nudge appears in the screenshots. Nothing is ever sent with it.
+  ...((keys) => ({ VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: 'mailto:sweep@example.com' }))(generateVAPIDKeys()),
 });
 
 type Fixture = { maya: string; bob: string; owner: string; newbies: string[]; schoolName: string; checklistTitle: string; chatThread: string; chatReadSeq: number };
@@ -122,11 +125,15 @@ function seed(): Fixture {
     const say = (from: string, to: string, text: string, at: string) => { clock = new Date(at); return chat.send(from, to, randomUUID(), text).message; };
     say(bob, maya, 'Did you finish the chem pre-lab?', '2026-09-16T20:05:00Z');
     say(maya, bob, 'Almost. Question 4 is confusing', '2026-09-16T20:07:00Z');
-    say(maya, bob, 'Is it asking for moles or grams?', '2026-09-16T20:07:30Z');
-    say(bob, maya, 'Grams. Ms. Okafor said so in class', '2026-09-16T20:09:00Z');
+    const question = say(maya, bob, 'Is it asking for moles or grams?', '2026-09-16T20:07:30Z');
+    // Bob answers by quoting the question, and both sides tapback (docs/CHAT.md §15).
+    clock = new Date('2026-09-16T20:09:00Z');
+    const grams = chat.send(bob, maya, randomUUID(), 'Grams. Ms. Okafor said so in class', question.seq).message;
+    clock = new Date('2026-09-16T20:09:30Z'); chat.react(maya, bob, grams.seq, '❤️'); chat.react(bob, maya, grams.seq, '❤️');
     const oops = say(maya, bob, 'ok thanks!! 🙏', '2026-09-16T20:10:00Z');
     clock = new Date('2026-09-16T20:11:00Z'); chat.delete(maya, bob, oops.id);
     const readUpTo = say(maya, bob, 'Thanks, that helps', '2026-09-16T20:11:30Z');
+    clock = new Date('2026-09-16T20:12:00Z'); chat.react(bob, maya, readUpTo.seq, '👍');
     say(bob, maya, 'Study group for the Algebra II quiz tomorrow before first period? Library, 7:15. Bring the review sheet from https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit so we can split up the problems.', '2026-09-17T12:30:00Z');
     say(bob, maya, 'Also can you send me the notes from US History?', '2026-09-17T12:31:00Z');
     say(priya, maya, 'Are you going to the game Friday?', '2026-09-17T11:10:00Z');
@@ -326,16 +333,17 @@ async function sweep(browser: Browser, fixture: Fixture, variant: Variant, newbi
     await shot(page, 'messages-thread', variant, 'Thread with Bob: yesterday and today, a deleted message, a link, the New messages divider', false);
     await attempt('messages-actions', variant, async () => {
       const item = page.getByRole('log', { name: 'Messages with Bob' }).getByRole('listitem').filter({ hasText: 'Grams. Ms. Okafor' });
-      // Not a bubble tap on the phone: an earlier full-page screenshot resets Chromium's touch emulation,
-      // so (pointer: fine) matches and the tap handler (correctly, for a mouse) ignores it.
+      // The draft goes in first: the action sheet is a popover, and focusing the composer would close it.
+      await page.getByRole('textbox', { name: 'Message Bob' }).fill('Sure, sending them tonight');
       await item.hover();
       await item.getByRole('button', { name: 'Message actions' }).click();
       await item.getByRole('button', { name: 'Add as task' }).waitFor();
-      await page.getByRole('textbox', { name: 'Message Bob' }).fill('Sure, sending them tonight');
-      await shot(page, 'messages-actions', variant, 'Thread with the message actions row open and a draft in the composer', false);
+      await shot(page, 'messages-actions', variant, 'Thread with a message’s action sheet open and a draft in the composer', false);
+      await page.keyboard.press('Escape');
     });
     await attempt('messages-report', variant, async () => {
-      await page.getByRole('button', { name: 'Report', exact: true }).click();
+      await page.getByRole('button', { name: 'More options', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Report Bob' }).click();
       const dialog = page.getByRole('dialog', { name: 'Report Bob' });
       await dialog.getByRole('radio', { name: 'Someone may be in danger' }).click();
       await dialog.getByText('call or text 988', { exact: false }).waitFor();

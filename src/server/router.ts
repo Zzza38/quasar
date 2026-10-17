@@ -8,10 +8,10 @@ import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directory
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
-import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
-import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
+import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
+import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
-import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
@@ -133,7 +133,8 @@ export const appRouter = t.router({
     // The list carries the global room's row too (§11), so the Messages view polls one endpoint.
     inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), groups: groups(ctx.service).list(ctx.userId), global: room(ctx.service).summary(ctx.userId) })),
     thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body)),
+    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(chatReactSchema).mutation(({ ctx, input }) => chat(ctx.service).react(ctx.userId, input.userId, input.seq, input.emoji)),
     delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
     read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
     mute: accountScoped.input(chatMuteSchema).mutation(({ ctx, input }) => chat(ctx.service).mute(ctx.userId, input.userId, input.muted)),
@@ -150,7 +151,8 @@ export const appRouter = t.router({
     removeMember: accountScoped.input(groupMemberSchema).mutation(({ ctx, input }) => groups(ctx.service).removeMember(ctx.userId, input.groupId, input.userId)),
     leave: accountScoped.input(groupIdSchema).mutation(({ ctx, input }) => groups(ctx.service).leave(ctx.userId, input.groupId)),
     thread: accountScoped.input(groupThreadSchema).query(({ ctx, input }) => groups(ctx.service).thread(ctx.userId, input.groupId, { after: input.after, before: input.before })),
-    send: accountScoped.input(groupSendSchema).mutation(({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body)),
+    send: accountScoped.input(groupSendSchema).mutation(({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(groupReactSchema).mutation(({ ctx, input }) => groups(ctx.service).react(ctx.userId, input.groupId, input.seq, input.emoji)),
     delete: accountScoped.input(groupDeleteSchema).mutation(({ ctx, input }) => groups(ctx.service).delete(ctx.userId, input.groupId, input.messageId)),
     read: accountScoped.input(groupReadSchema).mutation(({ ctx, input }) => groups(ctx.service).read(ctx.userId, input.groupId, input.seq)),
     mute: accountScoped.input(groupMuteSchema).mutation(({ ctx, input }) => groups(ctx.service).mute(ctx.userId, input.groupId, input.muted)),
@@ -160,7 +162,8 @@ export const appRouter = t.router({
   // The global chat room (docs/CHAT.md §11). Public to every member with names, so the owner moderates it directly.
   global: t.router({
     thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body)),
+    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(globalReactSchema).mutation(({ ctx, input }) => room(ctx.service).react(ctx.userId, input.seq, input.emoji)),
     delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
     edit: ownerScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),

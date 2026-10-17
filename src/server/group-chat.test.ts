@@ -253,3 +253,136 @@ describe('friend groups (docs/CHAT.md §12)', () => {
     expect((await push.deliverChat(f.clock.now)).sent).toBe(0);
   });
 });
+
+
+describe('group replies and reactions', () => {
+  function setup() {
+    const f = fixture();
+    const group = f.groups.create(f.alice, { name: 'Replies', memberIds: [f.bob] });
+    const send = (from: string, body: string, replyTo?: number, id = randomUUID()) => f.groups.send(from, group.id, id, body, replyTo).message;
+    const thread = (viewer = f.alice, after?: number) => f.groups.thread(viewer, group.id, { after });
+    const react = (viewer: string, seq: number, emoji: Parameters<typeof f.groups.react>[3]) => f.groups.react(viewer, group.id, seq, emoji);
+    const remove = (id: string) => f.groups.delete(f.alice, group.id, id);
+    return { ...f, send, thread, react, remove, group };
+  }
+
+  it('resolves quotes at read time, censors and truncates previews, and preserves retries', () => {
+    const f = setup();
+    const target = f.send(f.alice, '**hello**   world\n' + 'x'.repeat(150));
+    const id = randomUUID();
+    const reply = f.send(f.bob, 'reply', target.seq, id);
+    const expected = { seq: target.seq, fromMe: false, senderName: 'Alice', preview: ('hello world ' + 'x'.repeat(150)).slice(0, 140) };
+    expect(reply.replyTo).toEqual(expected);
+    expect(f.thread(f.bob).messages.find(m => m.seq === reply.seq)?.replyTo).toEqual(expected);
+    expect(f.thread().messages.find(m => m.seq === reply.seq)?.replyTo?.fromMe).toBe(true);
+    expect(f.send(f.bob, 'reply', target.seq, id).seq).toBe(reply.seq);
+    fails(() => f.send(f.bob, 'reply', undefined, id), 'BAD_REQUEST');
+    const revision = f.thread().revision;
+    f.remove(target.id);
+    expect(f.thread(f.bob).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.thread(f.alice, revision).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.send(f.bob, 'still a valid quote', target.seq).replyTo?.preview).toBeNull();
+    expect(f.send(f.bob, 'reply', target.seq, id).seq).toBe(reply.seq);
+  });
+
+  it('rejects unavailable quote targets', () => {
+    const f = setup();
+    fails(() => f.send(f.alice, 'reply', 999999), 'BAD_REQUEST', 'That message is no longer available.');
+    const other = f.groups.create(f.alice, { name: 'Elsewhere', memberIds: [f.bob] });
+    const elsewhere = f.groups.send(f.alice, other.id, randomUUID(), 'other group').message;
+    fails(() => f.send(f.alice, 'reply', elsewhere.seq), 'BAD_REQUEST', 'That message is no longer available.');
+  });
+
+  it('toggles, replaces and removes one reaction per user, including on own messages', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    expect(message.reactions).toEqual([]);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toEqual([]);
+    f.react(f.alice, message.seq, '👍');
+    expect(f.react(f.alice, message.seq, '😂').message.reactions).toEqual([{ emoji: '😂', count: 1, mine: true }]);
+    f.react(f.bob, message.seq, '😂');
+    expect(f.thread().messages[0]?.reactions).toEqual([{ emoji: '😂', count: 2, mine: true }]);
+    expect(f.react(f.alice, message.seq, null).message.reactions).toEqual([{ emoji: '😂', count: 1, mine: false }]);
+    f.react(f.alice, message.seq, '❤️');
+    expect(f.thread().messages[0]?.reactions.map(r => r.emoji)).toEqual(['❤️', '😂']);
+    f.react(f.alice, message.seq, null);
+    f.react(f.bob, message.seq, null);
+    expect(f.thread().messages[0]?.reactions).toEqual([]);
+  });
+
+  it('delivers reaction changes through the previous revision cursor without unread or activity changes', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    const before = f.thread(f.bob);
+    const activity = f.db.prepare('SELECT created_at FROM chat_group_messages WHERE seq=?').get(message.seq);
+    f.react(f.bob, message.seq, '👍');
+    const poll = f.thread(f.alice, before.revision);
+    expect(poll.revision).toBeGreaterThan(before.revision);
+    expect(poll.messages).toHaveLength(1);
+    expect(poll.messages[0]).toMatchObject({ seq: message.seq, reactions: [{ emoji: '👍', count: 1, mine: false }] });
+    expect(f.thread(f.bob).lastReadSeq).toBe(before.lastReadSeq);
+    expect(f.db.prepare('SELECT created_at FROM chat_group_messages WHERE seq=?').get(message.seq)).toEqual(activity);
+    expect(f.thread(f.alice, poll.revision).messages).toEqual([]);
+  });
+
+  it('rejects invalid emoji, missing and deleted messages, and paused senders', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    fails(() => f.react(f.alice, message.seq, '🔥' as never), 'BAD_REQUEST');
+    fails(() => f.react(f.alice, 999999, '👍'), 'NOT_FOUND');
+    f.remove(message.id);
+    fails(() => f.react(f.bob, message.seq, '👍'), 'NOT_FOUND');
+    const live = f.send(f.alice, 'still here');
+    f.db.prepare('INSERT INTO chat_pauses(user_id,actor_id,until,reason,created_at) VALUES(?,?,NULL,?,?)').run(f.bob, f.owner, 'Testing pause', f.clock.now.toISOString());
+    fails(() => f.react(f.bob, live.seq, '👍'), 'FORBIDDEN');
+  });
+
+  it('limits reaction changes to 60 per rolling minute across all chats', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    for (let i = 0; i < 60; i++) f.react(f.alice, message.seq, '👍');
+    fails(() => f.react(f.alice, message.seq, '👍'), 'TOO_MANY_REQUESTS');
+    f.tick(60001);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toHaveLength(1);
+  });
+
+  it('removes reaction rows with retained messages and censors quotes after hard deletion', () => {
+    const f = setup();
+    const target = f.send(f.alice, 'old');
+    const reply = f.send(f.bob, 'reply', target.seq);
+    f.react(f.alice, target.seq, '👍');
+    const revision = f.thread().revision;
+    f.db.prepare('DELETE FROM chat_group_messages WHERE seq=?').run(target.seq);
+    expect(f.db.prepare('SELECT * FROM chat_group_reactions').all()).toEqual([]);
+    expect(f.thread(f.alice, revision).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.db.pragma('foreign_key_check')).toEqual([]);
+  });
+});
+
+it('keeps pre-join and blocked group targets out of replies and reactions', () => {
+  const f = fixture();
+  const group = f.groups.create(f.alice, { name: 'Join times', memberIds: [f.bob] });
+  const old = f.send(f.alice, group.id, 'before Cara');
+  f.tick(1000); f.groups.addMembers(f.alice, group.id, [f.cara]);
+  fails(() => f.groups.send(f.cara, group.id, randomUUID(), 'reply', old.seq), 'BAD_REQUEST', 'That message is no longer available.');
+  fails(() => f.groups.react(f.cara, group.id, old.seq, '👍'), 'NOT_FOUND');
+  const reply = f.groups.send(f.bob, group.id, randomUUID(), 'reply', old.seq).message;
+  expect(f.groups.thread(f.cara, group.id).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+  f.community.block(f.bob, f.alice, true);
+  fails(() => f.groups.send(f.bob, group.id, randomUUID(), 'reply', old.seq), 'BAD_REQUEST');
+  fails(() => f.groups.react(f.bob, group.id, old.seq, '👍'), 'NOT_FOUND');
+});
+
+it('cascades groups containing quotes and tapbacks', () => {
+  const f = fixture();
+  const group = f.groups.create(f.alice, { name: 'Cleanup', memberIds: [f.bob] });
+  const target = f.send(f.alice, group.id, 'target');
+  f.groups.send(f.bob, group.id, randomUUID(), 'quote', target.seq);
+  f.groups.react(f.bob, group.id, target.seq, '👍');
+  f.groups.leave(f.bob, group.id);
+  f.groups.leave(f.alice, group.id);
+  expect(f.db.prepare('SELECT * FROM chat_group_messages').all()).toEqual([]);
+  expect(f.db.prepare('SELECT * FROM chat_group_reactions').all()).toEqual([]);
+  expect(f.db.pragma('foreign_key_check')).toEqual([]);
+});
