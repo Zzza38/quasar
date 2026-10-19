@@ -18,9 +18,10 @@ export const isPdf = (file: File) => file.type === 'application/pdf' || /\.pdf$/
  * exactly as printed alongside the pictures it reads the layout from. pdf.js loads only when a PDF is picked.
  */
 export async function readPdf(file: File, maxPages: number): Promise<{ pages: PdfPage[]; total: number; text: string }> {
-  const pdfjs = await import('pdfjs-dist');
+  // The legacy build supplies the newer JavaScript APIs missing on some school iPads and older browsers.
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   // The worker is bundled from the package and served from this site, which the CSP's worker-src 'self' allows.
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
   // Keep the scan's existing JavaScript decoder fallbacks without fetching extra WASM decoder assets.
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), useWasm: false });
   // One try for loading and rendering, so a PDF that fails to open still has its loading task (and worker) destroyed.

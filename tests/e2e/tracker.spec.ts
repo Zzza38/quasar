@@ -222,6 +222,39 @@ test('explicit community choice, class and task persistence, offline reload and 
   } finally { db.close(); }
 });
 
+test('recovers a suspended browser database and uploads each offline task once', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/tasks');
+  await expect(saved(page)).toBeVisible();
+  await context.setOffline(true);
+  await quickAdd(page, 'Saved before suspension');
+  await quickAdd(page, 'Also saved offline');
+  await page.evaluate(() => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === 'workspaces') {
+        IDBObjectStore.prototype.put = put;
+        document.documentElement.dataset.storageFailureInjected = 'true';
+        throw new DOMException('Attempt to delete range from database without an in-progress transaction', 'UnknownError');
+      }
+      return put.apply(this, args);
+    };
+  });
+  await context.setOffline(false);
+  await expect(page.locator('html')).toHaveAttribute('data-storage-failure-injected', 'true');
+  await expect(saved(page)).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByLabel('Mark Saved before suspension complete')).toBeVisible();
+  await expect(page.getByLabel('Mark Also saved offline complete')).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const tasks = new Service(db).workspace(fixture.id).entities.filter(entity => entity.kind === 'task');
+    expect(tasks).toHaveLength(2);
+    expect(tasks.every(entity => entity.version === 1)).toBe(true);
+  } finally { db.close(); }
+});
+
 test('admin UI enforces owner authorization and publishes locked approved revisions', async ({ page, context }) => {
   const student = seed(); await authenticate(context, student.id);
   await page.goto('/admin');

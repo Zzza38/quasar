@@ -127,8 +127,13 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await page.screenshot({ path: testInfo.outputPath('scan-placed.png'), fullPage: true });
 });
 
-test('reads a schedule PDF: renders its pages and sends its text for exact names', async ({ page, context }) => {
+test('reads a schedule PDF without newer browser APIs: renders its pages and sends its text for exact names', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
+  // Older Safari versions lack these APIs. Exercise the real PDF renderer rather than a mocked decoder.
+  await page.addInitScript(() => {
+    Reflect.deleteProperty(Map.prototype, 'getOrInsertComputed');
+    Reflect.deleteProperty(Uint8Array.prototype, 'toBase64');
+  });
   // A real two-page PDF, printed by Chromium from a small timetable page.
   const maker = await context.newPage();
   await maker.setContent(`<h1>10-Day Schedule</h1><table border="1"><tr><th>Block</th><th>Day 1</th><th>Day 2</th></tr>
