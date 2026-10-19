@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { IDBObjectStore } from "fake-indexeddb";
 import { TRPCError } from "@trpc/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
@@ -87,6 +88,96 @@ afterEach(async () => {
 });
 
 describe("durable offline workspace", () => {
+  it("reopens a lost browser database transaction and syncs the saved queue once", async () => {
+    const local = await workspace();
+    await local.setContext({ school: { name: "Example School" } });
+    await local.save("task", "t1", taskData({ title: "Saved before suspension" }));
+    const remote = server();
+    const open = vi.spyOn(indexedDB, "open");
+    const put = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(() => {
+      throw new DOMException("Attempt to delete range from database without an in-progress transaction", "UnknownError");
+    });
+    try {
+      await local.sync(remote.send);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(remote.requests).toHaveLength(1);
+      expect((await local.read()).pending).toBe(0);
+      expect((await local.read()).context).toEqual({ school: { name: "Example School" } });
+      expect(remote.entities.get("task:t1")?.data.title).toBe("Saved before suspension");
+    } finally { put.mockRestore(); open.mockRestore(); }
+  });
+
+  it("does not upload again when storage fails while acknowledging an applied mutation", async () => {
+    const local = await workspace();
+    await local.save("task", "t1", taskData({ title: "Read chapter 3" }));
+    const remote = server();
+    let put: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await local.sync(async mutation => {
+        const result = await remote.send(mutation);
+        put = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(() => {
+          throw new DOMException("Attempt to delete range from database without an in-progress transaction", "UnknownError");
+        });
+        return result;
+      });
+      expect(remote.requests).toHaveLength(1);
+      expect(remote.entities.get("task:t1")?.version).toBe(1);
+      expect((await local.read()).pending).toBe(0);
+    } finally { put?.mockRestore(); }
+  });
+
+  it("bounds storage recovery and keeps pending edits after repeated failures", async () => {
+    const local = await workspace();
+    await local.save("task", "t1", taskData({ title: "Keep this edit" }));
+    const remote = server();
+    const open = vi.spyOn(indexedDB, "open");
+    const fail = () => {
+      throw new DOMException("Attempt to delete range from database without an in-progress transaction", "UnknownError");
+    };
+    const put = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(fail).mockImplementationOnce(fail);
+    try {
+      await expect(local.sync(remote.send)).rejects.toThrow("Close and reopen Quasar");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(remote.requests).toHaveLength(0);
+    } finally { put.mockRestore(); open.mockRestore(); }
+    const state = await local.read();
+    expect(state.pending).toBe(1);
+    expect(state.entities[0].data.title).toBe("Keep this edit");
+    expect(state.lastError).toContain("Keep this site's data");
+    await local.sync(remote.send);
+    expect((await local.read()).pending).toBe(0);
+    expect((await local.read()).lastError).toBeNull();
+  });
+
+  it("does not retry a storage quota error or enqueue an uncommitted edit", async () => {
+    const local = await workspace();
+    const open = vi.spyOn(indexedDB, "open");
+    const put = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(() => {
+      throw new DOMException("No space left", "QuotaExceededError");
+    });
+    try {
+      await expect(local.save("task", "t1", taskData({}))).rejects.toThrow("No space left");
+      expect(open).not.toHaveBeenCalled();
+      expect((await local.read()).pending).toBe(0);
+    } finally { put.mockRestore(); open.mockRestore(); }
+  });
+
+  it("shares one replacement connection between concurrent reads without changing pending work", async () => {
+    const local = await workspace();
+    await local.save("task", "t1", taskData({ title: "Still on this device" }));
+    const open = vi.spyOn(indexedDB, "open");
+    const fail = () => { throw new DOMException("The database connection was lost", "UnknownError"); };
+    const get = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementationOnce(fail).mockImplementationOnce(fail);
+    try {
+      const snapshots = await Promise.all([local.read(), local.read()]);
+      expect(open).toHaveBeenCalledTimes(1);
+      for (const state of snapshots) {
+        expect(state.pending).toBe(1);
+        expect(state.entities[0].data.title).toBe("Still on this device");
+      }
+    } finally { get.mockRestore(); open.mockRestore(); }
+  });
+
   it("upgrades the saved context in one step and never over a newer copy written meanwhile", async () => {
     const store = await workspace();
     await store.setContext({ legacy: true });
