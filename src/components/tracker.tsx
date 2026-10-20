@@ -252,7 +252,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   };
 
   // A context saved by a build before betas existed has none (see CONTEXT_VERSION).
-  return <BetaProvider key={accountKey} accountId={accountId} betas={context.betas ?? []} online={session.online} refresh={session.initialize}><Shell session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
+  return <BetaProvider key={accountKey} accountId={accountId} betas={context.betas ?? []} online={session.online} refresh={session.initialize}>
+    <Shell session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
     gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}
     calendarSettings={(openAdd) => <CalendarFeeds state={state} openAdd={openAdd} />}>
