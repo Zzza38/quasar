@@ -39,6 +39,9 @@ async function seed(connect: boolean) {
     const service = new Service(db, 'browser-owner@example.com');
     const school = service.createSchool(id, { name: `Veracross High ${id.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
     service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
+    const base = service.entity(id, 'personal')!;
+    service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base,
+      data: { ...base.data, scheduleLocked: false } });
     if (connect) {
       const feeds = new ScheduleFeedService(db, { secret: process.env.E2E_AUTH_SECRET!, fetcher: async () => ({ status: 200, text: classSchedule() }) });
       await feeds.connect(id, { source: 'veracross', url: 'https://veracross.invalid/subscribe/class-schedule.ics?t=private' });
