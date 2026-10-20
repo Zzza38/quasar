@@ -8,10 +8,13 @@ import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directory
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
+import { ScheduleSignalsService } from './schedule-signals';
+import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
 import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
@@ -87,14 +90,15 @@ const adminScoped = accountScoped.use(({ ctx, path, next }) => {
 });
 /** The owner moderating the public Global chat from the Messages view: an owner check without the recent sign-in. */
 const ownerScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
-const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional() });
-const clientOptions = (input: { clientVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION });
+const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional(), personalVersion: z.number().int().positive().optional() });
+const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
 const betas = (service: Service) => new BetaService(service);
 export const appRouter = t.router({
+  scheduleSignals: t.router({ list: authenticated.query(({ ctx }) => new ScheduleSignalsService(ctx.service).list(ctx.userId)) }),
   mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
   // `adminReady`: the owner signed in recently enough to use the owner tools (see `admin` above).
   session: t.procedure.query(({ ctx }) => {

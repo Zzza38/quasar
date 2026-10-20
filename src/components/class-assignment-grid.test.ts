@@ -1,5 +1,8 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
 import { describe, expect, it } from 'vitest';
-import { describePendingChange, queuePendingChange, type PendingChange } from './class-assignment-grid';
+import { ClassAssignmentGrid, describePendingChange, queuePendingChange, type PendingChange } from './class-assignment-grid';
 
 const noop = () => {};
 
@@ -33,5 +36,35 @@ describe('waiting private-copy confirmations', () => {
     const queue = [remove('day-2', 'Day 2'), remove('day-3', 'Day 3'), remove('day-2', 'Day 2')].reduce<PendingChange[]>(queuePendingChange, []);
     expect(queue.map((entry) => entry.kind === 'remove' && entry.dayId)).toEqual(['day-2', 'day-3']);
     expect(describePendingChange(queue[0])).toEqual({ title: 'Remove Day 2 from your private rotation?', body: 'Dates will be recalculated across the remaining days.', confirmLabel: 'Remove day' });
+  });
+});
+
+
+describe('school-following controls', () => {
+  const grid = (personal = examplePersonalSchedule) => createElement(ClassAssignmentGrid, { schedule: exampleSchedule, schoolSchedule: exampleSchedule, personal, save: async () => {}, onSchoolCorrection: noop });
+
+  it('hides structure controls while following school and retains bell-time editing', () => {
+    const html = renderToStaticMarkup(grid());
+    expect(html).not.toContain('aria-label="Day 1 name"');
+    expect(html).not.toContain('aria-label="Remove Day 1"');
+    expect(html).not.toContain('Add rotation day');
+    expect(html).toContain('Edit times');
+  });
+
+  it('keeps private schedule management available', () => {
+    const html = renderToStaticMarkup(grid({ ...examplePersonalSchedule, customSchedule: exampleSchedule }));
+    expect(html).toContain('aria-label="Day 1 name"');
+    expect(html).toContain('Add rotation day');
+  });
+
+  it('disables assignments and bell-time editing together when locked', () => {
+    const html = renderToStaticMarkup(createElement(ClassAssignmentGrid, { schedule: exampleSchedule, personal: examplePersonalSchedule, save: async () => {}, onSchoolCorrection: noop, disabled: true }));
+    const placement = html.match(/<button[^>]*aria-label="Place Algebra"[^>]*>/)?.[0];
+    const times = html.match(/<button[^>]*>Edit times/)?.[0];
+    const resize = html.match(/<button[^>]*aria-label="Resize [^"]*"[^>]*>/g) ?? [];
+    expect(placement).toContain('disabled=""');
+    expect(times).toContain('disabled=""');
+    expect(resize.length).toBeGreaterThan(0);
+    expect(resize.every(button => button.includes('disabled=""'))).toBe(true);
   });
 });

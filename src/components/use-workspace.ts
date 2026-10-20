@@ -6,6 +6,7 @@ import { signOut } from 'next-auth/react';
 import { api, errorMessage, isTransportFailure, isUnauthorized, type Workspace } from '@/client/api';
 import { clearOfflineAccount, getLastAccountId, openWorkspace, requestPersistentStorage, storagePersistence, type OfflineWorkspace, type WorkspaceSnapshot } from '@/client/offline';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
+import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
 import type { EntityKind } from '@/domain/sync';
 import { cachedContext, persistedContext, storedContext, upgradedContext, withClassmates, type WorkspaceClassmates, type WorkspaceContext } from './app-state';
 import { clearSetupState } from './setup-state';
@@ -18,7 +19,7 @@ import { clearSetupState } from './setup-state';
  */
 
 /** Tells the server this build reads `completedAt`, so it sends tasks with it (older builds get them without). */
-const TASK_FIELDS = { clientVersion: TASK_CLIENT_VERSION };
+const TASK_FIELDS = { clientVersion: TASK_CLIENT_VERSION, personalVersion: PERSONAL_SCHEDULE_CLIENT_VERSION };
 
 /** A proxy's HTML error page, parsed as JSON by the tRPC client. */
 const UNPARSABLE_RESPONSE = /not valid JSON|Unexpected token|Unexpected end of JSON/i;

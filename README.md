@@ -79,9 +79,17 @@ Students can add classes from photos of a printed or on-screen timetable (Classe
 
 Type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. The effect is available to everyone and has no mod-menu entry.
 
+## School schedule following
+
+Personal timetables follow shared school bell times. A recurring correction can be for the school or only for the student. Personal adjustments save changed slot fields, inherit untouched school times, and clear when the school adopts them. Matching adjustments from at least three other classmates in the same grade can suggest a school proposal. Full private timetable controls live under advanced settings and warn that school corrections will no longer reach that timetable.
+
+A personal schedule without a saved lock preference starts locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
+
+Schedule following is available to everyone and does not depend on beta enrollment. Removing the former `schedule-following` beta does not disable it or replace saved adjustments. Existing queued edits and retry payloads keep their original revisions. Older clients that cannot read sparse adjustments receive a reload message before an incompatible write commits.
+
 ## Running a beta
 
-A beta lets chosen members try a change on the real site (https://quasar.ziona.dev) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
 
 Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
 
@@ -120,7 +128,7 @@ The command prints the code. `/admin` → **Betas** also shows every beta's code
 ### 3. Testers join, leave and send feedback
 
 - **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
-- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://quasar.ziona.dev/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
+- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://getquasarapp.com/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
 - **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
 
 Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests.

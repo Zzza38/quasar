@@ -115,12 +115,12 @@ export function isOverdue(task: Task, today: string, nowTime: string): boolean {
 }
 
 /**
- * Where "Wrong time?" links go. With a private schedule the times shown come from that copy, which school
- * corrections do not change, so the student edits it (Classes opens the sheet); otherwise the school's times.
+ * Where "Wrong time?" links go. Private schedules open their editor; school followers choose a shared
+ * correction or personal adjustment.
  */
 export function openBellTimes(state: Pick<AppState, 'personal' | 'navigate'>): void {
   if (state.personal.customSchedule) state.navigate('classes', { private: 'open' });
-  else state.navigate('school', { fix: 'times' });
+  else state.navigate('classes', { bell: 'open' });
 }
 
 export const UNREADABLE_PERSONAL = 'Retry sync before changing your saved schedule.';

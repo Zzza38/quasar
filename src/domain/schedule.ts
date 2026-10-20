@@ -103,12 +103,15 @@ export function scheduleForGrade(schedule: Schedule, grade?: Grade): Schedule {
 }
 
 export function effectiveSchedule(schedule: Schedule, personal: PersonalSchedule): Schedule {
-  return personal.customSchedule ?? scheduleForGrade(schedule, personal.grade);
+  const basis = personal.customSchedule ?? scheduleForGrade(schedule, personal.grade);
+  if (!personal.periods?.length) return basis;
+  return { ...basis, periods: [...basis.periods, ...personal.periods.filter(period => !basis.periods.some(entry => entry.id === period.id))] };
 }
 
-/** A rotation day's slots for this student: their cycle-day override when they saved one, else the day's own. */
+/** School slots with this student's saved field edits, additions, and removals applied. */
 export function cycleDaySlots(day: Schedule["cycleDays"][number], personal: Pick<PersonalSchedule, "cycleDayOverrides">): ScheduleSlot[] {
-  return personal.cycleDayOverrides.find((entry) => entry.cycleDayId === day.id)?.slots ?? day.slots;
+  const override = personal.cycleDayOverrides.find((entry) => entry.cycleDayId === day.id);
+  return override ? applySlotChanges(day.slots, override) : day.slots;
 }
 
 /** Labels of the rotation days on which `periodId` meets for this student, cycle-day overrides included. */
@@ -169,12 +172,24 @@ export const classSchema = z.strictObject({
   directoryId: z.string().uuid().optional(),
 });
 
+export const PERSONAL_SCHEDULE_CLIENT_VERSION = 2;
+const slotChangeSchema = z.strictObject({
+  periodId: idSchema.optional(), start: timeSchema.optional(), end: timeSchema.optional(), base: slotSchema.optional(),
+});
+export const cycleDayOverrideSchema = z.strictObject({
+  cycleDayId: idSchema,
+  slots: slotsSchema.optional(),
+  slotChanges: z.record(idSchema, slotChangeSchema.nullable()).optional(),
+}).refine(value => (value.slots !== undefined) !== (value.slotChanges !== undefined), "Use either legacy slots or slot changes");
+export type CycleDayOverride = z.infer<typeof cycleDayOverrideSchema>;
+
 export const personalScheduleSchema = z.strictObject({
+  periods: z.array(periodSchema).max(300).optional(),
   grade: gradeSchema.optional(),
   scheduleLocked: z.boolean().optional(),
   classes: z.array(classSchema).max(300),
   assignments: z.record(idSchema, idSchema),
-  cycleDayOverrides: z.array(z.strictObject({ cycleDayId: idSchema, slots: slotsSchema })).max(366),
+  cycleDayOverrides: z.array(cycleDayOverrideSchema).max(366),
   dateOverrides: z.array(z.strictObject({
     date: dateSchema,
     closed: z.boolean().optional(),
@@ -183,6 +198,7 @@ export const personalScheduleSchema = z.strictObject({
   }).refine((value) => !(value.closed === true && value.slots !== undefined), "A closed date cannot also contain slots")).max(5000),
   customSchedule: scheduleSchema.nullable().optional(),
 }).superRefine((personal, context) => {
+  if (new Set(personal.periods?.map(period => period.id)).size !== (personal.periods?.length ?? 0)) context.addIssue({ code: "custom", message: "Personal period IDs must be unique", path: ["periods"] });
   const classIds = new Set(personal.classes.map((entry) => entry.id));
   if (classIds.size !== personal.classes.length) context.addIssue({ code: "custom", message: "Class IDs must be unique", path: ["classes"] });
   for (const [periodId, classId] of Object.entries(personal.assignments)) {
@@ -197,6 +213,70 @@ export type PersonalSchedule = z.infer<typeof personalScheduleSchema>;
 export type SchoolPeriod = z.infer<typeof periodSchema>;
 export type ScheduleSlot = z.infer<typeof slotSchema>;
 export type StudentClass = z.infer<typeof classSchema>;
+
+/** Applies independent slot fields without discarding overlaps introduced by a school revision. */
+export function applySlotChanges(slots: ScheduleSlot[], override: CycleDayOverride): ScheduleSlot[] {
+  if (override.slots) return override.slots;
+  const changes = override.slotChanges ?? {};
+  const result: ScheduleSlot[] = [];
+  for (const slot of slots) {
+    const change = changes[slot.id];
+    if (change === null) continue;
+    const { base: _base, ...fields } = change ?? {};
+    result.push({ ...slot, ...fields });
+  }
+  for (const [id, change] of Object.entries(changes)) {
+    if (!change || slots.some(slot => slot.id === id)) continue;
+    const { base, ...fields } = change;
+    const parsed = slotSchema.safeParse({ ...base, ...fields, id });
+    if (parsed.success) result.push(parsed.data);
+  }
+  return result.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end) || a.id.localeCompare(b.id));
+}
+
+/** Minimal slot changes against the school day. A base keeps edited slots readable after school removal. */
+export function diffCycleDaySlots(day: Schedule["cycleDays"][number], slots: ScheduleSlot[]): CycleDayOverride | null {
+  const slotChanges: NonNullable<CycleDayOverride["slotChanges"]> = {};
+  for (const slot of slots) {
+    const original = day.slots.find(entry => entry.id === slot.id);
+    if (!original) { const { id: _id, ...fields } = slot; slotChanges[slot.id] = fields; continue; }
+    const fields: NonNullable<NonNullable<CycleDayOverride["slotChanges"]>[string]> = {};
+    for (const key of ["periodId", "start", "end"] as const) if (slot[key] !== original[key]) fields[key] = slot[key];
+    if (Object.keys(fields).length) slotChanges[slot.id] = { ...fields, base: original };
+  }
+  for (const slot of day.slots) if (!slots.some(entry => entry.id === slot.id)) slotChanges[slot.id] = null;
+  return Object.keys(slotChanges).length ? { cycleDayId: day.id, slotChanges } : null;
+}
+
+/** Migrate legacy day copies against the acknowledged revision, then prune fields that school has adopted. */
+export function normalizePersonalSchedule(school: Schedule, personal: PersonalSchedule, previousSchool?: Schedule): PersonalSchedule {
+  if (personal.customSchedule) return personal;
+  const current = scheduleForGrade(school, personal.grade);
+  const previous = previousSchool ? scheduleForGrade(previousSchool, personal.grade) : current;
+  const cycleDayOverrides = personal.cycleDayOverrides.flatMap(override => {
+    const day = current.cycleDays.find(day => day.id === override.cycleDayId);
+    const oldDay = previous.cycleDays.find(day => day.id === override.cycleDayId);
+    let migrated = override;
+    if (override.slots && oldDay) {
+      const diff = diffCycleDaySlots(oldDay, override.slots);
+      if (!diff) return day ? [] : [override];
+      migrated = diff;
+    }
+    if (!day || !migrated.slotChanges) return [migrated];
+    const slotChanges: NonNullable<CycleDayOverride["slotChanges"]> = {};
+    for (const [id, change] of Object.entries(migrated.slotChanges)) {
+      const slot = day.slots.find(slot => slot.id === id);
+      if (change === null) { if (slot) slotChanges[id] = null; continue; }
+      const { base, ...fields } = change;
+      if (!slot) { slotChanges[id] = change; continue; }
+      for (const key of ["periodId", "start", "end"] as const) if (fields[key] === slot[key]) delete fields[key];
+      if (Object.keys(fields).length) slotChanges[id] = { ...fields, ...(base ? { base: slot } : {}) };
+    }
+    return Object.keys(slotChanges).length ? [{ cycleDayId: migrated.cycleDayId, slotChanges }] : [];
+  });
+  const periods = personal.periods?.filter(period => !current.periods.some(entry => entry.id === period.id && JSON.stringify(entry) === JSON.stringify(period)));
+  return { ...personal, cycleDayOverrides, ...(personal.periods ? { periods } : {}) };
+}
 
 /**
  * Adds a rotation day at the end. A one-day schedule has no reason to advance, so its advance days are often
@@ -236,11 +316,11 @@ export interface ResolvedPeriod {
 
 export interface ScheduleIssue {
   slotId: string;
-  reason: "missing-period" | "shift-outside-day" | "nonexistent-time";
+  reason: "missing-period" | "shift-outside-day" | "nonexistent-time" | "slot-overlap" | "invalid-slot";
 }
 
 /**
- * One sentence per issue reason. Only shifted and daylight-saving-gap periods are left out of the day; a slot whose
+ * One sentence per issue reason. Invalid times, shifts outside the day, and daylight-saving gaps are left out; a slot whose
  * period the school removed is still shown (as REMOVED_PERIOD_LABEL). `preview` words it for an unsaved adjustment.
  */
 export function describeDayIssues(issues: ScheduleIssue[], preview = false): string[] {
@@ -254,6 +334,9 @@ export function describeDayIssues(issues: ScheduleIssue[], preview = false): str
   if (shifted) lines.push(`${periods(shifted)} ${be(shifted)} left out because the time shift moves ${shifted === 1 ? "it" : "them"} outside the day.`);
   if (skipped) lines.push(`${periods(skipped)} ${be(skipped)} skipped because ${skipped === 1 ? "its time does" : "their times do"} not exist on this date (daylight-saving change).`);
   if (removed) lines.push(`${periods(removed)} ${preview ? "would use" : removed === 1 ? "uses" : "use"} a period the school removed.`);
+  const overlaps = count("slot-overlap");
+  if (overlaps) lines.push(`${periods(overlaps)} overlap after school and personal changes were combined. Review the affected blocks.`);
+  if (count("invalid-slot")) lines.push("School and personal changes leave a saved block with an end time at or before its start. Review its times.");
   return lines;
 }
 
@@ -393,13 +476,15 @@ export function resolveDay(schoolSchedule: Schedule, dateString: string, persona
     if (exception.slots !== undefined) { closed = false; slots = exception.slots; }
     if (exception.closed !== undefined) closed = exception.closed;
   }
-  if (cycleOverride) slots = cycleOverride.slots;
+  if (cycleOverride) slots = applySlotChanges(slots, cycleOverride);
   if (dateOverride?.slots !== undefined) { closed = false; slots = dateOverride.slots; }
   if (dateOverride?.closed !== undefined) closed = dateOverride.closed;
   const result: ResolvedDay = { date: dateString, cycleDayId: cycleDay.id, cycleDayLabel: cycleDay.label, closed, periods: [], issues: [] };
   if (closed) return result;
 
   for (const slot of slots) {
+    if (slot.start >= slot.end) { result.issues.push({ slotId: slot.id, reason: "invalid-slot" }); continue; }
+    if (slots.some(other => other.id !== slot.id && other.start < slot.end && slot.start < other.end)) result.issues.push({ slotId: slot.id, reason: "slot-overlap" });
     const startMinutes = toMinutes(slot.start) + (dateOverride?.shiftMinutes ?? 0);
     const endMinutes = toMinutes(slot.end) + (dateOverride?.shiftMinutes ?? 0);
     if (startMinutes < 0 || endMinutes >= 1440) {
@@ -466,7 +551,7 @@ export interface OverrideConflict {
 
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
-/** Read-only: call before accepting a new school revision; retain personal data until the student decides. */
+/** Describe school changes that still affect a student's saved personal adjustments. */
 export function detectOverrideConflicts(previous: Schedule, current: Schedule, personal: PersonalSchedule): OverrideConflict[] {
   if (personal.customSchedule) return [];
   const schoolPeriods = new Map(current.periods.map(period => [period.id, period]));
@@ -482,19 +567,19 @@ export function detectOverrideConflicts(previous: Schedule, current: Schedule, p
   const currentlyScheduled = scheduledPeriodIds(current);
   const referencedPeriods = new Set([
     ...Object.keys(personal.assignments),
-    ...personal.cycleDayOverrides.flatMap((entry) => entry.slots.map((slot) => slot.periodId)),
+    ...personal.cycleDayOverrides.flatMap((entry) => applySlotChanges(current.cycleDays.find(day => day.id === entry.cycleDayId)?.slots ?? [], entry).map((slot) => slot.periodId)),
     ...personal.dateOverrides.flatMap((entry) => (entry.slots ?? []).map((slot) => slot.periodId)),
   ]);
   for (const periodId of referencedPeriods) {
     const oldPeriod = previous.periods.find((entry) => entry.id === periodId);
-    const newPeriod = current.periods.find((entry) => entry.id === periodId) ?? schoolPeriods.get(periodId);
+    const newPeriod = current.periods.find((entry) => entry.id === periodId) ?? schoolPeriods.get(periodId) ?? personal.periods?.find(period => period.id === periodId);
     if (!newPeriod) {
       const label = oldPeriod?.label ?? periodLabels.get(periodId);
       const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
       const subject = cls ? `Your class “${cls.name}” was assigned to ${label ? `“${label}”` : 'a period that is no longer listed'}` : label ? `The period “${label}”` : 'A period used by your personal adjustments';
       add("period-removed", periodId, `${subject}${cls && label ? ', which is no longer listed in your school schedule' : cls ? '' : ' is no longer listed in your school schedule'}. Review it in your classes. Your class and personal adjustments are still saved.`);
     }
-    else if (!currentlyScheduled.has(periodId) && (previouslyScheduled.has(periodId) || !current.periods.some(period => period.id === periodId))) {
+    else if (!personal.periods?.some(period => period.id === periodId) && !currentlyScheduled.has(periodId) && (previouslyScheduled.has(periodId) || !current.periods.some(period => period.id === periodId))) {
       const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
       add("period-unscheduled", periodId, `${cls ? `“${cls.name}” (${newPeriod.label})` : `“${newPeriod.label}”`} has no times set. The period still exists, but is not on any day. Your assignment and personal adjustments are still saved.`);
     }

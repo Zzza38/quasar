@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
-import { personalScheduleSchema, resolveDay, scheduleSchema, withCycleDay, type Schedule } from '@/domain/schedule';
+import { cycleDaySlots, diffCycleDaySlots, personalScheduleSchema, resolveDay, scheduleSchema, withCycleDay, type Schedule } from '@/domain/schedule';
 import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, removeClass, saveTimetableEdit, useSchoolTimetable } from './personal-timetable';
 it('automatically saves a changed day as an override while other days follow the school', () => {
   const next = structuredClone(exampleSchedule);
@@ -8,7 +8,7 @@ it('automatically saves a changed day as an override while other days follow the
   next.periods.push({ id: 'unused-class', label: 'Unused class', kind: 'class' });
   const saved = saveTimetableEdit(exampleSchedule, examplePersonalSchedule, next, { ...examplePersonalSchedule.assignments, 'unused-class': 'algebra' });
   expect(saved.customSchedule).toBeNull();
-  expect(saved.cycleDayOverrides).toEqual([{ cycleDayId: 'day-1', slots: next.cycleDays[0].slots }]);
+  expect(saved.cycleDayOverrides).toEqual([diffCycleDaySlots(exampleSchedule.cycleDays[0], next.cycleDays[0].slots)]);
   expect(saved.assignments['unused-class']).toBeUndefined();
   const restored = saveTimetableEdit(exampleSchedule, saved, exampleSchedule, saved.assignments);
   expect(restored.cycleDayOverrides).toEqual([]);
@@ -23,7 +23,7 @@ it('keeps overrides for a rotation day the school removed when another day is ed
   const next = structuredClone(exampleSchedule);
   next.cycleDays[0].slots[0].end = '08:55';
   const saved = saveTimetableEdit(exampleSchedule, personal, next, personal.assignments);
-  expect(saved.cycleDayOverrides).toEqual([{ cycleDayId: 'day-1', slots: next.cycleDays[0].slots }, orphan]);
+  expect(saved.cycleDayOverrides).toEqual([diffCycleDaySlots(exampleSchedule.cycleDays[0], next.cycleDays[0].slots), orphan]);
 });
 it('removing a class keeps its private time blocks and other schedule adjustments', () => {
   const personal = { ...examplePersonalSchedule, classes: [...examplePersonalSchedule.classes, { id: 'art', name: 'Art' }] };
@@ -64,13 +64,16 @@ describe('knowing when a timetable edit makes a private copy', () => {
   const assignments = { ...personal.assignments, 'class-art': 'art' };
   const changed = (change: (draft: Schedule) => void) => { const next = structuredClone(exampleSchedule); change(next); return next; };
 
-  it('is true for placing an unplaced class in free time, which adds a period the school does not have', () => {
+  it('keeps following school when placing an unplaced class in free time', () => {
     const next = changed((draft) => {
       draft.periods.push({ id: 'class-art', label: 'Art', kind: 'class' });
       draft.cycleDays[0].slots.push({ id: 'art-slot', periodId: 'class-art', start: '12:00', end: '12:45' });
     });
-    expect(makesPrivateCopy(exampleSchedule, personal, next, assignments)).toBe(true);
-    expect(saveTimetableEdit(exampleSchedule, personal, next, assignments).customSchedule).not.toBeNull();
+    expect(makesPrivateCopy(exampleSchedule, personal, next, assignments)).toBe(false);
+    const saved = saveTimetableEdit(exampleSchedule, personal, next, assignments);
+    expect(saved.customSchedule).toBeNull();
+    expect(saved.periods).toEqual([{ id: 'class-art', label: 'Art', kind: 'class' }]);
+    expect(cycleDaySlots(exampleSchedule.cycleDays[0], saved)).toEqual(next.cycleDays[0].slots);
   });
 
   it('is true for renaming, adding and removing a rotation day', () => {
@@ -130,16 +133,14 @@ describe('replaying timetable edits made while a save is running', () => {
     expect(result.cycleDays.slice(1)).toEqual(base.cycleDays.slice(1));
   });
 
-  it('keeps slots in time order and falls back to the edited slots when a merge would overlap', () => {
+  it('keeps slots in time order and reports overlapping queued edits', () => {
     const early = edit((draft) => { draft.cycleDays[1].slots.unshift({ id: 'zero', periodId: 'A', start: '07:00', end: '07:50' }); });
     expect(early(clearSlot(base)).cycleDays[1].slots[0].id).toBe('zero');
-    // A slot added at noon and the last class stretched past noon cannot both be kept, so the later edit's slots win.
     const addNoon = edit((draft) => { draft.cycleDays[0].slots.push({ id: 'noon', periodId: 'A', start: '12:00', end: '13:00' }); });
     const stretch = edit((draft) => { draft.cycleDays[0].slots[3] = { ...draft.cycleDays[0].slots[3], end: '12:30' }; });
-    const result = stretch(addNoon(rename(base)));
-    expect(scheduleSchema.safeParse(result).success).toBe(true);
-    expect(result.cycleDays[0].label).toBe('Monday A');
-    expect(result.cycleDays[0].slots.map((slot) => [slot.id, slot.end])).toEqual([['first', '09:00'], ['second', '10:10'], ['lunch-slot', '10:45'], ['third', '12:30']]);
+    const saved = addNoon(rename(base));
+    expect(() => stretch(saved)).toThrow('overlap');
+    expect(saved.cycleDays[0].slots.some(slot => slot.id === 'noon')).toBe(true);
   });
 
   it('adds and removes whole days without disturbing the days another edit changed', () => {
@@ -159,4 +160,35 @@ describe('replaying timetable edits made while a save is running', () => {
     expect(queued.assign).toEqual({ A: 'history', B: 'english' });
     expect(queued.change).toBeUndefined();
   });
+});
+
+it('replays independent fields of one slot without losing a queued change', () => {
+  const before = exampleSchedule;
+  const start = structuredClone(before);
+  start.cycleDays[0].slots[0].start = '07:50';
+  const end = structuredClone(before);
+  end.cycleDays[0].slots[0].end = '08:55';
+  const result = rebaseTimetableEdit(before, end)(rebaseTimetableEdit(before, start)(before));
+  expect(result.cycleDays[0].slots[0]).toMatchObject({ start: '07:50', end: '08:55' });
+});
+
+it('keeps both personal periods when two new blocks are queued from the same render', () => {
+  const first = structuredClone(exampleSchedule);
+  first.periods.push({ id: 'studio', label: 'Studio', kind: 'other' });
+  first.cycleDays[0].slots.push({ id: 'studio-slot', periodId: 'studio', start: '12:00', end: '13:00' });
+  const second = structuredClone(exampleSchedule);
+  second.periods.push({ id: 'practice', label: 'Practice', kind: 'other' });
+  second.cycleDays[0].slots.push({ id: 'practice-slot', periodId: 'practice', start: '13:00', end: '14:00' });
+  const result = rebaseTimetableEdit(exampleSchedule, second)(rebaseTimetableEdit(exampleSchedule, first)(exampleSchedule));
+  expect(scheduleSchema.safeParse(result).success).toBe(true);
+  expect(result.periods.map(period => period.id)).toContain('studio');
+  expect(result.periods.map(period => period.id)).toContain('practice');
+});
+
+it('reports a queued edit to a block removed by an earlier save', () => {
+  const edited = structuredClone(exampleSchedule);
+  edited.cycleDays[0].slots[0].end = '08:55';
+  const latest = structuredClone(exampleSchedule);
+  latest.cycleDays[0].slots.shift();
+  expect(() => rebaseTimetableEdit(exampleSchedule, edited)(latest)).toThrow('removed');
 });
