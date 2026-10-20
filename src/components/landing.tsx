@@ -29,6 +29,8 @@ const HIGHLIGHT = 'bg-[linear-gradient(transparent_40%,#fff27a_40%_92%,transpare
 const INK_BUTTON = 'inline-flex items-center gap-2.5 rounded-[10px] bg-[var(--ink)] px-[18px] py-[11px] font-sans text-[14px] leading-none font-semibold text-[var(--paper)] shadow-[3px_3px_0_var(--shadow)] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0_var(--shadow)]';
 const OUTLINE_BUTTON = 'inline-flex items-center rounded-[10px] border-[1.5px] border-[var(--ink)] bg-white px-[18px] py-[11px] font-sans text-[14px] leading-none font-semibold text-[#1f2430] shadow-[3px_3px_0_var(--shadow)] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0_var(--shadow)]';
 
+const FOOTER_LINK = 'text-[var(--ink)] underline decoration-[var(--margin)] decoration-[1.5px] underline-offset-[3px] hover:decoration-[var(--ink)]';
+
 const STICKIES: ReadonlyArray<{ title: string; body: string; note: string; color: string; tilt: string }> = [
   { title: 'Eight-day rotation', body: 'Not A/B. Any cycle length, letter days, periods that change position from day to day.', note: '“Is it day 3 or day 4?” Never again.', color: 'bg-[#fff3a3]', tilt: '-rotate-[1.5deg]' },
   { title: 'Snow day on a Tuesday', body: 'Cycle days skip holidays and closures. The rotation doesn’t slide out by one for a month.', note: 'Wed became Day 4, like it should.', color: 'bg-[#ffd1dc]', tilt: 'rotate-[1deg]' },
@@ -226,8 +228,8 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
       </main>
 
       <footer className="flex flex-wrap justify-between gap-2.5 py-5 pb-10 font-sans text-[13px] text-[var(--pencil)]">
-        <span>© 2026 Quasar · Made by a student, for students</span>
-        <span>Your schedule stays on your account.</span>
+        <span>© 2026 Quasar · Made by Zion A, a student, for students · <a className={FOOTER_LINK} href="https://ziona.dev">ziona.dev</a></span>
+        <span>Your schedule stays on your account. · <a className={FOOTER_LINK} href="https://github.com/Zzza38/quasar">Source on GitHub</a></span>
       </footer>
     </div>
   </div>;
