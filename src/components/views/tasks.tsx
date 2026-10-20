@@ -8,6 +8,7 @@ import { addDays, classColor, formatTime, formatTimeZone, reminderLabel } from '
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
+import { useBeta } from '../betas';
 import { DATED_GROUPS, groupTasks, type TaskGroupKey } from '../task-groups';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
@@ -63,6 +64,7 @@ export function TasksView({ state }: { state: AppState }) {
   const [sort, setSort] = useState('due');
   const editParam = state.params.get('edit');
   const { onComplete, undoBar } = useCompletionUndo(state);
+  const splitDays = useBeta('task-days');
   useEffect(() => { if (editParam) { setEditing(editParam); state.navigate('tasks', undefined, { replace: true }); } }, [editParam, state]);
 
   const filtered = open.filter((item) => (!classFilter || item.task.classId === classFilter) && (!priorityFilter || (item.task.priority ?? 'normal') === priorityFilter));
@@ -71,7 +73,7 @@ export function TasksView({ state }: { state: AppState }) {
   const nowTime = clockTime(state.now, state.timeZone);
   const late = (item: TaskItem) => isOverdue(item.task, state.today, nowTime);
   // Groups follow the school calendar: the next school day stands apart from the weekend or holiday before it.
-  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal });
+  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal, splitDays });
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter(late).length;
   const filterToggle = 'h-9 shrink-0 gap-1.5 pointer-coarse:h-10 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
@@ -103,7 +105,12 @@ export function TasksView({ state }: { state: AppState }) {
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
           {group.detail && <span className="ml-1 rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-bold normal-case tracking-normal text-foreground/80">{group.detail}</span>}
         </h2>
-        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>
+        {group.days ? group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} className="grid gap-0.5 border-t border-border/60 pt-1.5 first-of-type:border-t-0 first-of-type:pt-0">
+          {/* Each day gets its own heading, so its rows drop the date chip like Today's do. */}
+          <h3 id={`day-${group.key}-${day.date}`} className="px-2.5 pt-1 text-[13px] font-semibold text-foreground/80">{day.title} <span className="font-medium text-muted-foreground/70">· {day.items.length}</span></h3>
+          <ul className="grid gap-0.5">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} />)}</ul>
+        </section>)
+          : <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>}
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
