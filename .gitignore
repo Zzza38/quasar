@@ -9,3 +9,5 @@ data/
 coverage/
 playwright-report/
 test-results/
+# Beta definitions and their codes live beside the database (src/server/beta-registry.ts), never in git.
+betas.json

@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "db:backup": "node --import tsx scripts/backup.ts",
     "test:e2e": "playwright test",
-    "worker": "node --import tsx scripts/worker.ts"
+    "worker": "node --import tsx scripts/worker.ts",
+    "beta": "node --import tsx scripts/beta.ts"
   },
   "engines": {
     "node": ">=22.12.0"

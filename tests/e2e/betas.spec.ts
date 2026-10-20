@@ -2,7 +2,9 @@ import { test, expect, hydrating } from './fixtures';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
+import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 
@@ -35,25 +37,23 @@ async function signedIn(browser: Browser, id: string, phone = false): Promise<Pa
   return hydrating(await context.newPage());
 }
 
-test('betas: the owner creates one, a member joins with the code, sends feedback with diagnostics, and leaves without it', async ({ browser }) => {
+test('betas: one from the beta list shows its code to the owner; a member joins with it, sends feedback with diagnostics, and leaves without it', async ({ browser }) => {
   test.setTimeout(120_000);
   const f = seed();
   const key = `e2e-${f.member.slice(0, 8)}`;
   const name = `Month grid ${f.member.slice(0, 4)}`;
+  const theCode = `GRID-${f.member.slice(0, 4)}`;
+  // What `npm run beta -- create` writes. The list sits beside the test database, and the server reads it per request.
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  writeBetaRegistry(createBeta(readBetaRegistry(listPath), { key, name, description: 'Try the month view in Schedule.', code: theCode }), listPath);
 
-  // The owner creates the beta; the code is shown once.
+  // The owner sees the beta and its code, with no way to create or edit one.
   const owner = await signedIn(browser, f.owner);
   await owner.goto('/admin');
   await owner.getByRole('tab', { name: 'Betas', exact: true }).click();
-  await owner.getByRole('button', { name: 'New beta', exact: true }).click();
-  const form = owner.getByRole('dialog', { name: 'New beta' });
-  await form.getByRole('textbox', { name: 'Key' }).fill(key);
-  await form.getByRole('textbox', { name: 'Name' }).fill(name);
-  await form.getByRole('textbox', { name: 'Description' }).fill('Try the month view in Schedule.');
-  await form.getByRole('textbox', { name: 'Code' }).fill(`GRID-${f.member.slice(0, 4)}`);
-  await form.getByRole('button', { name: 'Create beta' }).click();
-  await expect(form).toHaveCount(0);
-  await expect(owner.getByText(`GRID-${f.member.slice(0, 4)}`, { exact: true })).toBeVisible();
+  const ownerRow = owner.getByRole('listitem').filter({ hasText: name });
+  await expect(ownerRow.getByText(theCode, { exact: true })).toBeVisible();
+  await expect(owner.getByRole('button', { name: 'New beta' })).toHaveCount(0);
 
   // The member types a wrong code, then the right one in another case and spacing.
   const member = await signedIn(browser, f.member, true);
@@ -64,7 +64,7 @@ test('betas: the owner creates one, a member joins with the code, sends feedback
   await code.fill('NOPE-1234');
   await account.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(account.getByRole('alert').filter({ hasText: 'That code doesn’t match an open beta' })).toBeVisible();
-  await code.fill(`grid ${f.member.slice(0, 4)}`);
+  await code.fill(theCode.toLowerCase().replace('-', ' '));
   await account.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(account.getByRole('status').filter({ hasText: `You’re in ${name}.` })).toBeVisible();
   const mine = account.getByRole('list', { name: 'Your betas' });
@@ -89,16 +89,15 @@ test('betas: the owner creates one, a member joins with the code, sends feedback
   await report.getByText('Diagnostics').click();
   await expect(report.getByText('390×844', { exact: false })).toBeVisible();
   await owner.getByRole('tab', { name: 'Betas', exact: true }).click();
-  const row = owner.getByRole('listitem').filter({ hasText: name });
-  await expect(row.getByText('1 member')).toBeVisible();
-  await expect(row.getByText('1 open report')).toBeVisible();
+  await expect(ownerRow.getByText('1 member')).toBeVisible();
+  await expect(ownerRow.getByText('1 open report')).toBeVisible();
 
   // Leaving is one tap, no code.
   await mine.getByRole('button', { name: `Leave ${name}` }).click();
   await expect(mine).toHaveCount(0);
 
   // Rejoin, then `?beta=off` leaves every beta before the page renders and drops itself from the address.
-  await code.fill(`GRID-${f.member.slice(0, 4)}`);
+  await code.fill(theCode);
   await account.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(mine.getByText(name)).toBeVisible();
   await member.goto('/schedule?beta=off');
