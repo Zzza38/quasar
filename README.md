@@ -83,6 +83,8 @@ Type `savanah` outside editable fields to spawn 80 broken hearts. They bounce ar
 
 A beta lets chosen members try a change on the real site (https://quasar.ziona.dev) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
 
+Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
+
 ### 1. Put the change behind a flag
 
 Pick a key: lowercase letters, numbers and dashes, such as `month-grid`. Wrap the new UI in `<Beta>` from `src/components/betas.tsx`, with the current UI as the fallback:
@@ -101,40 +103,47 @@ For logic rather than a whole component, branch on `useBeta('month-grid')`, whic
 
 Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
 
-### 2. Ship it
+Merge and deploy as usual. Until the beta exists in the list, nobody is in it, so the deploy changes nothing for anyone.
 
-Merge and deploy as usual. With no beta created yet, nobody is in it, so the deploy changes nothing for anyone.
+### 2. Create the beta
 
-### 3. Create the beta and share the code
+Run the command in the checkout whose server should have the beta. For the live site that is the production checkout, `/srv/NAS/Private/school-schedule-tracker`: the command loads `.env.local` there, so it edits the same list the live server reads.
 
-Open `/admin` → **Betas** → **New beta**. Enter the same key, a name and a short description (members see both in Account), and a code. **Generate** makes a code that is easy to read out. You can cap how many people can join, so a leaked code can't pull in the whole school. Case, spaces and dashes in codes don't matter: `GRID-2026` and `grid 2026` are the same code.
+```sh
+npm run beta -- create month-grid --name "Month grid" --description "Try the month view in Schedule." --max 30
+```
 
-Quasar stores only a hash of the code, so the console shows it once, right after you create the beta. Copy it and send it to your testers.
+`--name` and `--description` are what members see in Account. `--max` caps how many people can join, so a leaked code can't pull in the whole school. Leave out `--code` and the command generates one that is easy to read out, like `TQJKH-VMQWP`. Pass `--code "GRID-2026"` to choose your own: 4 to 64 letters and numbers, where case, spaces and dashes don't matter (`GRID-2026` and `grid 2026` are the same code). The command warns about codes under 8 characters, since those are easy to guess.
 
-### 4. Testers join, leave and send feedback
+The command prints the code. `/admin` → **Betas** also shows every beta's code with a Copy button, so you can look it up any time.
+
+### 3. Testers join, leave and send feedback
 
 - **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
 - **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://quasar.ziona.dev/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
 - **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
 
-Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests. The Betas tab shows each beta's open report count.
+Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests.
 
-### 5. Manage it
+### 4. Manage it
 
-In `/admin` → **Betas** you can:
+```sh
+npm run beta -- list                                   # every beta, its code and status, and where the list is
+npm run beta -- pause month-grid                       # the code stops working; members already in stay in
+npm run beta -- open month-grid                        # the code works again
+npm run beta -- new-code month-grid                    # a fresh generated code; members stay in
+npm run beta -- new-code month-grid --code "GRID-2027" # or one you choose
+npm run beta -- edit month-grid --name "Month view" --max none
+npm run beta -- remove month-grid                      # ends the beta: it switches off for everyone in it
+```
 
-- **Pause joining.** The code stops working. Members already in stay in.
-- **Reopen joining.** The code works again.
-- **New code.** For a leaked code. The old code stops working, the new one is shown once, and members stay in.
-- **Edit.** Change the name, description or member cap.
-- **Remove.** Under Members, take one person out of the beta.
-- **Close beta.** Deletes the beta and drops everyone in it. Its feedback stays in the inbox.
+`remove` retires the key, and the command refuses to reuse it, so the old members can't end up in a new beta that happens to share the name.
 
-Every owner action and every join and leave goes to the audit log as `beta.*`.
+`/admin` → **Betas** is read-only apart from **Remove** under a beta's Members, which takes one person out. It shows each beta's code, status, member count, members and open feedback. Joins, leaves and removals go to the audit log as `beta.*`.
 
-### 6. Ship it to everyone
+### 5. Ship it to everyone
 
-When the beta is done, delete the `<Beta>`/`useBeta` branch and keep the new code path, then deploy. After that, close the beta in `/admin` → Betas. To abandon a beta instead, delete the new code path and close it the same way.
+When the beta is done, delete the `<Beta>`/`useBeta` branch, keep the new code path, and deploy. Then run `npm run beta -- remove <key>`. To abandon a beta instead, delete the new code path and remove it the same way.
 
 ## Continuous integration
 
