@@ -1,5 +1,8 @@
 'use client';
 
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { useBeta } from '../betas';
+
 import { useEffect, useMemo, useState } from 'react';
 import { AttentionClassCells } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
@@ -38,6 +41,7 @@ const classFields: FieldSpec<Record<string, unknown>>[] = [
 ];
 
 export function ClassesView({ state }: { state: AppState }) {
+  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const { schedule: school, personal } = state;
   const schedule = effectiveSchedule(school, personal);
   const [editing, setEditing] = useState<string | 'new' | null>(null);
@@ -55,7 +59,7 @@ export function ClassesView({ state }: { state: AppState }) {
   const [resetPending, setResetPending] = useState(false);
   // "Wrong time?" links (openBellTimes) arrive with ?private=open; open the sheet once and drop the param.
   const bellParam = state.params.get('bell');
-  useEffect(() => { if (bellParam === 'open') { setBellChoice(true); state.navigate('classes', undefined, { replace: true }); } }, [bellParam, state]);
+  useEffect(() => { if (bellParam === 'open') { if (following) { setBellChoice(true); state.navigate('classes', undefined, { replace: true }); } else state.navigate('school', { fix: 'times' }, { replace: true }); } }, [bellParam, state, following]);
   const privateParam = state.params.get('private');
   useEffect(() => { if (privateParam === 'open') { state.navigate('classes', undefined, { replace: true }); editSchedule(state, () => setPrivateOpen(true)); } }, [privateParam, state]);
   // ?directory=open (School → Browse school classes) is one-shot too: open the directory and drop the param, so Back or a reload does not reopen it.
@@ -149,9 +153,9 @@ export function ClassesView({ state }: { state: AppState }) {
         {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) { const day = event.target.value; editSchedule(state, () => setAdjustCycleDay(day)); } }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
       </div>
       <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={(date) => editSchedule(state, () => setAdjustDate(date))} onEditCycleDay={(day) => editSchedule(state, () => setAdjustCycleDay(day))} />
-      {bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }} />}
-      <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>
-      {(advanced || !!personal.customSchedule) && <Panel className="flex flex-wrap items-center gap-3">
+      {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }} />}
+      {following && <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>}
+      {(!following || advanced || !!personal.customSchedule) && <Panel className="flex flex-wrap items-center gap-3">
 
         <span className={cn('grid size-9 shrink-0 place-items-center rounded-xl', personal.customSchedule ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground')}><Icon name={personal.customSchedule ? 'edit' : 'school'} size={17} /></span>
         <div className="min-w-0 flex-1 basis-[240px] text-sm">
@@ -160,7 +164,7 @@ export function ClassesView({ state }: { state: AppState }) {
         </div>
         <div className="flex flex-wrap gap-2">
           {(personal.customSchedule || personal.cycleDayOverrides.length > 0 || personal.dateOverrides.length > 0) && <Button size="sm" icon="refresh" onClick={() => editSchedule(state, () => setResetOpen(true))}>Revert to school timetable</Button>}
-          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => editSchedule(state, () => setPrivateOpen(true))}>{personal.customSchedule ? 'Manage private schedule' : 'Build a private schedule'}</Button>
+          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => editSchedule(state, () => setPrivateOpen(true))}>{following ? personal.customSchedule ? 'Manage private schedule' : 'Build a private schedule' : 'Advanced schedule settings'}</Button>
 
         </div>
       </Panel>}
@@ -181,9 +185,9 @@ export function ClassesView({ state }: { state: AppState }) {
     <ConnectScheduleFeedSheet open={veracrossOpen} onClose={() => setVeracrossOpen(false)} state={state} />
     <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schoolId={state.context.school.id} online={state.online} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal}
       onConnectFeed={feedConnected ? undefined : () => { setScanOpen(false); setVeracrossOpen(true); }} />
-    {correction && voting && <ComposeProposal state={state} seed={correction} onClose={() => setCorrection(null)} onSaved={async () => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); await state.refresh(); }} />}
-    {correction && !voting && !locked && <SharedEditorSheet accountId={state.context.user.id} open onClose={() => setCorrection(null)} schedule={state.context.school.schedule} initialGrade={personal.grade ?? '9'} seed={correction.schedule} schoolId={state.context.school.id} version={state.context.school.version} onSaved={state.refresh} onPublished={() => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); }} />}
-    {correction && locked && !voting && <Modal open onClose={() => setCorrection(null)} title="Request a school correction"><Callout tone="info" actions={<Button onClick={() => state.navigate('school')}>Open school corrections</Button>}>Support manages this school's schedule. Send a correction request from the School page.</Callout></Modal>}
+    {following && correction && voting && <ComposeProposal state={state} seed={correction} onClose={() => setCorrection(null)} onSaved={async () => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); await state.refresh(); }} />}
+    {following && correction && !voting && !locked && <SharedEditorSheet accountId={state.context.user.id} open onClose={() => setCorrection(null)} schedule={state.context.school.schedule} initialGrade={personal.grade ?? '9'} seed={correction.schedule} schoolId={state.context.school.id} version={state.context.school.version} onSaved={state.refresh} onPublished={() => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); }} />}
+    {following && correction && locked && !voting && <Modal open onClose={() => setCorrection(null)} title="Request a school correction"><Callout tone="info" actions={<Button onClick={() => state.navigate('school')}>Open school corrections</Button>}>Support manages this school's schedule. Send a correction request from the School page.</Callout></Modal>}
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
     <Modal open={resetOpen} onClose={() => setResetOpen(false)} busy={resetPending} title="Revert to the school timetable?"
       footer={<><Button variant="ghost" disabled={resetPending} onClick={() => setResetOpen(false)}>Keep my timetable</Button><Spacer /><Button variant="danger" busy={resetPending} onClick={async () => { setResetPending(true); setError(''); try { await state.savePersonal(useSchoolTimetable(school, personal)); setResetOpen(false); } catch (err) { setError(errorMessage(err)); } finally { setResetPending(false); } }}>Revert timetable</Button></>}>

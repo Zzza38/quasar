@@ -1,11 +1,16 @@
 import { test, expect, hydrating } from './fixtures';
-import type { BrowserContext, Page } from '@playwright/test';
+import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
+import { BetaService } from '../../src/server/betas';
+import { SCHEDULE_FOLLOWING_BETA } from '../../src/domain/betas';
 import { exampleSchedule } from '../../src/domain/example';
-import { diffCycleDaySlots, personalScheduleSchema } from '../../src/domain/schedule';
+import { cycleDaySlots, diffCycleDaySlots, personalScheduleSchema } from '../../src/domain/schedule';
+
+const BETA_CODE = 'SCHOOL-FOLLOWING-E2E';
+const BETA_NAME = 'School schedule following';
 
 function database<T>(run: (db: ReturnType<typeof openDatabase>, service: Service) => T): T {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -13,17 +18,33 @@ function database<T>(run: (db: ReturnType<typeof openDatabase>, service: Service
   finally { db.close(); }
 }
 
-function seed(locked = false) {
+function prepareBeta(db: ReturnType<typeof openDatabase>, service: Service) {
+  let owner = db.prepare('SELECT id FROM users WHERE email=?').get('browser-owner@example.com') as { id: string } | undefined;
+  if (!owner) {
+    owner = { id: randomUUID() };
+    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
+      .run(owner.id, owner.id, 'browser-owner@example.com', 'Owner', 'Browser Owner', new Date().toISOString());
+  }
+  const betas = new BetaService(service);
+  if (!betas.list(owner.id).some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) {
+    betas.create(owner.id, { key: SCHEDULE_FOLLOWING_BETA, name: BETA_NAME, description: 'Try personal bell-time changes while following school corrections.', code: BETA_CODE, maxMembers: null });
+  }
+  return betas;
+}
+
+function seed(locked = false, enroll = true, schedule = exampleSchedule) {
   return database((db, service) => {
+    const betas = prepareBeta(db, service);
     const members = Array.from({ length: locked ? 10 : 1 }, (_, index) => {
       const id = randomUUID();
       db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
         .run(id, id, `${id}@example.com`, `Follower ${index}`, `Follower Student ${index}`, new Date().toISOString());
       return id;
     });
-    const school = service.createSchool(members[0], { name: `Following High ${members[0].slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
+    const school = service.createSchool(members[0], { name: `Following High ${members[0].slice(0, 6)}`, location: 'Boston, MA', schedule });
     for (const id of members) {
       service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
+      if (enroll) betas.join(id, { code: BETA_CODE });
       if (locked) db.prepare('INSERT INTO school_verifications(user_id,school_id,method,verified_at) VALUES(?,?,?,?)')
         .run(id, school.id, 'support', new Date().toISOString());
     }
@@ -40,6 +61,11 @@ async function authenticate(context: BrowserContext, id: string) {
 const personal = (id: string) => database((_db, service) => personalScheduleSchema.parse(service.entity(id, 'personal')!.data));
 const school = (id: string) => database((_db, service) => service.school(id));
 const proposals = (schoolId: string) => database((db) => db.prepare('SELECT schedule,summary,status FROM schedule_proposals WHERE school_id=?').all(schoolId) as { schedule: string; summary: string; status: string }[]);
+const saved = (page: Page) => page.getByRole('status').filter({ hasText: /^Saved$/ }).first();
+async function choose(select: Locator, option: string) {
+  await select.click();
+  await select.page().getByRole('option', { name: option, exact: true }).click();
+}
 
 async function editFirstTime(page: Page, start = '8:05 am') {
   await page.getByRole('button', { name: 'Edit times for Day 1', exact: true }).click();
@@ -47,6 +73,75 @@ async function editFirstTime(page: Page, start = '8:05 am') {
   await page.getByRole('button', { name: 'Save times', exact: true }).click();
   await expect(page.getByText('Who needs this time change?', { exact: true })).toBeVisible();
 }
+
+test('the schedule beta is opt-in per account and leaving preserves saved classes and bell times', async ({ page, context, browser }) => {
+  test.setTimeout(120_000);
+  const f = seed(true, false);
+  await authenticate(context, f.id);
+  await page.goto('/classes');
+  const addDay = page.getByRole('button', { name: 'Add rotation day', exact: true });
+  await expect(addDay).toBeVisible();
+  await expect(page.getByLabel('Day 1 name', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  const classForm = page.getByRole('dialog', { name: 'Add a class', exact: true });
+  await classForm.getByLabel('Class name').fill('Biology');
+  await classForm.getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(classForm).toHaveCount(0);
+  const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
+  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
+  await day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  const account = page.getByRole('dialog', { name: 'Account', exact: true });
+  await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
+  await account.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(account.getByRole('list', { name: 'Your betas' })).toContainText(BETA_NAME);
+  await account.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(addDay).toHaveCount(0);
+  await expect(page.getByLabel('Day 1 name', { exact: true })).toHaveCount(0);
+
+  // A schoolmate sees the original UI even though someone at the same school joined the beta.
+  const schoolmateContext = await browser.newContext();
+  try {
+    await authenticate(schoolmateContext, f.members[1]);
+    const schoolmate = hydrating(await schoolmateContext.newPage());
+    await schoolmate.goto('/classes');
+    await expect(schoolmate.getByRole('button', { name: 'Add rotation day', exact: true })).toBeVisible();
+    await expect(schoolmate.getByLabel('Day 1 name', { exact: true })).toBeVisible();
+  } finally { await schoolmateContext.close(); }
+
+  await editFirstTime(page);
+  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
+  await expect.poll(() => personal(f.id).cycleDayOverrides[0]?.slotChanges?.first?.start).toBe('08:05');
+  const savedPersonal = personal(f.id);
+  expect(savedPersonal.classes).toEqual([expect.objectContaining({ name: 'Biology' })]);
+  expect(savedPersonal.assignments).toEqual({ A: 'Biology' });
+  expect(savedPersonal.customSchedule).toBeNull();
+
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await account.getByRole('button', { name: `Leave ${BETA_NAME}`, exact: true }).click();
+  await expect(account.getByRole('list', { name: 'Your betas' })).toHaveCount(0);
+  await account.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(addDay).toBeVisible();
+  await expect(page.getByLabel('Day 1 name', { exact: true })).toBeVisible();
+  await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
+  expect(personal(f.id)).toEqual(savedPersonal);
+  await page.reload();
+  await expect(addDay).toBeVisible();
+  await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
+  await account.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(account.getByRole('list', { name: 'Your betas' })).toContainText(BETA_NAME);
+  await page.goto('/classes?beta=off');
+  await expect(page).toHaveURL(/\/classes$/);
+  await expect(addDay).toBeVisible();
+  await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
+  expect(database((_db, service) => new BetaService(service).joined(f.id))).toEqual([]);
+  expect(personal(f.id)).toEqual(savedPersonal);
+});
 
 test('school followers choose before saving times, and adopted changes follow school updates again', async ({ page, context }) => {
   const f = seed();
@@ -163,6 +258,8 @@ test('private schedules require the advanced warning and suggestions need three 
   });
   adjustPeer(f.members[1]);
   adjustPeer(f.members[2]);
+  adjustPeer(f.members[3]);
+  database((_db, service) => new BetaService(service).leave(f.members[3], SCHEDULE_FOLLOWING_BETA));
   const [suggestionResponse] = await Promise.all([
     page.waitForResponse(response => response.url().includes('scheduleSignals.list') && response.ok()),
     page.goto('/school'),
@@ -171,7 +268,7 @@ test('private schedules require the advanced warning and suggestions need three 
   expect(replies.find(reply => reply.result?.data?.signals)?.result?.data?.signals).toEqual([]);
   await expect(page.getByRole('heading', { name: 'Proposed changes', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Schedule suggestions', exact: true })).toHaveCount(0);
-  adjustPeer(f.members[3]);
+  database((_db, service) => new BetaService(service).join(f.members[3], { code: BETA_CODE }));
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Schedule suggestions', exact: true })).toBeVisible();
   await expect(page.getByText('3 classmates moved this block. Propose it?', { exact: true })).toBeVisible();
@@ -180,4 +277,55 @@ test('private schedules require the advanced warning and suggestions need three 
   await expect(proposal.getByLabel('What changes and why?')).toHaveValue('Change A on Day 1 to 08:05 to 09:00 for grade 10.');
   await expect(proposal.getByRole('button', { name: 'Open the vote', exact: true })).toBeEnabled();
   expect(proposals(f.school.id)).toEqual([]);
+});
+
+test('bell corrections keep the selected grade and preserve a canceled personal editor draft', async ({ page, context }) => {
+  const junior = structuredClone(exampleSchedule);
+  junior.cycleDays[0].label = 'Junior day';
+  junior.cycleDays[0].slots[0].end = '08:50';
+  const fixture = seed(false, true, { ...exampleSchedule, gradeSchedules: { '11': junior } });
+  await authenticate(context, fixture.id);
+  await page.goto('/school');
+  await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 11', exact: true }).click();
+  await expect(saved(page)).toBeVisible();
+  await page.goto('/classes?bell=open');
+  await page.getByRole('button', { name: "The school's time is wrong", exact: true }).click();
+  const shared = page.getByRole('dialog', { name: 'Edit the shared schedule', exact: true });
+  await shared.getByRole('tab', { name: /Days ·/ }).click();
+  await expect(shared.getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await shared.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Change bell times', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
+  await choose(page.getByLabel('Adjust a rotation day', { exact: true }), 'Junior day');
+  const adjustment = page.getByRole('dialog', { name: 'Adjust Junior day', exact: true });
+  await adjustment.getByRole('switch', { name: 'Use my own periods on Junior day', exact: true }).click();
+  await adjustment.getByLabel('Slot 1 end', { exact: true }).fill('08:45 AM');
+  await adjustment.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: "The school's time is wrong", exact: true }).click();
+  await shared.getByRole('tab', { name: /Days ·/ }).click();
+  await expect(shared.getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
+  await shared.getByRole('button', { name: 'Edit times for Junior day', exact: true }).click();
+  await expect(shared.getByLabel('Slot 1 end', { exact: true })).toHaveValue('8:45');
+  await shared.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Change bell times', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(adjustment.getByLabel('Slot 1 end', { exact: true })).toHaveValue('8:45');
+  await adjustment.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Change bell times', exact: true })).toHaveCount(0);
+  await expect(adjustment).toHaveCount(0);
+  await expect.poll(() => {
+    const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+    try {
+      const personal = personalScheduleSchema.parse(new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data);
+      return cycleDaySlots(junior.cycleDays[0], personal)[0].end;
+    } finally { db.close(); }
+  }).toBe('08:45');
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db);
+    const personal = personalScheduleSchema.parse(service.workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data);
+    expect(personal.customSchedule).toBeNull();
+    expect(cycleDaySlots(junior.cycleDays[0], personal)[0].end).toBe('08:45');
+    expect(service.school(fixture.school.id).schedule.gradeSchedules?.['11']?.cycleDays[0].slots[0].end).toBe('08:50');
+    expect(service.school(fixture.school.id).schedule.cycleDays[0].slots[0].end).toBe('09:00');
+  } finally { db.close(); }
 });

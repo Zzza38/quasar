@@ -1,3 +1,4 @@
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
 import type { Workspace } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
 import { personalScheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
@@ -115,12 +116,13 @@ export function isOverdue(task: Task, today: string, nowTime: string): boolean {
 }
 
 /**
- * Where "Wrong time?" links go. Private schedules open their editor. School followers choose whether the
- * correction belongs to the shared schedule or only to their personal timetable.
+ * Where "Wrong time?" links go. Private schedules open their editor. Beta members choose shared or personal
+ * corrections; everyone else uses the existing school correction flow.
  */
-export function openBellTimes(state: Pick<AppState, 'personal' | 'navigate'>): void {
+export function openBellTimes(state: Pick<AppState, 'personal' | 'navigate'> & { context?: { betas?: ReadonlyArray<{ key: string }> } }): void {
   if (state.personal.customSchedule) state.navigate('classes', { private: 'open' });
-  else state.navigate('classes', { bell: 'open' });
+  else if (state.context?.betas?.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) state.navigate('classes', { bell: 'open' });
+  else state.navigate('school', { fix: 'times' });
 }
 
 export const UNREADABLE_PERSONAL = 'Retry sync before changing your saved schedule.';

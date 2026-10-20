@@ -1,5 +1,8 @@
 'use client';
 
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { useBeta } from './betas';
+
 import { useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaySlots, diffCycleDaySlots, describeDayIssues, effectiveSchedule, emptyPersonalSchedule, resolveDay, scheduleForGrade, scheduleSchema, type Grade, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
@@ -135,6 +138,7 @@ export function CycleDayAdjustmentSheet({ open, onClose, cycleDayId, school, per
 }
 
 function CycleDayBody({ onClose, cycleDayId, school, personal, save, onSchoolCorrection, personalIntent = false }: { onClose: () => void; cycleDayId: string; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void>; onSchoolCorrection?: (schedule: Schedule, onSaved?: () => void) => void; personalIntent?: boolean }) {
+  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const schedule = effectiveSchedule(school, personal);
   const day = schedule.cycleDays.find((entry) => entry.id === cycleDayId);
   const existing = personal.cycleDayOverrides.find((entry) => entry.cycleDayId === cycleDayId);
@@ -153,15 +157,15 @@ function CycleDayBody({ onClose, cycleDayId, school, personal, save, onSchoolCor
     try {
       const others = personal.cycleDayOverrides.filter((entry) => entry.cycleDayId !== cycleDayId);
       const current = { ...schedule, cycleDays: schedule.cycleDays.map(entry => ({ ...entry, slots: cycleDaySlots(entry, personal) })) };
-      const editedDay = applyEdits(current).cycleDays.find(entry => entry.id === cycleDayId);
-      const adjustment = day && editedDay && diffCycleDaySlots(day, editedDay.slots);
+      const editedDay = following ? applyEdits(current).cycleDays.find(entry => entry.id === cycleDayId) : null;
+      const adjustment = following ? day && editedDay && diffCycleDaySlots(day, editedDay.slots) : { cycleDayId, slots };
       await save({ ...personal, cycleDayOverrides: enabled && adjustment ? [...others, adjustment] : others });
       onClose();
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} title={`Adjust ${day?.label ?? 'rotation day'}`}
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} onClick={() => { if (!personal.customSchedule && !personalIntent && enabled && onSchoolCorrection) setChoosing(true); else void submit(); }}>Save</Button></>}>
-    {choosing && <BellTimeChoice modal schoolUnavailable={schoolDraft.schoolUnavailable} onCancel={() => setChoosing(false)} onSchool={() => { if (schoolDraft.schedule) onSchoolCorrection?.(schoolDraft.schedule, onClose); }} onPersonal={() => void submit()} />}
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} onClick={() => { if (following && !personal.customSchedule && !personalIntent && enabled && onSchoolCorrection) setChoosing(true); else void submit(); }}>Save</Button></>}>
+    {following && choosing && <BellTimeChoice modal schoolUnavailable={schoolDraft.schoolUnavailable} onCancel={() => setChoosing(false)} onSchool={() => { if (schoolDraft.schedule) onSchoolCorrection?.(schoolDraft.schedule, onClose); }} onPersonal={() => void submit()} />}
     {!day && <Callout tone="warning" icon="alert">This rotation day no longer exists in the school schedule. You can remove your adjustment.</Callout>}
     <Toggle label={`Use my own periods on ${day?.label ?? 'this day'}`} checked={enabled} onChange={setEnabled} />
     {enabled && <SlotsEditor slots={slots} periods={schedule.periods} onChange={setSlots} />}
@@ -175,6 +179,7 @@ export function PrivateScheduleSheet({ open, onClose, school, personal, save }: 
 }
 
 function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () => void; school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void> }) {
+  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const [entered, setEntered] = useState(!!personal.customSchedule);
   const [draft, setDraft] = useState<Schedule>(() => structuredClone(effectiveSchedule(school, personal)));
   const [initial] = useState(() => JSON.stringify(draft));
@@ -192,7 +197,7 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
     setError(''); setPending(true);
     try { await save(useSchoolTimetable(school, personal)); onClose(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  if (!entered) return <Modal open onClose={onClose} title="Build a private schedule?" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" onClick={() => setEntered(true)}>Continue to private schedule</Button></>}><Callout tone="warning">A private schedule replaces the school schedule for you. Future school corrections will no longer reach your timetable. Use a personal time adjustment if only a few bell times differ.</Callout></Modal>;
+  if (following && !entered) return <Modal open onClose={onClose} title="Build a private schedule?" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" onClick={() => setEntered(true)}>Continue to private schedule</Button></>}><Callout tone="warning">A private schedule replaces the school schedule for you. Future school corrections will no longer reach your timetable. Use a personal time adjustment if only a few bell times differ.</Callout></Modal>;
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide fullWidth title={personal.customSchedule ? 'Edit my private schedule' : 'Build a private schedule'} description="A private schedule replaces the school schedule for you only. It starts as a copy of the school schedule."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{personal.customSchedule && <Button variant="danger" disabled={pending || stopping} onClick={() => setStopping(true)}>Use the school schedule instead</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Save private schedule</Button></>}>
     <ScheduleEditor value={draft} onChange={setDraft} personal={personal} disabled={pending} />
@@ -206,6 +211,7 @@ function PrivateScheduleBody({ onClose, school, personal, save }: { onClose: () 
 
 /** Compact list of everything a student has adjusted, with edit/remove controls. */
 export function AdjustmentsList({ school, personal, save, onEditDate, onEditCycleDay }: { school: Schedule; personal: PersonalSchedule; save: (personal: PersonalSchedule) => Promise<void>; onEditDate: (date: string) => void; onEditCycleDay: (cycleDayId: string) => void }) {
+  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const schedule = effectiveSchedule(school, personal);
   const [error, setError] = useState('');
   const run = async (next: PersonalSchedule) => { setError(''); try { await save(next); } catch (err) { setError(errorMessage(err)); } };
@@ -216,7 +222,7 @@ export function AdjustmentsList({ school, personal, save, onEditDate, onEditCycl
       const day = schedule.cycleDays.find((item) => item.id === entry.cycleDayId);
       return <Panel key={entry.cycleDayId} className="flex items-center gap-3 px-3 py-2.5">
         <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-now-soft text-now-foreground"><Icon name="layers" size={16} /></span>
-        <div className="min-w-0 flex-1"><strong className="text-sm font-bold">{day?.label ?? entry.cycleDayId}</strong><Hint>{day ? `Personal changes every ${day.label}. Other bell times follow the school.` : 'This rotation day no longer exists'}</Hint></div>
+        <div className="min-w-0 flex-1"><strong className="text-sm font-bold">{day?.label ?? entry.cycleDayId}</strong><Hint>{day ? following ? `Personal changes every ${day.label}. Other bell times follow the school.` : `Your own ${cycleDaySlots(day, personal).length} periods every ${day.label}` : 'This rotation day no longer exists'}</Hint></div>
         <Button size="sm" variant="ghost" onClick={() => onEditCycleDay(entry.cycleDayId)}>Edit</Button>
         <Button size="sm" variant="ghost" icon="x" aria-label={`Remove adjustment for ${day?.label ?? entry.cycleDayId}`} onClick={() => void run({ ...personal, cycleDayOverrides: personal.cycleDayOverrides.filter((item) => item.cycleDayId !== entry.cycleDayId) })} />
       </Panel>;
