@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
+import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -26,10 +27,14 @@ type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type BanRow = RouterOutput['admin']['bans'][number];
-/** What a support request is: a correction request or feedback, or an appeal against a pause or a removal (docs/CHAT.md §14). */
-function requestKind(kind: Request['kind']): { label: string; appeal: 'pause' | 'ban' } | null {
+/**
+ * What a support request is: a correction request or feedback, an appeal against a pause or a removal (docs/CHAT.md
+ * §14), or feedback about a beta (src/server/betas.ts).
+ */
+function requestKind(kind: Request['kind']): { label: string; appeal?: 'pause' | 'ban' } | null {
   if (kind === 'appeal:pause') return { label: 'Appeal: messaging pause', appeal: 'pause' };
   if (kind === 'appeal:ban') return { label: 'Appeal: removal from school', appeal: 'ban' };
+  if (kind.startsWith('beta:')) return { label: `Beta feedback: ${kind.slice('beta:'.length)}` };
   return null;
 }
 type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
@@ -125,6 +130,12 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     finally { setLoading(false); setDecided(true); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  // A section that loads its own data (Betas) hands refusals back here, so losing access clears the whole page.
+  const accessLost = useCallback(async (err: unknown) => {
+    if (!needsSignIn(err) && !isAccessDenied(err)) return false;
+    await refresh();
+    return true;
+  }, [refresh]);
   // When the support session runs out, everything loaded leaves the screen at once rather than at the next click.
   useEffect(() => {
     if (!security || security.until === null) return;
@@ -205,11 +216,13 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       {security && !security.pinned && <Callout tone="warning" icon="lock" title="Pin the owner account">
         The owner is recognized by email alone. Add <code className="break-all font-mono text-[13px]">OWNER_GOOGLE_SUB={security.googleSub}</code> to the server’s .env.local and restart, so only this Google account can open these tools even if the address is ever given to someone else.
       </Callout>}
-      <Tabs value={tab} onValueChange={setTab} className="gap-5">
+      {/* min-w-0: without it the tab row widens the page on phones instead of scrolling inside its wrapper. */}
+      <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-5">
       <div className="overflow-x-auto"><TabsList aria-label="Support section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
         <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
         <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
+        <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>
         <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
       </TabsList></div>
       <TabsContent value="schools" className="grid gap-5">
@@ -229,20 +242,21 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </TabsContent>
 
       <TabsContent value="inbox" className="grid gap-5">
-      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, and appeals against a messaging pause or a removal.'}>
+      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, appeals against a messaging pause or a removal, and feedback on betas they joined.'}>
         {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => {
           const appeal = requestKind(request.kind);
           return <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-            {appeal && <div><Chip tone="warning" icon="flag">{appeal.label}</Chip></div>}
+            {appeal && <div><Chip tone={appeal.appeal ? 'warning' : 'accent'} icon={appeal.appeal ? 'flag' : 'sparkle'}>{appeal.label}</Chip></div>}
             <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{appeal ? request.displayName || request.email : request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email}{appeal && request.schoolName ? ` · ${request.schoolName}` : ''})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
             <p className="whitespace-pre-wrap text-sm">{request.message}</p>
+            {request.diagnostics && <BetaDiagnosticsDetails diagnostics={request.diagnostics} />}
             <div className="flex flex-wrap gap-2">
               {!appeal && request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
               {appeal?.appeal === 'pause' && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: request.userId })); }}>Lift pause</Button>}
               {appeal?.appeal === 'ban' && request.schoolId && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: request.userId, schoolId: request.schoolId! })); }}>Lift removal</Button>}
               <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName || request.email })}>Open member</Button>
-              <Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>{appeal ? 'Keep as is' : 'Mark resolved'}</Button>
+              <Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>{appeal?.appeal ? 'Keep as is' : 'Mark resolved'}</Button>
             </div>
           </li>;
         })}</ul>}
@@ -320,6 +334,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </Section>
       </TabsContent>
       <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} onOpen={openMember} /></TabsContent>
+      <TabsContent value="betas" className="grid gap-5">{tab === 'betas' && <BetaAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>
       <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>
       </Tabs>
     </main>

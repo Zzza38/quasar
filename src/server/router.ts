@@ -16,6 +16,7 @@ import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
+import { BetaService, betaCodeChangeSchema, betaCreateSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema, betaUpdateSchema } from './betas';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -92,6 +93,7 @@ const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
+const betas = (service: Service) => new BetaService(service);
 export const appRouter = t.router({
   mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
   // `adminReady`: the owner signed in recently enough to use the owner tools (see `admin` above).
@@ -109,6 +111,13 @@ export const appRouter = t.router({
   // Appeals against a messaging pause or a removal from a school (§14) land in the owner's support inbox.
   support: t.router({
     appeal: accountScoped.input(appealSchema).mutation(({ ctx, input }) => { ctx.service.appeal(ctx.userId, input); }),
+  }),
+  // Betas (src/server/betas.ts): a code joins one, leaving needs none, and feedback lands in the support inbox.
+  beta: t.router({
+    join: accountScoped.input(betaJoinSchema).mutation(({ ctx, input }) => betas(ctx.service).join(ctx.userId, input)),
+    leave: accountScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => betas(ctx.service).leave(ctx.userId, input.key)),
+    leaveAll: accountScoped.mutation(({ ctx }) => betas(ctx.service).leaveAll(ctx.userId)),
+    feedback: accountScoped.input(betaFeedbackSchema).mutation(({ ctx, input }) => { betas(ctx.service).feedback(ctx.userId, input); }),
   }),
   directory: t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
@@ -258,6 +267,14 @@ export const appRouter = t.router({
     // Removals the student can appeal (§14): the list, and lifting one so they can rejoin.
     bans: admin.query(({ ctx }) => ctx.service.bans(ctx.userId)),
     liftBan: adminScoped.input(z.object({ userId: z.uuid(), schoolId: z.uuid() })).mutation(({ ctx, input }) => { ctx.service.liftBan(ctx.userId, input.userId, input.schoolId); }),
+    betas: t.router({
+      list: admin.query(({ ctx }) => betas(ctx.service).list(ctx.userId)),
+      create: adminScoped.input(betaCreateSchema).mutation(({ ctx, input }) => { betas(ctx.service).create(ctx.userId, input); }),
+      update: adminScoped.input(betaUpdateSchema).mutation(({ ctx, input }) => { betas(ctx.service).update(ctx.userId, input); }),
+      changeCode: adminScoped.input(betaCodeChangeSchema).mutation(({ ctx, input }) => { betas(ctx.service).changeCode(ctx.userId, input); }),
+      close: adminScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => { betas(ctx.service).close(ctx.userId, input.key); }),
+      removeMember: adminScoped.input(betaMemberSchema).mutation(({ ctx, input }) => { betas(ctx.service).removeMember(ctx.userId, input); }),
+    }),
     // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
     security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: process.env.NODE_ENV === 'development' ? null : (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
     renameSchool: adminScoped.input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),
