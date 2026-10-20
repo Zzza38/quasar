@@ -1380,8 +1380,14 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await dialog(page).getByLabel('Class name').fill('Biology');
   await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
   await expect(dialog(page)).toHaveCount(0);
-  await mouseDrag(page, await pointIn(page.getByRole('button', { name: 'Place Biology', exact: true })), await pointIn(block2('10:50–11:50 AM: D')));
+  const biologyPalette = page.getByRole('button', { name: 'Place Biology', exact: true });
+  const emptyBiologyBlock = block2('10:50–11:50 AM: D');
+  await emptyBiologyBlock.scrollIntoViewIfNeeded();
+  await expect(biologyPalette).toBeInViewport();
+  await mouseDrag(page, await pointIn(biologyPalette), await pointIn(emptyBiologyBlock));
   await expect(block2('10:50–11:50 AM: Biology')).toBeVisible();
+  await block2('10:50–11:50 AM: Biology').scrollIntoViewIfNeeded();
+  await expect(page.getByRole('button', { name: 'Place Lunch', exact: true })).toBeInViewport();
   const lunchChip = await pointIn(page.getByRole('button', { name: 'Place Lunch', exact: true }));
   const biology = await pointIn(block2('10:50–11:50 AM: Biology'));
   await page.mouse.move(lunchChip.x, lunchChip.y);
