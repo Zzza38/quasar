@@ -12,6 +12,7 @@ import { Toggle } from './ui/toggle';
 import { ClassNameInput, useClassDirectory, type DirectoryEntry } from './class-name-input';
 import { isPdf, readPdf, MAX_PDF_TEXT } from './pdf-pages';
 import { ScheduleSourceGuide } from './schedule-sources';
+import { useBeta } from './betas';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 /** `scanned` remembers the directory class the scanner guessed, so the link holds only while the name is the one it read. */
@@ -175,6 +176,8 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
+  // Beta: read PDF text without the `for await` over a stream that Safari can't run (pageText in pdf-pages.ts).
+  const streamText = useBeta('pdf-safari');
   useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setLimited(false); setRows(null); setNotes([]); setError(''); setSavedNotice(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
@@ -193,7 +196,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
         try {
           if (isPdf(file)) {
             // Each page becomes one of the scan's pictures; the PDF's text goes along so names are read exactly.
-            const pdf = await readPdf(file, room);
+            const pdf = await readPdf(file, room, { streamText });
             if (pdf.pages.length === 0) throw new Error('That PDF has no pages.');
             const source = { id: crypto.randomUUID(), name: file.name };
             prepared.push(...pdf.pages.map(page => ({ ...page, pdf: source })));
