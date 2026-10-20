@@ -30,6 +30,28 @@ export interface TaskGroup {
   /** A second, quieter label; only the next-school-day group has one. */
   detail?: string;
   items: TaskItem[];
+  /** Per-day sections for the groups that span several days within the week, in date order. */
+  days?: TaskDay[];
+}
+
+export interface TaskDay {
+  date: string;
+  /** "Thursday, Oct 22" */
+  title: string;
+  items: TaskItem[];
+}
+
+/** Groups split into one section per due date, so Thursday's work does not run into Friday's. */
+const DAY_SPLIT_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['before-school', 'week']);
+
+/** Splits a group's items by due date, in date order; items keep their incoming order within each day. */
+export function splitByDay(items: TaskItem[]): TaskDay[] {
+  const days = new Map<string, TaskItem[]>();
+  for (const item of items) {
+    const date = item.task.dueDate!;
+    days.set(date, [...(days.get(date) ?? []), item]);
+  }
+  return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, dayItems]) => ({ date, title: formatDate(date, { weekday: 'long' }), items: dayItems }));
 }
 
 /** Groups whose rows need no date chip: the heading already says when. */
@@ -42,9 +64,10 @@ export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorr
  * rest of the week. Work due on days off before school resumes goes ahead of that group, with date chips.
  * When a break pushes the next school day past the week window, Next 7 days comes first, then any remaining
  * work before school resumes, then the next school day and Later. Groups stay in date order.
- * Items keep their incoming order within each group.
+ * Items keep their incoming order within each group. With `splitDays` (the task-days beta), Before school resumes
+ * and Next 7 days also carry one section per due date.
  */
-export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule }): TaskGroup[] {
+export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule; splitDays?: boolean }): TaskGroup[] {
   const { today, nowTime } = context;
   const tomorrow = addDays(today, 1);
   const school = nextSchoolDate(context.schedule, context.personal, today);
@@ -81,5 +104,7 @@ export function groupTasks(items: TaskItem[], context: { today: string; nowTime:
     { key: 'later', title: 'Later', items: between(separate ? Math.max(8, schoolDelta + 1) : 8, Number.POSITIVE_INFINITY) },
     { key: 'undated', title: 'No due date', items: items.filter((item) => !item.task.dueDate) },
   ];
-  return groups.filter((group): group is TaskGroup => group !== null && group.items.length > 0);
+  return groups
+    .filter((group): group is TaskGroup => group !== null && group.items.length > 0)
+    .map((group) => context.splitDays && DAY_SPLIT_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
 }
