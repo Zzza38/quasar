@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import { IDBObjectStore } from "fake-indexeddb";
+import { openDB } from "idb";
 import { TRPCError } from "@trpc/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
@@ -146,6 +147,48 @@ describe("durable offline workspace", () => {
     expect(state.lastError).toContain("Keep this site's data");
     await local.sync(remote.send);
     expect((await local.read()).pending).toBe(0);
+    expect((await local.read()).lastError).toBeNull();
+  });
+
+  it("clears a stored sync error once nothing is left to upload", async () => {
+    const local = await workspace();
+    await local.save("task", "t1", taskData({ title: "Uploaded" }));
+    const remote = server();
+    await local.sync(remote.send);
+    // An older build, or another tab, stored a raw storage error after the queue had drained.
+    const database = await openDB("whatsnext-offline-v1", 1);
+    const stored = await database.get("workspaces", local.accountId);
+    await database.put("workspaces", { ...stored, lastError: "Attempt to delete range from database without an in-progress transaction" });
+    database.close();
+    expect((await local.read()).lastError).toContain("in-progress transaction");
+    await local.sync(remote.send);
+    const state = await local.read();
+    expect(state.lastError).toBeNull();
+    expect(state.pending).toBe(0);
+    expect(remote.requests).toHaveLength(1);
+  });
+
+  it("keeps a stored sync error while another tab holds the upload lease", async () => {
+    const local = await workspace();
+    const other = await openWorkspace(local.accountId);
+    handles.push(other);
+    await local.save("task", "t1", taskData({ title: "Still sending elsewhere" }));
+    const remote = server();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const sending = other.sync(async (mutation) => { await held; return remote.send(mutation); });
+    const database = await openDB("whatsnext-offline-v1", 1);
+    const stored = await vi.waitFor(async () => {
+      const state = await database.get("workspaces", local.accountId);
+      expect(state.lease).not.toBeNull();
+      return state;
+    });
+    await database.put("workspaces", { ...stored, lastError: "The server could not save this change." });
+    database.close();
+    await local.sync(remote.send);
+    expect((await local.read()).lastError).toBe("The server could not save this change.");
+    release();
+    await sending;
     expect((await local.read()).lastError).toBeNull();
   });
 
