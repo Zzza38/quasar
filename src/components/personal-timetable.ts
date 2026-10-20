@@ -1,23 +1,28 @@
-import { cycleDaySchema, scheduleForGrade, scheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { cycleDaySchema, diffCycleDaySlots, scheduleForGrade, scheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 
-/** Keep ordinary timetable edits as day overrides so untouched days follow school updates. */
+/** Save ordinary timetable edits as slot changes so untouched blocks follow school updates. */
 export function saveTimetableEdit(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): PersonalSchedule {
   const used = new Set(next.cycleDays.flatMap(day => day.slots.map(slot => slot.periodId)));
   next = scheduleSchema.parse({ ...next, periods: next.periods.filter(period => basis.periods.some(entry => entry.id === period.id) || used.has(period.id)) });
   const keptAssignments = { ...personal.assignments, ...Object.fromEntries(Object.entries(assignments).filter(([id]) => next.periods.some(period => period.id === id))) };
-  const sameStructure = JSON.stringify(next.cycleDays.map(day => [day.id, day.label])) === JSON.stringify(basis.cycleDays.map(day => [day.id, day.label])) && next.periods.every(period => basis.periods.some(entry => JSON.stringify(entry) === JSON.stringify(period)));
+  const sameStructure = JSON.stringify(next.cycleDays.map(day => [day.id, day.label])) === JSON.stringify(basis.cycleDays.map(day => [day.id, day.label])) && basis.periods.every(period => next.periods.some(entry => JSON.stringify(entry) === JSON.stringify(period)));
   if (personal.customSchedule || !sameStructure) return { ...personal, assignments: keptAssignments, customSchedule: next, cycleDayOverrides: [] };
-  const cycleDayOverrides = next.cycleDays.filter(day => JSON.stringify(day.slots) !== JSON.stringify(basis.cycleDays.find(entry => entry.id === day.id)?.slots)).map(day => ({ cycleDayId: day.id, slots: day.slots }));
+  const cycleDayOverrides = next.cycleDays.flatMap(day => { const override = diffCycleDaySlots(basis.cycleDays.find(entry => entry.id === day.id)!, day.slots); return override ? [override] : []; });
+  const periods = next.periods.filter(period => !basis.periods.some(entry => entry.id === period.id));
+  const retainedPeriodIds = new Set([
+    ...personal.dateOverrides.flatMap(entry => (entry.slots ?? []).map(slot => slot.periodId)),
+    ...personal.cycleDayOverrides.filter(entry => !basis.cycleDays.some(day => day.id === entry.cycleDayId)).flatMap(entry => entry.slots?.map(slot => slot.periodId) ?? Object.values(entry.slotChanges ?? {}).flatMap(change => change?.periodId ?? change?.base?.periodId ?? [])),
+  ]);
+  for (const period of personal.periods ?? []) if (retainedPeriodIds.has(period.id) && !periods.some(entry => entry.id === period.id)) periods.push(period);
   // The editor only sees the school's current days. Overrides for a day the school removed stay saved until the
   // student removes them, as the conflict notice promises, so they come back if the school restores that day.
   const orphaned = personal.cycleDayOverrides.filter(override => !basis.cycleDays.some(day => day.id === override.cycleDayId));
-  return { ...personal, assignments: keptAssignments, cycleDayOverrides: [...cycleDayOverrides, ...orphaned] };
+  return { ...personal, assignments: keptAssignments, periods, cycleDayOverrides: [...cycleDayOverrides, ...orphaned] };
 }
 
 /**
  * Whether saving `next` would switch a student who follows the school timetable to a private copy of it, which
- * school corrections no longer reach: renaming, adding or removing a day, or placing a block for a period the
- * school does not have (such as the `class-<id>` period ClassAssignmentGrid makes for an unplaced class).
+ * school corrections no longer reach: renaming, adding or removing a day.
  * An edit that cannot be saved at all is not a switch; saving it reports its own error.
  */
 export function makesPrivateCopy(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): boolean {
@@ -30,8 +35,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
  * Replays one edit to a day onto the newest copy of it. The label and each slot (by slot ID) change only where the
- * edit changed them, so an earlier edit to another slot or to the name survives. If the merged slots would overlap,
- * the edited day's slots win, as they did before a same-day merge was possible.
+ * edit changed them, so an earlier edit to another slot or to the name survives. Overlapping concurrent edits
+ * report a conflict so neither edit silently replaces the other.
  */
 function rebaseDay(before: CycleDay | undefined, after: CycleDay, latest: CycleDay): CycleDay {
   if (!before) return after;
@@ -40,11 +45,19 @@ function rebaseDay(before: CycleDay | undefined, after: CycleDay, latest: CycleD
   const afterSlots = new Map(after.slots.map((slot) => [slot.id, slot]));
   const slots = latest.slots
     .filter((slot) => !(beforeSlots.has(slot.id) && !afterSlots.has(slot.id)))
-    .map((slot) => { const edited = afterSlots.get(slot.id); return edited && !same(edited, beforeSlots.get(slot.id)) ? edited : slot; });
-  for (const slot of after.slots) if (!beforeSlots.has(slot.id) && !slots.some((entry) => entry.id === slot.id)) slots.push(slot);
+    .map((slot) => { const edited = afterSlots.get(slot.id); if (!edited) return slot;
+      const original = beforeSlots.get(slot.id);
+      if (!original) return slot;
+      return { ...slot, ...Object.fromEntries((["periodId", "start", "end"] as const).filter(key => edited[key] !== original[key]).map(key => [key, edited[key]])) }; });
+  for (const slot of after.slots) {
+    const original = beforeSlots.get(slot.id);
+    if (original && !same(original, slot) && !latest.slots.some(entry => entry.id === slot.id)) throw new Error('This block was removed while you were editing it. Review the timetable and try again.');
+    if (!original && !slots.some(entry => entry.id === slot.id)) slots.push(slot);
+  }
   slots.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
   const merged = { ...latest, label, slots };
-  return cycleDaySchema.safeParse(merged).success ? merged : { ...latest, label, slots: after.slots };
+  if (!cycleDaySchema.safeParse(merged).success) throw new Error('These timetable edits overlap. Review the affected blocks and try again.');
+  return merged;
 }
 
 /**
@@ -57,8 +70,16 @@ export function rebaseTimetableEdit(before: Schedule, after: Schedule): (latest:
   return (latest) => {
     const merged = { ...latest } as Record<string, unknown>;
     for (const key of Object.keys(after) as (keyof Schedule)[]) {
-      if (key !== 'cycleDays' && !same(after[key], before[key])) merged[key] = after[key];
+      if (key !== 'cycleDays' && key !== 'periods' && !same(after[key], before[key])) merged[key] = after[key];
     }
+    const beforePeriods = new Map(before.periods.map(period => [period.id, period]));
+    const afterPeriods = new Map(after.periods.map(period => [period.id, period]));
+    merged.periods = latest.periods.filter(period => !(beforePeriods.has(period.id) && !afterPeriods.has(period.id))).map(period => {
+      const original = beforePeriods.get(period.id), edited = afterPeriods.get(period.id);
+      if (!original || !edited) return period;
+      return { ...period, ...Object.fromEntries((["label", "kind"] as const).filter(key => edited[key] !== original[key]).map(key => [key, edited[key]])) };
+    });
+    for (const period of after.periods) if (!beforePeriods.has(period.id) && !(merged.periods as Schedule['periods']).some(entry => entry.id === period.id)) (merged.periods as Schedule['periods']).push(period);
     const beforeDays = new Map(before.cycleDays.map((day) => [day.id, day]));
     const afterDays = new Map(after.cycleDays.map((day) => [day.id, day]));
     const days = latest.cycleDays
@@ -99,6 +120,7 @@ export function useSchoolTimetable(school: Schedule, personal: PersonalSchedule)
     ...personal,
     customSchedule: null,
     cycleDayOverrides: [],
+    periods: [],
     dateOverrides: [],
     assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([id]) => schoolIds.has(id))),
   };

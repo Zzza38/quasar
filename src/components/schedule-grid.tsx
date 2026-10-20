@@ -30,7 +30,7 @@ function pageBounds() {
   return { top: bar?.height ? bar.bottom : 0, bottom: dock?.height ? dock.top : window.innerHeight };
 }
 
-export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay }: {
+export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay, allowStructure = true }: {
   /** Sets the class of each listed period, or clears it with null, in one save. */
   onAssign?: (changes: Record<string, string | null>) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
   /**
@@ -39,6 +39,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
    * day gets its old name back and no "Saved" or "Cleared" message appears.
    */
   onChange: (value: Schedule) => boolean | void;
+  allowStructure?: boolean;
   onEditDay: (id: string) => void; onRemoveDay: (id: string) => void;
 }) {
   const [selected, setSelected] = useState<PeriodPlacement | null>(null);
@@ -190,7 +191,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     if (!removing || disabled) return;
     const { dayId, slot, name, keyboard } = removing;
     const next = { ...value, cycleDays: value.cycleDays.map(entry => entry.id === dayId ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) };
-    if (onChange(next) === false) return;
+    if (onChange(next) === false) { setRemoving(null); return; }
     if (selected?.slotId === slot.id) setSelected(null);
     setCleared({ dayId, slot, keyboard }); setReplaced(null);
     say(`Cleared ${name} from ${value.cycleDays.find(day => day.id === dayId)?.label ?? 'the timetable'}.`);
@@ -333,8 +334,8 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
             <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>
             {days.map((day, index) => <div key={day.id} className="time-canvas-heading">
-              <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} />
-              <div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => onEditDay(day.id)}>Edit times<span className="sr-only"> for {day.label}</span></Button><IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => onRemoveDay(day.id)} /></div>
+              {allowStructure ? <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} /> : <strong className="px-2 text-sm">{day.label}</strong>}
+              <div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => onEditDay(day.id)}>Edit times<span className="sr-only"> for {day.label}</span></Button>{allowStructure && <IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => onRemoveDay(day.id)} />}</div>
             </div>)}
             <div className="time-axis" style={{ height }}>{Array.from({ length: Math.ceil((endMinute - startMinute) / 60) }, (_, index) => <span key={index} style={{ top: axis.y(startMinute + index * 60) }}>{formatTime(clockTime(startMinute + index * 60))}</span>)}</div>
             {days.map(day => <div key={day.id} className="time-day" data-column={day.id} role="group" aria-label={`${day.label} time canvas`} style={{ height }}>

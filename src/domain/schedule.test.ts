@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { examplePersonalSchedule, exampleSchedule } from "./example";
 import {
   clampDate,
+  cycleDaySlots,
+  diffCycleDaySlots,
+  effectiveSchedule,
+  normalizePersonalSchedule,
   cycleDaysWithPeriod,
   describeDayIssues,
   detectOverrideConflicts,
@@ -484,4 +488,110 @@ describe("describeDayIssues", () => {
     expect(describeDayIssues([{ slotId: "a", reason: "shift-outside-day" }], true)).toEqual(["1 period would be left out because the time shift moves it outside the day."]);
     expect(describeDayIssues([])).toEqual([]);
   });
+});
+
+describe('per-slot personal timetable changes', () => {
+  const school = () => structuredClone(exampleSchedule);
+  const edited = () => {
+    const original = school();
+    const slots = structuredClone(original.cycleDays[0].slots);
+    slots[0].end = '08:55';
+    return { original, personal: { ...emptyPersonalSchedule(), cycleDayOverrides: [diffCycleDaySlots(original.cycleDays[0], slots)!] } };
+  };
+
+  it('inherits unrelated blocks and untouched fields of an edited block', () => {
+    const { original, personal } = edited();
+    const revised = school();
+    revised.cycleDays[0].slots[0].start = '07:50';
+    revised.cycleDays[0].slots[1].end = '10:05';
+    revised.cycleDays[0].slots.push({ id: 'new-school-slot', periodId: 'A', start: '13:00', end: '14:00' });
+    const slots = cycleDaySlots(revised.cycleDays[0], personal);
+    expect(slots[0]).toMatchObject({ start: '07:50', end: '08:55' });
+    expect(slots[1].end).toBe('10:05');
+    expect(slots.at(-1)?.id).toBe('new-school-slot');
+    expect(original.cycleDays[0].slots[0].end).toBe('09:00');
+  });
+
+  it('converges individual fields and drops an empty override', () => {
+    const { original, personal } = edited();
+    personal.cycleDayOverrides[0].slotChanges!.first!.start = '07:50';
+    const revised = school();
+    revised.cycleDays[0].slots[0].end = '08:55';
+    const normalized = normalizePersonalSchedule(revised, personal, original);
+    expect(normalized.cycleDayOverrides[0].slotChanges!.first).toMatchObject({ start: '07:50' });
+    expect(normalized.cycleDayOverrides[0].slotChanges!.first).not.toHaveProperty('end');
+    revised.cycleDays[0].slots[0].start = '07:50';
+    expect(normalizePersonalSchedule(revised, normalized).cycleDayOverrides).toEqual([]);
+  });
+
+  it('converges additions and deletions when school adopts them', () => {
+    const original = school();
+    const slots = original.cycleDays[0].slots.filter(slot => slot.id !== 'first');
+    slots.push({ id: 'personal-extra', periodId: 'A', start: '13:00', end: '14:00' });
+    const personal = { ...emptyPersonalSchedule(), cycleDayOverrides: [diffCycleDaySlots(original.cycleDays[0], slots)!] };
+    const revised = school();
+    revised.cycleDays[0].slots = slots;
+    expect(normalizePersonalSchedule(revised, personal, original).cycleDayOverrides).toEqual([]);
+  });
+
+  it('migrates legacy copies using the acknowledged revision rather than freezing new school times', () => {
+    const { original } = edited();
+    const slots = structuredClone(original.cycleDays[0].slots);
+    slots[0].end = '08:55';
+    const revised = school();
+    revised.cycleDays[0].slots[1].end = '10:05';
+    const personal = { ...emptyPersonalSchedule(), cycleDayOverrides: [{ cycleDayId: 'day-1', slots }] };
+    const normalized = normalizePersonalSchedule(revised, personal, original);
+    expect(normalized.cycleDayOverrides[0]).not.toHaveProperty('slots');
+    expect(cycleDaySlots(revised.cycleDays[0], normalized)[1].end).toBe('10:05');
+    expect(cycleDaySlots(revised.cycleDays[0], normalized)[0].end).toBe('08:55');
+  });
+
+  it('uses grade revisions when migrating and converging', () => {
+    const previous = school();
+    const grade = school();
+    grade.cycleDays[0].slots[0].start = '07:50';
+    previous.gradeSchedules = { '10': grade };
+    const current = structuredClone(previous);
+    current.gradeSchedules!['10']!.cycleDays[0].slots[1].end = '10:05';
+    const personal = personalScheduleSchema.parse({ ...emptyPersonalSchedule(), grade: '10', cycleDayOverrides: [{ cycleDayId: 'day-1', slots: grade.cycleDays[0].slots }] });
+    expect(normalizePersonalSchedule(current, personal, previous).cycleDayOverrides).toEqual([]);
+  });
+
+  it('keeps removed days and edited removed slots available for restoration', () => {
+    const { original, personal } = edited();
+    const revised = school();
+    revised.cycleDays[0].slots.shift();
+    const normalized = normalizePersonalSchedule(revised, personal, original);
+    expect(cycleDaySlots(revised.cycleDays[0], normalized)[0]).toMatchObject({ id: 'first', end: '08:55' });
+    revised.cycleDays.shift();
+    expect(normalizePersonalSchedule(revised, normalized).cycleDayOverrides).toEqual(normalized.cycleDayOverrides);
+  });
+
+  it('keeps overlapping combined blocks and reports them to the student', () => {
+    const { personal } = edited();
+    const revised = school();
+    revised.cycleDays[0].slots[1].start = '08:50';
+    const resolved = resolveDay(revised, revised.anchorDate, personal);
+    expect(resolved.periods).toHaveLength(revised.cycleDays[0].slots.length);
+    expect(resolved.issues.filter(issue => issue.reason === 'slot-overlap')).toHaveLength(2);
+  });
+
+  it('renders personal period metadata without creating a private timetable', () => {
+    const original = school();
+    const personal = personalScheduleSchema.parse({ ...emptyPersonalSchedule(), periods: [{ id: 'studio', label: 'Studio', kind: 'other' }], cycleDayOverrides: [{ cycleDayId: 'day-1', slotChanges: { studio: { periodId: 'studio', start: '13:00', end: '14:00' } } }] });
+    expect(effectiveSchedule(original, personal).periods.at(-1)?.label).toBe('Studio');
+    expect(resolveDay(original, original.anchorDate, personal).periods.at(-1)).toMatchObject({ label: 'Studio', kind: 'other' });
+    expect(personal.customSchedule).toBeNull();
+  });
+});
+
+it('retains a legacy removed-day copy even if it matched the last acknowledged school day', () => {
+  const previous = structuredClone(exampleSchedule);
+  const current = structuredClone(previous);
+  current.cycleDays.pop();
+  const removed = previous.cycleDays.at(-1)!;
+  const override = { cycleDayId: removed.id, slots: removed.slots };
+  const personal = { ...emptyPersonalSchedule(), cycleDayOverrides: [override] };
+  expect(normalizePersonalSchedule(current, personal, previous).cycleDayOverrides).toEqual([override]);
 });

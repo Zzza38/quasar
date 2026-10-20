@@ -154,6 +154,7 @@ export class ProposalService {
     if (school.version !== expectedVersion) fail('CONFLICT', 'The school schedule changed. Review the proposal against the latest revision.');
     this.db.prepare('UPDATE schools SET schedule=?, version=version+1, approved=? WHERE id=?').run(row.schedule, keepApproval ? Number(school.approved) : 0, school.id);
     this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, row.schedule, actorId, now());
+    this.service.reconcileSchoolPersonalSchedules(school.id, scheduleSchema.parse(JSON.parse(row.schedule)), school.schedule);
     this.db.prepare("UPDATE schedule_proposals SET status='passed', closed_at=?, actor_id=? WHERE id=?").run(now(), actorId, row.id);
     this.db.prepare("UPDATE schedule_proposals SET status='superseded', closed_at=? WHERE school_id=? AND id<>? AND status IN ('open','awaiting-support')").run(now(), school.id, row.id);
     this.service.audit(actorId, 'school.proposalApplied', school.id, { proposalId: row.id, fromVersion: school.version });

@@ -61,6 +61,18 @@ function mergeValue(base: Value, local: Value, remote: Value, path: string, conf
   if (equal(base, local)) return remote;
   if (equal(base, remote)) return local;
 
+  // Sparse overrides describe independent edits to an existing school day or slot. Two devices can create
+  // the first adjustment together, so their absent personal base means an empty edit, rather than two new days.
+  if (base === missing && isObject(local) && isObject(remote)) {
+    const newSparseDay = /^\/cycleDayOverrides\/[^/]+$/.test(path)
+      && typeof local.cycleDayId === "string" && local.cycleDayId === remote.cycleDayId
+      && isObject(local.slotChanges) && isObject(remote.slotChanges)
+      && !Object.hasOwn(local, "slots") && !Object.hasOwn(remote, "slots");
+    const sparseFields = /^\/cycleDayOverrides\/[^/]+\/slotChanges(?:\/[^/]+)?$/.test(path);
+    if (newSparseDay) base = { cycleDayId: local.cycleDayId, slotChanges: {} };
+    else if (sparseFields) base = {};
+  }
+
   if (isObject(base) && isObject(local) && isObject(remote)) {
     const result: Record<string, unknown> = {};
     for (const key of new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)])) {

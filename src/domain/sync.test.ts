@@ -160,3 +160,37 @@ describe("three-way entity synchronization", () => {
     if (result.status === "applied") expect(result.entity.data.exceptions).toHaveLength(2);
   });
 });
+
+describe('concurrent sparse timetable adjustments', () => {
+  const base = entity({ cycleDayOverrides: [] });
+  const data = (slotChanges: Record<string, unknown>) => ({ cycleDayOverrides: [{ cycleDayId: 'day1', slotChanges }] });
+
+  it('merges the first edits to different slots of the same day', () => {
+    expect(mergeMutation(edit(base, data({ first: { end: '08:55' } })), entity(data({ second: { start: '09:15' } }), 2)))
+      .toMatchObject({ status: 'applied', entity: { data: data({ first: { end: '08:55' }, second: { start: '09:15' } }) } });
+  });
+
+  it('merges independent fields of a slot adjusted for the first time', () => {
+    const original = { id: 'first', periodId: 'A', start: '08:00', end: '09:00' };
+    expect(mergeMutation(edit(base, data({ first: { start: '07:50', base: original } })), entity(data({ first: { end: '08:55', base: original } }), 2)))
+      .toMatchObject({ status: 'applied', entity: { data: data({ first: { start: '07:50', end: '08:55', base: original } }) } });
+  });
+
+  it('reports a precise conflict when both devices change the same slot field', () => {
+    expect(mergeMutation(edit(base, data({ first: { end: '08:50' } })), entity(data({ first: { end: '08:55' } }), 2)))
+      .toMatchObject({ status: 'conflict', paths: ['/cycleDayOverrides/day1/slotChanges/first/end'] });
+  });
+
+  it('keeps an edit-versus-removal conflict for the same school slot', () => {
+    expect(mergeMutation(edit(base, data({ first: null })), entity(data({ first: { end: '08:55' } }), 2)))
+      .toMatchObject({ status: 'conflict', paths: ['/cycleDayOverrides/day1/slotChanges/first'] });
+  });
+
+  it('keeps collisions between newly created classes and legacy day copies as conflicts', () => {
+    const classes = entity({ classes: [] });
+    expect(mergeMutation(edit(classes, { classes: [{ id: 'art', name: 'Art' }] }), entity({ classes: [{ id: 'art', name: 'Studio', room: '4' }] }, 2)))
+      .toMatchObject({ status: 'conflict', paths: ['/classes/art'] });
+    expect(mergeMutation(edit(base, { cycleDayOverrides: [{ cycleDayId: 'day1', slots: [{ id: 'a' }] }] }), entity({ cycleDayOverrides: [{ cycleDayId: 'day1', slots: [{ id: 'b' }] }] }, 2)))
+      .toMatchObject({ status: 'conflict', paths: ['/cycleDayOverrides/day1'] });
+  });
+});
