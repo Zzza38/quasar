@@ -8,14 +8,15 @@ vi.mock('@/client/api', async (importOriginal) => ({
   api: { chat: { send: { mutate: send } }, global: { send: { mutate: send } } },
 }));
 
-const { classifySendError, clearChatMemory, enqueue, GLOBAL_TARGET, mergeMessages, prependEarlier, reconcile, requeue, pump, resumeChatSends, threadMemory } = await import('./use-chat');
+const { applyThreadPage, classifySendError, clearChatMemory, enqueue, eventMatches, GLOBAL_TARGET, mergeMessages, pollInterval, prependEarlier, reconcile, requeue, pump, resumeChatSends, threadMemory } = await import('./use-chat');
 
 const serverError = (message: string, code: string, httpStatus = 400) => new TRPCClientError(message, { result: { error: { message, code: -32600, data: { code, httpStatus } } } });
 const offline = () => new TypeError('Failed to fetch');
 const RATE = 'You’re sending messages too fast. Wait a minute and try again.';
 
+/** A row as the server sends it; its revision defaults to its seq, so rows made in order carry rising revisions. */
 const message = (seq: number, extra: Partial<ChatMessage> = {}): ChatMessage =>
-  ({ id: `m${seq}`, seq, fromMe: false, body: `message ${seq}`, createdAt: '2026-09-24T12:00:00.000Z', deletedBy: null, ...extra }) as ChatMessage;
+  ({ id: `m${seq}`, seq, revision: seq, fromMe: false, body: `message ${seq}`, createdAt: '2026-09-24T12:00:00.000Z', deletedBy: null, replyTo: null, reactions: [], ...extra }) as ChatMessage;
 const seqs = (messages: ChatMessage[]) => messages.map((item) => item.seq);
 
 /** Lets the send queue's promise chain run. */
@@ -49,7 +50,7 @@ describe('classifySendError (§6 failure table)', () => {
 
 describe('mergeMessages', () => {
   it('replaces a message with the same seq and inserts new ones in seq order', () => {
-    const merged = mergeMessages([message(2), message(4)], [message(4, { body: null, deletedBy: 'sender' }), message(3), message(5)], false);
+    const merged = mergeMessages([message(2), message(4)], [message(4, { revision: 9, body: null, deletedBy: 'sender' }), message(3), message(5)], false);
     expect(seqs(merged)).toEqual([2, 3, 4, 5]);
     expect(merged[2]).toMatchObject({ seq: 4, body: null, deletedBy: 'sender' });
   });
@@ -57,6 +58,47 @@ describe('mergeMessages', () => {
   it('drops a change older than the oldest loaded message while earlier pages are unloaded', () => {
     expect(seqs(mergeMessages([message(10), message(11)], [message(3), message(12)], true))).toEqual([10, 11, 12]);
     expect(seqs(mergeMessages([message(10), message(11)], [message(3)], false))).toEqual([3, 10, 11]);
+  });
+
+  it('keeps the newer revision when a slow react answer lands after the poll that showed the deletion', () => {
+    // Alice reacts to seq 4 (revision 7 in flight); Bob deletes it (revision 8), and that poll lands first.
+    const shown = mergeMessages([message(4, { revision: 5 })], [message(4, { revision: 8, body: null, deletedBy: 'sender' })], false);
+    expect(shown[0]).toMatchObject({ revision: 8, body: null });
+    const stale = message(4, { revision: 7, body: 'message 4', reactions: [{ emoji: '❤️', count: 1, mine: true }] });
+    const after = mergeMessages(shown, [stale], false);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ revision: 8, body: null, deletedBy: 'sender', reactions: [] });
+    // A support redaction is the same story.
+    const hidden = mergeMessages([message(4, { revision: 8, body: null, deletedBy: 'support' })], [stale], false);
+    expect(hidden[0]).toMatchObject({ body: null, deletedBy: 'support' });
+    // The same revision keeps the row already shown; a newer one replaces it.
+    const same = message(4, { revision: 8, body: 'other copy' });
+    expect(mergeMessages(shown, [same], false)[0]).toBe(shown[0]);
+    expect(mergeMessages(shown, [message(4, { revision: 9, reactions: [{ emoji: '👍', count: 1, mine: false }] })], false)[0]).toMatchObject({ revision: 9, reactions: [{ emoji: '👍' }] });
+  });
+});
+
+describe('applyThreadPage', () => {
+  const page = (messages: ChatMessage[], reset: boolean) => ({ peer: null, receipts: [], messages, revision: 20, lastReadSeq: 0, hasEarlier: true, reset, muted: false, pause: null });
+  const loaded = () => ({ peer: null, room: null, group: null, receipts: [], hasEarlier: false, muted: false, pause: null,
+    messages: [message(1, { reactions: [{ emoji: '❤️', count: 1, mine: false }] }), message(2, { replyTo: { seq: 1, fromMe: false, senderName: 'Blocked', preview: 'message 1' } }), message(3)] });
+
+  it('merges an incremental page by seq and keeps the local hasEarlier', () => {
+    const next = applyThreadPage(loaded(), page([message(4)], false), false, false);
+    expect(seqs(next.messages)).toEqual([1, 2, 3, 4]);
+    expect(next.hasEarlier).toBe(false);
+  });
+
+  it('replaces every loaded row on a reset page, quotes and reactions included, so hidden rows and their quotes go', () => {
+    // After a block the server answers the next incremental poll with a full window that leaves the blocked sender's
+    // row (seq 1) out and clears the quote of it on seq 2, with a stale-looking revision on seq 3 that must not matter.
+    const full = page([message(2, { revision: 2, replyTo: { seq: 1, fromMe: false, senderName: '', preview: null } }), message(3, { revision: 3 })], true);
+    const next = applyThreadPage(loaded(), full, true, false);
+    expect(seqs(next.messages)).toEqual([2, 3]);
+    expect(next.messages[0]!.replyTo).toEqual({ seq: 1, fromMe: false, senderName: '', preview: null });
+    expect(next.hasEarlier).toBe(true);
+    // The first load is a full page too.
+    expect(seqs(applyThreadPage(null, page([message(9)], false), true, false).messages)).toEqual([9]);
   });
 });
 
@@ -142,7 +184,7 @@ describe('send queue', () => {
     expect(statuses(entry)[1]).toMatchObject({ body: 'two', status: 'failed', network: true });
     // A thread whose message was rate-limited is left alone on reconnect.
     const other = threadMemory('account-1', GLOBAL_TARGET);
-    other.outgoing = [{ clientId: crypto.randomUUID(), body: 'room', status: 'failed', retryable: true, network: false, error: RATE }];
+    other.outgoing = [{ clientId: crypto.randomUUID(), body: 'room', reply: null, status: 'failed', retryable: true, network: false, error: RATE }];
     send.mockReset();
     send.mockImplementation(async (input: { clientId: string; body: string }) => ({ message: message(5, { id: input.clientId, fromMe: true, body: input.body }) }));
     resumeChatSends('account-1');
@@ -174,6 +216,20 @@ describe('send queue', () => {
     expect(entry.outgoing).toEqual([]);
   });
 
+  it('sends the quoted message as replyTo and keeps the quote on the pending bubble', async () => {
+    const entry = entryFor();
+    send.mockImplementation(async (input: { clientId: string; body: string; replyTo?: number }) => ({ message: message(9, { id: input.clientId, fromMe: true, body: input.body, replyTo: { seq: input.replyTo!, fromMe: false, senderName: 'Bob', preview: 'hey' } }) }));
+    enqueue(entry, 'sure', { seq: 4, fromMe: false, senderName: 'Bob', preview: 'hey' });
+    expect(entry.outgoing[0]).toMatchObject({ body: 'sure', reply: { seq: 4, senderName: 'Bob' } });
+    await settle();
+    expect(send.mock.calls[0]![0]).toMatchObject({ body: 'sure', replyTo: 4 });
+    expect(entry.delivered[0]).toMatchObject({ seq: 9, replyTo: { seq: 4 } });
+    // Without a quote, replyTo is left out so the server stores a plain message.
+    enqueue(entry, 'plain');
+    await settle();
+    expect(send.mock.calls[1]![0]).toMatchObject({ body: 'plain', replyTo: undefined });
+  });
+
   it('marks the chat closed when the server says it is gone', async () => {
     const entry = entryFor();
     send.mockRejectedValue(serverError('This chat is closed.', 'NOT_FOUND', 404));
@@ -186,5 +242,22 @@ describe('send queue', () => {
     enqueue(entry, 'two');
     await settle();
     expect(sentBodies()).toEqual(['one', 'two']);
+  });
+});
+
+describe('event stream', () => {
+  it('polls slowly while the stream is connected and at the usual rate otherwise', () => {
+    expect(pollInterval('thread', false)).toBe(4_000);
+    expect(pollInterval('inbox', false)).toBe(10_000);
+    expect(pollInterval('thread', true)).toBe(15_000);
+    expect(pollInterval('inbox', true)).toBe(30_000);
+  });
+  it('matches an event to the thread it is about', () => {
+    expect(eventMatches({ kind: 'peer', key: 'friend-1' }, { kind: 'peer', userId: 'friend-1' })).toBe(true);
+    expect(eventMatches({ kind: 'peer', key: 'friend-2' }, { kind: 'peer', userId: 'friend-1' })).toBe(false);
+    expect(eventMatches({ kind: 'group', key: 'g1' }, { kind: 'group', groupId: 'g1' })).toBe(true);
+    expect(eventMatches({ kind: 'group', key: 'g1' }, { kind: 'peer', userId: 'g1' })).toBe(false);
+    expect(eventMatches({ kind: 'global', key: 'global' }, GLOBAL_TARGET)).toBe(true);
+    expect(eventMatches({ kind: 'peer', key: 'friend-1' }, GLOBAL_TARGET)).toBe(false);
   });
 });

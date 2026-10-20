@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, Bell, BellOff, Bold, BookOpen, Calendar, Camera, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Code, Coffee, Copy, Crown, Ellipsis, ExternalLink, Eye, Flag, GraduationCap, GripHorizontal, GripVertical, House, ImageUp, Inbox, Info, Italic, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, MessageCircle, MessageSquarePlus, Moon, Palette, Pencil, Plus, RefreshCw, Search, SendHorizontal, Settings, Sparkles, Star, Strikethrough, Sun, Trash2, TriangleAlert, Type, UserMinus, UserPlus, Users, Utensils, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, Bell, BellOff, Bold, BookOpen, Calendar, Camera, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Cloud, CloudOff, Code, Coffee, Copy, Crown, Ellipsis, ExternalLink, Eye, Flag, GraduationCap, GripHorizontal, GripVertical, House, ImageUp, Inbox, Info, Italic, Layers, ListChecks, LoaderCircle, Lock, LockOpen, LogOut, MapPin, MessageCircle, MessageSquarePlus, Moon, Palette, Pencil, Plus, RefreshCw, Reply, Search, SendHorizontal, Settings, Sparkles, Star, Strikethrough, Sun, Trash2, TriangleAlert, Type, UserMinus, UserPlus, Users, Utensils, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -72,6 +72,7 @@ const icons = {
   flag: Flag,
   ban: Ban,
   imageUp: ImageUp,
+  reply: Reply,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof icons;

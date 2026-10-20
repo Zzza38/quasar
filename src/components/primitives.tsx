@@ -5,7 +5,7 @@
  * Views import from here so the shadcn variant vocabulary stays in one place.
  */
 
-import { Children, createContext, Fragment, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { Children, createContext, Fragment, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { AttentionGap } from './attention-videos';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -50,7 +50,7 @@ export function Button({ variant = 'secondary', size = 'md', icon, iconRight, bu
   </ShadButton>;
 }
 
-export function IconButton({ label, icon, size = 'md', variant = 'ghost', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; icon: IconName; size?: Size; variant?: Variant }) {
+export function IconButton({ label, icon, size = 'md', variant = 'ghost', ...rest }: ComponentProps<'button'> & { label: string; icon: IconName; size?: Size; variant?: Variant }) {
   return <Button variant={variant} size={size} icon={icon} aria-label={label} title={label} {...rest} />;
 }
 
@@ -61,8 +61,8 @@ export function Spacer() {
 
 /* ---------- Text helpers ---------- */
 
-export function Hint({ children, className, tone = 'muted', role, id }: { children: ReactNode; className?: string; tone?: 'muted' | 'danger'; role?: 'alert' | 'status'; id?: string }) {
-  return <p id={id} role={role} className={cn('text-xs leading-relaxed', tone === 'danger' ? 'text-destructive' : 'text-muted-foreground', className)}>{children}</p>;
+export function Hint({ children, className, tone = 'muted', role, id, title }: { children: ReactNode; className?: string; tone?: 'muted' | 'danger'; role?: 'alert' | 'status'; id?: string; title?: string }) {
+  return <p id={id} role={role} title={title} className={cn('text-xs leading-relaxed', tone === 'danger' ? 'text-destructive' : 'text-muted-foreground', className)}>{children}</p>;
 }
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {

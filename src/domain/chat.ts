@@ -7,7 +7,7 @@ import { censorSlurs } from './chat-filter';
  * values (see the message helpers below), so editing CHAT is enough to change a limit.
  */
 export const CHAT = {
-  maxLength: 1000, perMinute: 20, perDay: 500, newChatsPerDay: 20,
+  maxLength: 1000, reactionsPerMinute: 60, perMinute: 20, perDay: 500, newChatsPerDay: 20,
   page: 50, maxChanges: 200, evidence: 30, evidenceBefore: 15, evidenceAfter: 14,
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
@@ -117,3 +117,10 @@ export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: s
   spam: { label: 'Spam or scam', short: 'Spam' },
   other: { label: 'Something else', short: 'Other' },
 };
+
+/** The tapbacks available in every chat, in display order. */
+export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'] as const;
+export type Reaction = typeof REACTIONS[number];
+export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
+export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
+export type MessageExtras = { replyTo: MessageReply | null; reactions: MessageReaction[] };

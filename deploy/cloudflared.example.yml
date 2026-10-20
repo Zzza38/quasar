@@ -1,8 +1,11 @@
-# Substitute the named tunnel UUID, credentials path, and public hostname.
+# Substitute the named tunnel UUID and credentials path.
 # Store the real config in ~/.cloudflared/quasar.yml, outside Git.
 tunnel: YOUR_TUNNEL_UUID
 credentials-file: /home/zion/.cloudflared/YOUR_TUNNEL_UUID.json
 ingress:
-  - hostname: quasar.example.com
+  - hostname: getquasarapp.com
+    service: http://127.0.0.1:3003
+  # Keep the previous address reachable for the move notice.
+  - hostname: quasar.ziona.dev
     service: http://127.0.0.1:3003
   - service: http_status:404
