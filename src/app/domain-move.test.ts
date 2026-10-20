@@ -24,7 +24,7 @@ describe('domain move routing', () => {
 
   it('leaves authentication, APIs, service workers and page assets reachable', async () => {
     vi.stubEnv('NEXTAUTH_URL', 'https://getquasarapp.com');
-    for (const path of ['/api/auth/callback/google', '/api/health', '/api/trpc/tasks.create', '/sw.js', '/brand/icon-192.png', '/_next/static/chunk.js', '/icon.svg', '/apple-icon.png', '/manifest.webmanifest', '/robots.txt', '/sitemap.xml']) {
+    for (const path of ['/api/auth/callback/google', '/api/health', '/api/trpc/tasks.create', '/sw.js', '/brand/icon-192.png', '/_next/static/chunk.js', '/favicon.ico', '/icon.svg', '/apple-icon.png', '/manifest.webmanifest', '/robots.txt', '/sitemap.xml']) {
       expect((await response('quasar.ziona.dev', path)).headers.get('x-middleware-rewrite')).toBeNull();
     }
   });
