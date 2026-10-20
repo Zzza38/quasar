@@ -14,7 +14,7 @@ import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
-import { Beta, BetaProvider } from './betas';
+import { BetaProvider } from './betas';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
 import { useWorkspace, type InitialBoot } from './use-workspace';
