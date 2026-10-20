@@ -144,7 +144,7 @@ export function ClassesView({ state }: { state: AppState }) {
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'}, assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
-      <ClassAssignmentGrid schedule={schedule} schoolSchedule={school} personal={personal} save={state.savePersonal} disabled={!state.personalValid} onSchoolCorrection={correctSchool} />
+      <ClassAssignmentGrid accountId={state.context.user.id} schedule={schedule} schoolSchedule={school} personal={personal} save={state.savePersonal} disabled={!state.personalValid} onSchoolCorrection={correctSchool} />
     </Section>
 
     <Section id="adjust-title" title="Adjustments" icon="edit" description="Change a single date or a whole rotation day for yourself only.">
