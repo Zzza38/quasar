@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createBeta, EMPTY_BETA_REGISTRY, readBetaRegistry, removeBeta, writeBetaRegistry } from './beta-registry';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { emptyPersonalSchedule, scheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
 import { exampleSchedule } from '@/domain/example';
 import { openDatabase, type Db } from './db';
@@ -10,7 +14,18 @@ import { BetaService } from './betas';
 import { appRouter } from './router';
 
 const databases: Db[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+let directory = '';
+let previousPath: string | undefined;
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), 'quasar-schedule-beta-'));
+  previousPath = process.env.BETAS_PATH;
+  process.env.BETAS_PATH = join(directory, 'betas.json');
+});
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+  rmSync(directory, { recursive: true, force: true });
+  if (previousPath === undefined) delete process.env.BETAS_PATH; else process.env.BETAS_PATH = previousPath;
+});
 function fixture() {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
@@ -21,7 +36,7 @@ function fixture() {
   };
   const owner = user('owner@example.com');
   const betas = new BetaService(service);
-  betas.create(owner, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null });
+  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null }));
   const viewer = user();
   const school = service.createSchool(viewer, { name: 'Signals High', location: 'Boston, MA', schedule: exampleSchedule });
   const join = (id: string, grade: Grade = '9', schoolId = school.id) => { service.join(id, { schoolId, grade, choice: 'community' }); betas.join(id, { code: 'FOLLOW2026' }); };
@@ -155,4 +170,13 @@ it('requires actual beta enrollment and counts only opted-in contributors', () =
   expect(f.signals.list(f.viewer).signals).toEqual([]);
   f.betas.leave(f.viewer, SCHEDULE_FOLLOWING_BETA);
   expect(() => f.signals.list(f.viewer)).toThrow('Join the schedule-following beta');
+});
+
+it('rejects a stale enrollment when the beta has been removed from the registry', () => {
+  const f = fixture();
+  f.member(); f.member(); f.member();
+  writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+  expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.viewer)).toBeTruthy();
+  expect(() => f.signals.list(f.viewer)).toThrow('Join the schedule-following beta');
+  expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.viewer)).toBeUndefined();
 });

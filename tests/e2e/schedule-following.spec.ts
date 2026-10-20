@@ -2,9 +2,11 @@ import { test, expect, hydrating } from './fixtures';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { BetaService } from '../../src/server/betas';
+import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { SCHEDULE_FOLLOWING_BETA } from '../../src/domain/betas';
 import { exampleSchedule } from '../../src/domain/example';
 import { cycleDaySlots, diffCycleDaySlots, personalScheduleSchema } from '../../src/domain/schedule';
@@ -14,27 +16,29 @@ const BETA_NAME = 'School schedule following';
 
 function database<T>(run: (db: ReturnType<typeof openDatabase>, service: Service) => T): T {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  const previousBetasPath = process.env.BETAS_PATH;
+  process.env.BETAS_PATH = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
   try { return run(db, new Service(db, 'browser-owner@example.com')); }
-  finally { db.close(); }
+  finally {
+    db.close();
+    if (previousBetasPath === undefined) delete process.env.BETAS_PATH;
+    else process.env.BETAS_PATH = previousBetasPath;
+  }
 }
 
-function prepareBeta(db: ReturnType<typeof openDatabase>, service: Service) {
-  let owner = db.prepare('SELECT id FROM users WHERE email=?').get('browser-owner@example.com') as { id: string } | undefined;
-  if (!owner) {
-    owner = { id: randomUUID() };
-    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
-      .run(owner.id, owner.id, 'browser-owner@example.com', 'Owner', 'Browser Owner', new Date().toISOString());
+function prepareBeta(service: Service) {
+  // Synthetic registry beside the throwaway database, matching the documented CLI's file format.
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) {
+    writeBetaRegistry(createBeta(registry, { key: SCHEDULE_FOLLOWING_BETA, name: BETA_NAME, description: 'Try personal bell-time changes while following school corrections.', code: BETA_CODE }), listPath);
   }
-  const betas = new BetaService(service);
-  if (!betas.list(owner.id).some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) {
-    betas.create(owner.id, { key: SCHEDULE_FOLLOWING_BETA, name: BETA_NAME, description: 'Try personal bell-time changes while following school corrections.', code: BETA_CODE, maxMembers: null });
-  }
-  return betas;
+  return new BetaService(service, () => readBetaRegistry(listPath));
 }
 
 function seed(locked = false, enroll = true, schedule = exampleSchedule) {
   return database((db, service) => {
-    const betas = prepareBeta(db, service);
+    const betas = prepareBeta(service);
     const members = Array.from({ length: locked ? 10 : 1 }, (_, index) => {
       const id = randomUUID();
       db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')

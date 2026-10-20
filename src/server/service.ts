@@ -1,4 +1,5 @@
 import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { currentBetaRegistry } from './beta-registry';
 import { materializePersonalSchedule } from '@/domain/legacy-personal-schedule';
 import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
@@ -330,13 +331,14 @@ export class Service {
       if (community.isBanned(id, school.id)) fail('FORBIDDEN', 'Support removed you from this school. You can read the reason and appeal on the school step.');
       if (input.choice === 'approved' && !school.approved) fail('BAD_REQUEST', 'Choose the community schedule explicitly, or build your own.');
       if (input.choice === 'personal' && !input.personalSchedule) fail('BAD_REQUEST', 'Provide your personal schedule.');
+      const following = this.scheduleFollowingEnabled(id);
       const existing = this.entity(id, 'personal');
       let data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
       const previousSchool = this.user(id).schoolId;
       if (previousSchool && previousSchool !== school.id) {
         const periods = data.periods;
         data = materializePersonalSchedule(this.school(previousSchool).schedule, data);
-        if (periods && this.scheduleFollowingEnabled(id)) data = { ...data, periods };
+        if (periods && following) data = { ...data, periods };
       }
       // Joining is online and deliberately establishes the schedule source. Existing classes and overrides survive.
       const updated = personalScheduleSchema.parse({ ...data, ...(input.grade ? { grade: input.grade } : {}), customSchedule: input.choice === 'personal' ? input.personalSchedule : null });
@@ -391,7 +393,8 @@ export class Service {
   }
   workspace(id: string, options: ClientOptions = {}) {
     const user = this.user(id);
-    if (options.legacyPersonal && this.scheduleFollowingEnabled(id)) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
+    const following = this.scheduleFollowingEnabled(id);
+    if (options.legacyPersonal && following) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
     const school = user.schoolId ? this.school(user.schoolId) : null;
     const {reviewed_version: reviewed} = this.db.prepare('SELECT reviewed_version FROM users WHERE id=?').get(id) as UserRow;
     let review: {previous: Schedule; current: Schedule; version: number} | null = null;
@@ -416,7 +419,20 @@ export class Service {
     this.db.prepare('INSERT INTO entity_history VALUES(?,?,?,?)').run(owner, entity.id, entity.version, JSON.stringify(entity));
   }
   scheduleFollowingEnabled(id: string): boolean {
-    return !!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHEDULE_FOLLOWING_BETA, id);
+    if (!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHEDULE_FOLLOWING_BETA, id)) return false;
+    if (currentBetaRegistry().betas.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) return true;
+    this.retireScheduleFollowing(id);
+    return false;
+  }
+  /** A removed registry entry ends enrollment only after saved adjustments have been frozen. */
+  retireScheduleFollowing(id: string, school?: Schedule): void {
+    if (!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHEDULE_FOLLOWING_BETA, id)) return;
+    this.db.transaction(() => {
+      if (!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHEDULE_FOLLOWING_BETA, id)) return;
+      this.leaveScheduleFollowing(id, school);
+      this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(SCHEDULE_FOLLOWING_BETA, id);
+      this.audit(id, 'beta.leave', null, { key: SCHEDULE_FOLLOWING_BETA, reason: 'retired' });
+    }).immediate();
   }
   reconcileScheduleFollowing(id: string): void {
     const schoolId = this.user(id).schoolId;
@@ -425,13 +441,13 @@ export class Service {
     this.reconcilePersonalSchedule(id, school.schedule, this.personalComparisonSchedule(id, school));
   }
   /** Freeze adjustments before beta enrollment disappears. Invalid legacy representations retain sparse edits. */
-  leaveScheduleFollowing(id: string): void {
+  leaveScheduleFollowing(id: string, school?: Schedule): void {
     const entity = this.entity(id, 'personal');
     if (!entity || entity.deleted) return;
     const parsed = personalScheduleSchema.safeParse(entity.data);
     if (!parsed.success) return;
     const schoolId = this.user(id).schoolId;
-    const materialized = materializePersonalSchedule(schoolId ? this.school(schoolId).schedule : undefined, parsed.data);
+    const materialized = materializePersonalSchedule(school ?? (schoolId ? this.school(schoolId).schedule : undefined), parsed.data);
     if (canonical(materialized) !== canonical(entity.data)) this.writeEntity(id, { ...entity, version: entity.version + 1, data: materialized });
   }
   /** Converts old day copies before their comparison revision disappears, and removes adopted slot changes. */
@@ -449,7 +465,11 @@ export class Service {
   /** Called inside every published school revision, including a proposal passing. */
   reconcileSchoolPersonalSchedules(schoolId: string, school: Schedule, previous?: Schedule): void {
     const members = this.db.prepare('SELECT u.id FROM users u JOIN beta_members m ON m.user_id=u.id AND m.beta_key=? WHERE u.school_id=?').all(SCHEDULE_FOLLOWING_BETA, schoolId) as Array<{ id: string }>;
-    for (const member of members) this.reconcilePersonalSchedule(member.id, school, this.personalComparisonSchedule(member.id, { schedule: previous ?? school }));
+    const active = currentBetaRegistry().betas.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA);
+    for (const member of members) {
+      if (!active) this.retireScheduleFollowing(member.id, previous ?? school);
+      else this.reconcilePersonalSchedule(member.id, school, this.personalComparisonSchedule(member.id, { schedule: previous ?? school }));
+    }
   }
   private personalComparisonSchedule(id: string, school: Pick<School, 'schedule'>): Schedule {
     const row = this.db.prepare('SELECT r.schedule FROM users u JOIN school_revisions r ON r.school_id=u.school_id AND r.version=u.reviewed_version WHERE u.id=?').get(id) as { schedule: string } | undefined;
@@ -465,12 +485,12 @@ export class Service {
     if (input.base && (input.base.id !== input.id || input.base.kind !== input.kind)) fail('BAD_REQUEST', 'The change does not match its base.');
     const fingerprint = createHash('sha256').update(canonical(input)).digest('hex');
     return this.db.transaction(() => {
+      const following = input.kind === 'personal' && this.scheduleFollowingEnabled(id);
       const receipt = this.db.prepare('SELECT * FROM mutation_receipts WHERE owner_id=? AND mutation_id=?').get(id, input.mutationId) as { fingerprint: string; result: string } | undefined;
       if (receipt) {
         if (receipt.fingerprint !== fingerprint) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different change.');
         return resultForClient(JSON.parse(receipt.result) as SyncResult, options);
       }
-      const following = input.kind === 'personal' && this.scheduleFollowingEnabled(id);
       const schoolId = input.kind === 'personal' ? this.user(id).schoolId : null;
       const school = schoolId ? this.school(schoolId) : null;
       const comparison = school ? this.personalComparisonSchedule(id, school) : undefined;
