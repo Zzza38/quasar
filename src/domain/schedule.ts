@@ -128,20 +128,22 @@ export function applyScheduleToGrades(current: Schedule, draft: Schedule, grades
   } });
 }
 
-/** Admin closures apply school-wide, while each grade keeps its own rotation and bell times. */
-export function applySchoolClosures(current: Schedule, draft: Schedule): Schedule {
+/** School calendar edits apply to every grade while preserving its rotation, bell times and explicit exceptions. */
+export function applySchoolExceptions(current: Schedule, draft: Schedule): Schedule {
   const variants = draft.gradeSchedules ?? current.gradeSchedules;
   if (!variants) return draft;
   const previous = new Map(current.exceptions.map((entry) => [entry.date, entry]));
   const next = new Map(draft.exceptions.map((entry) => [entry.date, entry]));
   const dates = [...new Set([...previous.keys(), ...next.keys()])].filter((date) => {
     const before = previous.get(date), after = next.get(date);
-    return (before?.kind === 'closure' || after?.kind === 'closure') && JSON.stringify(before) !== JSON.stringify(after);
+    return JSON.stringify(before) !== JSON.stringify(after);
   });
   const gradeSchedules = { ...variants };
   for (const grade of GRADES) {
     const variant = gradeSchedules[grade];
     if (!variant) continue;
+    // A newly supplied grade schedule is an explicit edit, including dates deliberately left out of it.
+    if (!current.gradeSchedules?.[grade] && draft.gradeSchedules?.[grade]) continue;
     const exceptions = new Map(variant.exceptions.map((entry) => [entry.date, entry]));
     for (const date of dates) {
       const original = current.gradeSchedules?.[grade]?.exceptions.find((entry) => entry.date === date);
@@ -150,13 +152,16 @@ export function applySchoolClosures(current: Schedule, draft: Schedule): Schedul
       // A saved grade-specific exception also takes precedence over the school calendar.
       if (original && JSON.stringify(original) !== JSON.stringify(previous.get(date))) continue;
       const after = next.get(date);
-      if (after?.kind === 'closure') exceptions.set(date, after);
+      if (after) exceptions.set(date, after);
       else if (JSON.stringify(exceptions.get(date)) === JSON.stringify(previous.get(date))) exceptions.delete(date);
     }
     gradeSchedules[grade] = { ...variant, exceptions: [...exceptions.values()] };
   }
   return scheduleSchema.parse({ ...draft, gradeSchedules });
 }
+
+/** @deprecated Use applySchoolExceptions for closures, replacements and cycle-day resets. */
+export const applySchoolClosures = applySchoolExceptions;
 
 export const classSchema = z.strictObject({
   id: idSchema,
@@ -181,6 +186,7 @@ export type CycleDayOverride = z.infer<typeof cycleDayOverrideSchema>;
 export const personalScheduleSchema = z.strictObject({
   periods: z.array(periodSchema).max(300).optional(),
   grade: gradeSchema.optional(),
+  scheduleLocked: z.boolean().optional(),
   classes: z.array(classSchema).max(300),
   assignments: z.record(idSchema, idSchema),
   cycleDayOverrides: z.array(cycleDayOverrideSchema).max(366),

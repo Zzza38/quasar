@@ -9,8 +9,44 @@ import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
 import type { Entity, SyncResult } from '@/domain/sync';
+import { CommunityService } from './community';
+import { exampleSchedule } from '@/domain/example';
 
 const shapeOf = (error: TRPCError) => getErrorShape({ config: appRouter._def._config, error, type: 'mutation', path: 'profile.save', input: {}, ctx: undefined });
+
+it('binds every reaction mutation to the account and validates reply and reaction inputs', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    const service = new Service(db, 'owner@example.com');
+    const alice = randomUUID(), bob = randomUUID();
+    for (const [id, name] of [[alice, 'Alice'], [bob, 'Bob']]) {
+      db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${id}@example.com`, name, `${name} Name`, new Date().toISOString());
+    }
+    const school = service.createSchool(alice, { name: 'Chat High', location: 'Boston, MA', schedule: exampleSchedule });
+    service.join(alice, { schoolId: school.id, choice: 'community' });
+    service.join(bob, { schoolId: school.id, choice: 'community' });
+    const community = new CommunityService(service);
+    community.request(alice, bob); community.respond(bob, alice, true);
+    const caller = appRouter.createCaller({ service, userId: alice });
+    const group = await caller.group.create({ accountId: alice, name: 'Replies', memberIds: [bob] });
+    const peer = { accountId: alice, userId: bob };
+    const friends = { accountId: alice, groupId: group.id };
+    const room = { accountId: alice };
+    for (const [send, react] of [
+      [(body: string, replyTo?: number) => caller.chat.send({ ...peer, clientId: randomUUID(), body, replyTo }), (seq: number, accountId: string, emoji: '👍' | null) => caller.chat.react({ ...peer, accountId, seq, emoji })],
+      [(body: string, replyTo?: number) => caller.group.send({ ...friends, clientId: randomUUID(), body, replyTo }), (seq: number, accountId: string, emoji: '👍' | null) => caller.group.react({ ...friends, accountId, seq, emoji })],
+      [(body: string, replyTo?: number) => caller.global.send({ ...room, clientId: randomUUID(), body, replyTo }), (seq: number, accountId: string, emoji: '👍' | null) => caller.global.react({ ...room, accountId, seq, emoji })],
+    ] as const) {
+      const { message } = await send('target');
+      expect((await send('reply', message.seq)).message.replyTo).toMatchObject({ seq: message.seq, preview: 'target', senderName: 'Alice', fromMe: true });
+      await expect(react(message.seq, bob, '👍')).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+      await expect(react(message.seq, alice, '🔥' as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(send('reply', -1)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect((await react(message.seq, alice, '👍')).message.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
+      expect((await react(message.seq, alice, null)).message.reactions).toEqual([]);
+    }
+  } finally { db.close(); }
+});
 
 describe('error formatter', () => {
   it('replaces a serialized Zod issue list with plain text and keeps the code', () => {

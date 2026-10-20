@@ -13,6 +13,7 @@ import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
+import { BetaSettings } from './betas';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
@@ -337,7 +338,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
       <SheetContent side="right" className="gap-0 border-l-0 p-0 text-foreground shadow-pop data-[side=right]:w-full data-[side=right]:sm:max-w-md">
         <SheetHeader className="border-b px-5 py-4">
           <SheetTitle className="text-[17px] font-bold">Account</SheetTitle>
-          <SheetDescription className="sr-only">Your profile, appearance, notifications and sign-out.</SheetDescription>
+          <SheetDescription className="sr-only">Your profile, appearance, notifications, betas and sign-out.</SheetDescription>
         </SheetHeader>
         {/* auto-rows-max: the summary hides its overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
         <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
@@ -359,6 +360,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
+          <div className="grid gap-3"><Eyebrow>Betas</Eyebrow><BetaSettings accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} /></div>
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}

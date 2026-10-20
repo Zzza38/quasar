@@ -223,6 +223,39 @@ test('explicit community choice, class and task persistence, offline reload and 
   } finally { db.close(); }
 });
 
+test('recovers a suspended browser database and uploads each offline task once', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/tasks');
+  await expect(saved(page)).toBeVisible();
+  await context.setOffline(true);
+  await quickAdd(page, 'Saved before suspension');
+  await quickAdd(page, 'Also saved offline');
+  await page.evaluate(() => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === 'workspaces') {
+        IDBObjectStore.prototype.put = put;
+        document.documentElement.dataset.storageFailureInjected = 'true';
+        throw new DOMException('Attempt to delete range from database without an in-progress transaction', 'UnknownError');
+      }
+      return put.apply(this, args);
+    };
+  });
+  await context.setOffline(false);
+  await expect(page.locator('html')).toHaveAttribute('data-storage-failure-injected', 'true');
+  await expect(saved(page)).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByLabel('Mark Saved before suspension complete')).toBeVisible();
+  await expect(page.getByLabel('Mark Also saved offline complete')).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const tasks = new Service(db).workspace(fixture.id).entities.filter(entity => entity.kind === 'task');
+    expect(tasks).toHaveLength(2);
+    expect(tasks.every(entity => entity.version === 1)).toBe(true);
+  } finally { db.close(); }
+});
+
 test('admin UI enforces owner authorization and publishes locked approved revisions', async ({ page, context }) => {
   const student = seed(); await authenticate(context, student.id);
   await page.goto('/admin');
@@ -1745,3 +1778,34 @@ function seedOwnerId(db: ReturnType<typeof openDatabase>): string {
   db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, 'browser-owner@example.com', 'Owner', 'Owner Person', new Date().toISOString());
   return id;
 }
+
+test('schedule lock persists and requires approval before editing', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  await page.goto('/schedule');
+  await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Adjust this day', exact: true }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock schedule?' });
+  await expect(unlock).toBeVisible();
+  await unlock.getByRole('button', { name: 'Keep locked' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Adjust this day', exact: true }).click();
+  await unlock.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await expect(unlock).not.toBeVisible();
+  await expect(dialog(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
+  await page.getByRole('link', { name: 'Classes', exact: true }).click();
+  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await expect(unlock).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await unlock.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+});

@@ -16,7 +16,9 @@ import { ClassAssignmentGrid } from '../class-assignment-grid';
 import { ClassNameInput, useClassDirectory } from '../class-name-input';
 import { removeClass, useSchoolTimetable } from '../personal-timetable';
 import { Icon } from '../icon';
+import { editSchedule, ScheduleLockButton } from '../schedule-lock';
 import { AdjustmentsList, BellTimeChoice, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
+
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer } from '../primitives';
 import { Card } from '../ui/card';
 import { ClassColorPicker } from '../class-color-picker';
@@ -55,7 +57,7 @@ export function ClassesView({ state }: { state: AppState }) {
   const bellParam = state.params.get('bell');
   useEffect(() => { if (bellParam === 'open') { setBellChoice(true); state.navigate('classes', undefined, { replace: true }); } }, [bellParam, state]);
   const privateParam = state.params.get('private');
-  useEffect(() => { if (privateParam === 'open') { setPrivateOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [privateParam, state]);
+  useEffect(() => { if (privateParam === 'open') { state.navigate('classes', undefined, { replace: true }); editSchedule(state, () => setPrivateOpen(true)); } }, [privateParam, state]);
   // ?directory=open (School → Browse school classes) is one-shot too: open the directory and drop the param, so Back or a reload does not reopen it.
   const directoryParam = state.params.get('directory');
   const [directoryOpen, setDirectoryOpen] = useState(directoryParam === 'open');
@@ -88,8 +90,8 @@ export function ClassesView({ state }: { state: AppState }) {
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'}` : undefined}
-      actions={<>{scanEnabled ? <Button icon="calendar" disabled={!state.online} onClick={() => setScanOpen(true)}>Import schedule</Button>
-        : !feedConnected && <Button icon="calendar" disabled={!state.online || !state.personalValid} onClick={() => setVeracrossOpen(true)}>Connect Veracross</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add class</Button></>} />
+      actions={<><ScheduleLockButton state={state} />{scanEnabled ? <Button icon="calendar" disabled={!state.online} onClick={() => editSchedule(state, () => setScanOpen(true))}>Import schedule</Button>
+        : !feedConnected && <Button icon="calendar" disabled={!state.online || !state.personalValid} onClick={() => editSchedule(state, () => setVeracrossOpen(true))}>Connect Veracross</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => editSchedule(state, () => setEditing('new'))}>Add class</Button></>} />
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
       if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
       const added = classes.filter(cls => !personal.classes.some(existing => existing.id === cls.id || existing.directoryId === cls.directoryId));
@@ -99,7 +101,7 @@ export function ClassesView({ state }: { state: AppState }) {
     {!state.personalValid && <Callout tone="warning" icon="alert">Your saved personal schedule could not be read. Retry sync before editing.</Callout>}
     <ScheduleFeedPanel state={state} />
 
-    {personal.classes.length === 0 && <Card><EmptyState icon="book" title="No classes yet" action={<div className="flex flex-wrap justify-center gap-2"><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add your first class</Button><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse the directory</Button>{scanEnabled && <Button icon="calendar" disabled={!state.online} onClick={() => setScanOpen(true)}>Import a schedule PDF</Button>}</div>}>Add the classes you take, then drop each one onto its period in the timetable.</EmptyState></Card>}
+    {personal.classes.length === 0 && <Card><EmptyState icon="book" title="No classes yet" action={<div className="flex flex-wrap justify-center gap-2"><Button variant="primary" icon="plus" onClick={() => editSchedule(state, () => setEditing('new'))}>Add your first class</Button><Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse the directory</Button>{scanEnabled && <Button icon="calendar" disabled={!state.online} onClick={() => editSchedule(state, () => setScanOpen(true))}>Import a schedule PDF</Button>}</div>}>Add the classes you take, then drop each one onto its period in the timetable.</EmptyState></Card>}
     {personal.classes.length > 0 && <ul data-attention-zone="classes-grid" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Your classes">
       {personal.classes.map((cls) => {
         const periods = knownPeriods.filter((period) => personal.assignments[period.id] === cls.id);
@@ -119,7 +121,7 @@ export function ClassesView({ state }: { state: AppState }) {
             </div>
             <div className="flex shrink-0 items-center">
               {colorButton}
-              <Button size="sm" variant="ghost" icon="edit" className="shrink-0" aria-label={`Edit ${cls.name}`} onClick={() => setEditing(cls.id)}>Edit</Button>
+              <Button size="sm" variant="ghost" icon="edit" className="shrink-0" aria-label={`Edit ${cls.name}`} onClick={() => editSchedule(state, () => setEditing(cls.id))}>Edit</Button>
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -143,21 +145,23 @@ export function ClassesView({ state }: { state: AppState }) {
 
     <Section id="adjust-title" title="Adjustments" icon="edit" description="Change a single date or a whole rotation day for yourself only.">
       <div className="flex flex-wrap items-end gap-3">
-        <Field label="Adjust a date" htmlFor="adjust-date"><div className="flex gap-2"><Input id="adjust-date" small type="date" value={pickDate} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value) setPickDate(event.target.value); }} className="max-w-[160px]" /><Button size="sm" onClick={() => setAdjustDate(pickDate)} disabled={!pickDate}>Open {formatDate(pickDate)}</Button></div></Field>
-        {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) setAdjustCycleDay(event.target.value); }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
+        <Field label="Adjust a date" htmlFor="adjust-date"><div className="flex gap-2"><Input id="adjust-date" small type="date" value={pickDate} min="1900-01-01" max="2199-12-31" onChange={(event) => { if (event.target.value) setPickDate(event.target.value); }} className="max-w-[160px]" /><Button size="sm" onClick={() => editSchedule(state, () => setAdjustDate(pickDate))} disabled={!pickDate}>Open {formatDate(pickDate)}</Button></div></Field>
+        {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) { const day = event.target.value; editSchedule(state, () => setAdjustCycleDay(day)); } }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
       </div>
-      <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={setAdjustDate} onEditCycleDay={setAdjustCycleDay} />
+      <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={(date) => editSchedule(state, () => setAdjustDate(date))} onEditCycleDay={(day) => editSchedule(state, () => setAdjustCycleDay(day))} />
       {bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }} />}
       <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>
       {(advanced || !!personal.customSchedule) && <Panel className="flex flex-wrap items-center gap-3">
+
         <span className={cn('grid size-9 shrink-0 place-items-center rounded-xl', personal.customSchedule ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground')}><Icon name={personal.customSchedule ? 'edit' : 'school'} size={17} /></span>
         <div className="min-w-0 flex-1 basis-[240px] text-sm">
           <strong>{personal.customSchedule ? 'Your timetable has personal changes' : 'Your timetable starts with the school schedule'}</strong>
           <Hint>{personal.customSchedule ? 'School corrections do not change your private copy.' : 'School corrections reach you automatically.'}</Hint>
         </div>
         <div className="flex flex-wrap gap-2">
-          {(personal.customSchedule || personal.cycleDayOverrides.length > 0 || personal.dateOverrides.length > 0) && <Button size="sm" icon="refresh" onClick={() => setResetOpen(true)}>Revert to school timetable</Button>}
-          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>{personal.customSchedule ? 'Manage private schedule' : 'Build a private schedule'}</Button>
+          {(personal.customSchedule || personal.cycleDayOverrides.length > 0 || personal.dateOverrides.length > 0) && <Button size="sm" icon="refresh" onClick={() => editSchedule(state, () => setResetOpen(true))}>Revert to school timetable</Button>}
+          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => editSchedule(state, () => setPrivateOpen(true))}>{personal.customSchedule ? 'Manage private schedule' : 'Build a private schedule'}</Button>
+
         </div>
       </Panel>}
     </Section>

@@ -9,15 +9,17 @@ import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ScheduleSignalsService } from './schedule-signals';
-import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
-import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
-import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
-import { GlobalChatService, globalThreadSchema, globalSendSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
+import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
+import { TASK_CLIENT_VERSION } from '@/domain/task';
+import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
+import { BetaService, betaCodeChangeSchema, betaCreateSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema, betaUpdateSchema } from './betas';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -94,6 +96,7 @@ const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
+const betas = (service: Service) => new BetaService(service);
 export const appRouter = t.router({
   scheduleSignals: t.router({ list: authenticated.query(({ ctx }) => new ScheduleSignalsService(ctx.service).list(ctx.userId)) }),
   mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
@@ -112,6 +115,13 @@ export const appRouter = t.router({
   // Appeals against a messaging pause or a removal from a school (§14) land in the owner's support inbox.
   support: t.router({
     appeal: accountScoped.input(appealSchema).mutation(({ ctx, input }) => { ctx.service.appeal(ctx.userId, input); }),
+  }),
+  // Betas (src/server/betas.ts): a code joins one, leaving needs none, and feedback lands in the support inbox.
+  beta: t.router({
+    join: accountScoped.input(betaJoinSchema).mutation(({ ctx, input }) => betas(ctx.service).join(ctx.userId, input)),
+    leave: accountScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => betas(ctx.service).leave(ctx.userId, input.key)),
+    leaveAll: accountScoped.mutation(({ ctx }) => betas(ctx.service).leaveAll(ctx.userId)),
+    feedback: accountScoped.input(betaFeedbackSchema).mutation(({ ctx, input }) => { betas(ctx.service).feedback(ctx.userId, input); }),
   }),
   directory: t.router({
     list: authenticated.input(z.object({ schoolId: z.uuid() })).query(({ ctx, input }) => new DirectoryService(ctx.service).list(ctx.userId, input.schoolId)),
@@ -136,7 +146,8 @@ export const appRouter = t.router({
     // The list carries the global room's row too (§11), so the Messages view polls one endpoint.
     inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), groups: groups(ctx.service).list(ctx.userId), global: room(ctx.service).summary(ctx.userId) })),
     thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body)),
+    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(chatReactSchema).mutation(({ ctx, input }) => chat(ctx.service).react(ctx.userId, input.userId, input.seq, input.emoji)),
     delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
     read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
     mute: accountScoped.input(chatMuteSchema).mutation(({ ctx, input }) => chat(ctx.service).mute(ctx.userId, input.userId, input.muted)),
@@ -153,7 +164,8 @@ export const appRouter = t.router({
     removeMember: accountScoped.input(groupMemberSchema).mutation(({ ctx, input }) => groups(ctx.service).removeMember(ctx.userId, input.groupId, input.userId)),
     leave: accountScoped.input(groupIdSchema).mutation(({ ctx, input }) => groups(ctx.service).leave(ctx.userId, input.groupId)),
     thread: accountScoped.input(groupThreadSchema).query(({ ctx, input }) => groups(ctx.service).thread(ctx.userId, input.groupId, { after: input.after, before: input.before })),
-    send: accountScoped.input(groupSendSchema).mutation(({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body)),
+    send: accountScoped.input(groupSendSchema).mutation(({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(groupReactSchema).mutation(({ ctx, input }) => groups(ctx.service).react(ctx.userId, input.groupId, input.seq, input.emoji)),
     delete: accountScoped.input(groupDeleteSchema).mutation(({ ctx, input }) => groups(ctx.service).delete(ctx.userId, input.groupId, input.messageId)),
     read: accountScoped.input(groupReadSchema).mutation(({ ctx, input }) => groups(ctx.service).read(ctx.userId, input.groupId, input.seq)),
     mute: accountScoped.input(groupMuteSchema).mutation(({ ctx, input }) => groups(ctx.service).mute(ctx.userId, input.groupId, input.muted)),
@@ -163,7 +175,8 @@ export const appRouter = t.router({
   // The global chat room (docs/CHAT.md §11). Public to every member with names, so the owner moderates it directly.
   global: t.router({
     thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body)),
+    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo)),
+    react: accountScoped.input(globalReactSchema).mutation(({ ctx, input }) => room(ctx.service).react(ctx.userId, input.seq, input.emoji)),
     delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
     edit: ownerScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
@@ -258,6 +271,14 @@ export const appRouter = t.router({
     // Removals the student can appeal (§14): the list, and lifting one so they can rejoin.
     bans: admin.query(({ ctx }) => ctx.service.bans(ctx.userId)),
     liftBan: adminScoped.input(z.object({ userId: z.uuid(), schoolId: z.uuid() })).mutation(({ ctx, input }) => { ctx.service.liftBan(ctx.userId, input.userId, input.schoolId); }),
+    betas: t.router({
+      list: admin.query(({ ctx }) => betas(ctx.service).list(ctx.userId)),
+      create: adminScoped.input(betaCreateSchema).mutation(({ ctx, input }) => { betas(ctx.service).create(ctx.userId, input); }),
+      update: adminScoped.input(betaUpdateSchema).mutation(({ ctx, input }) => { betas(ctx.service).update(ctx.userId, input); }),
+      changeCode: adminScoped.input(betaCodeChangeSchema).mutation(({ ctx, input }) => { betas(ctx.service).changeCode(ctx.userId, input); }),
+      close: adminScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => { betas(ctx.service).close(ctx.userId, input.key); }),
+      removeMember: adminScoped.input(betaMemberSchema).mutation(({ ctx, input }) => { betas(ctx.service).removeMember(ctx.userId, input); }),
+    }),
     // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
     security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: process.env.NODE_ENV === 'development' ? null : (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
     renameSchool: adminScoped.input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),

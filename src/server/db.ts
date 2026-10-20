@@ -533,6 +533,99 @@ function migrate(db: Db): void {
     `);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'))");
+
+  // Migration 22: replies and tapbacks for all three chat kinds (docs/CHAT.md §15).
+  for (const [messages, reactions, parent, key] of [
+    ['chat_messages', 'chat_reactions', 'chat_threads', 'thread_id'],
+    ['chat_group_messages', 'chat_group_reactions', 'chat_groups', 'group_id'],
+    ['global_messages', 'global_reactions', 'global_chat', null],
+  ] as const) {
+    if (!(db.pragma(`table_info(${messages})`) as { name: string }[]).some(column => column.name === 'reply_to_seq')) {
+      db.exec(`ALTER TABLE ${messages} ADD COLUMN reply_to_seq INTEGER`);
+    }
+    const scope = key ? `id=OLD.${key}` : 'id=1';
+    const sameThread = key ? `AND ${key}=OLD.${key}` : '';
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS ${messages}_reply ON ${messages}(reply_to_seq);
+      CREATE TABLE IF NOT EXISTS ${reactions} (
+        message_seq INTEGER NOT NULL REFERENCES ${messages}(seq) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+        PRIMARY KEY(message_seq, user_id)
+      );
+      CREATE TRIGGER IF NOT EXISTS ${messages}_reply_changed AFTER UPDATE OF body, deleted_at ON ${messages}
+      WHEN NEW.body<>OLD.body OR NEW.deleted_at IS NOT OLD.deleted_at BEGIN
+        UPDATE ${messages} SET revision=max(revision, NEW.revision) WHERE reply_to_seq=NEW.seq ${sameThread};
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${messages}_reply_removed AFTER DELETE ON ${messages}
+      WHEN EXISTS(SELECT 1 FROM ${messages} WHERE reply_to_seq=OLD.seq ${sameThread})
+        AND EXISTS(SELECT 1 FROM ${parent} WHERE ${scope}) BEGIN
+        UPDATE ${parent} SET revision=revision+1 WHERE ${scope};
+        UPDATE ${messages} SET revision=(SELECT revision FROM ${parent} WHERE ${scope})
+          WHERE reply_to_seq=OLD.seq ${sameThread};
+      END;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_reaction_changes (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_reaction_changes_user_time ON chat_reaction_changes(user_id, created_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
+  `);
+
+  // Migration 23: durable visibility reset thresholds, shared by every tab and server process.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_visibility_resets (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('global','group')),
+      scope TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      PRIMARY KEY(user_id, kind, scope)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'));
+  `);
+  for (const [operation, row] of [['INSERT', 'NEW'], ['DELETE', 'OLD']] as const) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS blocks_chat_${operation.toLowerCase()} AFTER ${operation} ON blocks BEGIN
+      UPDATE global_chat SET revision=revision+1 WHERE id=1;
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        VALUES(${row}.blocker_id,'global','global',(SELECT revision FROM global_chat WHERE id=1))
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE global_messages SET revision=(SELECT revision FROM global_chat WHERE id=1)
+        WHERE sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM global_messages WHERE sender_id=${row}.blocked_id);
+      UPDATE chat_groups SET revision=revision+1 WHERE id IN
+        (SELECT group_id FROM chat_group_members WHERE user_id=${row}.blocker_id AND left_at IS NULL);
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        SELECT ${row}.blocker_id,'group',g.id,g.revision FROM chat_groups g
+          JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=${row}.blocker_id AND m.left_at IS NULL
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE chat_group_messages SET revision=(SELECT revision FROM chat_groups WHERE id=group_id)
+        WHERE group_id IN (SELECT group_id FROM chat_group_members WHERE user_id=${row}.blocker_id AND left_at IS NULL)
+          AND (sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM chat_group_messages WHERE sender_id=${row}.blocked_id));
+    END`);
+  }
+
+  // Migration 24: betas (src/server/betas.ts). The owner creates a beta with a join code (only its SHA-256 is kept);
+  // a member who types the code joins it, and code behind useBeta()/<Beta> turns on for them. Leaving needs no code.
+  // Closing a beta deletes it and its members. Beta feedback is a support request of kind 'beta:<key>' whose
+  // `detail` is the diagnostics JSON the member saw before sending.
+  if (!(db.pragma('table_info(support_requests)') as {name: string}[]).some(column => column.name === 'detail')) db.exec('ALTER TABLE support_requests ADD COLUMN detail TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS betas (
+      key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      code_hash TEXT NOT NULL UNIQUE, open INTEGER NOT NULL DEFAULT 1, max_members INTEGER,
+      created_at TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS beta_members (
+      beta_key TEXT NOT NULL REFERENCES betas(key) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY(beta_key, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(24, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

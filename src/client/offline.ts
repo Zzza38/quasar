@@ -58,6 +58,15 @@ const SIGNING_OUT_ELSEWHERE = "Signing out in another tab. Wait for it to finish
 const keyOf = (value: { kind: EntityKind; id: string }) => `${value.kind}:${value.id}`;
 const clone = <T>(value: T): T => structuredClone(value);
 
+/** WebKit can lose its backing transaction after a tab has been suspended. Reopen, never clear, its database. */
+function lostStorageConnection(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "UnknownError" ||
+    (error.name === "InvalidStateError" && /clos(?:ed|ing)|connection/i.test(error.message));
+}
+
+const STORAGE_UNAVAILABLE = "This browser couldn't access your saved changes. Close and reopen Quasar, then try again. Keep this site's data so your unsynced changes stay on this device.";
+
 function connect(): Promise<IDBPDatabase<OfflineDatabase>> {
   return openDB<OfflineDatabase>(DATABASE, 1, {
     upgrade(database) {
@@ -288,10 +297,11 @@ export class OfflineWorkspace {
   private readonly channel: BroadcastChannel | null;
   private syncing: Promise<void> | null = null;
   private closed = false;
+  private reconnecting: Promise<void> | null = null;
   /** This handle's sign-out marker, which lets its own final sync run while other tabs wait. */
   private signOutToken: string | null = null;
 
-  constructor(private readonly database: IDBPDatabase<OfflineDatabase>, readonly accountId: string) {
+  constructor(private database: IDBPDatabase<OfflineDatabase>, readonly accountId: string) {
     this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(DATABASE) : null;
     if (this.channel) this.channel.onmessage = (event: MessageEvent<{ accountId: string }>) => {
       if (event.data.accountId === accountId) this.notify(false);
@@ -307,27 +317,59 @@ export class OfflineWorkspace {
     if (broadcast) this.channel?.postMessage({ accountId: this.accountId });
   }
 
+  private async reconnect(failed: IDBPDatabase<OfflineDatabase>): Promise<void> {
+    this.assertOpen();
+    if (this.reconnecting) return this.reconnecting;
+    // Another operation may already have replaced the failed connection.
+    if (this.database !== failed) return;
+    this.reconnecting = (async () => {
+      failed.close();
+      const database = await connect();
+      if (this.closed) { database.close(); this.assertOpen(); }
+      this.database = database;
+    })().finally(() => { this.reconnecting = null; });
+    return this.reconnecting;
+  }
+
+  /** Retry only a local transaction, before any network work. Its aborted writes never replace the saved queue. */
+  private async withDatabase<T>(operation: (database: IDBPDatabase<OfflineDatabase>) => Promise<T>): Promise<T> {
+    this.assertOpen();
+    if (this.reconnecting) await this.reconnecting;
+    this.assertOpen();
+    const database = this.database;
+    try {
+      return await operation(database);
+    } catch (error) {
+      if (this.closed || !lostStorageConnection(error)) throw error;
+      try {
+        await this.reconnect(database);
+        this.assertOpen();
+        return await operation(this.database);
+      } catch (retryError) {
+        if (lostStorageConnection(retryError)) throw new Error(STORAGE_UNAVAILABLE, { cause: retryError });
+        throw retryError;
+      }
+    }
+  }
+
   /** All writes, including lease claims, are atomic across browser tabs. */
   private async update<T>(change: (state: StoredWorkspace) => T): Promise<T> {
-    this.assertOpen();
-    const transaction = this.database.transaction("workspaces", "readwrite");
-    const state = await transaction.store.get(this.accountId);
-    if (!state) {
-      transaction.abort();
-      // Sign-out in another tab must not recreate a deleted private cache.
-      await transaction.done.catch(() => undefined);
-      throw new Error("This offline account was cleared. Sign in again.");
-    }
-    let result: T;
-    try {
-      result = change(state);
-      await transaction.store.put(state);
-      await transaction.done;
-    } catch (error) {
-      try { transaction.abort(); } catch { /* Already completed or aborted. */ }
-      await transaction.done.catch(() => undefined);
-      throw error;
-    }
+    const result = await this.withDatabase(async (database) => {
+      const transaction = database.transaction("workspaces", "readwrite");
+      try {
+        const state = await transaction.store.get(this.accountId);
+        // Sign-out in another tab must not recreate a deleted private cache.
+        if (!state) throw new Error("This offline account was cleared. Sign in again.");
+        const value = change(state);
+        await transaction.store.put(state);
+        await transaction.done;
+        return value;
+      } catch (error) {
+        try { transaction.abort(); } catch { /* Already completed or aborted. */ }
+        await transaction.done.catch(() => undefined);
+        throw error;
+      }
+    });
     this.notify();
     return result;
   }
@@ -366,8 +408,7 @@ export class OfflineWorkspace {
   }
 
   async read(): Promise<WorkspaceSnapshot> {
-    this.assertOpen();
-    const state = await this.database.get("workspaces", this.accountId);
+    const state = await this.withDatabase(database => database.get("workspaces", this.accountId));
     if (!state) throw new Error("This offline account was cleared. Sign in again.");
     return snapshot(state);
   }
@@ -493,6 +534,10 @@ export class OfflineWorkspace {
             }
             return clone(item.mutation);
           }
+          // Nothing is left to upload, so no stored failure still applies. Without this, an error kept from an
+          // earlier pass (or another tab, or an older build) would outlive the queue it described and Retry could
+          // never dismiss it. Conflicts still show through their own state.
+          state.lastError = null;
           return null;
         });
         if (!claimed) return;

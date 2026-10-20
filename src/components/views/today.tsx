@@ -15,6 +15,7 @@ import { Icon } from '../icon';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
 import { PeriodSheet } from '../period-sheet';
+import { editSchedule } from '../schedule-lock';
 import { Button, Chip, ColorDot, EmptyState, Eyebrow, Hint, Input, Section, Select, StatTile } from '../primitives';
 import { buttonVariants } from '../ui/button';
 import { SetupChecklist, coreSetupDone } from '../setup-checklist';
@@ -98,7 +99,7 @@ export function TodayView({ state }: { state: AppState }) {
           <p className="text-sm text-muted-foreground">No periods today. Enjoy the day off.</p>
         </div>}
         {displayDay && !displayDay.closed && displayDay.periods.length === 0 && <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
-        {displayDay && displayDay.periods.length > 0 && <Timeline periods={displayDay.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} tag={(period) => classmatesTag(state, displayDate, period)} />}
+        {displayDay && displayDay.periods.length > 0 && <Timeline periods={displayDay.periods} now={now} timeZone={timeZone} onPeriodSelect={state.personalValid ? (period) => editSchedule(state, () => setChangePeriod(period)) : undefined} tag={(period) => classmatesTag(state, displayDate, period)} />}
         {displayDay && !displayDay.closed && <LunchDay state={state} date={displayDate} />}
         {displayDay && displayDay.issues.length > 0 && <Hint tone="danger">{describeDayIssues(displayDay.issues).join(' ')} Review your adjustments under Classes.</Hint>}
       </Section>
