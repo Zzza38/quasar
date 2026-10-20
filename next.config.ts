@@ -56,6 +56,12 @@ export const httpsRedirects = [
   { source: "/:path*", has: [{ type: "header" as const, key: "cf-visitor", value: '.*"scheme":"http".*' }, { type: "host" as const, value: "(?<host>.*)" }], destination: "https://:host/:path*", permanent: true },
 ];
 
+// Internal config rewrites preserve the public Host behind a loopback Cloudflare connector.
+// Leave OAuth, APIs, and public assets reachable at the old address.
+const movedPages = '/((?!api(?:/|$)|_next/|brand/|sw\\.js$|manifest\\.webmanifest$|favicon\\.ico$|icon\\.svg$|apple-icon\\.png$|robots\\.txt$|sitemap\\.xml$).*)';
+const oldHost = [{ type: 'host' as const, value: 'quasar\\.ziona\\.dev' }];
+const domainMoved = () => process.env.NEXTAUTH_URL === 'https://getquasarapp.com';
+
 const config: NextConfig = {
   output: process.env.QUASAR_STANDALONE === '1' ? "standalone" : undefined,
   serverExternalPackages: ["better-sqlite3", "sharp"],
@@ -63,6 +69,9 @@ const config: NextConfig = {
   allowedDevOrigins: ["home-server.tail210f05.ts.net"],
   async redirects() {
     return isDev ? [] : httpsRedirects;
+  },
+  async rewrites() {
+    return { beforeFiles: domainMoved() ? [{ source: movedPages, has: oldHost, destination: '/moved' }] : [] };
   },
   async headers() {
     return [
@@ -75,7 +84,8 @@ const config: NextConfig = {
       // Every API response but a profile picture: /api/avatars sets its own headers (a year for a found picture, since
       // the URL carries its version; no-store for a miss or a signed-out request), which a rule here would override.
       { source: "/api/:path((?!avatars/).*)", headers: [{ key: "Cache-Control", value: "no-store" }] },
-      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] }
+      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] },
+      ...(domainMoved() ? [{ source: movedPages, has: oldHost, headers: [{ key: 'Cache-Control', value: 'private, no-store' }, { key: 'X-Robots-Tag', value: 'noindex, follow' }] }] : []),
     ];
   }
 };
