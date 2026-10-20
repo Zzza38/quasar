@@ -73,6 +73,63 @@ The current private installation has its worker and VAPID keys configured. Local
 
 Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory. The model can ask the server for up to six enlarged close-ups of parts of the photos (contrast-enhanced or rotated if it wants) before it answers, and it says the photo is too unclear instead of guessing; rows it is not sure of are flagged for the student to check. The student confirms or edits every row before anything is saved. A row keeps the model's directory match only when the printed name could be that class: the same words in any order, or a shortened name at the same level ("AP Chem" for "AP Chemistry"), never a different number, honors or AP level. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY`, `SCAN_MODEL_REASONING`, `SCAN_MODEL_TEMPERATURE`, `SCAN_MODEL_VARIANT` (on OpenRouter `:floor`, the cheapest provider, by default) and `SCAN_ZOOM` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
 
+## Running a beta
+
+A beta lets chosen members try a change on the real site (https://quasar.ziona.dev) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+
+### 1. Put the change behind a flag
+
+Pick a key: lowercase letters, numbers and dashes, such as `month-grid`. Wrap the new UI in `<Beta>` from `src/components/betas.tsx`, with the current UI as the fallback:
+
+```tsx
+import { Beta, useBeta } from '@/components/betas';
+
+<Beta id="month-grid" fallback={<WeekSchedule state={state} />}>
+  <MonthGrid state={state} />
+</Beta>
+```
+
+For logic rather than a whole component, branch on `useBeta('month-grid')`, which returns true only for members in that beta. If you need the flag on the server, `new BetaService(service).joined(userId)` in `src/server/betas.ts` lists the member's betas.
+
+`<Beta>` also catches crashes. If the beta UI throws, the member sees the fallback with a notice that offers **Leave beta** and **Report it**, not a broken page.
+
+Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
+
+### 2. Ship it
+
+Merge and deploy as usual. With no beta created yet, nobody is in it, so the deploy changes nothing for anyone.
+
+### 3. Create the beta and share the code
+
+Open `/admin` → **Betas** → **New beta**. Enter the same key, a name and a short description (members see both in Account), and a code. **Generate** makes a code that is easy to read out. You can cap how many people can join, so a leaked code can't pull in the whole school. Case, spaces and dashes in codes don't matter: `GRID-2026` and `grid 2026` are the same code.
+
+Quasar stores only a hash of the code, so the console shows it once, right after you create the beta. Copy it and send it to your testers.
+
+### 4. Testers join, leave and send feedback
+
+- **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
+- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://quasar.ziona.dev/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
+- **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
+
+Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests. The Betas tab shows each beta's open report count.
+
+### 5. Manage it
+
+In `/admin` → **Betas** you can:
+
+- **Pause joining.** The code stops working. Members already in stay in.
+- **Reopen joining.** The code works again.
+- **New code.** For a leaked code. The old code stops working, the new one is shown once, and members stay in.
+- **Edit.** Change the name, description or member cap.
+- **Remove.** Under Members, take one person out of the beta.
+- **Close beta.** Deletes the beta and drops everyone in it. Its feedback stays in the inbox.
+
+Every owner action and every join and leave goes to the audit log as `beta.*`.
+
+### 6. Ship it to everyone
+
+When the beta is done, delete the `<Beta>`/`useBeta` branch and keep the new code path, then deploy. After that, close the beta in `/admin` → Betas. To abandon a beta instead, delete the new code path and close it the same way.
+
 ## Continuous integration
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: typecheck, the unit suite and the production build on Node 22 (the engines floor) and Node 24 (what production and the Docker image run), then the Playwright suite in Chromium against the Node 24 build. A separate job builds both Docker images (the standalone app and the `worker` target), checks that the app container answers `/api/health` and that the worker container starts. Failed browser runs upload `test-results/` (traces and screenshots) as an artifact.
