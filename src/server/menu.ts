@@ -21,8 +21,9 @@ export type MenuWeek =
 export type MenuLookup = { site: { org: string; domain: MenuSource['domain'] }; choices: MenuChoice[]; suggested: string | null };
 type FetchJson = (url: string) => Promise<unknown>;
 
+// Provider failures answer 503, not 502: Cloudflare swaps an origin 502 body for its own HTML page (see src/server/scan.ts).
 const PROVIDER_DOWN = 'Couldn’t reach the menu site right now. Try again in a few minutes.';
-const fail = (code: 'FORBIDDEN' | 'BAD_REQUEST' | 'NOT_FOUND' | 'TOO_MANY_REQUESTS' | 'BAD_GATEWAY', message: string): never => { throw new TRPCError({ code, message }); };
+const fail = (code: 'FORBIDDEN' | 'BAD_REQUEST' | 'NOT_FOUND' | 'TOO_MANY_REQUESTS' | 'SERVICE_UNAVAILABLE', message: string): never => { throw new TRPCError({ code, message }); };
 
 /**
  * GET a JSON document from the menu provider. The hostname is always `{slug}.api.{supported domain}` (see
@@ -84,7 +85,7 @@ export class MenuService {
   private async choices(site: { org: string; domain: MenuSource['domain'] }): Promise<MenuChoice[]> {
     let payload: unknown;
     try { payload = await this.fetchJson(`${menuApiBase(site)}/menu/api/schools/?format=json`); }
-    catch (error) { return fail('BAD_GATEWAY', error instanceof Error && error.message ? error.message : PROVIDER_DOWN); }
+    catch (error) { return fail('SERVICE_UNAVAILABLE', error instanceof Error && error.message ? error.message : PROVIDER_DOWN); }
     return parseMenuChoices(payload);
   }
 
@@ -141,7 +142,7 @@ export class MenuService {
     try { days = parseMenuWeek(await this.fetchJson(weekUrl(source, weekStart))); }
     catch (error) {
       if (cached) return result(JSON.parse(cached.days), cached.fetched_at, true);
-      return fail('BAD_GATEWAY', error instanceof Error && error.message ? error.message : PROVIDER_DOWN);
+      return fail('SERVICE_UNAVAILABLE', error instanceof Error && error.message ? error.message : PROVIDER_DOWN);
     }
     const fetchedAt = now.toISOString();
     this.db.transaction(() => {
