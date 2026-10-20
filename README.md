@@ -75,6 +75,10 @@ The current private installation has its worker and VAPID keys configured. Local
 
 Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory. The model can ask the server for up to six enlarged close-ups of parts of the photos (contrast-enhanced or rotated if it wants) before it answers, and it says the photo is too unclear instead of guessing; rows it is not sure of are flagged for the student to check. The student confirms or edits every row before anything is saved. A row keeps the model's directory match only when the printed name could be that class: the same words in any order, or a shortened name at the same level ("AP Chem" for "AP Chemistry"), never a different number, honors or AP level. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY`, `SCAN_MODEL_REASONING`, `SCAN_MODEL_TEMPERATURE`, `SCAN_MODEL_VARIANT` (on OpenRouter `:floor`, the cheapest provider, by default) and `SCAN_ZOOM` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
 
+## Hidden broken hearts
+
+Type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. The effect is available to everyone and has no mod-menu entry.
+
 ## Running a beta
 
 A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
@@ -100,8 +104,6 @@ Keep beta changes additive. All members share one database, so any migration a b
 The `schedule-following` beta keeps students on the shared school timetable while letting them save personal time adjustments. Members choose whether a recurring correction is for the school or only for them. Personal adjustments inherit untouched school times and disappear when the school adopts them. Three other enrolled classmates with the same adjustment can suggest a school proposal. Full private timetable controls move under advanced settings. Accounts outside the beta keep the existing timetable editor and save behavior.
 
 Leaving this beta preserves classes, assignments, and saved time changes. Personal adjustments become full-day overrides where possible. Changes that cannot fit the older format stay saved in their current format. Offline edits and requests awaiting a response still sync after leaving. The same preservation applies when the owner removes a member, closes the beta, or the member uses `?beta=off`.
-
-The `broken-hearts` beta enables a hidden Easter egg: type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. Only members of that beta get the keyboard trigger. Leaving the beta removes the trigger and any hearts still on screen. The effect has no mod-menu entry.
 
 ### 2. Ship it
 
