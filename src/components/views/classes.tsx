@@ -4,17 +4,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { AttentionClassCells } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { classSchema, cycleDaysWithPeriod, displayPeriodLabel, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
+import { classSchema, cycleDaysWithPeriod, displayPeriodLabel, scheduleForGrade, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
 import { heroBase } from '@/lib/color';
 import { classColor, formatDate, formatRoom, slugId, todayIn } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { ChangedWhileEditing, type FieldSpec } from '../conflicts';
+import { ComposeProposal, type ProposalSeed } from '../proposals';
+import { SharedEditorSheet, schoolLocks } from './school';
 import { ClassAssignmentGrid } from '../class-assignment-grid';
 import { ClassNameInput, useClassDirectory } from '../class-name-input';
 import { removeClass, useSchoolTimetable } from '../personal-timetable';
 import { Icon } from '../icon';
-import { AdjustmentsList, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
+import { AdjustmentsList, BellTimeChoice, CycleDayAdjustmentSheet, DateAdjustmentSheet, PrivateScheduleSheet, effectiveSchedule } from '../overrides';
 import { Button, Callout, Chip, EmptyState, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer } from '../primitives';
 import { Card } from '../ui/card';
 import { ClassColorPicker } from '../class-color-picker';
@@ -41,9 +43,17 @@ export function ClassesView({ state }: { state: AppState }) {
   const [adjustDate, setAdjustDate] = useState<string | null>(null);
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
   const [privateOpen, setPrivateOpen] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [bellChoice, setBellChoice] = useState(false);
+  const [personalIntent, setPersonalIntent] = useState(false);
+  const [correction, setCorrection] = useState<(ProposalSeed & { onSaved?: () => void }) | null>(null);
+  const correctSchool = (next: Schedule, onSaved?: () => void) => setCorrection({ schedule: next, onSaved });
+  const { locked, voting } = schoolLocks(state.context.school);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetPending, setResetPending] = useState(false);
   // "Wrong time?" links (openBellTimes) arrive with ?private=open; open the sheet once and drop the param.
+  const bellParam = state.params.get('bell');
+  useEffect(() => { if (bellParam === 'open') { setBellChoice(true); state.navigate('classes', undefined, { replace: true }); } }, [bellParam, state]);
   const privateParam = state.params.get('private');
   useEffect(() => { if (privateParam === 'open') { setPrivateOpen(true); state.navigate('classes', undefined, { replace: true }); } }, [privateParam, state]);
   // ?directory=open (School → Browse school classes) is one-shot too: open the directory and drop the param, so Back or a reload does not reopen it.
@@ -128,7 +138,7 @@ export function ClassesView({ state }: { state: AppState }) {
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'}, assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
-      <ClassAssignmentGrid schedule={schedule} personal={personal} save={state.savePersonal} disabled={!state.personalValid} />
+      <ClassAssignmentGrid schedule={schedule} schoolSchedule={school} personal={personal} save={state.savePersonal} disabled={!state.personalValid} onSchoolCorrection={correctSchool} />
     </Section>
 
     <Section id="adjust-title" title="Adjustments" icon="edit" description="Change a single date or a whole rotation day for yourself only.">
@@ -137,7 +147,9 @@ export function ClassesView({ state }: { state: AppState }) {
         {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) setAdjustCycleDay(event.target.value); }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
       </div>
       <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={setAdjustDate} onEditCycleDay={setAdjustCycleDay} />
-      <Panel className="flex flex-wrap items-center gap-3">
+      {bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }} />}
+      <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>
+      {(advanced || !!personal.customSchedule) && <Panel className="flex flex-wrap items-center gap-3">
         <span className={cn('grid size-9 shrink-0 place-items-center rounded-xl', personal.customSchedule ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground')}><Icon name={personal.customSchedule ? 'edit' : 'school'} size={17} /></span>
         <div className="min-w-0 flex-1 basis-[240px] text-sm">
           <strong>{personal.customSchedule ? 'Your timetable has personal changes' : 'Your timetable starts with the school schedule'}</strong>
@@ -145,9 +157,9 @@ export function ClassesView({ state }: { state: AppState }) {
         </div>
         <div className="flex flex-wrap gap-2">
           {(personal.customSchedule || personal.cycleDayOverrides.length > 0 || personal.dateOverrides.length > 0) && <Button size="sm" icon="refresh" onClick={() => setResetOpen(true)}>Revert to school timetable</Button>}
-          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>Advanced schedule settings</Button>
+          <Button size="sm" icon={personal.customSchedule ? 'edit' : 'layers'} onClick={() => setPrivateOpen(true)}>{personal.customSchedule ? 'Manage private schedule' : 'Build a private schedule'}</Button>
         </div>
-      </Panel>
+      </Panel>}
     </Section>
 
     <ClassSheet key={editing ?? 'closed'} schoolId={state.context.school.id} online={state.online} personal={personal} open={editing !== null} onClose={() => setEditing(null)} initial={editing === 'new' ? { id: '', name: '', room: '', teacher: '' } : current} current={editing === 'new' ? undefined : current} usedIds={personal.classes.map((cls) => cls.id)}
@@ -161,10 +173,13 @@ export function ClassesView({ state }: { state: AppState }) {
         setEditing(null);
       } : undefined} />
     <DateAdjustmentSheet open={adjustDate !== null} onClose={() => setAdjustDate(null)} date={adjustDate ?? pickDate} school={school} personal={personal} save={state.savePersonal} />
-    <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => setAdjustCycleDay(null)} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} />
+    <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => { setAdjustCycleDay(null); setPersonalIntent(false); }} personalIntent={personalIntent} cycleDayId={adjustCycleDay} school={school} personal={personal} save={state.savePersonal} onSchoolCorrection={correctSchool} />
     <ConnectScheduleFeedSheet open={veracrossOpen} onClose={() => setVeracrossOpen(false)} state={state} />
     <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={state.context.user.id} schoolId={state.context.school.id} online={state.online} schedule={schedule} personal={personal} disabled={!state.personalValid} onSave={state.savePersonal}
       onConnectFeed={feedConnected ? undefined : () => { setScanOpen(false); setVeracrossOpen(true); }} />
+    {correction && voting && <ComposeProposal state={state} seed={correction} onClose={() => setCorrection(null)} onSaved={async () => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); await state.refresh(); }} />}
+    {correction && !voting && !locked && <SharedEditorSheet accountId={state.context.user.id} open onClose={() => setCorrection(null)} schedule={state.context.school.schedule} initialGrade={personal.grade ?? '9'} seed={correction.schedule} schoolId={state.context.school.id} version={state.context.school.version} onSaved={state.refresh} onPublished={() => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); }} />}
+    {correction && locked && !voting && <Modal open onClose={() => setCorrection(null)} title="Request a school correction"><Callout tone="info" actions={<Button onClick={() => state.navigate('school')}>Open school corrections</Button>}>Support manages this school's schedule. Send a correction request from the School page.</Callout></Modal>}
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={school} personal={personal} save={state.savePersonal} />
     <Modal open={resetOpen} onClose={() => setResetOpen(false)} busy={resetPending} title="Revert to the school timetable?"
       footer={<><Button variant="ghost" disabled={resetPending} onClick={() => setResetOpen(false)}>Keep my timetable</Button><Spacer /><Button variant="danger" busy={resetPending} onClick={async () => { setResetPending(true); setError(''); try { await state.savePersonal(useSchoolTimetable(school, personal)); setResetOpen(false); } catch (err) { setError(errorMessage(err)); } finally { setResetPending(false); } }}>Revert timetable</Button></>}>

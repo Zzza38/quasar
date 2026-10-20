@@ -2,11 +2,14 @@ import "fake-indexeddb/auto";
 import { TRPCError } from "@trpc/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
+import { openDB } from "idb";
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from "../domain/sync";
-import { emptyPersonalSchedule } from "../domain/schedule";
+import { cycleDaySlots, emptyPersonalSchedule, personalScheduleSchema } from "../domain/schedule";
+import { exampleSchedule } from "../domain/example";
 import { openDatabase, type Db } from "../server/db";
 import { Service } from "../server/service";
 import { CalendarService } from "../server/calendar";
+import { writeEntity } from "../server/entities";
 import type { fetchFeed } from "../server/feed-fetch";
 import { clearOfflineAccount, getLastAccountId, openWorkspace, requestPersistentStorage, storagePersistence, type OfflineWorkspace } from "./offline";
 
@@ -63,7 +66,7 @@ function realServer() {
   const service = new Service(db);
   const calendar = new CalendarService(db, { secret: "test-only-secret-that-is-at-least-32-characters", fetcher, now: () => now });
   return {
-    owner, service, calendar, fetcher,
+    owner, service, calendar, fetcher, db,
     advance() { now = new Date(now.getTime() + 61_000); },
     entities: () => service.workspace(owner).entities,
     async send(mutation: Mutation): Promise<SyncResult> {
@@ -87,6 +90,83 @@ afterEach(async () => {
 });
 
 describe("durable offline workspace", () => {
+  it.each(['review', 'cached', 'classes-only'])("rebases a queued legacy personal edit using the %s school revision through the real service", async source => {
+    const remote = realServer();
+    const school = remote.service.createSchool(remote.owner, { name: 'Offline High', location: 'Boston, MA', schedule: exampleSchedule });
+    remote.service.join(remote.owner, { schoolId: school.id, grade: '9', choice: 'community' });
+    const legacy: Entity = { id: 'personal', kind: 'personal', version: 2, deleted: false, data: {
+      ...emptyPersonalSchedule(), grade: '9', classes: [{ id: 'math', name: 'Algebra' }], assignments: { A: 'math' },
+      cycleDayOverrides: [{ cycleDayId: 'day-1', slots: exampleSchedule.cycleDays[0].slots.map(slot => slot.id === 'first' ? { ...slot, start: '08:10' } : slot) }],
+    } };
+    writeEntity(remote.db, remote.owner, legacy);
+    const local = await workspace(remote.owner);
+    await local.setContext({ school, review: null });
+    await local.ingest([legacy]);
+    // Model a queue written by the older client, before sparse projections existed.
+    const start = source === 'classes-only' ? '08:10' : '08:15';
+    const desired = { ...legacy.data, classes: [{ id: 'math', name: 'Advanced algebra' }],
+      cycleDayOverrides: [{ cycleDayId: 'day-1', slots: exampleSchedule.cycleDays[0].slots.map(slot => slot.id === 'first' ? { ...slot, start } : slot) }],
+    };
+    await local.save('personal', 'personal', desired);
+    const database = await openDB('whatsnext-offline-v1');
+    const cached = await database.get('workspaces', remote.owner);
+    cached.queue[0].mutation.base = structuredClone(legacy);
+    delete cached.queue[0].personalScheduleBase;
+    await database.put('workspaces', cached);
+    database.close();
+    const next = structuredClone(exampleSchedule);
+    next.cycleDays[0].slots[0].end = '09:05';
+    next.cycleDays[0].slots[1].start = '09:08';
+    next.cycleDays[0].slots.push({ id: 'new-block', periodId: 'A', start: '12:00', end: '12:30' });
+    remote.service.updateSchool(remote.owner, { schoolId: school.id, expectedVersion: school.version, schedule: next });
+    const fresh = remote.service.workspace(remote.owner);
+    await local.setContext({ school: fresh.school, review: source === 'cached' ? null : fresh.review });
+    await local.ingest(fresh.entities);
+    const optimistic = personalScheduleSchema.parse((await local.read()).entities.find(entity => entity.kind === 'personal')!.data);
+    expect(cycleDaySlots(next.cycleDays[0], optimistic)).toEqual(next.cycleDays[0].slots.map(slot => slot.id === 'first' ? { ...slot, start } : slot));
+    const requests: Mutation[] = [];
+    await local.sync(async mutation => { requests.push(structuredClone(mutation)); return remote.send(mutation); });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].base).toEqual(fresh.entities.find(entity => entity.kind === 'personal'));
+    expect((await local.read()).conflicts).toEqual([]);
+    expect((await local.read()).pending).toBe(0);
+    const saved = personalScheduleSchema.parse(remote.service.entity(remote.owner, 'personal')!.data);
+    expect(saved.classes).toEqual([{ id: 'math', name: 'Advanced algebra' }]);
+    expect(cycleDaySlots(next.cycleDays[0], saved)).toEqual(next.cycleDays[0].slots.map(slot => slot.id === 'first' ? { ...slot, start } : slot));
+    expect(saved.cycleDayOverrides[0].slotChanges).toMatchObject({ first: { start } });
+  });
+
+  it('retries a frozen personal request byte for byte after the school context changes', async () => {
+    const remote = realServer();
+    const school = remote.service.createSchool(remote.owner, { name: 'Retry High', location: 'Boston, MA', schedule: exampleSchedule });
+    remote.service.join(remote.owner, { schoolId: school.id, grade: '9', choice: 'community' });
+    const local = await workspace(remote.owner);
+    const initial = remote.service.workspace(remote.owner);
+    await local.setContext({ school: initial.school, review: null });
+    await local.ingest(initial.entities);
+    await local.save('personal', 'personal', { ...emptyPersonalSchedule(), grade: '9', classes: [{ id: 'math', name: 'Algebra' }], assignments: { A: 'math' },
+      cycleDayOverrides: [{ cycleDayId: 'day-1', slots: exampleSchedule.cycleDays[0].slots.map(slot => slot.id === 'first' ? { ...slot, start: '08:10' } : slot) }],
+    });
+    let sent: Mutation | undefined;
+    await expect(local.sync(async mutation => {
+      sent = structuredClone(mutation);
+      await remote.send(mutation);
+      throw new TypeError('Failed to fetch');
+    })).rejects.toThrow('Failed to fetch');
+    const next = structuredClone(exampleSchedule);
+    next.cycleDays[0].slots[1].start = '09:08';
+    remote.service.updateSchool(remote.owner, { schoolId: school.id, expectedVersion: school.version, schedule: next });
+    const fresh = remote.service.workspace(remote.owner);
+    await local.setContext({ school: fresh.school, review: fresh.review });
+    await local.ingest(fresh.entities);
+    await local.sync(async mutation => {
+      expect(JSON.stringify(mutation)).toBe(JSON.stringify(sent));
+      return remote.send(mutation);
+    });
+    expect((await local.read()).pending).toBe(0);
+    expect(personalScheduleSchema.parse(remote.service.entity(remote.owner, 'personal')!.data).classes[0].name).toBe('Algebra');
+  });
+
   it("upgrades the saved context in one step and never over a newer copy written meanwhile", async () => {
     const store = await workspace();
     await store.setContext({ legacy: true });

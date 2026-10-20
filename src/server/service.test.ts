@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { openDatabase, type Db } from './db';
 import { MAX_SCHOOL_SCHEDULE_CHARS, namesSchema, reservedDisplayName, Service, SYNC_LIMITS } from './service';
 import { appRouter } from './router';
-import { emptyPersonalSchedule, GRADES, resolveDay, type Schedule } from '@/domain/schedule';
+import { cycleDaySlots, emptyPersonalSchedule, GRADES, personalScheduleSchema, resolveDay, type Schedule } from '@/domain/schedule';
 import type { Entity, Mutation } from '@/domain/sync';
 
 const schedule: Schedule = {
@@ -107,11 +107,14 @@ describe('school membership and owner authorization', () => {
     const changed={...schedule,periods:[{id:'L',label:'Lunch',kind:'lunch' as const}],cycleDays:[{...schedule.cycleDays[0],slots:[{id:'l1',periodId:'L',start:'12:30',end:'13:00'}]}]};
     f.service.updateSchool(f.owner,{schoolId:f.school.id,expectedVersion:1,schedule:changed,approved:true,supportLocked:true},true);
     const workspace=f.service.workspace(f.student);
-    expect(workspace.entities.find(e=>e.id==='personal')?.data).toMatchObject(data);
+    const saved = personalScheduleSchema.parse(workspace.entities.find(e=>e.id==='personal')?.data);
+    expect(saved).toMatchObject({ classes:data.classes, assignments:data.assignments, customSchedule:null });
+    expect(cycleDaySlots(changed.cycleDays[0], saved)).toEqual(data.cycleDayOverrides[0].slots);
+    expect(saved.cycleDayOverrides[0].slots).toBeUndefined();
     expect(workspace.review).toMatchObject({previous:schedule,current:changed,version:2});
     f.service.acknowledge(f.student,2);
     expect(f.service.workspace(f.student).review).toBeNull();
-    expect(f.service.entity(f.student,'personal')?.data).toMatchObject(data);
+    expect(f.service.entity(f.student,'personal')?.data).toEqual(saved);
   });
   it('revokes approval when a member edits an approved, unlocked schedule', () => {
     const f=fixture(); f.service.join(f.student,{schoolId:f.school.id,choice:'community'});

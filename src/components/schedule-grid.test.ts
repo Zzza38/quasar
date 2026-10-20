@@ -18,3 +18,19 @@ describe('ScheduleGrid', () => {
     expect(html).not.toContain('per-gone-7');
   });
 });
+
+
+describe('school-following timetable controls', () => {
+  it('keeps bell-time editing and class placement available without rotation structure controls', () => {
+    const html = renderToStaticMarkup(createElement(ScheduleGrid, { value: exampleSchedule, personal: examplePersonalSchedule, personalClassesOnly: true, allowStructure: false, onChange: noop, onEditDay: noop, onRemoveDay: noop }));
+    expect(html).toContain('Edit times');
+    expect(html).not.toMatch(/aria-label="Day \d+ name"/);
+    expect(html).not.toMatch(/aria-label="Remove Day /);
+  });
+
+  it('retains structure management in a private schedule', () => {
+    const html = renderToStaticMarkup(createElement(ScheduleGrid, { value: exampleSchedule, allowStructure: true, onChange: noop, onEditDay: noop, onRemoveDay: noop }));
+    expect(html).toContain('aria-label="Day 1 name"');
+    expect(html).toContain('aria-label="Remove Day ');
+  });
+});
