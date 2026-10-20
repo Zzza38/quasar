@@ -1,8 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { mergeMutation, mergePreferringLocal, type Entity, type EntityKind, type Mutation, type SyncResult } from "../domain/sync";
 import { normalizePersonalSchedule, personalScheduleSchema, scheduleSchema, type Schedule } from "../domain/schedule";
-import { SCHEDULE_FOLLOWING_BETA } from "../domain/betas";
-import { materializePersonalSchedule } from "../domain/legacy-personal-schedule";
 import { completionTime, stampCompletion, taskSchema, withoutCompletionEdit } from "../domain/task";
 import { errorMessage, isPermanentRejection, isTransportFailure } from "./api";
 
@@ -91,20 +89,12 @@ function schoolContext(context: Record<string, unknown> | null): { id: string; s
   return { id: school.id, schedule: schedule.data, ...(previous.success ? { previous: previous.data } : {}) };
 }
 
-function scheduleFollowingEnabled(context: Record<string, unknown> | null): boolean {
-  return Array.isArray(context?.betas) && context.betas.some(beta => beta && typeof beta === "object" && beta.key === SCHEDULE_FOLLOWING_BETA);
-}
-
 /** Comparison and rendering projections never replace a server entity or an already-sending payload. */
 function personalProjection(state: StoredWorkspace, data: Record<string, unknown> | null, previous?: Schedule): Record<string, unknown> | null {
   if (!data) return data;
-  const enabled = scheduleFollowingEnabled(state.context);
-  const sparse = data.periods !== undefined || (Array.isArray(data.cycleDayOverrides) && data.cycleDayOverrides.some(override => override && typeof override === "object" && override.slotChanges !== undefined));
-  if (!enabled && !sparse) return data;
   const school = schoolContext(state.context);
   const parsed = personalScheduleSchema.safeParse(data);
   if (!parsed.success) return data;
-  if (!enabled) return materializePersonalSchedule(school?.schedule, parsed.data);
   return school ? normalizePersonalSchedule(school.schedule, parsed.data, previous ?? school.previous) : data;
 }
 
@@ -432,7 +422,7 @@ export class OfflineWorkspace {
     const saved = clone(context);
     await this.update((state) => {
       const next = schoolContext(saved), old = schoolContext(state.context);
-      if (next && scheduleFollowingEnabled(saved)) {
+      if (next) {
         const previous = next.previous ?? (old?.id === next.id ? old.schedule : undefined) ?? next.schedule;
         for (const item of state.queue) if (item.mutation.kind === "personal" && item.state !== "sending" && !item.personalScheduleBase) item.personalScheduleBase = previous;
       }
@@ -476,7 +466,7 @@ export class OfflineWorkspace {
       const base = optimistic(state).find((entity) => entity.id === id && entity.kind === kind) ?? null;
       state.queue.push({
         state: "queued",
-        ...(kind === "personal" && scheduleFollowingEnabled(state.context) && schoolContext(state.context) ? { personalScheduleBase: schoolContext(state.context)!.schedule } : {}),
+        ...(kind === "personal" && schoolContext(state.context) ? { personalScheduleBase: schoolContext(state.context)!.schedule } : {}),
         // A draft or undo snapshot may predate a calendar refresh; its stale metadata is not an edit.
         // completedAt is stamped here only so a task checked off offline sorts as just done; the server restamps it.
         mutation: { mutationId: crypto.randomUUID(), kind, id, base, data: withServerImported(kind, kind === "task" && desired ? stampCompletion(desired, base && !base.deleted ? base.data : null, new Date()) : desired, base) },

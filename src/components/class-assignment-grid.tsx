@@ -1,13 +1,10 @@
 'use client';
 
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
-import { Beta } from './betas';
-
 import { useLayoutEffect, useRef, useState } from 'react';
 import { cycleDaySlots, displayPeriodLabel, scheduleForGrade, scheduleSchema, withCycleDay, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { errorMessage } from '@/client/api';
 import { slugId } from '@/lib/format';
-import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, rebaseLegacyTimetableEdit, saveTimetableEdit, saveLegacyTimetableEdit, type QueuedTimetableEdit } from './personal-timetable';
+import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, saveTimetableEdit, type QueuedTimetableEdit } from './personal-timetable';
 import { BellTimeChoice, sharedBellTimeDraft } from './overrides';
 import { ScheduleGrid } from './schedule-grid';
 import { SlotsEditor } from './schedule-editor';
@@ -53,11 +50,7 @@ type ClassAssignmentGridProps = {
   schedule: Schedule; schoolSchedule?: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean; onSchoolCorrection: (schedule: Schedule, onSaved?: () => void) => void;
 };
 
-export function ClassAssignmentGrid(props: ClassAssignmentGridProps) {
-  return <Beta id={SCHEDULE_FOLLOWING_BETA} fallback={<ClassAssignmentGridBody {...props} following={false} />}><ClassAssignmentGridBody {...props} following /></Beta>;
-}
-
-function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule, following }: ClassAssignmentGridProps & { following: boolean }) {
+export function ClassAssignmentGrid({ schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule }: ClassAssignmentGridProps) {
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
   const queued = useRef<QueuedTimetableEdit | null>(null);
@@ -103,7 +96,7 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
   });
   const build = (edit: QueuedTimetableEdit) => {
     const { schedule: basis, personal: base, assignments: shown, draft: current } = latest.current;
-    const next = edit.change ? (following ? saveTimetableEdit : saveLegacyTimetableEdit)(schoolSchedule ? scheduleForGrade(schoolSchedule, base.grade) : basis, base, edit.change(current), shown) : base;
+    const next = edit.change ? saveTimetableEdit(schoolSchedule ? scheduleForGrade(schoolSchedule, base.grade) : basis, base, edit.change(current), shown) : base;
     // Assignments go last so a timetable draft cannot overwrite a class the student just placed.
     if (!edit.assign) return next;
     const updatedAssignments = { ...next.assignments };
@@ -138,9 +131,9 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
   const persist = (next: Schedule, action: string, then?: () => void): boolean => {
     if (latest.current.disabled) return false;
     // `draft` is the timetable this render showed, which is what `next` was built from.
-    const run = () => { void enqueue({ change: (following ? rebaseTimetableEdit : rebaseLegacyTimetableEdit)(draft, next) }); then?.(); };
-    if (following && !personal.customSchedule) { setTimeChange({ before: draft, schedule: next, run }); return false; }
-    if (!makesPrivateCopy(schedule, personal, next, assignments, following)) { run(); return true; }
+    const run = () => { void enqueue({ change: rebaseTimetableEdit(draft, next) }); then?.(); };
+    if (!personal.customSchedule) { setTimeChange({ before: draft, schedule: next, run }); return false; }
+    if (!makesPrivateCopy(schedule, personal, next, assignments)) { run(); return true; }
     ask({ kind: 'copy', actions: [action], runs: [run] });
     return false;
   };
@@ -153,7 +146,7 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
       <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
     </>}>{prompt.body}</Callout>}
     {timeChange && <BellTimeChoice modal schoolUnavailable={schoolDraft?.schoolUnavailable} onCancel={() => setTimeChange(null)} onSchool={() => { if (schoolDraft?.schedule) onSchoolCorrection(schoolDraft.schedule, () => { setTimeChange(null); setEditing(null); }); }} onPersonal={() => { timeChange.run(); setTimeChange(null); }} />}
-    <ScheduleGrid allowStructure={!following || !!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
+    <ScheduleGrid allowStructure={!!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
       onEditDay={id => { if (latest.current.disabled) return; setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
         if (latest.current.disabled) return;
         const days = draft.cycleDays.filter(day => day.id !== id);
@@ -169,7 +162,7 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
       <SlotsEditor slots={editedSlots} periods={draft.periods.map(period => ({ ...period, label: displayPeriodLabel(period, personal.classes.find(cls => cls.id === assignments[period.id])?.name ?? false) }))} disabled={disabled} onChange={setEditedSlots} />
       <div><Button size="sm" disabled={disabled || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
     </Panel>)}
-    {(!following || personal.customSchedule) && <div><Button size="sm" icon="plus" disabled={disabled || draft.cycleDays.length >= 366} onClick={() => {
+    {personal.customSchedule && <div><Button size="sm" icon="plus" disabled={disabled || draft.cycleDays.length >= 366} onClick={() => {
       const id = slugId(`day-${draft.cycleDays.length + 1}`, draft.cycleDays.map(day => day.id));
       persist(withCycleDay(draft, { id, label: `Day ${draft.cycleDays.length + 1}`, slots: [] }), 'Adding a day');
     }}>Add rotation day</Button></div>}

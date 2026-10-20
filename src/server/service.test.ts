@@ -148,7 +148,7 @@ describe('school membership and owner authorization', () => {
     const saved = personalScheduleSchema.parse(workspace.entities.find(e=>e.id==='personal')?.data);
     expect(saved).toMatchObject({ classes:data.classes, assignments:data.assignments, customSchedule:null });
     expect(cycleDaySlots(changed.cycleDays[0], saved)).toEqual(data.cycleDayOverrides[0].slots);
-    expect(saved.cycleDayOverrides[0].slots).toEqual(data.cycleDayOverrides[0].slots);
+    expect(saved.cycleDayOverrides[0].slotChanges?.l1).toMatchObject({ start:'12:15', end:'12:45' });
     expect(workspace.review).toMatchObject({previous:schedule,current:changed,version:2});
     f.service.acknowledge(f.student,2);
     expect(f.service.workspace(f.student).review).toBeNull();

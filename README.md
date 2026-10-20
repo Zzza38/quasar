@@ -79,6 +79,14 @@ Students can add classes from photos of a printed or on-screen timetable (Classe
 
 Type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. The effect is available to everyone and has no mod-menu entry.
 
+## School schedule following
+
+Personal timetables follow shared school bell times. A recurring correction can be for the school or only for the student. Personal adjustments save changed slot fields, inherit untouched school times, and clear when the school adopts them. Matching adjustments from at least three other classmates in the same grade can suggest a school proposal. Full private timetable controls live under advanced settings and warn that school corrections will no longer reach that timetable.
+
+A personal schedule without a saved lock preference starts locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
+
+Schedule following is available to everyone and does not depend on beta enrollment. Removing the former `schedule-following` beta does not disable it or replace saved adjustments. Existing queued edits and retry payloads keep their original revisions. Older clients that cannot read sparse adjustments receive a reload message before an incompatible write commits.
+
 ## Running a beta
 
 A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
@@ -102,12 +110,6 @@ For logic rather than a whole component, branch on `useBeta('month-grid')`, whic
 `<Beta>` also catches crashes. If the beta UI throws, the member sees the fallback with a notice that offers **Leave beta** and **Report it**, not a broken page.
 
 Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
-
-The `schedule-following` beta keeps students on the shared school timetable while letting them save personal time adjustments. Members choose whether a recurring correction is for the school or only for them. Personal adjustments inherit untouched school times and disappear when the school adopts them. Three other enrolled classmates with the same adjustment can suggest a school proposal. Full private timetable controls move under advanced settings. Accounts outside the beta keep the existing timetable editor and save behavior.
-
-Beta members without a saved lock preference start with their whole personal schedule locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
-
-Leaving this beta preserves classes, assignments, and saved time changes. Personal adjustments become full-day overrides where possible. Changes that cannot fit the older format stay saved in their current format. Offline edits and requests awaiting a response still sync after leaving. The same preservation applies when the owner removes a member, removes the beta with the command, or the member uses `?beta=off`.
 
 Merge and deploy as usual. Until the beta exists in the list, nobody is in it, so the deploy changes nothing for anyone.
 

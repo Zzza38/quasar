@@ -1,7 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
-import { BetaProvider } from './betas';
 import { describe, expect, it } from 'vitest';
 import { ClassAssignmentGrid, describePendingChange, queuePendingChange, type PendingChange } from './class-assignment-grid';
 
@@ -41,28 +40,31 @@ describe('waiting private-copy confirmations', () => {
 });
 
 
-describe('schedule-following beta controls', () => {
+describe('school-following controls', () => {
   const grid = (personal = examplePersonalSchedule) => createElement(ClassAssignmentGrid, { schedule: exampleSchedule, schoolSchedule: exampleSchedule, personal, save: async () => {}, onSchoolCorrection: noop });
-  const enrolled = (child: ReturnType<typeof grid>) => createElement(BetaProvider, { accountId: 'student', betas: [{ key: 'schedule-following', name: 'Schedule following', description: '', joinedAt: '2026-10-19' }], online: true, refresh: async () => {}, children: child });
 
-  it('retains rename, remove and add day controls for members outside the beta', () => {
+  it('hides structure controls while following school and retains bell-time editing', () => {
     const html = renderToStaticMarkup(grid());
-    expect(html).toContain('aria-label="Day 1 name"');
-    expect(html).toContain('aria-label="Remove Day 1"');
-    expect(html).toContain('Add rotation day');
-  });
-
-  it('hides structure controls for beta members following school and retains bell-time editing', () => {
-    const html = renderToStaticMarkup(enrolled(grid()));
     expect(html).not.toContain('aria-label="Day 1 name"');
     expect(html).not.toContain('aria-label="Remove Day 1"');
     expect(html).not.toContain('Add rotation day');
     expect(html).toContain('Edit times');
   });
 
-  it('keeps private schedule management available inside the beta', () => {
-    const html = renderToStaticMarkup(enrolled(grid({ ...examplePersonalSchedule, customSchedule: exampleSchedule })));
+  it('keeps private schedule management available', () => {
+    const html = renderToStaticMarkup(grid({ ...examplePersonalSchedule, customSchedule: exampleSchedule }));
     expect(html).toContain('aria-label="Day 1 name"');
     expect(html).toContain('Add rotation day');
+  });
+
+  it('disables assignments and bell-time editing together when locked', () => {
+    const html = renderToStaticMarkup(createElement(ClassAssignmentGrid, { schedule: exampleSchedule, personal: examplePersonalSchedule, save: async () => {}, onSchoolCorrection: noop, disabled: true }));
+    const placement = html.match(/<button[^>]*aria-label="Place Algebra"[^>]*>/)?.[0];
+    const times = html.match(/<button[^>]*>Edit times/)?.[0];
+    const resize = html.match(/<button[^>]*aria-label="Resize [^"]*"[^>]*>/g) ?? [];
+    expect(placement).toContain('disabled=""');
+    expect(times).toContain('disabled=""');
+    expect(resize.length).toBeGreaterThan(0);
+    expect(resize.every(button => button.includes('disabled=""'))).toBe(true);
   });
 });

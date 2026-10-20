@@ -3,7 +3,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '@/client/api';
 import { serviceWorkerEnabled } from '@/client/service-worker-support';
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
@@ -142,8 +141,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   const personalEntity = snapshot?.entities.find((entity) => entity.kind === 'personal' && entity.id === 'personal' && !entity.deleted);
   const parsedPersonal = useMemo(() => personalScheduleSchema.safeParse(personalEntity?.data ?? emptyPersonalSchedule()), [personalEntity]);
-  const defaultLocked = context?.betas?.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA) ?? false;
-  const personal: PersonalSchedule = useMemo(() => withDefaultScheduleLock(parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule(), defaultLocked), [parsedPersonal, defaultLocked]);
+  const personal: PersonalSchedule = useMemo(() => withDefaultScheduleLock(parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule()), [parsedPersonal]);
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
   // Finishing a setup step bumps this so its flag (in this device's storage) is re-read during render.
   const [, rereadSetup] = useState(0);

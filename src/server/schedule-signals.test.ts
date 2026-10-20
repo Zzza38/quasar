@@ -26,7 +26,7 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
   if (previousPath === undefined) delete process.env.BETAS_PATH; else process.env.BETAS_PATH = previousPath;
 });
-function fixture() {
+function fixture(enrolled = false) {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
   const user = (email?: string) => {
@@ -36,10 +36,10 @@ function fixture() {
   };
   const owner = user('owner@example.com');
   const betas = new BetaService(service);
-  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null }));
+  if (enrolled) writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null }));
   const viewer = user();
   const school = service.createSchool(viewer, { name: 'Signals High', location: 'Boston, MA', schedule: exampleSchedule });
-  const join = (id: string, grade: Grade = '9', schoolId = school.id) => { service.join(id, { schoolId, grade, choice: 'community' }); betas.join(id, { code: 'FOLLOW2026' }); };
+  const join = (id: string, grade: Grade = '9', schoolId = school.id) => { service.join(id, { schoolId, grade, choice: 'community' }); if (enrolled) betas.join(id, { code: 'FOLLOW2026' }); };
   join(viewer);
   const save = (id: string, changes: Partial<PersonalSchedule> = {}) => {
     const data = { ...emptyPersonalSchedule(), grade: '9', classes: [{ id: 'secret', name: 'Private class', teacher: 'Private teacher' }], assignments: { A: 'secret' },
@@ -159,24 +159,21 @@ describe('anonymous recurring schedule signals', () => {
   });
 });
 
-it('requires actual beta enrollment and counts only opted-in contributors', () => {
-  const f = fixture();
-  const a = f.member(); f.member(); f.member();
-  expect(f.signals.list(f.viewer).signals[0].count).toBe(3);
-  f.betas.leave(a, SCHEDULE_FOLLOWING_BETA);
-  expect(f.signals.list(f.viewer).signals).toEqual([]);
-  // A persisted sparse adjustment cannot stand in for beta membership.
-  f.save(a);
-  expect(f.signals.list(f.viewer).signals).toEqual([]);
-  f.betas.leave(f.viewer, SCHEDULE_FOLLOWING_BETA);
-  expect(() => f.signals.list(f.viewer)).toThrow('Join the schedule-following beta');
-});
-
-it('rejects a stale enrollment when the beta has been removed from the registry', () => {
+it('counts eligible classmates and serves viewers without any beta enrollment', () => {
   const f = fixture();
   f.member(); f.member(); f.member();
+  expect(f.db.prepare('SELECT count(*) n FROM beta_members').get()).toEqual({ n: 0 });
+  expect(f.signals.list(f.viewer).signals[0].count).toBe(3);
+});
+
+it('keeps contributions and viewer access after leaving or removing the retired beta', () => {
+  const f = fixture(true);
+  const a = f.member(); f.member(); f.member();
+  const before = f.signals.list(f.viewer);
+  f.betas.leave(a, SCHEDULE_FOLLOWING_BETA);
+  f.betas.leave(f.viewer, SCHEDULE_FOLLOWING_BETA);
+  expect(f.signals.list(f.viewer)).toEqual(before);
   writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
-  expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.viewer)).toBeTruthy();
-  expect(() => f.signals.list(f.viewer)).toThrow('Join the schedule-following beta');
-  expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.viewer)).toBeUndefined();
+  expect(f.signals.list(f.viewer)).toEqual(before);
+  expect(f.betas.joined(f.viewer)).toEqual([]);
 });

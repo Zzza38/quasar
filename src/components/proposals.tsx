@@ -1,8 +1,5 @@
 'use client';
 
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
-import { useBeta } from './betas';
-
 import { useCallback, useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { GRADES, applyScheduleToGrades, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
@@ -160,7 +157,6 @@ function WithdrawModal({ online, onClose, onWithdraw }: { online: boolean; onClo
 export type ProposalSeed = { schedule: Schedule; summary?: string; baseVersion?: number };
 
 export function ComposeProposal({ state, onClose, onSaved, seed }: { state: AppState; onClose: () => void; onSaved: () => Promise<void>; seed?: ProposalSeed }) {
-  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const { context, personal } = state;
   const school = context.school;
   // Frozen when the sheet opens, so the proposal records the revision its author actually saw (the background
@@ -197,8 +193,8 @@ export function ComposeProposal({ state, onClose, onSaved, seed }: { state: AppS
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
   const reloadButton = <Button size="sm" variant="secondary" disabled={pending} onClick={() => void reload()}>Reload latest</Button>;
-  return <Modal open onClose={onClose} dirty={edited.length > 0 || summary.trim() !== ''} busy={pending} wide fullWidth title="Propose a schedule change" description={following ? "Verified members of your school vote on your proposal. If it passes, the shared schedule updates for everyone; your classes stay saved. Personal time changes that match a published correction start following the school again." : "Verified members of your school vote on your proposal. If it passes, the shared schedule updates for everyone; personal classes and adjustments are never changed."}
-    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={(following && (!state.online || context.community?.verification.status !== 'verified')) || issues.length > 0 || unchanged || summary.trim().length < 10} onClick={async () => {
+  return <Modal open onClose={onClose} dirty={edited.length > 0 || summary.trim() !== ''} busy={pending} wide fullWidth title="Propose a schedule change" description="Verified members of your school vote on your proposal. If it passes, the shared schedule updates for everyone; your classes stay saved. Personal time changes that match a published correction start following the school again."
+    footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={!state.online || context.community?.verification.status !== 'verified' || issues.length > 0 || unchanged || summary.trim().length < 10} onClick={async () => {
       setPending(true); setError(''); setNotice(''); setStale(false);
       try {
         await api.proposals.create.mutate({ accountId: context.user.id, schoolId: school.id, baseVersion: base.version, schedule: scheduleSchema.parse(applyScheduleToGrades(base.schedule, draft, [grade])), summary: summary.trim() });
@@ -209,7 +205,7 @@ export function ComposeProposal({ state, onClose, onSaved, seed }: { state: AppS
         if (/changed\. Reload/i.test(text)) setStale(true);
       } finally { setPending(false); }
     }}>Open the vote</Button></>}>
-    {following && context.community?.verification.status !== 'verified' && <Callout tone="info" actions={<Button onClick={() => state.navigate('people')}>Verify my school</Button>}>Verify your school membership before opening a vote.</Callout>}
+    {context.community?.verification.status !== 'verified' && <Callout tone="info" actions={<Button onClick={() => state.navigate('people')}>Verify my school</Button>}>Verify your school membership before opening a vote.</Callout>}
     {moved && !stale && <Callout tone="warning" icon="alert" role="status" actions={reloadButton}>Someone published revision {school.version} while you were writing this. Reload it before opening the vote; your edits stay.</Callout>}
     <div className="grid gap-4 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04] lg:grid-cols-2">
       <Field label="What changes and why?" htmlFor="proposal-summary" hint="At least 10 characters. Everyone sees this next to the vote."><Textarea id="proposal-summary" rows={3} minLength={10} maxLength={1000} value={summary} onChange={event => setSummary(event.target.value)} placeholder="Example: Day 3 lunch moved to 11:20–11:50 in the new bell schedule (see the district PDF)." /></Field>
