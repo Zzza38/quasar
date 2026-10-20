@@ -1,5 +1,7 @@
 # Deployment and pilot operations
 
+The target production address is `https://getquasarapp.com`. See [the domain move runbook](DOMAIN_MOVE.md) for DNS, Google OAuth, the old-address notice, verification, and rollback. The deployment history below records the original address.
+
 The production installation is available at https://quasar.ziona.dev/ through Cloudflare Tunnel. Quasar's former Tailscale route has been removed. See [Cloudflare Tunnel deployment](CLOUDFLARE.md) for services, recovery instructions, and remaining Google authentication checks. The general deployment instructions below also support a separate Docker installation. Google sign-in with a second account has been verified by the owner. Actual device push delivery still requires interactive pilot verification.
 
 ## Search engines
