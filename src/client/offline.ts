@@ -499,6 +499,10 @@ export class OfflineWorkspace {
             }
             return clone(item.mutation);
           }
+          // Nothing is left to upload, so no stored failure still applies. Without this, an error kept from an
+          // earlier pass (or another tab, or an older build) would outlive the queue it described and Retry could
+          // never dismiss it. Conflicts still show through their own state.
+          state.lastError = null;
           return null;
         });
         if (!claimed) return;
