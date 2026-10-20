@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '@/client/api';
 import { serviceWorkerEnabled } from '@/client/service-worker-support';
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
@@ -29,7 +30,7 @@ import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
 import { CalendarFeeds } from './calendar-feeds';
-import { useScheduleLock } from './schedule-lock';
+import { useScheduleLock, withDefaultScheduleLock } from './schedule-lock';
 
 /* ---------- Path routing: Today at "/", every other view at "/<view>", rendered by the server ---------- */
 
@@ -141,7 +142,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   const personalEntity = snapshot?.entities.find((entity) => entity.kind === 'personal' && entity.id === 'personal' && !entity.deleted);
   const parsedPersonal = useMemo(() => personalScheduleSchema.safeParse(personalEntity?.data ?? emptyPersonalSchedule()), [personalEntity]);
-  const personal: PersonalSchedule = parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule();
+  const defaultLocked = context?.betas?.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA) ?? false;
+  const personal: PersonalSchedule = useMemo(() => withDefaultScheduleLock(parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule(), defaultLocked), [parsedPersonal, defaultLocked]);
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
   // Finishing a setup step bumps this so its flag (in this device's storage) is re-read during render.
   const [, rereadSetup] = useState(0);
@@ -217,7 +219,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     return <Fragment key={accountKey}><ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
       onSave={savePersonal} notice={sessionNotice}
       onDone={() => { classesStep.finish(accountId); feedStep.begin(accountId); rereadSetup((version) => version + 1); }}
-      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}{scheduleLock.dialog}</Fragment>;
   }
   if (setupFeed) {
     return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}

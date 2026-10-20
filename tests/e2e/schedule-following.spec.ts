@@ -48,7 +48,13 @@ function seed(locked = false, enroll = true, schedule = exampleSchedule) {
     const school = service.createSchool(members[0], { name: `Following High ${members[0].slice(0, 6)}`, location: 'Boston, MA', schedule });
     for (const id of members) {
       service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
-      if (enroll) betas.join(id, { code: BETA_CODE });
+      if (enroll) {
+        betas.join(id, { code: BETA_CODE });
+        // Most scenarios focus on bell-time choices; the default-lock scenario opts in separately.
+        const base = service.entity(id, 'personal')!;
+        const data = personalScheduleSchema.parse(base.data);
+        service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base, data: { ...data, scheduleLocked: false } });
+      }
       if (locked) db.prepare('INSERT INTO school_verifications(user_id,school_id,method,verified_at) VALUES(?,?,?,?)')
         .run(id, school.id, 'support', new Date().toISOString());
     }
@@ -72,41 +78,52 @@ async function choose(select: Locator, option: string) {
 }
 
 async function editFirstTime(page: Page, start = '8:05 am') {
-  const unlock = page.getByRole('button', { name: 'Unlock bell times', exact: true });
-  if (await unlock.isVisible()) await unlock.click();
-  await expect(page.getByRole('button', { name: 'Lock bell times', exact: true })).toBeVisible();
+  const unlock = page.getByRole('button', { name: 'Unlock schedule', exact: true });
+  if (await unlock.isVisible()) {
+    await unlock.click();
+    await page.getByRole('dialog', { name: 'Unlock schedule?', exact: true }).getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  }
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Edit times for Day 1', exact: true }).click();
   await page.getByLabel('Slot 1 start', { exact: true }).fill(start);
   await page.getByRole('button', { name: 'Save times', exact: true }).click();
   await expect(page.getByText('Who needs this time change?', { exact: true })).toBeVisible();
 }
 
-test('beta bell times start locked while class placement works, and relocking survives reload', async ({ page, context, browser }) => {
+test('beta schedules default to locked and require confirmation before editing classes or times', async ({ page, context, browser }) => {
+  test.setTimeout(120_000);
   const f = seed(true, false);
   database((_db, service) => new BetaService(service).join(f.id, { code: BETA_CODE }));
+  expect(personal(f.id).scheduleLocked).toBeUndefined();
   await authenticate(context, f.id);
   await page.goto('/classes');
-  const unlock = page.getByRole('button', { name: 'Unlock bell times', exact: true });
+  const unlockButton = page.getByRole('button', { name: 'Unlock schedule', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Unlock schedule?', exact: true });
+  const addClass = page.getByRole('button', { name: 'Add class', exact: true });
   const editTimes = page.getByRole('button', { name: 'Edit times for Day 1', exact: true });
   const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
   const resize = day.getByRole('button', { name: 'Resize Day 1 A end', exact: true });
-  await expect(unlock).toBeVisible();
+  await expect(unlockButton).toBeVisible();
   await expect(editTimes).toBeDisabled();
   await expect(resize).toBeDisabled();
+  const before = personal(f.id);
+  await addClass.click();
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Keep locked', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Add a class', exact: true })).toHaveCount(0);
+  expect(personal(f.id)).toEqual(before);
 
-  await page.getByRole('button', { name: 'Add class', exact: true }).click();
+  await addClass.click();
+  await confirmation.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
   const classForm = page.getByRole('dialog', { name: 'Add a class', exact: true });
   await classForm.getByLabel('Class name').fill('Biology');
   await classForm.getByRole('button', { name: 'Add class', exact: true }).click();
   await expect(classForm).toHaveCount(0);
+  await expect.poll(() => personal(f.id).scheduleLocked).toBe(false);
   await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
   await day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
-  await expect(day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Biology', exact: true })).toBeVisible();
   await expect.poll(() => personal(f.id).assignments).toEqual({ A: 'Biology' });
-  expect(personal(f.id).cycleDayOverrides).toEqual([]);
-  await expect(unlock).toBeVisible();
-
-  await unlock.click();
   await expect(editTimes).toBeEnabled();
   await expect(resize).toBeEnabled();
   await resize.press('ArrowUp');
@@ -115,16 +132,22 @@ test('beta bell times start locked while class placement works, and relocking su
   await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect.poll(() => personal(f.id).cycleDayOverrides[0]?.slotChanges?.first?.end).toBe('08:55');
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Biology', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Lock bell times', exact: true }).click();
+  await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
+  await expect.poll(() => personal(f.id).scheduleLocked).toBe(true);
   await expect(editTimes).toBeDisabled();
   await expect(resize).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Place Biology', exact: true })).toBeDisabled();
   const lockedPersonal = personal(f.id);
   await page.reload();
-  await expect(unlock).toBeVisible();
+  await expect(unlockButton).toBeVisible();
   await expect(editTimes).toBeDisabled();
   await expect(resize).toBeDisabled();
-  await page.getByRole('button', { name: 'Place Biology', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Place Biology', exact: true })).toBeDisabled();
+  await addClass.click();
+  await confirmation.getByRole('button', { name: 'Keep locked', exact: true }).click();
+  expect(personal(f.id)).toEqual(lockedPersonal);
+  await page.goto('/schedule');
+  await expect(page.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(personal(f.id)).toEqual(lockedPersonal);
 
   const nonmemberContext = await browser.newContext();
@@ -133,9 +156,44 @@ test('beta bell times start locked while class placement works, and relocking su
     const nonmember = hydrating(await nonmemberContext.newPage());
     await nonmember.goto('/classes');
     await expect(nonmember.getByRole('button', { name: 'Edit times for Day 1', exact: true })).toBeEnabled();
-    await expect(nonmember.getByRole('button', { name: 'Unlock bell times', exact: true })).toHaveCount(0);
-    await expect(nonmember.getByRole('button', { name: 'Lock bell times', exact: true })).toHaveCount(0);
+    await expect(nonmember.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveCount(0);
+    await expect(nonmember.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
   } finally { await nonmemberContext.close(); }
+});
+
+test('unlocking keeps class updates that sync from another device while confirmation is open', async ({ page, context }) => {
+  test.setTimeout(120_000);
+  const f = seed(false, false);
+  database((_db, service) => new BetaService(service).join(f.id, { code: BETA_CODE }));
+  await authenticate(context, f.id);
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Unlock schedule?', exact: true });
+  await expect(confirmation).toBeVisible();
+
+  const remoteClass = { id: 'remote-biology', name: 'Remote Biology', room: '204' };
+  database((_db, service) => {
+    const base = service.entity(f.id, 'personal')!;
+    service.sync(f.id, {
+      mutationId: randomUUID(), id: 'personal', kind: 'personal', base,
+      data: { ...base.data, classes: [remoteClass], assignments: { A: remoteClass.id }, scheduleLocked: true },
+    });
+  });
+  // Radix hides the page from assistive technology while its modal is open. The underlying class card still
+  // renders synced data, so includeHidden lets this wait for the normal background refresh without closing it.
+  await expect(page.getByRole('button', { name: 'Edit Remote Biology', exact: true, includeHidden: true })).toBeVisible({ timeout: 45_000 });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect.poll(() => personal(f.id).scheduleLocked).toBe(false);
+  expect(personal(f.id).classes).toEqual([remoteClass]);
+  expect(personal(f.id).assignments).toEqual({ A: remoteClass.id });
+  await expect(page.getByRole('button', { name: 'Edit Remote Biology', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Day 1 time canvas', exact: true }).getByRole('button', { name: 'Day 1, 8:00–9:00 AM: Remote Biology', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit Remote Biology', exact: true })).toBeVisible();
+  expect(personal(f.id).assignments).toEqual({ A: remoteClass.id });
 });
 
 test('the schedule beta is opt-in per account and leaving preserves saved classes and bell times', async ({ page, context, browser }) => {
@@ -188,6 +246,7 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
     expect(current.assignments).toEqual(savedPersonal.assignments);
     expect(current.dateOverrides).toEqual(savedPersonal.dateOverrides);
     expect(current.grade).toBe(savedPersonal.grade);
+    expect(current.scheduleLocked).toBe(savedPersonal.scheduleLocked);
     expect(current.customSchedule).toBeNull();
     expect(current.cycleDayOverrides).toHaveLength(1);
     expect(current.cycleDayOverrides[0].slots).toBeDefined();

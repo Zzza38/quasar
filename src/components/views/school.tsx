@@ -14,6 +14,7 @@ import { Icon, type IconName } from '../icon';
 import { LunchMenuSection } from '../lunch-menu';
 import { BellTimeChoice, CycleDayAdjustmentSheet, PrivateScheduleSheet } from '../overrides';
 import { ScheduleSignalsSection } from '../schedule-signals';
+import { editSchedule } from '../schedule-lock';
 import { RotationOverview } from '../rotation-overview';
 import { ComposeProposal, type ProposalSeed, ProposalsSection } from '../proposals';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
@@ -108,9 +109,9 @@ export function SchoolView({ state }: { state: AppState }) {
             <strong>{personal.customSchedule ? 'Private schedule' : 'School schedule'}</strong>
             <p className="text-xs text-muted-foreground">{personal.customSchedule ? 'You follow your own copy. School corrections do not change it.' : 'You follow the shared schedule, plus your own adjustments.'}</p>
           </div>
-          {(!following || personal.customSchedule) && <Button size="sm" onClick={() => setPrivateOpen(true)}>{personal.customSchedule ? 'Manage' : 'Build a private schedule'}</Button>}
+          {(!following || personal.customSchedule) && <Button size="sm" onClick={() => following ? editSchedule(state, () => setPrivateOpen(true)) : setPrivateOpen(true)}>{personal.customSchedule ? 'Manage' : 'Build a private schedule'}</Button>}
         </Panel>
-        {following && !personal.customSchedule && <><Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>{advanced && <Panel><Hint>A private schedule stops receiving school corrections.</Hint><Button size="sm" onClick={() => setPrivateOpen(true)}>Build a private schedule</Button></Panel>}</>}
+        {following && !personal.customSchedule && <><Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>{advanced && <Panel><Hint>A private schedule stops receiving school corrections.</Hint><Button size="sm" onClick={() => editSchedule(state, () => setPrivateOpen(true))}>Build a private schedule</Button></Panel>}</>}
       </Section>
     </div>
 
@@ -123,10 +124,10 @@ export function SchoolView({ state }: { state: AppState }) {
     </Section>
 
     <Section id="rotation-title" title={rotation ? 'Rotation' : 'Daily bell schedule'} icon="calendar" description={rotation ? 'Every day of the cycle and when it comes up next. Open a day to see its periods or adjust it for yourself.' : 'Open the day to see its periods or adjust it for yourself.'}>
-      <RotationOverview state={state} onAdjust={setAdjustCycleDay} onJump={(date) => state.navigate('schedule', { date })} />
+      <RotationOverview state={state} onAdjust={day => following ? editSchedule(state, () => setAdjustCycleDay(day)) : setAdjustCycleDay(day)} onJump={(date) => state.navigate('schedule', { date })} />
     </Section>
 
-    {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => setCorrection({ schedule: sharedSchedule })} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(sharedSchedule.cycleDays[0]?.id ?? null); }} />}
+    {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => setCorrection({ schedule: sharedSchedule })} onPersonal={() => { setBellChoice(false); editSchedule(state, () => { setPersonalIntent(true); setAdjustCycleDay(sharedSchedule.cycleDays[0]?.id ?? null); }); }} />}
     <LunchMenuSection state={state} />
 
     <Beta id={SCHEDULE_FOLLOWING_BETA}><ScheduleSignalsSection state={state} onPropose={setCorrection} /></Beta>
