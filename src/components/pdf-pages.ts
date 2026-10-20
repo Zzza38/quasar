@@ -1,5 +1,6 @@
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 
+type TextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>;
 /** A rendered page, in the same shape scan-schedule.tsx uses for photos. */
 export type PdfPage = { image: string; mediaType: 'image/jpeg'; preview: string };
 /** Text kept from one PDF; schedules are a page or two, so this only cuts off something that is not a schedule. */
@@ -38,8 +39,8 @@ export async function readPdf(file: File, maxPages: number): Promise<{ pages: Pd
     // Only the pages that are rendered are read for text too, so the scanner never gets text from a page it cannot see.
     for (let number = 1; number <= Math.min(document.numPages, maxPages); number += 1) {
       const page = await document.getPage(number);
-      const content = await page.getTextContent();
-      const text = content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('').replace(/[ \t]+/g, ' ').trim();
+      const items = await pageText(page);
+      const text = items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('').replace(/[ \t]+/g, ' ').trim();
       if (text) texts.push(text);
       const base = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({ scale: Math.min(4, PAGE_EDGE / Math.max(base.width, base.height)) });
@@ -56,6 +57,20 @@ export async function readPdf(file: File, maxPages: number): Promise<{ pages: Pd
     }
     return { pages, total: document.numPages, text: texts.join('\n\n').slice(0, MAX_PDF_TEXT) };
   } finally { await task.destroy(); }
+}
+
+/**
+ * A page's text items, read from pdf.js's text stream with a reader. getTextContent() walks that stream with
+ * `for await`, and Safari's ReadableStream is not async-iterable, so there it fails with "undefined is not a function".
+ */
+async function pageText(page: PDFPageProxy): Promise<TextContent['items']> {
+  const reader = page.streamTextContent().getReader();
+  const items: TextContent['items'] = [];
+  for (;;) {
+    const { done, value } = await reader.read() as ReadableStreamReadResult<Pick<TextContent, 'items'>>;
+    if (done) return items;
+    items.push(...value.items);
+  }
 }
 
 /**
