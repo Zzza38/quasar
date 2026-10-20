@@ -1,23 +1,22 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { SCHEDULE_FOLLOWING_BETA, betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, normalizeBetaCode, type StoredBetaDiagnostics } from '@/domain/betas';
+import { SCHEDULE_FOLLOWING_BETA, betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, type StoredBetaDiagnostics } from '@/domain/betas';
+import { betaForCode, betaRegistryPath, currentBetaRegistry, type BetaDefinition, type BetaRegistry } from './beta-registry';
 import type { Service } from './service';
 
 /**
- * Betas (README "Running a beta"). The owner creates a beta with a join code on /admin; a member who types the code
- * in Account joins it, and the code paths behind useBeta()/<Beta> turn on for them on every device. Leaving is one
- * tap and needs no code. Feedback about a beta lands in the support inbox as kind 'beta:<key>' with diagnostics.
- *
- * Only a SHA-256 of each code is stored, so the owner sees a code once, when it is set; "New code" replaces it.
+ * Betas (README "Running a beta"). Which betas exist, and their codes, come from the beta list beside the database
+ * (src/server/beta-registry.ts), written by `npm run beta`. A member who types a beta's code in Account joins it, and
+ * the code paths behind useBeta()/<Beta> turn on for them on every device. Leaving is one tap and needs no code.
+ * Feedback about a beta lands in the support inbox as kind 'beta:<key>' with diagnostics.
  */
 
 type FailCode = 'NOT_FOUND' | 'BAD_REQUEST' | 'CONFLICT' | 'TOO_MANY_REQUESTS';
 const fail = (code: FailCode, message: string): never => { throw new TRPCError({ code, message }); };
 const now = () => new Date().toISOString();
-const hashCode = (code: string) => createHash('sha256').update(normalizeBetaCode(code)).digest('hex');
 
 /** Wrong codes an account may type in BETA_GUESS_WINDOW_MS before joining is refused for a while. */
 export const BETA_GUESS_LIMIT = 5;
@@ -27,16 +26,10 @@ export const WRONG_CODE_MESSAGE = 'That code doesn’t match an open beta. Check
 export const betaJoinSchema = z.object({ code: betaCodeSchema });
 export const betaLeaveSchema = z.object({ key: betaKeySchema });
 export const betaFeedbackSchema = z.object({ key: betaKeySchema, message: z.string().trim().min(10).max(5000), diagnostics: betaDiagnosticsSchema });
-const maxMembersSchema = z.number().int().min(1).max(100_000).nullable();
-const betaDetailsSchema = z.object({ name: z.string().trim().min(2).max(80), description: z.string().trim().max(500) });
-export const betaCreateSchema = betaDetailsSchema.extend({ key: betaKeySchema, code: betaCodeSchema, maxMembers: maxMembersSchema });
-export const betaUpdateSchema = betaDetailsSchema.extend({ key: betaKeySchema, open: z.boolean(), maxMembers: maxMembersSchema });
-export const betaCodeChangeSchema = z.object({ key: betaKeySchema, code: betaCodeSchema });
 export const betaMemberSchema = z.object({ key: betaKeySchema, userId: z.uuid() });
 
 /** What a member sees of a beta they are in. */
 export type JoinedBeta = { key: string; name: string; description: string; joinedAt: string };
-type BetaRow = { key: string; name: string; description: string; code_hash: string; open: number; max_members: number | null; created_at: string };
 
 /** The build that is serving requests (`.next/BUILD_ID`), stamped on beta reports so a report names the code it was about. */
 let buildId: string | undefined;
@@ -48,13 +41,19 @@ function currentBuild(): string {
 }
 
 export class BetaService {
-  constructor(private readonly service: Service) {}
+  /** `registry` is read per call, so a change to the beta list applies to the next request. Tests pass their own. */
+  constructor(private readonly service: Service, private readonly registry: () => BetaRegistry = () => currentBetaRegistry()) {}
   private get db() { return this.service.db; }
+  private beta(key: string): BetaDefinition | undefined { return this.registry().betas.find(beta => beta.key === key); }
 
-  /** The betas the member is in, for the workspace (useBeta reads it on the client). */
+  /**
+   * The betas the member is in, for the workspace (useBeta reads it on the client). Memberships of a beta that is no
+   * longer in the list are ignored. Schedule-following memberships first freeze saved adjustments, then retire.
+   */
   joined(userId: string): JoinedBeta[] {
-    return this.db.prepare(`SELECT b.key, b.name, b.description, m.joined_at joinedAt FROM beta_members m JOIN betas b ON b.key=m.beta_key
-      WHERE m.user_id=? ORDER BY m.joined_at`).all(userId) as JoinedBeta[];
+    if (!this.beta(SCHEDULE_FOLLOWING_BETA)) this.service.retireScheduleFollowing(userId);
+    const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
+    return rows.flatMap(row => { const beta = this.beta(row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt }] : []; });
   }
 
   /**
@@ -69,7 +68,7 @@ export class BetaService {
       const since = new Date(Date.now() - BETA_GUESS_WINDOW_MS).toISOString();
       const guesses = this.db.prepare("SELECT count(*) n FROM audit_log WHERE actor_id=? AND action='beta.wrongCode' AND created_at>?").get(userId, since) as { n: number };
       if (guesses.n >= BETA_GUESS_LIMIT) fail('TOO_MANY_REQUESTS', 'Too many wrong codes. Wait ten minutes and try again.');
-      const beta = this.db.prepare('SELECT * FROM betas WHERE code_hash=?').get(hashCode(code)) as BetaRow | undefined;
+      const beta = betaForCode(this.registry(), code);
       if (!beta) {
         this.service.audit(userId, 'beta.wrongCode', null, {});
         return { error: WRONG_CODE_MESSAGE };
@@ -77,7 +76,7 @@ export class BetaService {
       if (this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(beta.key, userId)) return { joined: this.joined(userId) };
       if (!beta.open) fail('CONFLICT', `${beta.name} isn’t taking new testers right now.`);
       const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(beta.key) as { n: number };
-      if (beta.max_members !== null && members.n >= beta.max_members) fail('CONFLICT', `${beta.name} is full.`);
+      if (beta.maxMembers !== null && members.n >= beta.maxMembers) fail('CONFLICT', `${beta.name} is full.`);
       this.db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(beta.key, userId, now());
       if (beta.key === SCHEDULE_FOLLOWING_BETA) this.service.reconcileScheduleFollowing(userId);
       this.service.audit(userId, 'beta.join', null, { key: beta.key });
@@ -91,7 +90,7 @@ export class BetaService {
   leave(userId: string, key: string): JoinedBeta[] {
     this.service.user(userId);
     return this.db.transaction(() => {
-      if (key === SCHEDULE_FOLLOWING_BETA && this.service.scheduleFollowingEnabled(userId)) this.service.leaveScheduleFollowing(userId);
+      if (key === SCHEDULE_FOLLOWING_BETA && this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(key, userId)) this.service.leaveScheduleFollowing(userId);
       if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
       return this.joined(userId);
     }).immediate();
@@ -101,7 +100,7 @@ export class BetaService {
   leaveAll(userId: string): JoinedBeta[] {
     this.service.user(userId);
     return this.db.transaction(() => {
-      const keys = this.joined(userId).map(beta => beta.key);
+      const keys = this.db.prepare('SELECT beta_key FROM beta_members WHERE user_id=?').pluck().all(userId) as string[];
       if (keys.length) {
         if (keys.includes(SCHEDULE_FOLLOWING_BETA)) this.service.leaveScheduleFollowing(userId);
         this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
@@ -115,7 +114,7 @@ export class BetaService {
   feedback(userId: string, raw: z.infer<typeof betaFeedbackSchema>): void {
     const user = this.service.user(userId);
     const input = betaFeedbackSchema.parse(raw);
-    if (!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(input.key, userId)) fail('BAD_REQUEST', 'You’re not in that beta any more.');
+    if (!this.beta(input.key) || !this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(input.key, userId)) fail('BAD_REQUEST', 'You’re not in that beta any more.');
     const open = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(userId) as { n: number };
     if (open.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     const detail: StoredBetaDiagnostics = { ...input.diagnostics, build: currentBuild() };
@@ -123,79 +122,28 @@ export class BetaService {
       .run(randomUUID(), user.schoolId, userId, input.message, now(), betaRequestKind(input.key), JSON.stringify(detail));
   }
 
-  /* ---------- Owner (/admin → Betas). Every change is audited. ---------- */
+  /* ---------- Owner (/admin → Betas): read the list and remove a member. Betas are created with `npm run beta`. ---------- */
 
+  /** Every beta in the list with its code (the owner shares it), members and open feedback, plus where the list lives. */
   list(adminId: string) {
     this.service.admin(adminId);
     const members = this.db.prepare(`SELECT m.user_id userId, u.email, u.display_name displayName, m.joined_at joinedAt FROM beta_members m JOIN users u ON u.id=m.user_id
       WHERE m.beta_key=? ORDER BY m.joined_at`);
     const feedback = this.db.prepare('SELECT count(*) n FROM support_requests WHERE kind=? AND resolved_at IS NULL');
-    return (this.db.prepare('SELECT * FROM betas ORDER BY created_at DESC').all() as BetaRow[]).map(row => ({
-      key: row.key, name: row.name, description: row.description, open: !!row.open, maxMembers: row.max_members, createdAt: row.created_at,
-      members: members.all(row.key) as { userId: string; email: string; displayName: string; joinedAt: string }[],
-      openFeedback: (feedback.get(betaRequestKind(row.key)) as { n: number }).n,
-    }));
-  }
-
-  create(adminId: string, raw: z.infer<typeof betaCreateSchema>): void {
-    this.service.admin(adminId);
-    const input = betaCreateSchema.parse(raw);
-    this.db.transaction(() => {
-      if (this.db.prepare('SELECT 1 FROM betas WHERE key=?').get(input.key)) fail('CONFLICT', 'A beta with that key already exists.');
-      this.assertCodeFree(input.code);
-      this.db.prepare('INSERT INTO betas(key,name,description,code_hash,open,max_members,created_at,created_by) VALUES(?,?,?,?,1,?,?,?)')
-        .run(input.key, input.name, input.description, hashCode(input.code), input.maxMembers, now(), adminId);
-      this.service.audit(adminId, 'beta.create', null, { key: input.key, name: input.name, maxMembers: input.maxMembers });
-    }).immediate();
-  }
-
-  /** Renames, pauses or reopens joining, or changes the member limit. Members already in stay in. */
-  update(adminId: string, raw: z.infer<typeof betaUpdateSchema>): void {
-    this.service.admin(adminId);
-    const input = betaUpdateSchema.parse(raw);
-    const changed = this.db.prepare('UPDATE betas SET name=?, description=?, open=?, max_members=? WHERE key=?').run(input.name, input.description, input.open ? 1 : 0, input.maxMembers, input.key).changes;
-    if (!changed) fail('NOT_FOUND', 'That beta no longer exists.');
-    this.service.audit(adminId, 'beta.update', null, { key: input.key, name: input.name, open: input.open, maxMembers: input.maxMembers });
-  }
-
-  /** A new code for a leaked or forgotten one. The old code stops working; members stay in. */
-  changeCode(adminId: string, raw: z.infer<typeof betaCodeChangeSchema>): void {
-    this.service.admin(adminId);
-    const input = betaCodeChangeSchema.parse(raw);
-    this.db.transaction(() => {
-      this.assertCodeFree(input.code, input.key);
-      if (!this.db.prepare('UPDATE betas SET code_hash=? WHERE key=?').run(hashCode(input.code), input.key).changes) fail('NOT_FOUND', 'That beta no longer exists.');
-      this.service.audit(adminId, 'beta.changeCode', null, { key: input.key });
-    }).immediate();
-  }
-
-  /** Ends a beta: deletes it and drops every member. Its feedback stays in the inbox. */
-  close(adminId: string, key: string): void {
-    this.service.admin(adminId);
-    this.db.transaction(() => {
-      const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(key) as { n: number };
-      if (key === SCHEDULE_FOLLOWING_BETA) {
-        const enrolled = this.db.prepare('SELECT user_id FROM beta_members WHERE beta_key=?').all(key) as Array<{ user_id: string }>;
-        for (const member of enrolled) this.service.leaveScheduleFollowing(member.user_id);
-      }
-      if (!this.db.prepare('DELETE FROM betas WHERE key=?').run(key).changes) fail('NOT_FOUND', 'That beta no longer exists.');
-      this.service.audit(adminId, 'beta.close', null, { key, members: members.n });
-    }).immediate();
+    return { path: betaRegistryPath(), betas: this.registry().betas.map(beta => ({
+      ...beta,
+      members: members.all(beta.key) as { userId: string; email: string; displayName: string; joinedAt: string }[],
+      openFeedback: (feedback.get(betaRequestKind(beta.key)) as { n: number }).n,
+    })) };
   }
 
   removeMember(adminId: string, raw: z.infer<typeof betaMemberSchema>): void {
     this.service.admin(adminId);
     const input = betaMemberSchema.parse(raw);
     this.db.transaction(() => {
-      if (input.key === SCHEDULE_FOLLOWING_BETA && this.service.scheduleFollowingEnabled(input.userId)) this.service.leaveScheduleFollowing(input.userId);
+      if (input.key === SCHEDULE_FOLLOWING_BETA && this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(input.key, input.userId)) this.service.leaveScheduleFollowing(input.userId);
       if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
       this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
     }).immediate();
-  }
-
-  /** One code opens one beta, so the same code can't be given to two. */
-  private assertCodeFree(code: string, exceptKey?: string): void {
-    const holder = this.db.prepare('SELECT key FROM betas WHERE code_hash=?').get(hashCode(code)) as { key: string } | undefined;
-    if (holder && holder.key !== exceptKey) fail('CONFLICT', 'Another beta already uses that code. Pick a different one.');
   }
 }

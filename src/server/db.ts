@@ -606,9 +606,9 @@ function migrate(db: Db): void {
     END`);
   }
 
-  // Migration 24: betas (src/server/betas.ts). The owner creates a beta with a join code (only its SHA-256 is kept);
-  // a member who types the code joins it, and code behind useBeta()/<Beta> turns on for them. Leaving needs no code.
-  // Closing a beta deletes it and its members. Beta feedback is a support request of kind 'beta:<key>' whose
+  // Migration 24: betas (src/server/betas.ts). A member who types a beta's code joins it, and code behind
+  // useBeta()/<Beta> turns on for them. Leaving needs no code. (Migration 25 moved the betas themselves out of the
+  // database.) Beta feedback is a support request of kind 'beta:<key>' whose
   // `detail` is the diagnostics JSON the member saw before sending.
   if (!(db.pragma('table_info(support_requests)') as {name: string}[]).some(column => column.name === 'detail')) db.exec('ALTER TABLE support_requests ADD COLUMN detail TEXT');
   db.exec(`
@@ -626,6 +626,26 @@ function migrate(db: Db): void {
     CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(24, datetime('now'));
   `);
+
+  // Migration 25: betas are defined in the beta list beside the database (src/server/beta-registry.ts), not in a
+  // table. beta_members is rebuilt without its foreign key to betas (members of a beta no longer in the list are
+  // ignored), and the betas table is dropped. No beta was created in production before this.
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='betas'").get()) {
+    db.exec(`
+      CREATE TABLE beta_members_next (
+        beta_key TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY(beta_key, user_id)
+      );
+      INSERT INTO beta_members_next SELECT beta_key, user_id, joined_at FROM beta_members;
+      DROP TABLE beta_members;
+      DROP TABLE betas;
+      ALTER TABLE beta_members_next RENAME TO beta_members;
+      CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
+    `);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(25, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createBeta, EMPTY_BETA_REGISTRY, readBetaRegistry, removeBeta, writeBetaRegistry } from './beta-registry';
 import { cycleDaySlots, diffCycleDaySlots, emptyPersonalSchedule, personalScheduleSchema, PERSONAL_SCHEDULE_CLIENT_VERSION, type Schedule } from '@/domain/schedule';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
@@ -14,7 +18,18 @@ const schedule: Schedule = {
   anchorDate: '2026-09-08', anchorCycleDayId: 'day1', schoolWeekdays: [1, 2, 3, 4, 5], advanceWeekdays: [1, 2, 3, 4, 5], exceptions: [],
 };
 const databases: Db[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+let directory = '';
+let previousPath: string | undefined;
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), 'quasar-schedule-beta-'));
+  previousPath = process.env.BETAS_PATH;
+  process.env.BETAS_PATH = join(directory, 'betas.json');
+});
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+  rmSync(directory, { recursive: true, force: true });
+  if (previousPath === undefined) delete process.env.BETAS_PATH; else process.env.BETAS_PATH = previousPath;
+});
 function fixture(enrolled = true) {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
@@ -25,7 +40,7 @@ function fixture(enrolled = true) {
   };
   const owner = user('owner@example.com'), student = user();
   const betas = new BetaService(service);
-  betas.create(owner, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null });
+  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null }));
   const enroll = (id: string) => betas.join(id, { code: 'FOLLOW2026' });
   const school = service.createSchool(student, { name: 'Following High', location: 'Boston', schedule });
   service.join(student, { schoolId: school.id, choice: 'community', grade: '10' });
@@ -194,18 +209,18 @@ describe('schedule-following beta gate', () => {
     expect(f.read().cycleDayOverrides[0].slots).toContainEqual({ id: 'studio', periodId: 'studio', start: '13:00', end: '14:00' });
   });
 
-  it.each(['leave', 'leaveAll', 'removeMember', 'close'] as const)('preserves classes and ordinary times on %s', (method) => {
+  it.each(['leave', 'leaveAll', 'removeMember', 'retire'] as const)('preserves classes and ordinary times on %s', (method) => {
     const f = fixture();
     const data = { ...f.read(), classes: [{ id: 'art', name: 'Art' }], assignments: { A: 'art' }, cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] };
     f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(f.student, 'personal')!, data });
     if (method === 'leave') f.betas.leave(f.student, SCHEDULE_FOLLOWING_BETA);
     if (method === 'leaveAll') f.betas.leaveAll(f.student);
     if (method === 'removeMember') f.betas.removeMember(f.owner, { key: SCHEDULE_FOLLOWING_BETA, userId: f.student });
-    if (method === 'close') f.betas.close(f.owner, SCHEDULE_FOLLOWING_BETA);
+    if (method === 'retire') { writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA)); f.service.workspace(f.student); }
     expect(f.service.scheduleFollowingEnabled(f.student)).toBe(false);
     expect(f.read()).toMatchObject({ classes: data.classes, assignments: data.assignments, customSchedule: null });
     expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
-    expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action=?").get(`beta.${method === 'leaveAll' ? 'leave' : method}`)).toMatchObject({ n: 1 });
+    expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action=?").get(`beta.${method === 'leaveAll' || method === 'retire' ? 'leave' : method}`)).toMatchObject({ n: 1 });
   });
 
   it('retains removed-day sparse edits and invalid combinations when the beta is left', () => {
@@ -268,4 +283,81 @@ it('materializes opt-out snapshots against the student grade rather than the sch
   f.betas.leaveAll(f.student);
   expect(f.read().cycleDayOverrides[0].slots?.[0]).toMatchObject({ start: '09:05', end: '10:00' });
   expect(f.read().customSchedule).toBeNull();
+});
+
+describe('schedule beta removed from the file registry', () => {
+  it.each(['leave', 'leaveAll', 'removeMember', 'joined', 'workspace', 'sync'] as const)('preserves retired membership adjustments through %s', (method) => {
+    const f = fixture();
+    const data = { ...f.read(), classes: [{ id: 'art', name: 'Art' }], assignments: { A: 'art' }, cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] };
+    f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(f.student, 'personal')!, data });
+    const base = f.service.entity(f.student, 'personal')!;
+    writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+    // Registry removal deliberately leaves the database membership in place until its next server interaction.
+    expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.student)).toBeTruthy();
+    if (method === 'leave') f.betas.leave(f.student, SCHEDULE_FOLLOWING_BETA);
+    if (method === 'leaveAll') f.betas.leaveAll(f.student);
+    if (method === 'removeMember') f.betas.removeMember(f.owner, { key: SCHEDULE_FOLLOWING_BETA, userId: f.student });
+    if (method === 'joined') expect(f.betas.joined(f.student)).toEqual([]);
+    if (method === 'workspace') expect(f.service.workspace(f.student, { legacyPersonal: true }).betas).toEqual([]);
+    if (method === 'sync') expect(f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base, data: { ...base.data, classes: [{ id: 'art', name: 'Studio art' }] } }).status).toBe('applied');
+    expect(f.service.scheduleFollowingEnabled(f.student)).toBe(false);
+    expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.student)).toBeUndefined();
+    expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
+    expect(f.read().classes[0].name).toBe(method === 'sync' ? 'Studio art' : 'Art');
+    const saved = f.service.entity(f.student, 'personal');
+    f.service.workspace(f.student);
+    expect(f.service.entity(f.student, 'personal')).toEqual(saved);
+  });
+
+  it('freezes against the previous school before a direct school publication following registry removal', () => {
+    const f = fixture();
+    f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(f.student, 'personal')!, data: { ...f.read(), cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] } });
+    writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+    const next = moved('08:10');
+    next.cycleDays[0].slots[1] = { ...next.cycleDays[0].slots[1], start: '10:10' };
+    f.publish(next, 1);
+    expect(f.service.scheduleFollowingEnabled(f.student)).toBe(false);
+    expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
+    expect(f.service.workspace(f.student, { legacyPersonal: true }).entities.find(entity => entity.id === 'personal')?.data).toEqual(f.read());
+  });
+
+  it('freezes against the previous school before a proposal passes following registry removal', () => {
+    const f = fixture();
+    const members = [f.student, ...Array.from({ length: 9 }, () => f.user())];
+    for (const id of members) {
+      if (id !== f.student) f.service.join(id, { schoolId: f.school.id, choice: 'community', grade: '10' });
+      f.db.prepare('INSERT INTO school_verifications(user_id,school_id,method,verified_at) VALUES(?,?,?,?)').run(id, f.school.id, 'support', new Date().toISOString());
+    }
+    f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(f.student, 'personal')!, data: { ...f.read(), cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] } });
+    const next = moved('08:10');
+    next.cycleDays[0].slots[1] = { ...next.cycleDays[0].slots[1], start: '10:10' };
+    const proposals = new ProposalService(f.service);
+    const proposal = proposals.create(f.student, { schoolId: f.school.id, baseVersion: 1, schedule: next, summary: 'Correct the school bell times for our grade.' });
+    writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+    proposals.vote(members[1], { proposalId: proposal.id, vote: 'for' });
+    expect(proposals.vote(members[2], { proposalId: proposal.id, vote: 'for' }).status).toBe('passed');
+    expect(f.service.scheduleFollowingEnabled(f.student)).toBe(false);
+    expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
+  });
+});
+
+it('retires before capturing the personal version when a former tester switches schools', () => {
+  const f = fixture();
+  const data = { ...f.read(), periods: [{ id: 'studio', label: 'Studio', kind: 'other' as const }], cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] };
+  f.service.sync(f.student, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(f.student, 'personal')!, data });
+  const other = f.service.createSchool(f.owner, { name: 'Other school', location: 'Boston', schedule: moved('08:20') });
+  writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+  expect(() => f.service.join(f.student, { schoolId: other.id, choice: 'community' })).not.toThrow();
+  expect(f.service.scheduleFollowingEnabled(f.student)).toBe(false);
+  expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
+});
+
+it('retires removed registry enrollment on a receipt replay while preserving the receipt response', () => {
+  const f = fixture();
+  const mutation = { mutationId: randomUUID(), id: 'personal', kind: 'personal' as const, base: f.service.entity(f.student, 'personal')!, data: { ...f.read(), cycleDayOverrides: [diffCycleDaySlots(schedule.cycleDays[0], moved('08:05').cycleDays[0].slots)!] } };
+  const original = f.service.sync(f.student, mutation);
+  writeBetaRegistry(removeBeta(readBetaRegistry(), SCHEDULE_FOLLOWING_BETA));
+  expect(f.service.sync(f.student, mutation)).toEqual(original);
+  expect(f.db.prepare('SELECT 1 FROM beta_members WHERE user_id=?').get(f.student)).toBeUndefined();
+  expect(f.read().cycleDayOverrides[0].slots).toEqual(moved('08:05').cycleDays[0].slots);
 });

@@ -2,7 +2,10 @@ import "fake-indexeddb/auto";
 import { IDBObjectStore } from "fake-indexeddb";
 import { openDB } from "idb";
 import { TRPCError } from "@trpc/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from "../domain/sync";
 import { cycleDaySlots, emptyPersonalSchedule, personalScheduleSchema } from "../domain/schedule";
@@ -12,12 +15,22 @@ import { Service } from "../server/service";
 import { CalendarService } from "../server/calendar";
 import { writeEntity } from "../server/entities";
 import { BetaService } from "../server/betas";
+import { EMPTY_BETA_REGISTRY, createBeta, writeBetaRegistry } from "../server/beta-registry";
 import { SCHEDULE_FOLLOWING_BETA } from "../domain/betas";
 import type { fetchFeed } from "../server/feed-fetch";
 import { clearOfflineAccount, getLastAccountId, openWorkspace, requestPersistentStorage, storagePersistence, type OfflineWorkspace } from "./offline";
 
 const handles: OfflineWorkspace[] = [];
 const accounts = new Set<string>();
+let betaDirectory = '';
+let previousBetasPath: string | undefined;
+
+beforeEach(() => {
+  betaDirectory = mkdtempSync(join(tmpdir(), 'quasar-offline-betas-'));
+  previousBetasPath = process.env.BETAS_PATH;
+  process.env.BETAS_PATH = join(betaDirectory, 'betas.json');
+  writeBetaRegistry(EMPTY_BETA_REGISTRY);
+});
 async function workspace(accountId = crypto.randomUUID()) {
   accounts.add(accountId);
   const opened = await openWorkspace(accountId);
@@ -85,18 +98,24 @@ function realServer() {
 }
 
 function enrollScheduleFollowing(remote: ReturnType<typeof realServer>, join = true) {
-  const beta = new BetaService(new Service(remote.db, `${remote.owner}@example.com`));
-  beta.create(remote.owner, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'SCHEDULE26', maxMembers: null });
+  const beta = new BetaService(remote.service);
+  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'SCHEDULE26', maxMembers: null }));
   if (join) beta.join(remote.owner, { code: 'SCHEDULE26' });
   return beta;
 }
 
 afterEach(async () => {
-  for (const db of databases.splice(0)) db.close();
-  handles.forEach((handle) => handle.close());
-  handles.length = 0;
-  for (const account of accounts) await clearOfflineAccount(account);
-  accounts.clear();
+  try {
+    for (const db of databases.splice(0)) db.close();
+    handles.forEach((handle) => handle.close());
+    handles.length = 0;
+    for (const account of accounts) await clearOfflineAccount(account);
+    accounts.clear();
+  } finally {
+    rmSync(betaDirectory, { recursive: true, force: true });
+    if (previousBetasPath === undefined) delete process.env.BETAS_PATH;
+    else process.env.BETAS_PATH = previousBetasPath;
+  }
 });
 
 describe("durable offline workspace", () => {

@@ -19,7 +19,7 @@ import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
-import { BetaService, betaCodeChangeSchema, betaCreateSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema, betaUpdateSchema } from './betas';
+import { BetaService, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -271,12 +271,9 @@ export const appRouter = t.router({
     // Removals the student can appeal (§14): the list, and lifting one so they can rejoin.
     bans: admin.query(({ ctx }) => ctx.service.bans(ctx.userId)),
     liftBan: adminScoped.input(z.object({ userId: z.uuid(), schoolId: z.uuid() })).mutation(({ ctx, input }) => { ctx.service.liftBan(ctx.userId, input.userId, input.schoolId); }),
+    // Betas are created and changed with `npm run beta` (the beta list is not in git); the console reads them.
     betas: t.router({
       list: admin.query(({ ctx }) => betas(ctx.service).list(ctx.userId)),
-      create: adminScoped.input(betaCreateSchema).mutation(({ ctx, input }) => { betas(ctx.service).create(ctx.userId, input); }),
-      update: adminScoped.input(betaUpdateSchema).mutation(({ ctx, input }) => { betas(ctx.service).update(ctx.userId, input); }),
-      changeCode: adminScoped.input(betaCodeChangeSchema).mutation(({ ctx, input }) => { betas(ctx.service).changeCode(ctx.userId, input); }),
-      close: adminScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => { betas(ctx.service).close(ctx.userId, input.key); }),
       removeMember: adminScoped.input(betaMemberSchema).mutation(({ ctx, input }) => { betas(ctx.service).removeMember(ctx.userId, input); }),
     }),
     // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
