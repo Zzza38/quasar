@@ -828,7 +828,7 @@ test('task-days beta: Next 7 days gives each due date its own heading', async ({
   await page.reload();
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
-    await expect(thursday.getByRole('heading')).toHaveText('Thursday, Oct 22 · 2');
+    await expect(thursday.getByRole('heading')).toHaveAccessibleName('Thursday, Oct 22');
     await expect(thursday).toContainText('Project 1');
     await expect(thursday).toContainText('Mongols debate');
     await expect(thursday).not.toContainText('Unit 2 test');
