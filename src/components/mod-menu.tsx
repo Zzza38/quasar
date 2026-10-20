@@ -5,6 +5,7 @@ import { Button, Modal, Panel, Toggle } from './primitives';
 import { setAttentionMode as setAttentionEnabled } from './attention-videos';
 import { ShyParticles } from './shy-particles';
 import { SpinLetters } from './spin-letters';
+import { BrokenHearts } from './broken-hearts';
 import { useModOverrides } from '@/client/mod-overrides';
 import type { ModId } from '@/domain/mods';
 import { useReducedMotion } from '@/client/reduced-motion';
@@ -14,7 +15,7 @@ const KONAMI_CODE = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft'
 
 export function ModMenu() {
   const accountId = useModAccount();
-  return <AccountModMenu key={accountId ?? 'signed-out'} accountId={accountId} />;
+  return <><BrokenHearts /><AccountModMenu key={accountId ?? 'signed-out'} accountId={accountId} /></>;
 }
 
 function AccountModMenu({ accountId }: { accountId: string | null | undefined }) {
