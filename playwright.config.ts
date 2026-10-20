@@ -34,6 +34,8 @@ export default defineConfig({
       NEXTAUTH_URL:'http://localhost:3100', OWNER_EMAIL:'browser-owner@example.com', OWNER_GOOGLE_SUB:'',
       GOOGLE_CLIENT_ID:'test-client', GOOGLE_CLIENT_SECRET:'test-client-secret',
       SCAN_API_URL:'http://127.0.0.1:3199/v1', SCAN_MODEL:'mock-vision', SCAN_API_KEY:'', SCAN_MODEL_REASONING:'', SCAN_MODEL_TEMPERATURE:'',
-      VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'' }
+      VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'',
+      // The beta list then sits beside the test database (src/server/beta-registry.ts); tests write it there.
+      BETAS_PATH:'' }
   }
 });
