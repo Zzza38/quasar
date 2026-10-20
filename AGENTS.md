@@ -18,6 +18,12 @@ Keep the copy in the dev checkout's ignored `data/` directory. Stop any dev serv
 
 Production snapshots contain private account data. Bind preview servers to loopback and expose them only on the owner's private Tailscale network, with the app's Google sign-in and account authorization checks intact. Keep snapshot files at mode `0600`; never commit them or include them in CI artifacts. When retiring a preview, stop its server and remove its snapshots, archived copies, and SQLite companion files from the dev checkout. Production database copies are not authorized for public preview links.
 
+# Betas are created with `npm run beta`
+
+To put a change in beta, wrap it in `<Beta id="key">` or `useBeta('key')` from `src/components/betas.tsx`, then create the beta with `npm run beta -- create <key> --name "Name" [--description "…"] [--max N] [--code "…"]` (see README "Running a beta" and `npm run beta -- --help`). Without `--code` a code is generated. Never create or change betas any other way: not from `/admin`, not by writing `betas.json` by hand, not in a migration.
+
+The beta list (`betas.json` beside the database, or `BETAS_PATH`) holds the join codes, so it is gitignored. Never commit it or copy its codes into the repository, a PR or CI. A beta for the live site is created by running the command in the production checkout, `/srv/NAS/Private/school-schedule-tracker`, and it takes effect immediately; a preview server's list sits beside its database snapshot in the dev checkout. Report the code the command prints to the owner, who can also read it on `/admin` → Betas.
+
 # UI rule: every form control is shadcn/ui
 
 **Never write a raw `<input>`, `<select>`, `<textarea>`, or `<option>`-driven native dropdown in app code.** Native controls render OS-drawn popups (light-theme lists on a dark app, wrong fonts, no theming), so any `<input>` you are tempted to write MUST be replaced with the shadcn/ui equivalent:
