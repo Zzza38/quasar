@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { SCHEDULE_FOLLOWING_BETA, betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, type StoredBetaDiagnostics } from '@/domain/betas';
+import { betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, type StoredBetaDiagnostics } from '@/domain/betas';
 import { betaForCode, betaRegistryPath, currentBetaRegistry, type BetaDefinition, type BetaRegistry } from './beta-registry';
 import type { Service } from './service';
 
@@ -48,10 +48,9 @@ export class BetaService {
 
   /**
    * The betas the member is in, for the workspace (useBeta reads it on the client). Memberships of a beta that is no
-   * longer in the list are ignored. Schedule-following memberships first freeze saved adjustments, then retire.
+   * longer in the list are ignored. Shipped features keep working independently of their old memberships.
    */
   joined(userId: string): JoinedBeta[] {
-    if (!this.beta(SCHEDULE_FOLLOWING_BETA)) this.service.retireScheduleFollowing(userId);
     const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
     return rows.flatMap(row => { const beta = this.beta(row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt }] : []; });
   }
@@ -78,7 +77,6 @@ export class BetaService {
       const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(beta.key) as { n: number };
       if (beta.maxMembers !== null && members.n >= beta.maxMembers) fail('CONFLICT', `${beta.name} is full.`);
       this.db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(beta.key, userId, now());
-      if (beta.key === SCHEDULE_FOLLOWING_BETA) this.service.reconcileScheduleFollowing(userId);
       this.service.audit(userId, 'beta.join', null, { key: beta.key });
       return { joined: this.joined(userId) };
     }).immediate();
@@ -90,7 +88,6 @@ export class BetaService {
   leave(userId: string, key: string): JoinedBeta[] {
     this.service.user(userId);
     return this.db.transaction(() => {
-      if (key === SCHEDULE_FOLLOWING_BETA && this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(key, userId)) this.service.leaveScheduleFollowing(userId);
       if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
       return this.joined(userId);
     }).immediate();
@@ -102,7 +99,6 @@ export class BetaService {
     return this.db.transaction(() => {
       const keys = this.db.prepare('SELECT beta_key FROM beta_members WHERE user_id=?').pluck().all(userId) as string[];
       if (keys.length) {
-        if (keys.includes(SCHEDULE_FOLLOWING_BETA)) this.service.leaveScheduleFollowing(userId);
         this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
         this.service.audit(userId, 'beta.leave', null, { keys });
       }
@@ -141,7 +137,6 @@ export class BetaService {
     this.service.admin(adminId);
     const input = betaMemberSchema.parse(raw);
     this.db.transaction(() => {
-      if (input.key === SCHEDULE_FOLLOWING_BETA && this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(input.key, input.userId)) this.service.leaveScheduleFollowing(input.userId);
       if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
       this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
     }).immediate();

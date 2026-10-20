@@ -108,18 +108,14 @@ describe('isOverdue', () => {
 });
 
 describe('openBellTimes', () => {
-  it('opens the shared-or-personal choice only for enrolled schedule-following members', () => {
+  it('opens the shared-or-personal choice for everyone following school', () => {
     const navigate = vi.fn();
-    openBellTimes({ personal: emptyPersonalSchedule(), navigate, context: { betas: [{ key: 'some-other-beta' }] } });
-    expect(navigate).toHaveBeenLastCalledWith('school', { fix: 'times' });
-    openBellTimes({ personal: emptyPersonalSchedule(), navigate, context: { betas: [{ key: 'schedule-following' }] } });
+    openBellTimes({ personal: emptyPersonalSchedule(), navigate });
     expect(navigate).toHaveBeenLastCalledWith('classes', { bell: 'open' });
   });
 
   it('sends students with a private schedule to it, since school corrections do not change what they see', () => {
     const navigate = vi.fn();
-    openBellTimes({ personal: emptyPersonalSchedule(), navigate });
-    expect(navigate).toHaveBeenLastCalledWith('school', { fix: 'times' });
     openBellTimes({ personal: { ...emptyPersonalSchedule(), customSchedule: exampleSchedule }, navigate });
     expect(navigate).toHaveBeenLastCalledWith('classes', { private: 'open' });
   });

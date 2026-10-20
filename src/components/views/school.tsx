@@ -1,14 +1,11 @@
 'use client';
 
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
-import { useBeta, Beta } from '../betas';
-
 import { useEffect, useState } from 'react';
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { GRADES, gradeLabel, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { pluralize } from '@/lib/format';
-import { cn, scrollToId } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon, type IconName } from '../icon';
 import { LunchMenuSection } from '../lunch-menu';
@@ -44,7 +41,6 @@ export function schoolLocks(school: { supportLocked: boolean; memberLocked: bool
 }
 
 export function SchoolView({ state }: { state: AppState }) {
-  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const { context, personal, online } = state;
   const school = context.school;
   const sharedSchedule = scheduleForGrade(school.schedule, personal.grade);
@@ -64,11 +60,9 @@ export function SchoolView({ state }: { state: AppState }) {
   const { navigate } = state;
   useEffect(() => {
     if (fix !== 'times') return;
-    if (following) setBellChoice(true);
-    else if (!locked && online) setEditing(true);
-    else scrollToId(voting && document.getElementById('proposals-title') ? 'proposals-title' : 'correction-title', true);
+    setBellChoice(true);
     navigate('school', {}, { replace: true });
-  }, [fix, navigate, following, locked, online, voting]);
+  }, [fix, navigate]);
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">
@@ -90,7 +84,7 @@ export function SchoolView({ state }: { state: AppState }) {
         <ul className="grid gap-3">
           <FactRow icon={school.approved ? 'checkCircle' : 'info'} tone={school.approved ? 'success' : 'warning'}>{school.approved ? 'Support has checked this schedule against the school’s published one.' : 'This schedule was entered by students and has not been checked by support yet. Compare it with the school’s published schedule.'}</FactRow>
           <FactRow icon={locked ? 'lock' : 'unlock'}>{school.supportLocked ? (voting ? 'Support locked the shared schedule. Verified members can still propose and vote on changes; support publishes the ones that pass.' : 'Support locked the shared schedule, so only support publishes changes. Send a correction request below.') : voting ? 'Shared editing locked when the school reached 10 members, so one person cannot change everyone’s schedule. Verified members propose changes and vote on them below, or send a correction request.' : `Any member can edit the shared schedule until the school reaches 10 members (${school.memberCount} now). Every edit is saved as a new revision that other members review.`}</FactRow>
-          <FactRow icon="users">{following ? "School corrections keep your classes saved. Bell times you have not changed follow the school. When a correction matches your personal time change, that time follows the school again." : "Corrections never touch your classes or adjustments. When the shared schedule changes, you see what changed and anything of yours it affects."}</FactRow>
+          <FactRow icon="users">School corrections keep your classes saved. Bell times you have not changed follow the school. When a correction matches your personal time change, that time follows the school again.</FactRow>
         </ul>
       </Section>
 
@@ -109,9 +103,9 @@ export function SchoolView({ state }: { state: AppState }) {
             <strong>{personal.customSchedule ? 'Private schedule' : 'School schedule'}</strong>
             <p className="text-xs text-muted-foreground">{personal.customSchedule ? 'You follow your own copy. School corrections do not change it.' : 'You follow the shared schedule, plus your own adjustments.'}</p>
           </div>
-          {(!following || personal.customSchedule) && <Button size="sm" onClick={() => following ? editSchedule(state, () => setPrivateOpen(true)) : setPrivateOpen(true)}>{personal.customSchedule ? 'Manage' : 'Build a private schedule'}</Button>}
+          {personal.customSchedule && <Button size="sm" onClick={() => editSchedule(state, () => setPrivateOpen(true))}>Manage</Button>}
         </Panel>
-        {following && !personal.customSchedule && <><Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>{advanced && <Panel><Hint>A private schedule stops receiving school corrections.</Hint><Button size="sm" onClick={() => editSchedule(state, () => setPrivateOpen(true))}>Build a private schedule</Button></Panel>}</>}
+        {!personal.customSchedule && <><Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>{advanced && <Panel><Hint>A private schedule stops receiving school corrections.</Hint><Button size="sm" onClick={() => editSchedule(state, () => setPrivateOpen(true))}>Build a private schedule</Button></Panel>}</>}
       </Section>
     </div>
 
@@ -124,13 +118,13 @@ export function SchoolView({ state }: { state: AppState }) {
     </Section>
 
     <Section id="rotation-title" title={rotation ? 'Rotation' : 'Daily bell schedule'} icon="calendar" description={rotation ? 'Every day of the cycle and when it comes up next. Open a day to see its periods or adjust it for yourself.' : 'Open the day to see its periods or adjust it for yourself.'}>
-      <RotationOverview state={state} onAdjust={day => following ? editSchedule(state, () => setAdjustCycleDay(day)) : setAdjustCycleDay(day)} onJump={(date) => state.navigate('schedule', { date })} />
+      <RotationOverview state={state} onAdjust={day => editSchedule(state, () => setAdjustCycleDay(day))} onJump={(date) => state.navigate('schedule', { date })} />
     </Section>
 
-    {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => setCorrection({ schedule: sharedSchedule })} onPersonal={() => { setBellChoice(false); editSchedule(state, () => { setPersonalIntent(true); setAdjustCycleDay(sharedSchedule.cycleDays[0]?.id ?? null); }); }} />}
+    {bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => setCorrection({ schedule: sharedSchedule })} onPersonal={() => { setBellChoice(false); editSchedule(state, () => { setPersonalIntent(true); setAdjustCycleDay(sharedSchedule.cycleDays[0]?.id ?? null); }); }} />}
     <LunchMenuSection state={state} />
 
-    <Beta id={SCHEDULE_FOLLOWING_BETA}><ScheduleSignalsSection state={state} onPropose={setCorrection} /></Beta>
+    <ScheduleSignalsSection state={state} onPropose={setCorrection} />
     {voting && <ProposalsSection state={state} />}
 
     <div className="grid items-start gap-5 lg:grid-cols-2">
@@ -145,9 +139,9 @@ export function SchoolView({ state }: { state: AppState }) {
 
     <SharedEditorSheet accountId={context.user.id} open={editing} onClose={() => setEditing(false)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} schoolId={school.id} version={school.version} onSaved={state.refresh} />
     <CycleDayAdjustmentSheet open={adjustCycleDay !== null} onClose={() => { setAdjustCycleDay(null); setPersonalIntent(false); }} personalIntent={personalIntent} cycleDayId={adjustCycleDay} school={sharedSchedule} personal={personal} save={state.savePersonal} onSchoolCorrection={(schedule, onSaved) => setCorrection({ schedule, onSaved })} />
-    {following && correction && voting && <ComposeProposal state={state} seed={correction} onClose={() => setCorrection(null)} onSaved={async () => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); await state.refresh(); }} />}
-    {following && correction && !voting && !locked && <SharedEditorSheet accountId={context.user.id} open onClose={() => setCorrection(null)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} seed={correction.schedule} schoolId={school.id} version={school.version} onSaved={state.refresh} onPublished={() => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); }} />}
-    {following && correction && locked && !voting && <Modal open onClose={() => setCorrection(null)} title="Request a school correction"><Hint>Support manages this school's schedule. Send the correction request below.</Hint><Button onClick={() => { setCorrection(null); document.getElementById('correction-title')?.scrollIntoView({ behavior: 'smooth' }); }}>Open correction request</Button></Modal>}
+    {correction && voting && <ComposeProposal state={state} seed={correction} onClose={() => setCorrection(null)} onSaved={async () => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); await state.refresh(); }} />}
+    {correction && !voting && !locked && <SharedEditorSheet accountId={context.user.id} open onClose={() => setCorrection(null)} schedule={school.schedule} initialGrade={personal.grade ?? '9'} seed={correction.schedule} schoolId={school.id} version={school.version} onSaved={state.refresh} onPublished={() => { correction.onSaved?.(); setCorrection(null); setBellChoice(false); }} />}
+    {correction && locked && !voting && <Modal open onClose={() => setCorrection(null)} title="Request a school correction"><Hint>Support manages this school's schedule. Send the correction request below.</Hint><Button onClick={() => { setCorrection(null); document.getElementById('correction-title')?.scrollIntoView({ behavior: 'smooth' }); }}>Open correction request</Button></Modal>}
     <PrivateScheduleSheet open={privateOpen} onClose={() => setPrivateOpen(false)} school={sharedSchedule} personal={personal} save={state.savePersonal} />
   </div>;
 }
@@ -178,7 +172,6 @@ export function SharedEditorSheet({ accountId, open, onClose, schedule, initialG
 type Notice = { tone: 'success' | 'warning'; text: string };
 
 function SharedEditorBody({ accountId, onClose, schedule, initialGrade, schoolId, version, onSaved, seed, onPublished }: { accountId: string; onClose: () => void; schedule: Schedule; initialGrade: Grade; schoolId: string; version: number; onSaved: () => Promise<boolean>; seed?: Schedule; onPublished?: () => void }) {
-  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   // Frozen when the editor opens: the background sync updates the live props, and publishing against them would
   // pass the server's stale-revision check and silently replace a classmate's newer revision.
   const [base, setBase] = useState(() => ({ version, schedule }));
@@ -242,7 +235,7 @@ function SharedEditorBody({ accountId, onClose, schedule, initialGrade, schoolId
       setNotice({ tone: 'warning', text: 'Reloaded. Your draft is still here; publishing now replaces the newer revision.' });
     } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
   };
-  return <Modal open onClose={onClose} dirty={edited.length > 0} busy={pending} wide fullWidth title="Edit the shared schedule" description={following ? "Every member of the school sees your revision. Your classes stay saved. Personal changes that match the published correction return to the school default." : "Every member of the school sees your revision. Personal classes and adjustments are never changed by it."}
+  return <Modal open onClose={onClose} dirty={edited.length > 0} busy={pending} wide fullWidth title="Edit the shared schedule" description="Every member of the school sees your revision. Your classes stay saved. Personal changes that match the published correction return to the school default."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />{stale && <Button variant="secondary" disabled={pending} onClick={() => void reload()}>Reload latest</Button>}<Button variant="primary" busy={pending} disabled={issues.length > 0} onClick={() => void submit()}>Publish revision</Button></>}>
     {moved && !stale && <Callout tone="warning" icon="alert" role="status" actions={<Button size="sm" variant="secondary" disabled={pending} onClick={() => void reload()}>Reload latest</Button>}>Someone published revision {version} while you were editing. Reload it before publishing; your draft stays.</Callout>}
     <div className="grid gap-4 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04] lg:grid-cols-2">

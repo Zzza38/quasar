@@ -1,8 +1,5 @@
 'use client';
 
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
-import { useBeta } from './betas';
-
 import { useRef, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaysWithPeriod, effectiveSchedule, type ResolvedPeriod } from '@/domain/schedule';
@@ -20,7 +17,6 @@ export function PeriodSheet({ state, period, date, onClose, onAdjustDay }: { sta
 }
 
 function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state: AppState; period: ResolvedPeriod; date: string; onClose: () => void; onAdjustDay: () => void }) {
-  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const { personal } = state;
   const [pending, setPending] = useState(false);
   // Controls stay enabled while saving (disabling the picker would drop its focus); this ref blocks
@@ -61,6 +57,6 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
       <div><Button icon="calendar" onClick={whenIdle(onAdjustDay)}>Adjust this day</Button></div>
       <Hint>Close, reopen or move periods on {formatDate(date, { weekday: 'long' })} only.</Hint>
     </div>
-    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); openBellTimes(state); })}>{personal.customSchedule ? 'Bell time wrong? Edit my private schedule' : following ? 'Bell time wrong? Change bell times' : 'Bell time wrong? Fix the school schedule'}</Button></div>
+    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); openBellTimes(state); })}>{personal.customSchedule ? 'Bell time wrong? Edit my private schedule' : 'Bell time wrong? Change bell times'}</Button></div>
   </Modal>;
 }

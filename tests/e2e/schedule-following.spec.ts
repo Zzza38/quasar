@@ -2,43 +2,19 @@ import { test, expect, hydrating } from './fixtures';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
-import { BetaService } from '../../src/server/betas';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { SCHEDULE_FOLLOWING_BETA } from '../../src/domain/betas';
 import { exampleSchedule } from '../../src/domain/example';
 import { cycleDaySlots, diffCycleDaySlots, personalScheduleSchema } from '../../src/domain/schedule';
 
-const BETA_CODE = 'SCHOOL-FOLLOWING-E2E';
-const BETA_NAME = 'School schedule following';
-
 function database<T>(run: (db: ReturnType<typeof openDatabase>, service: Service) => T): T {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-  const previousBetasPath = process.env.BETAS_PATH;
-  process.env.BETAS_PATH = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
   try { return run(db, new Service(db, 'browser-owner@example.com')); }
-  finally {
-    db.close();
-    if (previousBetasPath === undefined) delete process.env.BETAS_PATH;
-    else process.env.BETAS_PATH = previousBetasPath;
-  }
+  finally { db.close(); }
 }
 
-function prepareBeta(service: Service) {
-  // Synthetic registry beside the throwaway database, matching the documented CLI's file format.
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some(beta => beta.key === SCHEDULE_FOLLOWING_BETA)) {
-    writeBetaRegistry(createBeta(registry, { key: SCHEDULE_FOLLOWING_BETA, name: BETA_NAME, description: 'Try personal bell-time changes while following school corrections.', code: BETA_CODE }), listPath);
-  }
-  return new BetaService(service, () => readBetaRegistry(listPath));
-}
-
-function seed(locked = false, enroll = true, schedule = exampleSchedule) {
+function seed(locked = false, unlocked = true, schedule = exampleSchedule) {
   return database((db, service) => {
-    const betas = prepareBeta(service);
     const members = Array.from({ length: locked ? 10 : 1 }, (_, index) => {
       const id = randomUUID();
       db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
@@ -48,9 +24,8 @@ function seed(locked = false, enroll = true, schedule = exampleSchedule) {
     const school = service.createSchool(members[0], { name: `Following High ${members[0].slice(0, 6)}`, location: 'Boston, MA', schedule });
     for (const id of members) {
       service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
-      if (enroll) {
-        betas.join(id, { code: BETA_CODE });
-        // Most scenarios focus on bell-time choices; the default-lock scenario opts in separately.
+      if (unlocked) {
+        // Scenarios unrelated to locking keep an explicit preference through the normal revision history.
         const base = service.entity(id, 'personal')!;
         const data = personalScheduleSchema.parse(base.data);
         service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base, data: { ...data, scheduleLocked: false } });
@@ -90,10 +65,9 @@ async function editFirstTime(page: Page, start = '8:05 am') {
   await expect(page.getByText('Who needs this time change?', { exact: true })).toBeVisible();
 }
 
-test('beta schedules default to locked and require confirmation before editing classes or times', async ({ page, context, browser }) => {
+test('all schedules default to locked and require confirmation before editing classes or times', async ({ page, context, browser }) => {
   test.setTimeout(120_000);
   const f = seed(true, false);
-  database((_db, service) => new BetaService(service).join(f.id, { code: BETA_CODE }));
   expect(personal(f.id).scheduleLocked).toBeUndefined();
   await authenticate(context, f.id);
   await page.goto('/classes');
@@ -132,6 +106,10 @@ test('beta schedules default to locked and require confirmation before editing c
   await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect.poll(() => personal(f.id).cycleDayOverrides[0]?.slotChanges?.first?.end).toBe('08:55');
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Biology', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+  await expect(editTimes).toBeEnabled();
+  expect(personal(f.id).scheduleLocked).toBe(false);
   await page.getByRole('button', { name: 'Lock schedule', exact: true }).click();
   await expect.poll(() => personal(f.id).scheduleLocked).toBe(true);
   await expect(editTimes).toBeDisabled();
@@ -155,16 +133,15 @@ test('beta schedules default to locked and require confirmation before editing c
     await authenticate(nonmemberContext, f.members[1]);
     const nonmember = hydrating(await nonmemberContext.newPage());
     await nonmember.goto('/classes');
-    await expect(nonmember.getByRole('button', { name: 'Edit times for Day 1', exact: true })).toBeEnabled();
-    await expect(nonmember.getByRole('button', { name: 'Unlock schedule', exact: true })).toHaveCount(0);
-    await expect(nonmember.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
+    await expect(nonmember.getByRole('button', { name: 'Edit times for Day 1', exact: true })).toBeDisabled();
+    await expect(nonmember.getByRole('button', { name: 'Unlock schedule', exact: true })).toBeVisible();
+    await expect(nonmember.getByRole('button', { name: 'Add rotation day', exact: true })).toHaveCount(0);
   } finally { await nonmemberContext.close(); }
 });
 
 test('unlocking keeps class updates that sync from another device while confirmation is open', async ({ page, context }) => {
   test.setTimeout(120_000);
   const f = seed(false, false);
-  database((_db, service) => new BetaService(service).join(f.id, { code: BETA_CODE }));
   await authenticate(context, f.id);
   await page.goto('/classes');
   await page.getByRole('button', { name: 'Unlock schedule', exact: true }).click();
@@ -196,14 +173,14 @@ test('unlocking keeps class updates that sync from another device while confirma
   expect(personal(f.id).assignments).toEqual({ A: remoteClass.id });
 });
 
-test('the schedule beta is opt-in per account and leaving preserves saved classes and bell times', async ({ page, context, browser }) => {
+test('school following works without beta membership and keeps personal edits across account refreshes', async ({ page, context, browser }) => {
   test.setTimeout(120_000);
-  const f = seed(true, false);
+  const f = seed(true);
   await authenticate(context, f.id);
   await page.goto('/classes');
   const addDay = page.getByRole('button', { name: 'Add rotation day', exact: true });
-  await expect(addDay).toBeVisible();
-  await expect(page.getByLabel('Day 1 name', { exact: true })).toBeVisible();
+  await expect(addDay).toHaveCount(0);
+  await expect(page.getByLabel('Day 1 name', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
   const classForm = page.getByRole('dialog', { name: 'Add a class', exact: true });
   await classForm.getByLabel('Class name').fill('Biology');
@@ -214,23 +191,14 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
   await day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
   await expect(saved(page)).toBeVisible();
 
-  await page.getByRole('button', { name: /^Follower 0 / }).click();
-  const account = page.getByRole('dialog', { name: 'Account', exact: true });
-  await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
-  await account.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(account.getByRole('list', { name: 'Your betas' })).toContainText(BETA_NAME);
-  await account.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(addDay).toHaveCount(0);
-  await expect(page.getByLabel('Day 1 name', { exact: true })).toHaveCount(0);
-
-  // A schoolmate sees the original UI even though someone at the same school joined the beta.
   const schoolmateContext = await browser.newContext();
   try {
     await authenticate(schoolmateContext, f.members[1]);
     const schoolmate = hydrating(await schoolmateContext.newPage());
     await schoolmate.goto('/classes');
-    await expect(schoolmate.getByRole('button', { name: 'Add rotation day', exact: true })).toBeVisible();
-    await expect(schoolmate.getByLabel('Day 1 name', { exact: true })).toBeVisible();
+    await expect(schoolmate.getByRole('button', { name: 'Add rotation day', exact: true })).toHaveCount(0);
+    await expect(schoolmate.getByLabel('Day 1 name', { exact: true })).toHaveCount(0);
+    await expect(schoolmate.getByRole('button', { name: 'Lock schedule', exact: true })).toBeVisible();
   } finally { await schoolmateContext.close(); }
 
   await editFirstTime(page);
@@ -240,44 +208,21 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
   expect(savedPersonal.classes).toEqual([expect.objectContaining({ name: 'Biology' })]);
   expect(savedPersonal.assignments).toEqual({ A: 'Biology' });
   expect(savedPersonal.customSchedule).toBeNull();
-  const expectLegacyTimetablePreserved = () => {
-    const current = personal(f.id);
-    expect(current.classes).toEqual(savedPersonal.classes);
-    expect(current.assignments).toEqual(savedPersonal.assignments);
-    expect(current.dateOverrides).toEqual(savedPersonal.dateOverrides);
-    expect(current.grade).toBe(savedPersonal.grade);
-    expect(current.scheduleLocked).toBe(savedPersonal.scheduleLocked);
-    expect(current.customSchedule).toBeNull();
-    expect(current.cycleDayOverrides).toHaveLength(1);
-    expect(current.cycleDayOverrides[0].slots).toBeDefined();
-    expect(current.cycleDayOverrides[0].slotChanges).toBeUndefined();
-    for (const rotationDay of f.school.schedule.cycleDays) {
-      expect(cycleDaySlots(rotationDay, current)).toEqual(cycleDaySlots(rotationDay, savedPersonal));
-    }
-  };
-
+  expect(savedPersonal.cycleDayOverrides[0].slots).toBeUndefined();
   await page.getByRole('button', { name: /^Follower 0 / }).click();
-  await account.getByRole('button', { name: `Leave ${BETA_NAME}`, exact: true }).click();
+  const account = page.getByRole('dialog', { name: 'Account', exact: true });
   await expect(account.getByRole('list', { name: 'Your betas' })).toHaveCount(0);
   await account.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(addDay).toBeVisible();
-  await expect(page.getByLabel('Day 1 name', { exact: true })).toBeVisible();
-  await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
-  expectLegacyTimetablePreserved();
   await page.reload();
-  await expect(addDay).toBeVisible();
+  await expect(addDay).toHaveCount(0);
   await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: /^Follower 0 / }).click();
-  await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
-  await account.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(account.getByRole('list', { name: 'Your betas' })).toContainText(BETA_NAME);
+  expect(personal(f.id)).toEqual(savedPersonal);
   await page.goto('/classes?beta=off');
   await expect(page).toHaveURL(/\/classes$/);
-  await expect(addDay).toBeVisible();
+  await expect(addDay).toHaveCount(0);
   await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
-  expect(database((_db, service) => new BetaService(service).joined(f.id))).toEqual([]);
-  expectLegacyTimetablePreserved();
+  expect(personal(f.id)).toEqual(savedPersonal);
+  expect(database(db => db.prepare('SELECT count(*) n FROM beta_members WHERE user_id=?').get(f.id))).toEqual({ n: 0 });
 });
 
 test('school followers choose before saving times, and adopted changes follow school updates again', async ({ page, context }) => {
@@ -387,16 +332,16 @@ test('private schedules require the advanced warning and suggestions need three 
   await warning.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(personal(f.id).customSchedule).toBeNull();
 
-  const adjustPeer = (id: string) => database((db, service) => {
+  const adjustPeer = (id: string) => database((_db, service) => {
     const next = personalScheduleSchema.parse(service.entity(id, 'personal')!.data);
     const day = exampleSchedule.cycleDays[0];
     next.cycleDayOverrides = [diffCycleDaySlots(day, day.slots.map(slot => slot.id === 'first' ? { ...slot, start: '08:05' } : slot))!];
-    db.prepare("UPDATE entities SET data=?,version=version+1 WHERE owner_id=? AND id='personal'").run(JSON.stringify(next), id);
+    const base = service.entity(id, 'personal')!;
+    service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base, data: next });
   });
   adjustPeer(f.members[1]);
   adjustPeer(f.members[2]);
-  adjustPeer(f.members[3]);
-  database((_db, service) => new BetaService(service).leave(f.members[3], SCHEDULE_FOLLOWING_BETA));
+
   const [suggestionResponse] = await Promise.all([
     page.waitForResponse(response => response.url().includes('scheduleSignals.list') && response.ok()),
     page.goto('/school'),
@@ -405,7 +350,7 @@ test('private schedules require the advanced warning and suggestions need three 
   expect(replies.find(reply => reply.result?.data?.signals)?.result?.data?.signals).toEqual([]);
   await expect(page.getByRole('heading', { name: 'Proposed changes', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Schedule suggestions', exact: true })).toHaveCount(0);
-  database((_db, service) => new BetaService(service).join(f.members[3], { code: BETA_CODE }));
+  adjustPeer(f.members[3]);
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Schedule suggestions', exact: true })).toBeVisible();
   await expect(page.getByText('3 classmates moved this block. Propose it?', { exact: true })).toBeVisible();

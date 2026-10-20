@@ -1,20 +1,5 @@
 import { cycleDaySchema, diffCycleDaySlots, scheduleForGrade, scheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 
-/** Preserve the current public timetable behavior while schedule following is in beta. */
-export function saveLegacyTimetableEdit(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): PersonalSchedule {
-  const used = new Set(next.cycleDays.flatMap(day => day.slots.map(slot => slot.periodId)));
-  next = scheduleSchema.parse({ ...next, periods: next.periods.filter(period => basis.periods.some(entry => entry.id === period.id) || used.has(period.id)) });
-  const keptAssignments = { ...personal.assignments, ...Object.fromEntries(Object.entries(assignments).filter(([id]) => next.periods.some(period => period.id === id))) };
-  const sameStructure = JSON.stringify(next.cycleDays.map(day => [day.id, day.label])) === JSON.stringify(basis.cycleDays.map(day => [day.id, day.label])) && next.periods.every(period => basis.periods.some(entry => JSON.stringify(entry) === JSON.stringify(period)));
-  if (personal.customSchedule || !sameStructure) return { ...personal, assignments: keptAssignments, customSchedule: next, cycleDayOverrides: [] };
-  const cycleDayOverrides = next.cycleDays.filter(day => JSON.stringify(day.slots) !== JSON.stringify(basis.cycleDays.find(entry => entry.id === day.id)?.slots)).map(day => ({ cycleDayId: day.id, slots: day.slots }));
-  // The editor only sees the school's current days. Overrides for a day the school removed stay saved until the
-  // student removes them, as the conflict notice promises, so they come back if the school restores that day.
-  const orphaned = personal.cycleDayOverrides.filter(override => !basis.cycleDays.some(day => day.id === override.cycleDayId));
-  return { ...personal, assignments: keptAssignments, cycleDayOverrides: [...cycleDayOverrides, ...orphaned] };
-}
-
-
 /** Save ordinary timetable edits as slot changes so untouched blocks follow school updates. */
 export function saveTimetableEdit(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): PersonalSchedule {
   const used = new Set(next.cycleDays.flatMap(day => day.slots.map(slot => slot.periodId)));
@@ -37,12 +22,12 @@ export function saveTimetableEdit(basis: Schedule, personal: PersonalSchedule, n
 
 /**
  * Whether saving `next` would switch a student who follows the school timetable to a private copy of it, which
- * school corrections no longer reach: renaming, adding or removing a day. Outside the beta, adding a period
- * absent from school also requires a private copy. An edit that cannot be saved at all is not a switch; saving it reports its own error.
+ * school corrections no longer reach: renaming, adding or removing a day. An edit that cannot be saved at all
+ * is not a switch; saving it reports its own error.
  */
-export function makesPrivateCopy(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments'], following = true): boolean {
+export function makesPrivateCopy(basis: Schedule, personal: PersonalSchedule, next: Schedule, assignments: PersonalSchedule['assignments']): boolean {
   if (personal.customSchedule) return false;
-  try { return (following ? saveTimetableEdit : saveLegacyTimetableEdit)(basis, personal, next, assignments).customSchedule != null; } catch { return false; }
+  try { return saveTimetableEdit(basis, personal, next, assignments).customSchedule != null; } catch { return false; }
 }
 
 type CycleDay = Schedule['cycleDays'][number];
@@ -100,46 +85,6 @@ export function rebaseTimetableEdit(before: Schedule, after: Schedule): (latest:
     const days = latest.cycleDays
       .filter((day) => !(beforeDays.has(day.id) && !afterDays.has(day.id)))
       .map((day) => { const edited = afterDays.get(day.id); return edited && !same(edited, beforeDays.get(day.id)) ? rebaseDay(beforeDays.get(day.id), edited, day) : day; });
-    for (const day of after.cycleDays) if (!beforeDays.has(day.id) && !days.some((entry) => entry.id === day.id)) days.push(day);
-    // A timetable needs a rotation day. Two removals built from one render (Day 1, then Day 2 of a two-day rotation)
-    // would leave none once the first is saved, so the later one is skipped instead of failing to save.
-    if (!days.length) return latest;
-    return { ...(merged as Schedule), cycleDays: days };
-  };
-}
-
-/** Replay public edits with the existing whole-slot merge behavior until the beta graduates. */
-function rebaseLegacyDay(before: CycleDay | undefined, after: CycleDay, latest: CycleDay): CycleDay {
-  if (!before) return after;
-  const label = after.label !== before.label ? after.label : latest.label;
-  const beforeSlots = new Map(before.slots.map((slot) => [slot.id, slot]));
-  const afterSlots = new Map(after.slots.map((slot) => [slot.id, slot]));
-  const slots = latest.slots
-    .filter((slot) => !(beforeSlots.has(slot.id) && !afterSlots.has(slot.id)))
-    .map((slot) => { const edited = afterSlots.get(slot.id); return edited && !same(edited, beforeSlots.get(slot.id)) ? edited : slot; });
-  for (const slot of after.slots) if (!beforeSlots.has(slot.id) && !slots.some((entry) => entry.id === slot.id)) slots.push(slot);
-  slots.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
-  const merged = { ...latest, label, slots };
-  return cycleDaySchema.safeParse(merged).success ? merged : { ...latest, label, slots: after.slots };
-}
-
-/**
- * Replays an edit that turned `before` into `after` onto `latest`, the newest timetable, touching only what the edit
- * changed. The timetable grid builds edits from the render it showed, which may predate a save still running, so
- * replaying keeps that save's changes: other fields, days, and on a changed day its other slots and its name.
- * An edit that would leave no rotation day changes nothing.
- */
-export function rebaseLegacyTimetableEdit(before: Schedule, after: Schedule): (latest: Schedule) => Schedule {
-  return (latest) => {
-    const merged = { ...latest } as Record<string, unknown>;
-    for (const key of Object.keys(after) as (keyof Schedule)[]) {
-      if (key !== 'cycleDays' && !same(after[key], before[key])) merged[key] = after[key];
-    }
-    const beforeDays = new Map(before.cycleDays.map((day) => [day.id, day]));
-    const afterDays = new Map(after.cycleDays.map((day) => [day.id, day]));
-    const days = latest.cycleDays
-      .filter((day) => !(beforeDays.has(day.id) && !afterDays.has(day.id)))
-      .map((day) => { const edited = afterDays.get(day.id); return edited && !same(edited, beforeDays.get(day.id)) ? rebaseLegacyDay(beforeDays.get(day.id), edited, day) : day; });
     for (const day of after.cycleDays) if (!beforeDays.has(day.id) && !days.some((entry) => entry.id === day.id)) days.push(day);
     // A timetable needs a rotation day. Two removals built from one render (Day 1, then Day 2 of a two-day rotation)
     // would leave none once the first is saved, so the later one is skipped instead of failing to save.

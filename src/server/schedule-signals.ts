@@ -1,4 +1,3 @@
-import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
 import { TRPCError } from '@trpc/server';
 import { cycleDaySlots, effectiveSchedule, normalizePersonalSchedule, personalScheduleSchema, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { CommunityService } from './community';
@@ -19,7 +18,6 @@ export class ScheduleSignalsService {
   list(viewerId: string): ScheduleSignals {
     const viewer = this.service.ready(viewerId);
     if (!viewer.schoolId) throw new TRPCError({ code: 'FORBIDDEN', message: 'Join a school to see schedule suggestions.' });
-    if (!this.service.scheduleFollowingEnabled(viewerId)) throw new TRPCError({ code: 'FORBIDDEN', message: 'Join the schedule-following beta to see schedule suggestions.' });
     const school = this.service.school(viewer.schoolId);
     const own = this.service.entity(viewerId, 'personal');
     const personal = own && !own.deleted ? personalScheduleSchema.safeParse(own.data) : null;
@@ -33,11 +31,10 @@ export class ScheduleSignalsService {
     const { gradeSchedules: _variants, ...shared } = effectiveSchedule(school.schedule, { ...personal.data, periods: [] });
     const counts = new Map<string, { day: typeof shared.cycleDays[number]; slot: typeof shared.cycleDays[number]['slots'][number]; start: string; end: string; count: number }>();
     const rows = this.service.db.prepare(`SELECT e.data, u.reviewed_version FROM users u
-      JOIN beta_members m ON m.user_id=u.id AND m.beta_key=?
       JOIN entities e ON e.owner_id=u.id AND e.id='personal' AND e.kind='personal' AND e.deleted=0
       WHERE u.school_id=? AND u.id<>? AND u.suspended_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id=? AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=?))`)
-      .all(SCHEDULE_FOLLOWING_BETA, school.id, viewerId, viewerId, viewerId) as { data: string; reviewed_version: number | null }[];
+      .all(school.id, viewerId, viewerId, viewerId) as { data: string; reviewed_version: number | null }[];
     const revisions = new Map<number, Schedule | undefined>();
     for (const row of rows) {
       const parsed = personalScheduleSchema.safeParse(JSON.parse(row.data));

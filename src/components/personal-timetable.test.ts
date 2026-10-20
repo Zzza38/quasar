@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
 import { cycleDaySlots, diffCycleDaySlots, personalScheduleSchema, resolveDay, scheduleSchema, withCycleDay, type Schedule } from '@/domain/schedule';
-import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, rebaseLegacyTimetableEdit, removeClass, saveTimetableEdit, saveLegacyTimetableEdit, useSchoolTimetable } from './personal-timetable';
+import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, removeClass, saveTimetableEdit, useSchoolTimetable } from './personal-timetable';
 it('automatically saves a changed day as an override while other days follow the school', () => {
   const next = structuredClone(exampleSchedule);
   next.cycleDays[0].slots[0].end = '08:55';
@@ -191,47 +191,4 @@ it('reports a queued edit to a block removed by an earlier save', () => {
   const latest = structuredClone(exampleSchedule);
   latest.cycleDays[0].slots.shift();
   expect(() => rebaseTimetableEdit(exampleSchedule, edited)(latest)).toThrow('removed');
-});
-
-
-describe('public timetable behavior outside the schedule-following beta', () => {
-  it('keeps the public whole-slot replay while beta merges separate edits to a slot field', () => {
-    const edited = structuredClone(exampleSchedule);
-    edited.cycleDays[0].slots[0].end = '08:55';
-    const updated = structuredClone(exampleSchedule);
-    updated.cycleDays[0].slots[0].start = '08:05';
-    expect(rebaseLegacyTimetableEdit(exampleSchedule, edited)(updated).cycleDays[0].slots[0]).toMatchObject({ start: '08:00', end: '08:55' });
-    expect(rebaseTimetableEdit(exampleSchedule, edited)(updated).cycleDays[0].slots[0]).toMatchObject({ start: '08:05', end: '08:55' });
-  });
-
-  it('saves a complete edited day while the beta saves only the edited slot fields', () => {
-    const next = structuredClone(exampleSchedule);
-    next.cycleDays[0].slots[0].end = '08:55';
-    const legacy = saveLegacyTimetableEdit(exampleSchedule, examplePersonalSchedule, next, examplePersonalSchedule.assignments);
-    const beta = saveTimetableEdit(exampleSchedule, examplePersonalSchedule, next, examplePersonalSchedule.assignments);
-    expect(legacy.cycleDayOverrides).toEqual([{ cycleDayId: next.cycleDays[0].id, slots: next.cycleDays[0].slots }]);
-    expect(beta.cycleDayOverrides[0].slots).toBeUndefined();
-    const correctedSchool = structuredClone(exampleSchedule);
-    correctedSchool.cycleDays[0].slots[1].start = '09:15';
-    expect(cycleDaySlots(correctedSchool.cycleDays[0], legacy)[1].start).toBe('09:10');
-    expect(cycleDaySlots(correctedSchool.cycleDays[0], beta)[1].start).toBe('09:15');
-  });
-
-  it('asks for a private copy when a public user adds a period absent from the school', () => {
-    const next = structuredClone(exampleSchedule);
-    next.periods.push({ id: 'class-art', label: 'Art', kind: 'class' });
-    next.cycleDays[0].slots.push({ id: 'private-art', periodId: 'class-art', start: '13:00', end: '13:45' });
-    expect(makesPrivateCopy(exampleSchedule, examplePersonalSchedule, next, examplePersonalSchedule.assignments, false)).toBe(true);
-    expect(makesPrivateCopy(exampleSchedule, examplePersonalSchedule, next, examplePersonalSchedule.assignments, true)).toBe(false);
-    expect(saveLegacyTimetableEdit(exampleSchedule, examplePersonalSchedule, next, examplePersonalSchedule.assignments).customSchedule).toEqual(next);
-  });
-
-  it('keeps schedule locks, date adjustments, and orphaned legacy days', () => {
-    const orphan = { cycleDayId: 'retired', slots: [] };
-    const personal = { ...examplePersonalSchedule, scheduleLocked: true, cycleDayOverrides: [orphan], dateOverrides: [{ date: '2026-09-15', closed: true }] };
-    const saved = saveLegacyTimetableEdit(exampleSchedule, personal, exampleSchedule, personal.assignments);
-    expect(saved.scheduleLocked).toBe(true);
-    expect(saved.dateOverrides).toEqual(personal.dateOverrides);
-    expect(saved.cycleDayOverrides).toEqual([orphan]);
-  });
 });

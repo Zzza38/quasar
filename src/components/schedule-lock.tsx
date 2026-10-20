@@ -6,9 +6,9 @@ import { errorMessage } from '@/client/api';
 import type { AppState } from './app-state';
 import { Button, Callout, IconButton, Modal, Spacer } from './primitives';
 
-/** Keep an explicit choice; a beta member without one starts with the full schedule locked. */
-export function withDefaultScheduleLock(personal: PersonalSchedule, defaultLocked: boolean): PersonalSchedule {
-  return defaultLocked && personal.scheduleLocked === undefined ? { ...personal, scheduleLocked: true } : personal;
+/** Keep an explicit choice; a schedule without one starts fully locked. */
+export function withDefaultScheduleLock(personal: PersonalSchedule): PersonalSchedule {
+  return personal.scheduleLocked === undefined ? { ...personal, scheduleLocked: true } : personal;
 }
 
 /** Confirm before any personal schedule write, including drag-and-drop assignments. */

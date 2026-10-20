@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+/** Former beta key, retained for retirement regression tests. Schedule following is available to everyone. */
 export const SCHEDULE_FOLLOWING_BETA = 'schedule-following';
 
 /**
