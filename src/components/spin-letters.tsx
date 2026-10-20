@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 
 type TextRun = { original: string; wrapper: HTMLSpanElement };
 // Letters the I'm Shy mod already split keep its wrappers; the Spin stylesheet rotates those glyphs too.
-const EXCLUDED = 'script, style, noscript, textarea, input, [contenteditable], [role="textbox"], .sr-only, [data-spin-text], [data-shy-text], svg, img, video, canvas';
+const EXCLUDED = 'script, style, noscript, textarea, input, [contenteditable], [role="textbox"], .sr-only, [data-spin-text], [data-shy-text], svg, img, video, canvas, .broken-hearts';
 
 /** Wraps every visible grapheme in its own inline-block span so the Spin stylesheet can rotate each letter. */
 export function SpinLetters() {

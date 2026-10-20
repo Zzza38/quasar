@@ -11,10 +11,10 @@ type TextRun = { original: string; wrapper: HTMLSpanElement };
 const CONTROLS = 'button, [role="button"]';
 const MEDIA = 'img, svg, video, canvas, [role="img"]';
 const LAYERS = '[role="dialog"], [role="alertdialog"], [data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"], [data-slot="select-content"]';
-const TEXT_EXCLUDED = 'script, style, noscript, textarea, input, [contenteditable], [role="textbox"], .sr-only, [data-shy-text]';
+const TEXT_EXCLUDED = 'script, style, noscript, textarea, input, [contenteditable], [role="textbox"], .sr-only, [data-shy-text], .broken-hearts';
 
 function isUiPiece(element: HTMLElement): boolean {
-  if (element.closest('.sr-only, script, style, noscript, [data-shy-text], svg') || element.matches('main, header, footer, nav, aside, section, form, [role="dialog"], [role="alertdialog"], [data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], .rgb-mode-overlay')) return false;
+  if (element.closest('.broken-hearts, .sr-only, script, style, noscript, [data-shy-text], svg') || element.matches('main, header, footer, nav, aside, section, form, [role="dialog"], [role="alertdialog"], [data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], .rgb-mode-overlay')) return false;
   const style = getComputedStyle(element);
   if (style.display === 'contents' || style.position === 'fixed' && element.getAttribute('data-state') !== null && !element.matches(CONTROLS)) return false;
   // Layout-only wrappers have no separate visible piece to move.
@@ -159,7 +159,7 @@ export function ShyParticles() {
       }
       splitText();
       const mediaCandidates = [...document.querySelectorAll<Visual>(MEDIA)].filter(element =>
-        !element.closest('.sr-only, script, style, [data-shy-text]') && !element.querySelector('[data-shy-glyph]'));
+        !element.closest('.broken-hearts, .sr-only, script, style, [data-shy-text]') && !element.querySelector('[data-shy-glyph]'));
       const candidateSet = new Set<Element>(mediaCandidates);
       const media = mediaCandidates.filter(element => {
         for (let parent = element.parentElement; parent; parent = parent.parentElement) if (candidateSet.has(parent)) return false;
