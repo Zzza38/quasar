@@ -45,8 +45,8 @@ export interface TaskDay {
   items: TaskItem[];
 }
 
-/** Groups split into one section per due date, so Thursday's work does not run into Friday's. */
-const DAY_SPLIT_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['before-school', 'week']);
+/** Every group with due dates splits into one section per date, so Thursday's work does not run into Friday's. */
+const UNDATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['undated']);
 
 /** Splits a group's items by due date, in date order; items keep their incoming order within each day. */
 export function splitByDay(items: TaskItem[]): TaskDay[] {
@@ -71,8 +71,8 @@ export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorr
  * rest of the week. Work due on days off before school resumes goes ahead of that group, with date chips.
  * When a break pushes the next school day past the week window, Next 7 days comes first, then any remaining
  * work before school resumes, then the next school day and Later. Groups stay in date order.
- * Items keep their incoming order within each group. With `splitDays` (the task-days beta), Before school resumes
- * and Next 7 days also carry one section per due date.
+ * Items keep their incoming order within each group. With `splitDays` (the task-days beta), every group except
+ * No due date also carries one section per due date.
  */
 export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule; splitDays?: boolean }): TaskGroup[] {
   const { today, nowTime } = context;
@@ -113,5 +113,5 @@ export function groupTasks(items: TaskItem[], context: { today: string; nowTime:
   ];
   return groups
     .filter((group): group is TaskGroup => group !== null && group.items.length > 0)
-    .map((group) => context.splitDays && DAY_SPLIT_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
+    .map((group) => context.splitDays && !UNDATED_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
 }

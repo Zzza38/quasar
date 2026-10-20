@@ -110,13 +110,15 @@ export function TasksView({ state }: { state: AppState }) {
               On phones the block becomes a line above the rows, lined up with the task titles. */}
           <h3 id={`day-${group.key}-${day.date}`} className="flex items-baseline gap-1.5 pl-11 pt-2 sm:flex-col sm:items-center sm:gap-0.5 sm:pl-0 sm:pt-3">
             <span className="sr-only">{day.title}</span>
-            <span aria-hidden="true" className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{day.weekday}</span>
-            <span aria-hidden="true" className="text-[13px] font-semibold tabular-nums text-foreground sm:text-[22px] sm:leading-none">{day.day}</span>
-            <span aria-hidden="true" className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">{day.month}</span>
+            {/* Overdue rows lose their red date chip here, so the date block carries the red instead. */}
+            <span aria-hidden="true" className={cn('text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground', group.key === 'overdue' && 'text-destructive')}>{day.weekday}</span>
+            <span aria-hidden="true" className={cn('text-[13px] font-semibold tabular-nums text-foreground sm:text-[22px] sm:leading-none', group.key === 'overdue' && 'text-destructive')}>{day.day}</span>
+            <span aria-hidden="true" className={cn('text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70', group.key === 'overdue' && 'text-destructive/70')}>{day.month}</span>
           </h3>
           <ul className="grid gap-0.5">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} />)}</ul>
         </section>)}</div>
-          : <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>}
+          // With date columns on, No due date keeps its checkboxes in line with the dated groups above it.
+          : <ul className={cn('grid gap-0.5', splitDays && 'sm:pl-14')}>{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>}
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
