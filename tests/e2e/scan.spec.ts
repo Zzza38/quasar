@@ -45,6 +45,9 @@ function seed() {
     const service = new Service(db, 'browser-owner@example.com');
     const school = service.createSchool(id, { name: `Scan High ${id.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
     service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
+    const base = service.entity(id, 'personal')!;
+    service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base,
+      data: { ...base.data, scheduleLocked: false } });
     directoryId = new DirectoryService(service).save(id, { schoolId: school.id, details: { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', grades: ['9'] } }).id;
     return { id, school };
   } finally { db.close(); }
