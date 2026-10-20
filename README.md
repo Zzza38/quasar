@@ -1,5 +1,7 @@
 # Quasar
 
+Production domain: `https://getquasarapp.com`. The [domain move runbook](docs/DOMAIN_MOVE.md) covers cutover and the notice at the previous address.
+
 Phases 1 to 4 of [PLAN.md](PLAN.md): a personal school schedule and task tracker with a school community, friends-only one-to-one chat and one public Global chat room. The UI is a phone-first app with seven views (Today, Schedule, Tasks, Classes, School, People, Messages) at their own paths, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS with [shadcn/ui](https://ui.shadcn.com) (Radix primitives, lucide icons), tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.

@@ -1,5 +1,7 @@
 # Quasar through Cloudflare Tunnel
 
+For the move to `https://getquasarapp.com` and the notice on `quasar.ziona.dev`, follow [the domain move runbook](DOMAIN_MOVE.md). The deployment history below describes the original hostname.
+
 Quasar stays on the existing server with SQLite and its background worker. Cloudflare provides the public HTTPS route; the server must remain powered on and connected. No Vercel deployment or database conversion is needed.
 
 ## Live on this host

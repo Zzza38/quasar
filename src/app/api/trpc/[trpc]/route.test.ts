@@ -52,4 +52,14 @@ describe('tRPC route body limit',()=>{
     expect((await POST(new Request(url,{method:'POST',headers:{...headers,origin:'https://evil.test'},body:'{}'}))).status).toBe(403);
     expect((await POST(new Request(url,{method:'POST',headers:{origin:'http://localhost','content-type':'text/plain'},body:'{}'}))).status).toBe(415);
   });
+  it('accepts the new production origin behind the tunnel and rejects the former origin',async()=>{
+    process.env.NEXTAUTH_URL='https://getquasarapp.com';
+    try {
+      const proxied='http://localhost:3003/api/trpc/tasks.create';
+      expect((await POST(new Request(proxied,{method:'POST',headers:{...headers,origin:'https://getquasarapp.com'},body:'{}'}))).status).toBe(200);
+      trpc.fetchRequestHandler.mockClear();
+      expect((await POST(new Request(proxied,{method:'POST',headers:{...headers,origin:'https://quasar.ziona.dev'},body:'{}'}))).status).toBe(403);
+      expect(trpc.fetchRequestHandler).not.toHaveBeenCalled();
+    } finally { delete process.env.NEXTAUTH_URL; }
+  });
 });
