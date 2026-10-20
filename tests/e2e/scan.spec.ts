@@ -7,6 +7,9 @@ import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
 import { exampleSchedule } from '../../src/domain/example';
+import { dirname, join } from 'node:path';
+import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
+import { BetaService } from '../../src/server/betas';
 
 /** Stands in for any OpenAI-compatible vision provider; the config points SCAN_API_URL here. */
 const MOCK_PORT = Number(new URL(process.env.SCAN_API_URL ?? 'http://127.0.0.1:3199/v1').port);
@@ -162,6 +165,42 @@ test('reads a schedule PDF without newer browser APIs: renders its pages and sen
   expect(sent.prompt).toContain('Advisory meets in room 12.');
 });
 
+
+test('pdf-safari beta: reads a PDF where ReadableStream is not async-iterable, as in Safari', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  // Safari has no ReadableStream[Symbol.asyncIterator], which pdf.js's getTextContent() needs for its `for await`.
+  await page.addInitScript(() => {
+    Reflect.deleteProperty(ReadableStream.prototype, Symbol.asyncIterator);
+    Reflect.deleteProperty(ReadableStream.prototype, 'values');
+  });
+  const maker = await context.newPage();
+  await maker.setContent('<h1>10-Day Schedule</h1><p>Algebra II (Ms. Ortiz, 204)</p>');
+  const pdf = await maker.pdf({ format: 'Letter' });
+  await maker.close();
+  const upload = async () => {
+    await page.goto('/classes');
+    await page.getByRole('button', { name: 'Import schedule' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'schedule.pdf', mimeType: 'application/pdf', buffer: pdf });
+    return dialog;
+  };
+  // Outside the beta the scan fails as on Safari ("undefined is not a function"; Chromium words it "is not async iterable").
+  await expect((await upload()).getByRole('alert').filter({ hasText: /is not (a function|async iterable)/ })).toBeVisible();
+
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some(beta => beta.key === 'pdf-safari')) writeBetaRegistry(createBeta(registry, { key: 'pdf-safari', name: 'Safari PDF import', code: 'SAFARIPDF' }), listPath);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { new BetaService(new Service(db, 'browser-owner@example.com'), () => readBetaRegistry(listPath)).join(fixture.id, { code: 'SAFARIPDF' }); } finally { db.close(); }
+
+  const dialog = await upload();
+  await expect(dialog.getByRole('img', { name: 'Page 1 of schedule.pdf' })).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  const before = requests.length;
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  expect(requests[before].prompt).toContain('Algebra II (Ms. Ortiz, 204)');
+});
 
 test('keeps the text of same-named PDFs apart and reads only the pages it shows', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
