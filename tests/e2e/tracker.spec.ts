@@ -1328,7 +1328,7 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await page.mouse.up();
   await savePersonalTimes(page);
   await expect(block('9:10–10:10 AM: Lunch')).toBeVisible();
-  await expect(status).toHaveText('Placed Lunch in B.');
+  await expect(saved(page)).toBeVisible();
   await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slotChanges: { second: { periodId: 'lunch', base: second } } }], custom: null });
 
   // By tap, in the class order: the period, then the empty block, which says it can take it.
@@ -1338,7 +1338,8 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await block('10:50–11:50 AM: C').click();
   await savePersonalTimes(page);
   await expect(block('10:50–11:50 AM: Lunch')).toBeVisible();
-  await expect(status).toHaveText('Placed Lunch in C.');
+  await expect(saved(page)).toBeVisible();
+  await expect.poll(personal).toMatchObject({ overrides: [{ cycleDayId: 'day-1', slotChanges: { third: { periodId: 'lunch' } } }] });
   await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
 
   // A period's own block dragged onto an empty block moves into it, and its old block goes.
@@ -1346,7 +1347,7 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await savePersonalTimes(page);
   await expect(block('8:00–9:00 AM: Lunch')).toBeVisible();
   await expect(block('10:15–10:45 AM: Lunch')).toHaveCount(0);
-  await expect(status).toHaveText('Moved Lunch to A.');
+  await expect(saved(page)).toBeVisible();
   await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slotChanges: {
     first: { periodId: 'lunch', base: first }, second: { periodId: 'lunch', base: second },
     'lunch-slot': null, third: { periodId: 'lunch', base: third },
@@ -1362,7 +1363,8 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await page.getByRole('button', { name: 'Place Lunch', exact: true }).click();
   await savePersonalTimes(page);
   await expect(block2('8:00–9:00 AM: Lunch')).toBeVisible();
-  await expect(status).toHaveText('Placed Lunch in B.');
+  await expect(saved(page)).toBeVisible();
+  await expect.poll(personal).toMatchObject({ overrides: [{}, { cycleDayId: 'day-2', slotChanges: { first: { periodId: 'lunch' } } }] });
   // A period's own block, by tap: it moves into the empty block it is tapped onto.
   await block2('8:00–9:00 AM: Lunch').click();
   await expect(prompt).toHaveText('Lunch selected. Tap an empty block to move it there, or tap an empty time.');
@@ -1370,7 +1372,8 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await savePersonalTimes(page);
   await expect(block2('9:10–10:10 AM: Lunch')).toBeVisible();
   await expect(block2('8:00–9:00 AM: Lunch')).toHaveCount(0);
-  await expect(status).toHaveText('Moved Lunch to C.');
+  await expect(saved(page)).toBeVisible();
+  await expect.poll(personal).toMatchObject({ overrides: [{}, { cycleDayId: 'day-2', slotChanges: { first: null, second: { periodId: 'lunch' } } }] });
 
   // A block that holds a class is not taken over: the drop is refused where it would have landed.
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
