@@ -605,6 +605,27 @@ function migrate(db: Db): void {
           AND (sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM chat_group_messages WHERE sender_id=${row}.blocked_id));
     END`);
   }
+
+  // Migration 24: betas (src/server/betas.ts). The owner creates a beta with a join code (only its SHA-256 is kept);
+  // a member who types the code joins it, and code behind useBeta()/<Beta> turns on for them. Leaving needs no code.
+  // Closing a beta deletes it and its members. Beta feedback is a support request of kind 'beta:<key>' whose
+  // `detail` is the diagnostics JSON the member saw before sending.
+  if (!(db.pragma('table_info(support_requests)') as {name: string}[]).some(column => column.name === 'detail')) db.exec('ALTER TABLE support_requests ADD COLUMN detail TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS betas (
+      key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      code_hash TEXT NOT NULL UNIQUE, open INTEGER NOT NULL DEFAULT 1, max_members INTEGER,
+      created_at TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS beta_members (
+      beta_key TEXT NOT NULL REFERENCES betas(key) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY(beta_key, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(24, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

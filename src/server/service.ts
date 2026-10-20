@@ -10,6 +10,8 @@ import { scheduleFeedStatus } from './schedule-feed';
 import { CommunityService, emailDomainsSchema, parseEmailDomains } from './community';
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
+import { BetaService } from './betas';
+import type { StoredBetaDiagnostics } from '@/domain/betas';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
 
 /** `avatar` is the picture URL other members see (docs/CHAT.md §13): an uploaded picture, else the Google picture, else null for initials. */
@@ -381,7 +383,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
@@ -507,8 +509,10 @@ export class Service {
   }
   requests(id: string) {
     this.admin(id);
-    return this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind
-      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban'}[];
+    // `detail` is a beta report's diagnostics (src/server/betas.ts); other kinds have none.
+    const rows = this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind,r.detail
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban' | `beta:${string}`; detail: string | null}[];
+    return rows.map(({ detail, ...row }) => ({ ...row, diagnostics: detail ? JSON.parse(detail) as StoredBetaDiagnostics : null }));
   }
   resolveRequest(id: string, requestId: string) {
     this.admin(id);

@@ -3,6 +3,7 @@ import { signInErrorMessage, signInReturnPath } from '@/lib/sign-in';
 import { getUserId } from '@/server/auth';
 import { getDb } from '@/server/db';
 import { Service } from '@/server/service';
+import { BetaService } from '@/server/betas';
 import { siteOrigin } from '@/server/site';
 
 export type SearchParams = Record<string, string | string[] | undefined>;
@@ -29,7 +30,11 @@ export async function initialBoot(searchParams: SearchParams): Promise<InitialBo
     if (!userId) {
       return { kind: 'signed-out', signInError: signInErrorMessage(first(searchParams.error)), callbackPath: signInReturnPath(first(searchParams.callbackUrl), siteOrigin()), renderedAt };
     }
-    return { kind: 'workspace', workspace: new Service(getDb()).workspace(userId, { legacyTasks: false }), renderedAt };
+    const service = new Service(getDb());
+    // `?beta=off` leaves every beta (README "Running a beta"). It runs here, before any client code, so it still works
+    // when a beta breaks the page badly enough that the Account sheet can't open.
+    if (first(searchParams.beta) === 'off') new BetaService(service).leaveAll(userId);
+    return { kind: 'workspace', workspace: service.workspace(userId, { legacyTasks: false }), renderedAt };
   } catch {
     // The client boots the way it always did: device cache first, then the session check and the workspace.
     return { kind: 'none', renderedAt };
