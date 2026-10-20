@@ -163,6 +163,29 @@ test('reads a schedule PDF without newer browser APIs: renders its pages and sen
 });
 
 
+test('reads a PDF where ReadableStream is not async-iterable, as in older Safari', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  // Older Safari has no ReadableStream[Symbol.asyncIterator], which pdf.js's getTextContent() needs for its `for await`.
+  await page.addInitScript(() => {
+    Reflect.deleteProperty(ReadableStream.prototype, Symbol.asyncIterator);
+    Reflect.deleteProperty(ReadableStream.prototype, 'values');
+  });
+  const maker = await context.newPage();
+  await maker.setContent('<h1>10-Day Schedule</h1><p>Algebra II (Ms. Ortiz, 204)</p>');
+  const pdf = await maker.pdf({ format: 'Letter' });
+  await maker.close();
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'schedule.pdf', mimeType: 'application/pdf', buffer: pdf });
+  await expect(dialog.getByRole('img', { name: 'Page 1 of schedule.pdf' })).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  const before = requests.length;
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  expect(requests[before].prompt).toContain('Algebra II (Ms. Ortiz, 204)');
+});
+
 test('keeps the text of same-named PDFs apart and reads only the pages it shows', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   const printed = async (html: string) => {
