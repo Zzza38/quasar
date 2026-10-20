@@ -75,9 +75,17 @@ The current private installation has its worker and VAPID keys configured. Local
 
 Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory. The model can ask the server for up to six enlarged close-ups of parts of the photos (contrast-enhanced or rotated if it wants) before it answers, and it says the photo is too unclear instead of guessing; rows it is not sure of are flagged for the student to check. The student confirms or edits every row before anything is saved. A row keeps the model's directory match only when the printed name could be that class: the same words in any order, or a shortened name at the same level ("AP Chem" for "AP Chemistry"), never a different number, honors or AP level. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY`, `SCAN_MODEL_REASONING`, `SCAN_MODEL_TEMPERATURE`, `SCAN_MODEL_VARIANT` (on OpenRouter `:floor`, the cheapest provider, by default) and `SCAN_ZOOM` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
 
+## School schedule following
+
+Personal timetables follow shared school bell times. A recurring correction can be for the school or only for the student. Personal adjustments save changed slot fields, inherit untouched school times, and clear when the school adopts them. Matching adjustments from at least three other classmates in the same grade can suggest a school proposal. Full private timetable controls live under advanced settings and warn that school corrections will no longer reach that timetable.
+
+A personal schedule without a saved lock preference starts locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
+
+Schedule following is available to everyone and does not depend on beta enrollment. Removing the former `schedule-following` beta does not disable it or replace saved adjustments. Existing queued edits and retry payloads keep their original revisions. Older clients that cannot read sparse adjustments receive a reload message before an incompatible write commits.
+
 ## Running a beta
 
-A beta lets chosen members try a change on the real site (https://quasar.ziona.dev) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
 
 Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
 
@@ -116,7 +124,7 @@ The command prints the code. `/admin` → **Betas** also shows every beta's code
 ### 3. Testers join, leave and send feedback
 
 - **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
-- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://quasar.ziona.dev/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
+- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://getquasarapp.com/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
 - **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
 
 Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests.

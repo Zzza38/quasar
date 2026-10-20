@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { mergeMutation, mergePreferringLocal, type Entity, type EntityKind, type Mutation, type SyncResult } from "../domain/sync";
-import { personalScheduleSchema } from "../domain/schedule";
+import { normalizePersonalSchedule, personalScheduleSchema, scheduleSchema, type Schedule } from "../domain/schedule";
 import { completionTime, stampCompletion, taskSchema, withoutCompletionEdit } from "../domain/task";
 import { errorMessage, isPermanentRejection, isTransportFailure } from "./api";
 
@@ -15,6 +15,8 @@ interface QueuedMutation {
   mutation: Mutation;
   state: "queued" | "sending" | "conflict";
   conflict?: ConflictInfo;
+  /** School revision used to interpret a queued legacy day copy. Never changes a frozen request. */
+  personalScheduleBase?: Schedule;
 }
 
 interface StoredWorkspace {
@@ -78,15 +80,39 @@ function empty(accountId: string): StoredWorkspace {
   return { accountId, server: [], queue: [], context: null, lastError: null, lease: null, signingOut: null };
 }
 
+function schoolContext(context: Record<string, unknown> | null): { id: string; schedule: Schedule; previous?: Schedule } | null {
+  const school = context?.school as { id?: unknown; schedule?: unknown } | undefined;
+  if (!school || typeof school.id !== "string") return null;
+  const schedule = scheduleSchema.safeParse(school.schedule);
+  if (!schedule.success) return null;
+  const previous = scheduleSchema.safeParse((context?.review as { previous?: unknown } | undefined)?.previous);
+  return { id: school.id, schedule: schedule.data, ...(previous.success ? { previous: previous.data } : {}) };
+}
+
+/** Comparison and rendering projections never replace a server entity or an already-sending payload. */
+function personalProjection(state: StoredWorkspace, data: Record<string, unknown> | null, previous?: Schedule): Record<string, unknown> | null {
+  if (!data) return data;
+  const school = schoolContext(state.context);
+  const parsed = personalScheduleSchema.safeParse(data);
+  if (!parsed.success) return data;
+  return school ? normalizePersonalSchedule(school.schedule, parsed.data, previous ?? school.previous) : data;
+}
+
+function personalMergeInputs(state: StoredWorkspace, mutation: Mutation, current: Entity | null, previous?: Schedule): { mutation: Mutation; current: Entity | null } {
+  if (mutation.kind !== "personal") return { mutation, current };
+  const project = (entity: Entity | null) => entity && !entity.deleted ? { ...entity, data: personalProjection(state, entity.data, previous)! } : entity;
+  return { mutation: { ...mutation, base: project(mutation.base), data: personalProjection(state, mutation.data, previous) }, current: project(current) };
+}
+
 function optimistic(state: StoredWorkspace): Entity[] {
-  const entities = new Map(state.server.map((entity) => [keyOf(entity), entity]));
-  for (const { mutation } of state.queue) {
+  const entities = new Map(state.server.map((entity) => [keyOf(entity), entity.kind === "personal" && !entity.deleted ? { ...entity, data: personalProjection(state, entity.data)! } : entity]));
+  for (const { mutation, personalScheduleBase } of state.queue) {
     const key = keyOf(mutation);
     entities.set(key, {
       id: mutation.id,
       kind: mutation.kind,
       version: entities.get(key)?.version ?? mutation.base?.version ?? 0,
-      data: mutation.data ?? {},
+      data: mutation.kind === "personal" ? personalProjection(state, mutation.data, personalScheduleBase) ?? {} : mutation.data ?? {},
       deleted: mutation.data === null,
     });
   }
@@ -394,7 +420,14 @@ export class OfflineWorkspace {
 
   async setContext(context: Record<string, unknown>): Promise<void> {
     const saved = clone(context);
-    await this.update((state) => { state.context = saved; });
+    await this.update((state) => {
+      const next = schoolContext(saved), old = schoolContext(state.context);
+      if (next) {
+        const previous = next.previous ?? (old?.id === next.id ? old.schedule : undefined) ?? next.schedule;
+        for (const item of state.queue) if (item.mutation.kind === "personal" && item.state !== "sending" && !item.personalScheduleBase) item.personalScheduleBase = previous;
+      }
+      state.context = saved;
+    });
   }
 
   /**
@@ -433,6 +466,7 @@ export class OfflineWorkspace {
       const base = optimistic(state).find((entity) => entity.id === id && entity.kind === kind) ?? null;
       state.queue.push({
         state: "queued",
+        ...(kind === "personal" && schoolContext(state.context) ? { personalScheduleBase: schoolContext(state.context)!.schedule } : {}),
         // A draft or undo snapshot may predate a calendar refresh; its stale metadata is not an edit.
         // completedAt is stamped here only so a task checked off offline sorts as just done; the server restamps it.
         mutation: { mutationId: crypto.randomUUID(), kind, id, base, data: withServerImported(kind, kind === "task" && desired ? stampCompletion(desired, base && !base.deleted ? base.data : null, new Date()) : desired, base) },
@@ -468,10 +502,11 @@ export class OfflineWorkspace {
             if (blocked.has(key)) continue;
             if (item.state === "queued") {
               const current = state.server.find((entity) => keyOf(entity) === key) ?? null;
-              const rebased = mergeMutation({ ...item.mutation, data: withoutServerFields(item.mutation.kind, item.mutation.data, item.mutation.base) }, current);
+              const comparison = personalMergeInputs(state, { ...item.mutation, data: withoutServerFields(item.mutation.kind, item.mutation.data, item.mutation.base) }, current, item.personalScheduleBase);
+              const rebased = mergeMutation(comparison.mutation, comparison.current);
               if (rebased.status === "conflict") {
                 item.state = "conflict";
-                item.conflict = { current: rebased.current, paths: rebased.paths };
+                item.conflict = { current, paths: rebased.paths };
                 blocked.add(key);
                 continue;
               }

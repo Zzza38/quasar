@@ -48,7 +48,7 @@ export class BetaService {
 
   /**
    * The betas the member is in, for the workspace (useBeta reads it on the client). Memberships of a beta that is no
-   * longer in the list (removed, its key retired) are left in the table but ignored.
+   * longer in the list are ignored. Shipped features keep working independently of their old memberships.
    */
   joined(userId: string): JoinedBeta[] {
     const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
@@ -87,19 +87,23 @@ export class BetaService {
   /** Leaves one beta. No code: a member stuck in a broken beta must always be able to get out. */
   leave(userId: string, key: string): JoinedBeta[] {
     this.service.user(userId);
-    if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
-    return this.joined(userId);
+    return this.db.transaction(() => {
+      if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
+      return this.joined(userId);
+    }).immediate();
   }
 
   /** Leaves every beta: the crash screen's button and `/?beta=off`. */
   leaveAll(userId: string): JoinedBeta[] {
     this.service.user(userId);
-    const keys = (this.db.prepare('SELECT beta_key FROM beta_members WHERE user_id=?').pluck().all(userId) as string[]);
-    if (keys.length) {
-      this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
-      this.service.audit(userId, 'beta.leave', null, { keys });
-    }
-    return [];
+    return this.db.transaction(() => {
+      const keys = this.db.prepare('SELECT beta_key FROM beta_members WHERE user_id=?').pluck().all(userId) as string[];
+      if (keys.length) {
+        this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
+        this.service.audit(userId, 'beta.leave', null, { keys });
+      }
+      return [];
+    }).immediate();
   }
 
   /** Feedback about a beta the member is in. Shares the five-open-requests limit with every other support request. */
@@ -132,7 +136,9 @@ export class BetaService {
   removeMember(adminId: string, raw: z.infer<typeof betaMemberSchema>): void {
     this.service.admin(adminId);
     const input = betaMemberSchema.parse(raw);
-    if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
-    this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
+    this.db.transaction(() => {
+      if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
+      this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
+    }).immediate();
   }
 }

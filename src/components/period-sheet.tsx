@@ -57,6 +57,6 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
       <div><Button icon="calendar" onClick={whenIdle(onAdjustDay)}>Adjust this day</Button></div>
       <Hint>Close, reopen or move periods on {formatDate(date, { weekday: 'long' })} only.</Hint>
     </div>
-    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); openBellTimes(state); })}>{personal.customSchedule ? 'Bell time wrong? Edit my private schedule' : 'Bell time wrong? Fix the school schedule'}</Button></div>
+    <div><Button variant="link" className="h-auto px-0" onClick={whenIdle(() => { onClose(); openBellTimes(state); })}>{personal.customSchedule ? 'Bell time wrong? Edit my private schedule' : 'Bell time wrong? Change bell times'}</Button></div>
   </Modal>;
 }

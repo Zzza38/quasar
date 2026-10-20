@@ -1,8 +1,10 @@
+import { materializePersonalSchedule } from '@/domain/legacy-personal-schedule';
 import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Db } from './db';
-import { applySchoolExceptions, applyScheduleToGrades, gradeSchema, gradesSchema, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+import { applySchoolExceptions, applyScheduleToGrades, cycleDaySchema, cycleDaySlots, gradeSchema, gradesSchema, normalizePersonalSchedule, scheduleForGrade, scheduleSchema, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
+
 import { completionTime, nextRecurringTask, stampCompletion, taskSchema, withoutCompletionEdit } from '@/domain/task';
 import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/domain/sync';
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
@@ -45,9 +47,15 @@ export const SYNC_LIMITS = { liveTasks: 5000, dailyMutations: 5000, dailyBytes: 
  * How the server shapes what it sends a client. Bundles built before `completedAt` existed parse tasks strictly and
  * do not send TASK_CLIENT_VERSION (a tab left open across a deploy, or one started offline from the cached shell),
  * so the router sets `legacyTasks` for them and their workspace and sync replies leave that field out.
+ * Bundles without sparse personal override support reload before reading or writing that format.
  */
-export type ClientOptions = { legacyTasks?: boolean };
-function forClient(entity: Entity, { legacyTasks = false }: ClientOptions): Entity {
+export type ClientOptions = { legacyTasks?: boolean; legacyPersonal?: boolean };
+const RELOAD_PERSONAL_MESSAGE = 'Quasar has been updated. Reload the page, or close and reopen the app, to continue.';
+function forClient(entity: Entity, { legacyTasks = false, legacyPersonal = false }: ClientOptions): Entity {
+  const overrides = entity.data.cycleDayOverrides;
+  if (legacyPersonal && entity.kind === 'personal' && (entity.data.periods !== undefined || (Array.isArray(overrides) && overrides.some(entry => entry && typeof entry === 'object' && entry.slotChanges !== undefined)))) {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
+  }
   if (!legacyTasks || entity.kind !== 'task' || !('completedAt' in entity.data)) return entity;
   const { completedAt: _completedAt, ...data } = entity.data;
   return { ...entity, data };
@@ -322,12 +330,17 @@ export class Service {
       if (input.choice === 'approved' && !school.approved) fail('BAD_REQUEST', 'Choose the community schedule explicitly, or build your own.');
       if (input.choice === 'personal' && !input.personalSchedule) fail('BAD_REQUEST', 'Provide your personal schedule.');
       const existing = this.entity(id, 'personal');
-      const data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
+      let data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
+      const previousSchool = this.user(id).schoolId;
+      if (previousSchool && previousSchool !== school.id) {
+        const periods = data.periods;
+        data = materializePersonalSchedule(this.school(previousSchool).schedule, data);
+        if (periods) data = { ...data, periods };
+      }
       // Joining is online and deliberately establishes the schedule source. Existing classes and overrides survive.
       const updated = personalScheduleSchema.parse({ ...data, ...(input.grade ? { grade: input.grade } : {}), customSchedule: input.choice === 'personal' ? input.personalSchedule : null });
       this.writeEntity(id, { id: 'personal', kind: 'personal', version: (existing?.version || 0) + 1, data: updated, deleted: false });
       // Switching schools ends membership of the old one, so an open proposal there is withdrawn.
-      const previousSchool = this.user(id).schoolId;
       if (previousSchool && previousSchool !== school.id) community.withdrawProposals(id, previousSchool);
       this.db.prepare('UPDATE users SET school_id=?,reviewed_version=? WHERE id=?').run(school.id, school.version, id);
       this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);
@@ -353,6 +366,7 @@ export class Service {
       this.db.prepare('UPDATE schools SET schedule=?,version=version+1,approved=?,support_locked=? WHERE id=?')
         .run(JSON.stringify(updatedSchedule), admin ? Number(admin.approved) : 0, admin ? Number(admin.supportLocked) : Number(school.supportLocked), school.id);
       this.db.prepare('INSERT INTO school_revisions VALUES(?,?,?,?,?)').run(school.id, school.version + 1, JSON.stringify(updatedSchedule), id, now());
+      this.reconcileSchoolPersonalSchedules(school.id, updatedSchedule, school.schedule);
       // A member who was up to date has just seen this revision, so they are not asked to review their own edit.
       if (!asAdmin) this.db.prepare('UPDATE users SET reviewed_version=? WHERE id=? AND reviewed_version=?').run(school.version + 1, id, school.version);
       // Proposals built on the old revision can no longer apply, including ones awaiting support.
@@ -369,7 +383,10 @@ export class Service {
     if (!user.schoolId) return fail('BAD_REQUEST', 'Join a school first.');
     const school = this.school(user.schoolId);
     if (school.version !== version) fail('CONFLICT', 'A newer school correction needs review.');
-    this.db.prepare('UPDATE users SET reviewed_version=? WHERE id=?').run(version, id);
+    this.db.transaction(() => {
+      this.reconcilePersonalSchedule(id, school.schedule, this.personalComparisonSchedule(id, school));
+      this.db.prepare('UPDATE users SET reviewed_version=? WHERE id=?').run(version, id);
+    }).immediate();
   }
   workspace(id: string, options: ClientOptions = {}) {
     const user = this.user(id);
@@ -380,6 +397,7 @@ export class Service {
       const old = this.db.prepare('SELECT schedule FROM school_revisions WHERE school_id=? AND version=?').get(school.id, reviewed) as {schedule: string} | undefined;
       if (old) review = {previous: JSON.parse(old.schedule), current: school.schedule, version: school.version};
     }
+    if (school) this.reconcilePersonalSchedule(id, school.schedule, review?.previous);
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
@@ -395,6 +413,26 @@ export class Service {
       .run(owner, entity.id, entity.kind, entity.version, JSON.stringify(entity.data), Number(entity.deleted));
     this.db.prepare('INSERT INTO entity_history VALUES(?,?,?,?)').run(owner, entity.id, entity.version, JSON.stringify(entity));
   }
+  /** Converts old day copies before their comparison revision disappears, and removes adopted slot changes. */
+  reconcilePersonalSchedule(id: string, school: Schedule, previous?: Schedule): void {
+    this.db.transaction(() => {
+      const entity = this.entity(id, 'personal');
+      if (!entity || entity.deleted) return;
+      const parsed = personalScheduleSchema.safeParse(entity.data);
+      if (!parsed.success) return;
+      const normalized = normalizePersonalSchedule(school, parsed.data, previous);
+      if (canonical(normalized) !== canonical(entity.data)) this.writeEntity(id, { ...entity, version: entity.version + 1, data: normalized });
+    }).immediate();
+  }
+  /** Called inside every published school revision, including a proposal passing. */
+  reconcileSchoolPersonalSchedules(schoolId: string, school: Schedule, previous?: Schedule): void {
+    const members = this.db.prepare('SELECT id FROM users WHERE school_id=?').all(schoolId) as Array<{ id: string }>;
+    for (const member of members) this.reconcilePersonalSchedule(member.id, school, this.personalComparisonSchedule(member.id, { schedule: previous ?? school }));
+  }
+  private personalComparisonSchedule(id: string, school: Pick<School, 'schedule'>): Schedule {
+    const row = this.db.prepare('SELECT r.schedule FROM users u JOIN school_revisions r ON r.school_id=u.school_id AND r.version=u.reviewed_version WHERE u.id=?').get(id) as { schedule: string } | undefined;
+    return row ? scheduleSchema.parse(JSON.parse(row.schedule)) : school.schedule;
+  }
   sync(id: string, raw: Mutation, options: ClientOptions = {}): SyncResult {
     this.ready(id);
     const input = mutationSchema.parse(raw) as Mutation;
@@ -409,7 +447,11 @@ export class Service {
         if (receipt.fingerprint !== fingerprint) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different change.');
         return resultForClient(JSON.parse(receipt.result) as SyncResult, options);
       }
-      const current = this.entity(id, input.id);
+      const schoolId = input.kind === 'personal' ? this.user(id).schoolId : null;
+      const school = schoolId ? this.school(schoolId) : null;
+      const comparison = school ? this.personalComparisonSchedule(id, school) : undefined;
+      if (school) this.reconcilePersonalSchedule(id, school.schedule, comparison);
+      let current = this.entity(id, input.id);
       if (current && current.kind !== input.kind) fail('BAD_REQUEST', 'Entity kind cannot change.');
       this.checkSyncQuota(id, input, current);
       if (input.base) {
@@ -422,6 +464,15 @@ export class Service {
         input.base = recorded;
       }
       if (input.data) this.validateData(input.kind, input.data);
+      if (input.kind === 'personal') {
+        const normalize = (data: Record<string, unknown>) => {
+          const parsed = personalScheduleSchema.parse(data);
+          return school ? normalizePersonalSchedule(school.schedule, parsed, comparison) : parsed;
+        };
+        if (input.base && !input.base.deleted) input.base = { ...input.base, data: normalize(input.base.data) };
+        if (input.data) input.data = normalize(input.data);
+        if (current && !current.deleted) current = { ...current, data: normalize(current.data) };
+      }
       if (input.kind === 'task' && input.data && canonical(input.data.imported ?? null) !== canonical(input.base?.data.imported ?? null)) {
         fail('BAD_REQUEST', 'Calendar source metadata can only be changed by calendar synchronization.');
       }
@@ -436,6 +487,20 @@ export class Service {
           const parsed = (input.kind === 'task' ? taskSchema : personalScheduleSchema).safeParse(result.entity.data);
           if (parsed.success) result.entity.data = parsed.data;
           else result = { status: 'conflict', current, paths: parsed.error.issues.map(issue => '/' + issue.path.join('/')) };
+        }
+        if (result.status === 'applied' && input.kind === 'personal' && school && !result.entity.deleted) {
+          const personal = personalScheduleSchema.parse(result.entity.data);
+          const before = current && !current.deleted ? personalScheduleSchema.parse(current.data) : emptyPersonalSchedule();
+          const basis = personal.customSchedule ?? scheduleForGrade(school.schedule, personal.grade);
+          const paths: string[] = [];
+          for (const day of basis.cycleDays) {
+            const slots = cycleDaySlots(day, personal);
+            // A school revision may already have introduced an overlap. Preserve it while unrelated fields save.
+            if (canonical(slots) === canonical(cycleDaySlots(day, before))) continue;
+            const valid = cycleDaySchema.safeParse({ ...day, slots });
+            if (!valid.success) paths.push(`/cycleDayOverrides/${day.id}`);
+          }
+          if (paths.length) result = { status: 'conflict', current, paths };
         }
         // mergeMutation always returns the next revision, even when the merged data is unchanged (two identical edits),
         // so every applied change is written and recorded in history.

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** Former beta key, retained for retirement regression tests. Schedule following is available to everyone. */
+export const SCHEDULE_FOLLOWING_BETA = 'schedule-following';
+
 /**
  * Betas (src/server/betas.ts, README "Running a beta"). A beta key names the code path in the app: useBeta('key') and
  * <Beta id="key"> turn on only for members who joined that beta with its code.
