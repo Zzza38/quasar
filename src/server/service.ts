@@ -1,3 +1,5 @@
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { materializePersonalSchedule } from '@/domain/legacy-personal-schedule';
 import { randomUUID, createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -329,12 +331,17 @@ export class Service {
       if (input.choice === 'approved' && !school.approved) fail('BAD_REQUEST', 'Choose the community schedule explicitly, or build your own.');
       if (input.choice === 'personal' && !input.personalSchedule) fail('BAD_REQUEST', 'Provide your personal schedule.');
       const existing = this.entity(id, 'personal');
-      const data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
+      let data = personalScheduleSchema.parse(existing && !existing.deleted ? existing.data : emptyPersonalSchedule());
+      const previousSchool = this.user(id).schoolId;
+      if (previousSchool && previousSchool !== school.id) {
+        const periods = data.periods;
+        data = materializePersonalSchedule(this.school(previousSchool).schedule, data);
+        if (periods && this.scheduleFollowingEnabled(id)) data = { ...data, periods };
+      }
       // Joining is online and deliberately establishes the schedule source. Existing classes and overrides survive.
       const updated = personalScheduleSchema.parse({ ...data, ...(input.grade ? { grade: input.grade } : {}), customSchedule: input.choice === 'personal' ? input.personalSchedule : null });
       this.writeEntity(id, { id: 'personal', kind: 'personal', version: (existing?.version || 0) + 1, data: updated, deleted: false });
       // Switching schools ends membership of the old one, so an open proposal there is withdrawn.
-      const previousSchool = this.user(id).schoolId;
       if (previousSchool && previousSchool !== school.id) community.withdrawProposals(id, previousSchool);
       this.db.prepare('UPDATE users SET school_id=?,reviewed_version=? WHERE id=?').run(school.id, school.version, id);
       this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);
@@ -384,6 +391,7 @@ export class Service {
   }
   workspace(id: string, options: ClientOptions = {}) {
     const user = this.user(id);
+    if (options.legacyPersonal && this.scheduleFollowingEnabled(id)) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
     const school = user.schoolId ? this.school(user.schoolId) : null;
     const {reviewed_version: reviewed} = this.db.prepare('SELECT reviewed_version FROM users WHERE id=?').get(id) as UserRow;
     let review: {previous: Schedule; current: Schedule; version: number} | null = null;
@@ -407,8 +415,28 @@ export class Service {
       .run(owner, entity.id, entity.kind, entity.version, JSON.stringify(entity.data), Number(entity.deleted));
     this.db.prepare('INSERT INTO entity_history VALUES(?,?,?,?)').run(owner, entity.id, entity.version, JSON.stringify(entity));
   }
+  scheduleFollowingEnabled(id: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHEDULE_FOLLOWING_BETA, id);
+  }
+  reconcileScheduleFollowing(id: string): void {
+    const schoolId = this.user(id).schoolId;
+    if (!schoolId) return;
+    const school = this.school(schoolId);
+    this.reconcilePersonalSchedule(id, school.schedule, this.personalComparisonSchedule(id, school));
+  }
+  /** Freeze adjustments before beta enrollment disappears. Invalid legacy representations retain sparse edits. */
+  leaveScheduleFollowing(id: string): void {
+    const entity = this.entity(id, 'personal');
+    if (!entity || entity.deleted) return;
+    const parsed = personalScheduleSchema.safeParse(entity.data);
+    if (!parsed.success) return;
+    const schoolId = this.user(id).schoolId;
+    const materialized = materializePersonalSchedule(schoolId ? this.school(schoolId).schedule : undefined, parsed.data);
+    if (canonical(materialized) !== canonical(entity.data)) this.writeEntity(id, { ...entity, version: entity.version + 1, data: materialized });
+  }
   /** Converts old day copies before their comparison revision disappears, and removes adopted slot changes. */
   reconcilePersonalSchedule(id: string, school: Schedule, previous?: Schedule): void {
+    if (!this.scheduleFollowingEnabled(id)) return;
     this.db.transaction(() => {
       const entity = this.entity(id, 'personal');
       if (!entity || entity.deleted) return;
@@ -420,7 +448,7 @@ export class Service {
   }
   /** Called inside every published school revision, including a proposal passing. */
   reconcileSchoolPersonalSchedules(schoolId: string, school: Schedule, previous?: Schedule): void {
-    const members = this.db.prepare('SELECT id FROM users WHERE school_id=?').all(schoolId) as Array<{ id: string }>;
+    const members = this.db.prepare('SELECT u.id FROM users u JOIN beta_members m ON m.user_id=u.id AND m.beta_key=? WHERE u.school_id=?').all(SCHEDULE_FOLLOWING_BETA, schoolId) as Array<{ id: string }>;
     for (const member of members) this.reconcilePersonalSchedule(member.id, school, this.personalComparisonSchedule(member.id, { schedule: previous ?? school }));
   }
   private personalComparisonSchedule(id: string, school: Pick<School, 'schedule'>): Schedule {
@@ -432,7 +460,7 @@ export class Service {
     const input = mutationSchema.parse(raw) as Mutation;
     if (JSON.stringify(input).length > 1000000) fail('BAD_REQUEST', 'This change is too large.');
     if ((input.kind === 'personal') !== (input.id === 'personal')) fail('BAD_REQUEST', 'Invalid personal schedule ID.');
-    if (input.kind === 'personal' && options.legacyPersonal) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
+    if (input.kind === 'personal' && options.legacyPersonal && this.scheduleFollowingEnabled(id)) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
     if (input.kind === 'personal' && input.data === null) fail('BAD_REQUEST', 'Reset your personal schedule instead of deleting it.');
     if (input.base && (input.base.id !== input.id || input.base.kind !== input.kind)) fail('BAD_REQUEST', 'The change does not match its base.');
     const fingerprint = createHash('sha256').update(canonical(input)).digest('hex');
@@ -442,6 +470,7 @@ export class Service {
         if (receipt.fingerprint !== fingerprint) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different change.');
         return resultForClient(JSON.parse(receipt.result) as SyncResult, options);
       }
+      const following = input.kind === 'personal' && this.scheduleFollowingEnabled(id);
       const schoolId = input.kind === 'personal' ? this.user(id).schoolId : null;
       const school = schoolId ? this.school(schoolId) : null;
       const comparison = school ? this.personalComparisonSchedule(id, school) : undefined;
@@ -459,8 +488,11 @@ export class Service {
         input.base = recorded;
       }
       if (input.data) this.validateData(input.kind, input.data);
-      if (school) {
-        const normalize = (data: Record<string, unknown>) => normalizePersonalSchedule(school.schedule, personalScheduleSchema.parse(data), comparison);
+      if (input.kind === 'personal') {
+        const normalize = (data: Record<string, unknown>) => {
+          const parsed = personalScheduleSchema.parse(data);
+          return following ? school ? normalizePersonalSchedule(school.schedule, parsed, comparison) : parsed : materializePersonalSchedule(school?.schedule, parsed);
+        };
         if (input.base && !input.base.deleted) input.base = { ...input.base, data: normalize(input.base.data) };
         if (input.data) input.data = normalize(input.data);
         if (current && !current.deleted) current = { ...current, data: normalize(current.data) };
@@ -477,10 +509,10 @@ export class Service {
         if (input.kind === 'task' && !result.entity.deleted) result.entity.data = stampCompletion(result.entity.data, current && !current.deleted ? current.data : null, completedAt);
         if (!result.entity.deleted) {
           const parsed = (input.kind === 'task' ? taskSchema : personalScheduleSchema).safeParse(result.entity.data);
-          if (parsed.success) result.entity.data = parsed.data;
+          if (parsed.success) result.entity.data = input.kind === 'personal' && !following ? materializePersonalSchedule(school?.schedule, personalScheduleSchema.parse(parsed.data)) : parsed.data;
           else result = { status: 'conflict', current, paths: parsed.error.issues.map(issue => '/' + issue.path.join('/')) };
         }
-        if (result.status === 'applied' && school && !result.entity.deleted) {
+        if (result.status === 'applied' && following && school && !result.entity.deleted) {
           const personal = personalScheduleSchema.parse(result.entity.data);
           const before = current && !current.deleted ? personalScheduleSchema.parse(current.data) : emptyPersonalSchedule();
           const basis = personal.customSchedule ?? scheduleForGrade(school.schedule, personal.grade);

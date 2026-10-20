@@ -1,5 +1,8 @@
 'use client';
 
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { useBeta } from './betas';
+
 import { useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { formatTime } from '@/lib/format';
@@ -10,6 +13,7 @@ import { Button, Callout, Hint, Section } from './primitives';
 type Signals = RouterOutput['scheduleSignals']['list'];
 
 export function ScheduleSignalsSection({ state, onPropose }: { state: AppState; onPropose: (seed: ProposalSeed) => void }) {
+  const following = useBeta(SCHEDULE_FOLLOWING_BETA);
   const [loaded, setLoaded] = useState<{ accountId: string; schoolId: string; value: Signals } | null>(null);
   const [error, setError] = useState('');
   const accountId = state.context.user.id;
@@ -21,16 +25,16 @@ export function ScheduleSignalsSection({ state, onPropose }: { state: AppState; 
   useEffect(() => {
     let active = true;
     setLoaded(null); setError('');
-    if (!state.online) return;
+    if (!following || !state.online) return;
     const refresh = () => api.scheduleSignals.list.query().then(value => {
       if (active) { setLoaded({ accountId, schoolId, value }); setError(''); }
     }, err => { if (active) { setLoaded(null); setError(errorMessage(err)); } });
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 30_000);
     return () => { active = false; clearInterval(timer); };
-  }, [accountId, schoolId, version, grade, recurringChanges, privateCopy, state.online]);
+  }, [accountId, schoolId, version, grade, recurringChanges, privateCopy, state.online, following]);
   const board = loaded?.accountId === accountId && loaded.schoolId === schoolId && loaded.value.baseVersion === version && loaded.value.grade === grade ? loaded.value : null;
-  if (!state.online || (!error && !board?.signals.length)) return null;
+  if (!following || !state.online || (!error && !board?.signals.length)) return null;
   return <Section title="Schedule suggestions" icon="users" description="Anonymous timing patterns from classmates in your grade. A suggestion needs at least three matching classmates.">
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
     {board && <>

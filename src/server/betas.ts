@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, normalizeBetaCode, type StoredBetaDiagnostics } from '@/domain/betas';
+import { SCHEDULE_FOLLOWING_BETA, betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, normalizeBetaCode, type StoredBetaDiagnostics } from '@/domain/betas';
 import type { Service } from './service';
 
 /**
@@ -79,6 +79,7 @@ export class BetaService {
       const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(beta.key) as { n: number };
       if (beta.max_members !== null && members.n >= beta.max_members) fail('CONFLICT', `${beta.name} is full.`);
       this.db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(beta.key, userId, now());
+      if (beta.key === SCHEDULE_FOLLOWING_BETA) this.service.reconcileScheduleFollowing(userId);
       this.service.audit(userId, 'beta.join', null, { key: beta.key });
       return { joined: this.joined(userId) };
     }).immediate();
@@ -89,19 +90,25 @@ export class BetaService {
   /** Leaves one beta. No code: a member stuck in a broken beta must always be able to get out. */
   leave(userId: string, key: string): JoinedBeta[] {
     this.service.user(userId);
-    if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
-    return this.joined(userId);
+    return this.db.transaction(() => {
+      if (key === SCHEDULE_FOLLOWING_BETA && this.service.scheduleFollowingEnabled(userId)) this.service.leaveScheduleFollowing(userId);
+      if (this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(key, userId).changes) this.service.audit(userId, 'beta.leave', null, { key });
+      return this.joined(userId);
+    }).immediate();
   }
 
   /** Leaves every beta: the crash screen's button and `/?beta=off`. */
   leaveAll(userId: string): JoinedBeta[] {
     this.service.user(userId);
-    const keys = this.joined(userId).map(beta => beta.key);
-    if (keys.length) {
-      this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
-      this.service.audit(userId, 'beta.leave', null, { keys });
-    }
-    return [];
+    return this.db.transaction(() => {
+      const keys = this.joined(userId).map(beta => beta.key);
+      if (keys.length) {
+        if (keys.includes(SCHEDULE_FOLLOWING_BETA)) this.service.leaveScheduleFollowing(userId);
+        this.db.prepare('DELETE FROM beta_members WHERE user_id=?').run(userId);
+        this.service.audit(userId, 'beta.leave', null, { keys });
+      }
+      return [];
+    }).immediate();
   }
 
   /** Feedback about a beta the member is in. Shares the five-open-requests limit with every other support request. */
@@ -167,6 +174,10 @@ export class BetaService {
     this.service.admin(adminId);
     this.db.transaction(() => {
       const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(key) as { n: number };
+      if (key === SCHEDULE_FOLLOWING_BETA) {
+        const enrolled = this.db.prepare('SELECT user_id FROM beta_members WHERE beta_key=?').all(key) as Array<{ user_id: string }>;
+        for (const member of enrolled) this.service.leaveScheduleFollowing(member.user_id);
+      }
       if (!this.db.prepare('DELETE FROM betas WHERE key=?').run(key).changes) fail('NOT_FOUND', 'That beta no longer exists.');
       this.service.audit(adminId, 'beta.close', null, { key, members: members.n });
     }).immediate();
@@ -175,8 +186,11 @@ export class BetaService {
   removeMember(adminId: string, raw: z.infer<typeof betaMemberSchema>): void {
     this.service.admin(adminId);
     const input = betaMemberSchema.parse(raw);
-    if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
-    this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
+    this.db.transaction(() => {
+      if (input.key === SCHEDULE_FOLLOWING_BETA && this.service.scheduleFollowingEnabled(input.userId)) this.service.leaveScheduleFollowing(input.userId);
+      if (!this.db.prepare('DELETE FROM beta_members WHERE beta_key=? AND user_id=?').run(input.key, input.userId).changes) fail('NOT_FOUND', 'That member already left the beta.');
+      this.service.audit(adminId, 'beta.removeMember', null, { key: input.key, userId: input.userId });
+    }).immediate();
   }
 
   /** One code opens one beta, so the same code can't be given to two. */

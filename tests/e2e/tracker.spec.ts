@@ -6,7 +6,6 @@ import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
 import { CalendarService } from '../../src/server/calendar';
-import { cycleDaySlots, personalScheduleSchema } from '../../src/domain/schedule';
 import { exampleSchedule } from '../../src/domain/example';
 
 function seed(email = `${randomUUID()}@example.com`, joined = true, schedule = exampleSchedule) {
@@ -1084,8 +1083,6 @@ test.describe('class color bar', () => {
 test('Classes page drops and resizes actual classes with persistence and touch alternative', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/classes');
-  await expect(page.getByRole('button', { name: 'Add rotation day', exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('Day 1 name', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
   await dialog(page).getByLabel('Class name').fill('Spanish 2H');
   await dialog(page).getByLabel('Class color', { exact: true }).fill('#cc3366');
@@ -1098,11 +1095,6 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await expect(block).toBeVisible();
   await expect(saved(page)).toBeVisible();
   await day.getByRole('button', { name: 'Resize Day 1 A end', exact: true }).press('ArrowUp');
-  await expect(page.getByText('Who needs this time change?', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(block).toBeVisible();
-  await day.getByRole('button', { name: 'Resize Day 1 A end', exact: true }).press('ArrowUp');
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: Spanish 2H', exact: true })).toBeVisible();
   await expect(saved(page)).toBeVisible();
   await page.reload();
@@ -1110,17 +1102,15 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   await page.setViewportSize({ width: 390, height: 844 });
   await palette.click();
   await page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true }).click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true })).toHaveCount(1);
   await expect(saved(page)).toBeVisible();
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
-    const personal = personalScheduleSchema.parse(new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data);
+    const personal = new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data;
     expect(personal.customSchedule).toBeNull();
     expect(personal.assignments).toMatchObject({ A: 'Spanish-2H' });
     expect(personal.cycleDayOverrides).toHaveLength(1);
-    expect(personal.cycleDayOverrides[0].slots).toBeUndefined();
-    expect(cycleDaySlots(fixture.school.schedule.cycleDays[0], personal)).toMatchObject([{ start: '08:00', end: '08:55' }, {}, {}, {}, { start: '13:00', end: '13:45' }]);
+    expect(personal.cycleDayOverrides).toMatchObject([{ cycleDayId: 'day-1', slots: [{ start: '08:00', end: '08:55' }, {}, {}, {}, { start: '13:00', end: '13:45' }] }]);
     expect(new Service(db).school(fixture.school.id).schedule.cycleDays[0].slots[0].end).toBe('09:00');
   } finally { db.close(); }
   await day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Spanish 2H', exact: true }).click();
@@ -1131,57 +1121,6 @@ test('Classes page drops and resizes actual classes with persistence and touch a
   // The class moved into period B; both of its old A blocks are still there, empty.
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: A', exact: true })).toHaveCount(1);
   await expect(day.getByRole('button', { name: 'Day 1, 8:00–8:55 AM: A', exact: true })).toHaveCount(1);
-});
-
-test('bell corrections keep the selected grade and preserve a canceled personal editor draft', async ({ page, context }) => {
-  const junior = structuredClone(exampleSchedule);
-  junior.cycleDays[0].label = 'Junior day';
-  junior.cycleDays[0].slots[0].end = '08:50';
-  const fixture = seed(undefined, true, { ...exampleSchedule, gradeSchedules: { '11': junior } });
-  await authenticate(context, fixture.id);
-  await page.goto('/school');
-  await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 11', exact: true }).click();
-  await expect(saved(page)).toBeVisible();
-  await page.goto('/classes?bell=open');
-  await page.getByRole('button', { name: "The school's time is wrong", exact: true }).click();
-  const shared = page.getByRole('dialog', { name: 'Edit the shared schedule', exact: true });
-  await shared.getByRole('tab', { name: /Days ·/ }).click();
-  await expect(shared.getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
-  await shared.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Change bell times', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
-  await choose(page.getByLabel('Adjust a rotation day', { exact: true }), 'Junior day');
-  const adjustment = page.getByRole('dialog', { name: 'Adjust Junior day', exact: true });
-  await adjustment.getByRole('switch', { name: 'Use my own periods on Junior day', exact: true }).click();
-  await adjustment.getByLabel('Slot 1 end', { exact: true }).fill('08:45 AM');
-  await adjustment.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.getByRole('button', { name: "The school's time is wrong", exact: true }).click();
-  await shared.getByRole('tab', { name: /Days ·/ }).click();
-  await expect(shared.getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
-  await shared.getByRole('button', { name: 'Edit times for Junior day', exact: true }).click();
-  await expect(shared.getByLabel('Slot 1 end', { exact: true })).toHaveValue('8:45');
-  await shared.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Change bell times', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(adjustment.getByLabel('Slot 1 end', { exact: true })).toHaveValue('8:45');
-  await adjustment.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: 'Change bell times', exact: true })).toHaveCount(0);
-  await expect(adjustment).toHaveCount(0);
-  await expect.poll(() => {
-    const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-    try {
-      const personal = personalScheduleSchema.parse(new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data);
-      return cycleDaySlots(junior.cycleDays[0], personal)[0].end;
-    } finally { db.close(); }
-  }).toBe('08:45');
-  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try {
-    const service = new Service(db);
-    const personal = personalScheduleSchema.parse(service.workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data);
-    expect(personal.customSchedule).toBeNull();
-    expect(cycleDaySlots(junior.cycleDays[0], personal)[0].end).toBe('08:45');
-    expect(service.school(fixture.school.id).schedule.gradeSchedules?.['11']?.cycleDays[0].slots[0].end).toBe('08:50');
-    expect(service.school(fixture.school.id).schedule.cycleDays[0].slots[0].end).toBe('09:00');
-  } finally { db.close(); }
 });
 
 test('class and time block removals confirm, and reverting restores school times', async ({ page, context }) => {
@@ -1224,15 +1163,13 @@ test('class and time block removals confirm, and reverting restores school times
   await expect(schoolBlock).toBeVisible();
   await day.getByRole('button', { name: 'Remove time block from Day 1 8:00–9:00 AM' }).click();
   await blockPrompt.getByRole('button', { name: 'Remove time block' }).click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(schoolBlock).toHaveCount(0);
-  await page.getByRole('button', { name: 'Advanced schedule settings', exact: true }).click();
   await page.getByRole('button', { name: 'Revert to school timetable' }).click();
   await page.getByRole('dialog', { name: 'Revert to the school timetable?' }).getByRole('button', { name: 'Revert timetable' }).click();
   await expect(schoolBlock).toBeVisible();
 });
 
-test('removing a class from a personal time block keeps the block until it is removed separately', async ({ page, context }) => {
+test('removing a class from a private time block keeps the block until it is removed separately', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.goto('/classes');
   await page.getByRole('button', { name: 'Add class', exact: true }).click();
@@ -1240,7 +1177,7 @@ test('removing a class from a personal time block keeps the block until it is re
   await dialog(page).getByRole('button', { name: 'Add class', exact: true }).click();
   await page.getByRole('button', { name: 'Place Wellness', exact: true }).click();
   await page.getByRole('button', { name: 'Place in Day 1 at 1:00 PM', exact: true }).click();
-  await page.getByRole('button', { name: 'Only for me' }).click();
+  await page.getByRole('button', { name: 'Make my own copy' }).click();
   const day = page.getByRole('group', { name: 'Day 1 time canvas', exact: true });
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Wellness', exact: true })).toBeVisible();
   await day.getByRole('button', { name: 'Remove class from Day 1 1:00–1:45 PM' }).click();
@@ -1251,7 +1188,6 @@ test('removing a class from a personal time block keeps the block until it is re
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Unassigned block', exact: true })).toBeVisible();
   await day.getByRole('button', { name: 'Remove time block from Day 1 1:00–1:45 PM' }).click();
   await page.getByRole('dialog', { name: 'Remove Unassigned block?' }).getByRole('button', { name: 'Remove time block' }).click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(day.getByRole('button', { name: 'Day 1, 1:00–1:45 PM: Unassigned block', exact: true })).toHaveCount(0);
 });
 
@@ -1354,7 +1290,7 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   const block = (name: string) => day.getByRole('button', { name: `Day 1, ${name}`, exact: true });
   const status = page.locator('.timetable-status').getByRole('status');
   const prompt = page.locator('.timetable-pin').getByRole('status');
-  const personal = () => { const db = openDatabase(process.env.E2E_DATABASE_PATH!); try { const data = personalScheduleSchema.parse(new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data); return { overrides: data.cycleDayOverrides.map(entry => ({ cycleDayId: entry.cycleDayId, slots: cycleDaySlots(fixture.school.schedule.cycleDays.find(day => day.id === entry.cycleDayId)!, data) })), custom: data.customSchedule }; } finally { db.close(); } };
+  const personal = () => { const db = openDatabase(process.env.E2E_DATABASE_PATH!); try { const data = new Service(db).workspace(fixture.id).entities.find(entry => entry.kind === 'personal')!.data; return { overrides: data.cycleDayOverrides, custom: data.customSchedule }; } finally { db.close(); } };
   const [first, second, lunch, third] = exampleSchedule.cycleDays[0].slots;
   await page.locator('.timetable-workspace').scrollIntoViewIfNeeded();
 
@@ -1366,8 +1302,8 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await page.mouse.move(target.x, target.y, { steps: 6 });
   await expect(day.locator('.time-drop-preview')).toHaveText('9:10–10:10 AM');
   await page.mouse.up();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(block('9:10–10:10 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in B.');
   await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slots: [first, { ...second, periodId: 'lunch' }, lunch, third] }], custom: null });
 
   // By tap, in the class order: the period, then the empty block, which says it can take it.
@@ -1375,15 +1311,15 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await expect(prompt).toHaveText('Lunch selected. Tap an empty block to put it there, or tap an empty time.');
   await expect(block('10:50–11:50 AM: C')).toContainText('Tap to place here');
   await block('10:50–11:50 AM: C').click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(block('10:50–11:50 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in C.');
   await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
 
   // A period's own block dragged onto an empty block moves into it, and its old block goes.
   await mouseDrag(page, await pointIn(block('10:15–10:45 AM: Lunch')), await pointIn(block('8:00–9:00 AM: A')));
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(block('8:00–9:00 AM: Lunch')).toBeVisible();
   await expect(block('10:15–10:45 AM: Lunch')).toHaveCount(0);
+  await expect(status).toHaveText('Moved Lunch to A.');
   await expect.poll(personal).toEqual({ overrides: [{ cycleDayId: 'day-1', slots: [{ ...first, periodId: 'lunch' }, { ...second, periodId: 'lunch' }, { ...third, periodId: 'lunch' }] }], custom: null });
   // Other days keep the school's timetable: only this day was overridden.
   const day2 = page.getByRole('group', { name: 'Day 2 time canvas', exact: true });
@@ -1394,15 +1330,15 @@ test('a period that is not a class fills an empty block by drag and by tap, keep
   await block2('8:00–9:00 AM: B').click();
   await expect(prompt).toHaveText('Empty block selected. Tap a class or period to put it here, or tap an empty time to move the block.');
   await page.getByRole('button', { name: 'Place Lunch', exact: true }).click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(block2('8:00–9:00 AM: Lunch')).toBeVisible();
+  await expect(status).toHaveText('Placed Lunch in B.');
   // A period's own block, by tap: it moves into the empty block it is tapped onto.
   await block2('8:00–9:00 AM: Lunch').click();
   await expect(prompt).toHaveText('Lunch selected. Tap an empty block to move it there, or tap an empty time.');
   await block2('9:10–10:10 AM: C').click();
-  await page.getByRole('button', { name: 'Only for me', exact: true }).click();
   await expect(block2('9:10–10:10 AM: Lunch')).toBeVisible();
   await expect(block2('8:00–9:00 AM: Lunch')).toHaveCount(0);
+  await expect(status).toHaveText('Moved Lunch to C.');
 
   // A block that holds a class is not taken over: the drop is refused where it would have landed.
   await page.getByRole('button', { name: 'Add class', exact: true }).click();

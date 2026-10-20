@@ -77,7 +77,7 @@ Students can add classes from photos of a printed or on-screen timetable (Classe
 
 ## Running a beta
 
-A beta lets chosen members try a change on the real site (https://quasar.ziona.dev) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
 
 ### 1. Put the change behind a flag
 
@@ -97,6 +97,10 @@ For logic rather than a whole component, branch on `useBeta('month-grid')`, whic
 
 Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
 
+The `schedule-following` beta keeps students on the shared school timetable while letting them save personal time adjustments. Members choose whether a recurring correction is for the school or only for them. Personal adjustments inherit untouched school times and disappear when the school adopts them. Three other enrolled classmates with the same adjustment can suggest a school proposal. Full private timetable controls move under advanced settings. Accounts outside the beta keep the existing timetable editor and save behavior.
+
+Leaving this beta preserves classes, assignments, and saved time changes. Personal adjustments become full-day overrides where possible. Changes that cannot fit the older format stay saved in their current format. Offline edits and requests awaiting a response still sync after leaving. The same preservation applies when the owner removes a member, closes the beta, or the member uses `?beta=off`.
+
 The `broken-hearts` beta enables a hidden Easter egg: type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. Only members of that beta get the keyboard trigger. Leaving the beta removes the trigger and any hearts still on screen. The effect has no mod-menu entry.
 
 ### 2. Ship it
@@ -112,7 +116,7 @@ Quasar stores only a hash of the code, so the console shows it once, right after
 ### 4. Testers join, leave and send feedback
 
 - **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
-- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://quasar.ziona.dev/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
+- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://getquasarapp.com/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
 - **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
 
 Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests. The Betas tab shows each beta's open report count.

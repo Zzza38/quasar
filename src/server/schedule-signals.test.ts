@@ -5,6 +5,8 @@ import { exampleSchedule } from '@/domain/example';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { ScheduleSignalsService } from './schedule-signals';
+import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
+import { BetaService } from './betas';
 import { appRouter } from './router';
 
 const databases: Db[] = [];
@@ -12,14 +14,17 @@ afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
-  const user = () => {
+  const user = (email?: string) => {
     const id = randomUUID();
-    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${id}@example.com`, `Private name ${id}`, 'Private full name', new Date().toISOString());
+    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, email ?? `${id}@example.com`, `Private name ${id}`, 'Private full name', new Date().toISOString());
     return id;
   };
+  const owner = user('owner@example.com');
+  const betas = new BetaService(service);
+  betas.create(owner, { key: SCHEDULE_FOLLOWING_BETA, name: 'Schedule following', description: '', code: 'FOLLOW2026', maxMembers: null });
   const viewer = user();
   const school = service.createSchool(viewer, { name: 'Signals High', location: 'Boston, MA', schedule: exampleSchedule });
-  const join = (id: string, grade: Grade = '9', schoolId = school.id) => service.join(id, { schoolId, grade, choice: 'community' });
+  const join = (id: string, grade: Grade = '9', schoolId = school.id) => { service.join(id, { schoolId, grade, choice: 'community' }); betas.join(id, { code: 'FOLLOW2026' }); };
   join(viewer);
   const save = (id: string, changes: Partial<PersonalSchedule> = {}) => {
     const data = { ...emptyPersonalSchedule(), grade: '9', classes: [{ id: 'secret', name: 'Private class', teacher: 'Private teacher' }], assignments: { A: 'secret' },
@@ -28,7 +33,7 @@ function fixture() {
     db.prepare("UPDATE entities SET data=? WHERE owner_id=? AND id='personal'").run(JSON.stringify(data), id);
   };
   const member = (changes: Partial<PersonalSchedule> = {}) => { const id = user(); join(id); save(id, changes); return id; };
-  return { db, service, user, viewer, school, join, save, member, signals: new ScheduleSignalsService(service) };
+  return { db, service, user, viewer, school, join, save, member, signals: new ScheduleSignalsService(service), betas };
 }
 
 describe('anonymous recurring schedule signals', () => {
@@ -137,4 +142,17 @@ describe('anonymous recurring schedule signals', () => {
     expect(signal.draft.cycleDays[0].slots[1].start).toBe('09:08');
     expect(f.signals.list(f.viewer).signals).toHaveLength(1);
   });
+});
+
+it('requires actual beta enrollment and counts only opted-in contributors', () => {
+  const f = fixture();
+  const a = f.member(); f.member(); f.member();
+  expect(f.signals.list(f.viewer).signals[0].count).toBe(3);
+  f.betas.leave(a, SCHEDULE_FOLLOWING_BETA);
+  expect(f.signals.list(f.viewer).signals).toEqual([]);
+  // A persisted sparse adjustment cannot stand in for beta membership.
+  f.save(a);
+  expect(f.signals.list(f.viewer).signals).toEqual([]);
+  f.betas.leave(f.viewer, SCHEDULE_FOLLOWING_BETA);
+  expect(() => f.signals.list(f.viewer)).toThrow('Join the schedule-following beta');
 });
