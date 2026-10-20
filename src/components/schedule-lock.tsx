@@ -1,16 +1,23 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PersonalSchedule } from '@/domain/schedule';
 import { errorMessage } from '@/client/api';
 import type { AppState } from './app-state';
 import { Button, Callout, IconButton, Modal, Spacer } from './primitives';
+
+/** Keep an explicit choice; a beta member without one starts with the full schedule locked. */
+export function withDefaultScheduleLock(personal: PersonalSchedule, defaultLocked: boolean): PersonalSchedule {
+  return defaultLocked && personal.scheduleLocked === undefined ? { ...personal, scheduleLocked: true } : personal;
+}
 
 /** Confirm before any personal schedule write, including drag-and-drop assignments. */
 export function useScheduleLock(accountId: string | undefined, personal: PersonalSchedule, save: (next: PersonalSchedule) => Promise<void>) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
   const answer = useRef<((approved: boolean) => void) | null>(null);
+  const latest = useRef({ accountId, personal, save });
+  useLayoutEffect(() => { latest.current = { accountId, personal, save }; });
   const finish = (approved: boolean) => {
     answer.current?.(approved);
     answer.current = null;
@@ -21,24 +28,35 @@ export function useScheduleLock(accountId: string | undefined, personal: Persona
     answer.current = null;
   }, [accountId]);
 
+  const confirmUnlock = async () => {
+    if (answer.current) throw new Error('Answer the unlock prompt before making another change.');
+    const approved = await new Promise<boolean>((resolve) => {
+      answer.current = resolve;
+      setConfirming(true);
+    });
+    if (!approved || latest.current.accountId !== accountId) throw new Error('Your schedule is still locked.');
+  };
+
   const savePersonal = async (next: PersonalSchedule) => {
-    if (personal.scheduleLocked) {
-      if (answer.current) throw new Error('Answer the unlock prompt before making another change.');
-      const approved = await new Promise<boolean>((resolve) => {
-        answer.current = resolve;
-        setConfirming(true);
-      });
-      if (!approved) throw new Error('Your schedule is still locked.');
-      await save({ ...next, scheduleLocked: false });
+    if (latest.current.accountId !== accountId) throw new Error('Your account changed. Try the edit again.');
+    const before = latest.current.personal;
+    if (before.scheduleLocked) {
+      await confirmUnlock();
+      if (JSON.stringify(before) !== JSON.stringify(latest.current.personal)) {
+        throw new Error('Your schedule changed while the unlock prompt was open. Try the edit again.');
+      }
+      await latest.current.save({ ...next, scheduleLocked: false });
     } else {
-      await save(next);
+      await latest.current.save(next);
     }
   };
 
   const requestEdit = async (edit: () => void) => {
-    if (!personal.scheduleLocked) { edit(); return; }
     try {
-      await savePersonal({ ...personal, scheduleLocked: false });
+      if (latest.current.accountId !== accountId) throw new Error('Your account changed. Try the edit again.');
+      if (!latest.current.personal.scheduleLocked) { edit(); return; }
+      await confirmUnlock();
+      await latest.current.save({ ...latest.current.personal, scheduleLocked: false });
       edit();
     } catch (err) {
       // Cancellation keeps the current view; a failed save must still be visible.
@@ -56,7 +74,7 @@ export function useScheduleLock(accountId: string | undefined, personal: Persona
   return { savePersonal, requestEdit, dialog };
 }
 
-export function ScheduleLockButton({ state }: { state: AppState }) {
+export function ScheduleLockButton({ state, showLabel = false }: { state: AppState; showLabel?: boolean }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const locked = !!state.personal.scheduleLocked;
@@ -71,8 +89,9 @@ export function ScheduleLockButton({ state }: { state: AppState }) {
     finally { setPending(false); }
   };
   return <div className="grid justify-items-end gap-2">
-    <IconButton size="sm" label={locked ? 'Unlock schedule' : 'Lock schedule'} icon={locked ? 'lock' : 'unlock'}
-      aria-pressed={locked} variant={locked ? 'soft' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()} />
+    {showLabel ? <Button size="sm" icon={locked ? 'lock' : 'unlock'} aria-pressed={locked} variant={locked ? 'secondary' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()}>{locked ? 'Unlock schedule' : 'Lock schedule'}</Button>
+      : <IconButton size="sm" label={locked ? 'Unlock schedule' : 'Lock schedule'} icon={locked ? 'lock' : 'unlock'}
+        aria-pressed={locked} variant={locked ? 'soft' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()} />}
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
   </div>;
 }

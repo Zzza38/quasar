@@ -50,17 +50,14 @@ describe('schedule-following beta controls', () => {
     expect(html).toContain('aria-label="Day 1 name"');
     expect(html).toContain('aria-label="Remove Day 1"');
     expect(html).toContain('Add rotation day');
-    expect(html).not.toContain('Unlock bell times');
   });
 
-  it('hides structure controls and starts bell times locked for beta members', () => {
+  it('hides structure controls for beta members following school and retains bell-time editing', () => {
     const html = renderToStaticMarkup(enrolled(grid()));
     expect(html).not.toContain('aria-label="Day 1 name"');
     expect(html).not.toContain('aria-label="Remove Day 1"');
     expect(html).not.toContain('Add rotation day');
     expect(html).toContain('Edit times');
-    expect(html).toContain('Bell times locked');
-    expect(html).toContain('Unlock bell times');
   });
 
   it('keeps private schedule management available inside the beta', () => {

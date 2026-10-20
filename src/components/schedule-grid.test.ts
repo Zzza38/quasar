@@ -35,10 +35,10 @@ describe('school-following timetable controls', () => {
   });
 });
 
-describe('bell-time locking', () => {
+describe('disabled timetable', () => {
   const personal = { ...examplePersonalSchedule, assignments: { A: 'algebra' } };
-  const render = (timesLocked?: boolean, disabled?: boolean) => renderToStaticMarkup(createElement(ScheduleGrid, {
-    value: exampleSchedule, personal, personalClassesOnly: true, timesLocked, disabled,
+  const render = (disabled?: boolean) => renderToStaticMarkup(createElement(ScheduleGrid, {
+    value: exampleSchedule, personal, personalClassesOnly: true, disabled,
     onAssign: async () => {}, onChange: noop, onEditDay: noop, onRemoveDay: noop,
   }));
   const control = (html: string, label: string) => {
@@ -60,12 +60,12 @@ describe('bell-time locking', () => {
     expect(control(html, 'Place in Day 1 at 1:00 PM')).toContain('disabled=""');
   });
 
-  it('keeps class selection, existing block targets, and class removal available', () => {
+  it('also disables class selection, existing block targets, and class removal', () => {
     const html = render(true);
-    expect(control(html, 'Place Algebra')).not.toContain('disabled=""');
-    expect(control(html, 'Day 1, 8:00–9:00 AM: Algebra')).not.toContain('disabled=""');
-    expect(control(html, 'Day 1, 9:10–10:10 AM: B')).not.toContain('disabled=""');
-    expect(control(html, 'Remove class from Day 1 8:00–9:00 AM')).not.toContain('disabled=""');
+    expect(control(html, 'Place Algebra')).toContain('disabled=""');
+    expect(control(html, 'Day 1, 8:00–9:00 AM: Algebra')).toContain('disabled=""');
+    expect(control(html, 'Day 1, 9:10–10:10 AM: B')).toContain('disabled=""');
+    expect(control(html, 'Remove class from Day 1 8:00–9:00 AM')).toContain('disabled=""');
   });
 
   it('preserves existing unlocked behavior when the prop is omitted', () => {
@@ -77,9 +77,4 @@ describe('bell-time locking', () => {
     expect(control(html, 'Place Lunch')).not.toContain('disabled=""');
   });
 
-  it('still respects a full disabled state for class-only controls', () => {
-    const html = render(true, true);
-    expect(control(html, 'Place Algebra')).toContain('disabled=""');
-    expect(control(html, 'Remove class from Day 1 8:00–9:00 AM')).toContain('disabled=""');
-  });
 });

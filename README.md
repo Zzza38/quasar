@@ -105,7 +105,7 @@ Keep beta changes additive. All members share one database, so any migration a b
 
 The `schedule-following` beta keeps students on the shared school timetable while letting them save personal time adjustments. Members choose whether a recurring correction is for the school or only for them. Personal adjustments inherit untouched school times and disappear when the school adopts them. Three other enrolled classmates with the same adjustment can suggest a school proposal. Full private timetable controls move under advanced settings. Accounts outside the beta keep the existing timetable editor and save behavior.
 
-The Classes timetable starts with bell times locked. Students can still place, move, swap, and remove class assignments within existing blocks. **Unlock bell times** enables moving, resizing, adding, and removing time blocks. Each account's choice is remembered in that browser. The separate schedule lock still protects all personal schedule edits.
+Beta members without a saved lock preference start with their whole personal schedule locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
 
 Leaving this beta preserves classes, assignments, and saved time changes. Personal adjustments become full-day overrides where possible. Changes that cannot fit the older format stay saved in their current format. Offline edits and requests awaiting a response still sync after leaving. The same preservation applies when the owner removes a member, removes the beta with the command, or the member uses `?beta=off`.
 

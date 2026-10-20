@@ -94,7 +94,7 @@ export function ClassesView({ state }: { state: AppState }) {
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Classes" eyebrow="Your timetable" description={personal.classes.length > 0 ? `${personal.classes.length} ${personal.classes.length === 1 ? 'class' : 'classes'}` : undefined}
-      actions={<><ScheduleLockButton state={state} />{scanEnabled ? <Button icon="calendar" disabled={!state.online} onClick={() => editSchedule(state, () => setScanOpen(true))}>Import schedule</Button>
+      actions={<>{!following && <ScheduleLockButton state={state} />}{scanEnabled ? <Button icon="calendar" disabled={!state.online} onClick={() => editSchedule(state, () => setScanOpen(true))}>Import schedule</Button>
         : !feedConnected && <Button icon="calendar" disabled={!state.online || !state.personalValid} onClick={() => editSchedule(state, () => setVeracrossOpen(true))}>Connect Veracross</Button>}<Button icon="search" onClick={() => setDirectoryOpen(true)}>Browse school classes</Button><Button variant="primary" icon="plus" onClick={() => editSchedule(state, () => setEditing('new'))}>Add class</Button></>} />
     {directoryOpen && <SchoolDirectory schoolId={state.context.school.id} online={state.online} personal={personal} onClose={() => setDirectoryOpen(false)} onAdd={async (classes) => {
       if (!state.personalValid) throw new Error('Retry sync before changing your saved classes.');
@@ -141,10 +141,14 @@ export function ClassesView({ state }: { state: AppState }) {
 
     {/* overflow-clip: a card that hides its overflow becomes the scrollport of the sticky palette and selection bar, so they would scroll away. */}
     <Section id="assignments-title" title="Your class timetable" icon="layers" className="overflow-clip" description="Drag a class onto a block, or tap the class and then the block. Drag a block to an empty time to move it.">
+      {following && <Panel className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1"><strong className="text-sm">{personal.scheduleLocked ? 'Schedule locked' : 'Schedule unlocked'}</strong><Hint>{personal.scheduleLocked ? 'Unlock to change classes, assignments, or timetable settings.' : 'Classes, assignments, and timetable settings can be edited.'}</Hint></div>
+        <ScheduleLockButton state={state} showLabel />
+      </Panel>}
       {stale.length > 0 && <Callout tone="warning" icon="alert" title="Some assignments refer to periods the school removed" actions={<Button size="sm" onClick={() => void run({ ...personal, assignments: Object.fromEntries(Object.entries(personal.assignments).filter(([periodId]) => !stale.includes(periodId))) })}>Clear them</Button>}>
         {stale.map((periodId) => `${personal.classes.find((cls) => cls.id === personal.assignments[periodId])?.name ?? 'Saved class'}, assigned to a period that is no longer listed`).join(', ')}
       </Callout>}
-      <ClassAssignmentGrid accountId={state.context.user.id} schedule={schedule} schoolSchedule={school} personal={personal} save={state.savePersonal} disabled={!state.personalValid} onSchoolCorrection={correctSchool} />
+      <ClassAssignmentGrid schedule={schedule} schoolSchedule={school} personal={personal} save={state.savePersonal} disabled={!state.personalValid || (following && !!personal.scheduleLocked)} onSchoolCorrection={correctSchool} />
     </Section>
 
     <Section id="adjust-title" title="Adjustments" icon="edit" description="Change a single date or a whole rotation day for yourself only.">
@@ -153,7 +157,7 @@ export function ClassesView({ state }: { state: AppState }) {
         {schedule.cycleDays.length > 1 && <Field label="Adjust a rotation day" htmlFor="adjust-day"><Select id="adjust-day" small value="" onChange={(event) => { if (event.target.value) { const day = event.target.value; editSchedule(state, () => setAdjustCycleDay(day)); } }}><option value="">Choose a day…</option>{schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}</Select></Field>}
       </div>
       <AdjustmentsList school={school} personal={personal} save={state.savePersonal} onEditDate={(date) => editSchedule(state, () => setAdjustDate(date))} onEditCycleDay={(day) => editSchedule(state, () => setAdjustCycleDay(day))} />
-      {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }} />}
+      {following && bellChoice && <BellTimeChoice modal onCancel={() => setBellChoice(false)} onSchool={() => correctSchool(scheduleForGrade(school, personal.grade))} onPersonal={() => { setBellChoice(false); editSchedule(state, () => { setPersonalIntent(true); setAdjustCycleDay(schedule.cycleDays[0]?.id ?? null); }); }} />}
       {following && <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>Advanced schedule settings</Button>}
       {(!following || advanced || !!personal.customSchedule) && <Panel className="flex flex-wrap items-center gap-3">
 
