@@ -92,7 +92,7 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
   await day.getByRole('button', { name: 'Day 1, 8:00–9:00 AM: A', exact: true }).click();
   await expect(saved(page)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('button', { name: /^Follower 0 / }).click();
   const account = page.getByRole('dialog', { name: 'Account', exact: true });
   await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
   await account.getByRole('button', { name: 'Join', exact: true }).click();
@@ -118,20 +118,34 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
   expect(savedPersonal.classes).toEqual([expect.objectContaining({ name: 'Biology' })]);
   expect(savedPersonal.assignments).toEqual({ A: 'Biology' });
   expect(savedPersonal.customSchedule).toBeNull();
+  const expectLegacyTimetablePreserved = () => {
+    const current = personal(f.id);
+    expect(current.classes).toEqual(savedPersonal.classes);
+    expect(current.assignments).toEqual(savedPersonal.assignments);
+    expect(current.dateOverrides).toEqual(savedPersonal.dateOverrides);
+    expect(current.grade).toBe(savedPersonal.grade);
+    expect(current.customSchedule).toBeNull();
+    expect(current.cycleDayOverrides).toHaveLength(1);
+    expect(current.cycleDayOverrides[0].slots).toBeDefined();
+    expect(current.cycleDayOverrides[0].slotChanges).toBeUndefined();
+    for (const rotationDay of f.school.schedule.cycleDays) {
+      expect(cycleDaySlots(rotationDay, current)).toEqual(cycleDaySlots(rotationDay, savedPersonal));
+    }
+  };
 
-  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('button', { name: /^Follower 0 / }).click();
   await account.getByRole('button', { name: `Leave ${BETA_NAME}`, exact: true }).click();
   await expect(account.getByRole('list', { name: 'Your betas' })).toHaveCount(0);
   await account.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(addDay).toBeVisible();
   await expect(page.getByLabel('Day 1 name', { exact: true })).toBeVisible();
   await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
-  expect(personal(f.id)).toEqual(savedPersonal);
+  expectLegacyTimetablePreserved();
   await page.reload();
   await expect(addDay).toBeVisible();
   await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('button', { name: /^Follower 0 / }).click();
   await account.getByRole('textbox', { name: 'Beta code', exact: true }).fill(BETA_CODE);
   await account.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(account.getByRole('list', { name: 'Your betas' })).toContainText(BETA_NAME);
@@ -140,7 +154,7 @@ test('the schedule beta is opt-in per account and leaving preserves saved classe
   await expect(addDay).toBeVisible();
   await expect(day.getByRole('button', { name: 'Day 1, 8:05–9:00 AM: Biology', exact: true })).toBeVisible();
   expect(database((_db, service) => new BetaService(service).joined(f.id))).toEqual([]);
-  expect(personal(f.id)).toEqual(savedPersonal);
+  expectLegacyTimetablePreserved();
 });
 
 test('school followers choose before saving times, and adopted changes follow school updates again', async ({ page, context }) => {
