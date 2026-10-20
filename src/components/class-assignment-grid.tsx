@@ -3,7 +3,7 @@
 import { SCHEDULE_FOLLOWING_BETA } from '@/domain/betas';
 import { Beta } from './betas';
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { cycleDaySlots, displayPeriodLabel, scheduleForGrade, scheduleSchema, withCycleDay, type PersonalSchedule, type Schedule, type ScheduleSlot } from '@/domain/schedule';
 import { errorMessage } from '@/client/api';
 import { slugId } from '@/lib/format';
@@ -50,14 +50,27 @@ export function describePendingChange(change: PendingChange): { title: string; b
 }
 
 type ClassAssignmentGridProps = {
-  schedule: Schedule; schoolSchedule?: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean; onSchoolCorrection: (schedule: Schedule, onSaved?: () => void) => void;
+  accountId?: string; schedule: Schedule; schoolSchedule?: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean; onSchoolCorrection: (schedule: Schedule, onSaved?: () => void) => void;
 };
 
 export function ClassAssignmentGrid(props: ClassAssignmentGridProps) {
-  return <Beta id={SCHEDULE_FOLLOWING_BETA} fallback={<ClassAssignmentGridBody {...props} following={false} />}><ClassAssignmentGridBody {...props} following /></Beta>;
+  return <Beta id={SCHEDULE_FOLLOWING_BETA} fallback={<ClassAssignmentGridBody key={props.accountId} {...props} following={false} />}><ClassAssignmentGridBody key={props.accountId} {...props} following /></Beta>;
 }
 
-function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule, following }: ClassAssignmentGridProps & { following: boolean }) {
+function ClassAssignmentGridBody({ accountId, schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule, following }: ClassAssignmentGridProps & { following: boolean }) {
+  const [lockedTimes, setLockedTimes] = useState(true);
+  const timesLocked = following && lockedTimes;
+  const lockKey = accountId ? `quasar.bell-times.${accountId}` : null;
+  useEffect(() => {
+    if (!following || !lockKey) return;
+    try { setLockedTimes(localStorage.getItem(lockKey) !== 'unlocked'); } catch { /* Keep the default lock when storage is unavailable. */ }
+  }, [following, lockKey]);
+  const toggleTimesLock = () => {
+    const next = !timesLocked;
+    setLockedTimes(next);
+    setError('');
+    if (lockKey) try { localStorage.setItem(lockKey, next ? 'locked' : 'unlocked'); } catch { /* Keep this session's choice. */ }
+  };
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
   const queued = useRef<QueuedTimetableEdit | null>(null);
@@ -90,9 +103,9 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
   /** Takes the shown change off the queue, with any removal whose day is already gone (a reused day ID must not revive it). */
   const answered = () => setWaiting((queue) => queue.filter((entry) => entry !== confirming && live(entry)));
   // The grid stays usable while saving (disabling it would drop keyboard focus), so queued edits are built from the latest render.
-  const latest = useRef({ schedule, personal, assignments, draft });
+  const latest = useRef({ schedule, personal, assignments, draft, timesLocked });
   useLayoutEffect(() => {
-    latest.current = { schedule, personal, assignments, draft };
+    latest.current = { schedule, personal, assignments, draft, timesLocked };
     if (waiter.current && waiter.current.from !== personal) { waiter.current.resolve(); waiter.current = null; }
   });
   /** Resolves once the saved personal schedule has rendered, or after a second if it never changes. */
@@ -115,11 +128,13 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
   };
   const enqueue = async (edit: QueuedTimetableEdit) => {
     if (disabled) return;
+    if (edit.change && latest.current.timesLocked) { setError('Unlock bell times before changing the timetable.'); return; }
     if (saving.current) { queued.current = queueTimetableEdit(queued.current, edit); return; }
     saving.current = true; setPending(true); setError('');
     try {
       let next: QueuedTimetableEdit | null = edit;
       while (next) {
+        if (next.change && latest.current.timesLocked) throw new Error('Unlock bell times before changing the timetable.');
         const from = latest.current.personal;
         await save(build(next));
         next = queued.current; queued.current = null;
@@ -135,6 +150,7 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
    * §Dialogs: no native confirm()), and is saved only when the student agrees; then this returns false.
    */
   const persist = (next: Schedule, action: string, then?: () => void): boolean => {
+    if (latest.current.timesLocked) { setError('Unlock bell times before changing the timetable.'); return false; }
     // `draft` is the timetable this render showed, which is what `next` was built from.
     const run = () => { void enqueue({ change: (following ? rebaseTimetableEdit : rebaseLegacyTimetableEdit)(draft, next) }); then?.(); };
     if (following && !personal.customSchedule) { setTimeChange({ before: draft, schedule: next, run }); return false; }
@@ -145,14 +161,18 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
   const schoolDraft = timeChange ? sharedBellTimeDraft(timeChange.before, timeChange.schedule, schoolSchedule ?? schedule, personal.grade) : null;
   const renames = (next: Schedule) => next.cycleDays.some(day => draft.cycleDays.some(entry => entry.id === day.id && entry.label !== day.label));
   return <div className="grid gap-3 min-w-0">
+    {following && <Panel className="flex flex-wrap items-center gap-3">
+      <div className="min-w-0 flex-1"><strong className="text-sm">{timesLocked ? 'Bell times locked' : 'Bell times unlocked'}</strong><Hint>{personal.scheduleLocked ? 'Your schedule lock also protects class assignments.' : timesLocked ? 'Place classes in existing blocks. Unlock to change the timetable.' : 'Move, resize, add, or remove time blocks.'}</Hint></div>
+      <Button size="sm" variant={timesLocked ? 'secondary' : 'ghost'} icon={timesLocked ? 'lock' : 'unlock'} aria-pressed={timesLocked} disabled={disabled || pending} onClick={toggleTimesLock}>{timesLocked ? 'Unlock bell times' : 'Lock bell times'}</Button>
+    </Panel>}
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
     {confirming && prompt && <Callout tone="warning" icon="alert" role="alert" title={prompt.title} actions={<>
-      <Button size="sm" variant="danger" disabled={disabled || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
+      <Button size="sm" variant="danger" disabled={disabled || timesLocked || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
       <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
     </>}>{prompt.body}</Callout>}
     {timeChange && <BellTimeChoice modal schoolUnavailable={schoolDraft?.schoolUnavailable} onCancel={() => setTimeChange(null)} onSchool={() => { if (schoolDraft?.schedule) onSchoolCorrection(schoolDraft.schedule, () => { setTimeChange(null); setEditing(null); }); }} onPersonal={() => { timeChange.run(); setTimeChange(null); }} />}
-    <ScheduleGrid allowStructure={!following || !!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
-      onEditDay={id => { setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
+    <ScheduleGrid timesLocked={timesLocked} allowStructure={!following || !!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
+      onEditDay={id => { if (timesLocked) return; setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
         const days = draft.cycleDays.filter(day => day.id !== id);
         if (!days.length) return;
         const remove = () => persist({ ...draft, cycleDays: days, anchorCycleDayId: draft.anchorCycleDayId === id ? days[0].id : draft.anchorCycleDayId, exceptions: draft.exceptions.filter(entry => entry.kind !== 'reset' || entry.cycleDayId !== id) }, 'Removing a day');
@@ -163,10 +183,10 @@ function ClassAssignmentGridBody({ schedule, personal, save, disabled, onSchoolC
       }} />
     {draft.cycleDays.filter(day => day.id === editing).map(day => <Panel key={day.id} className="grid gap-2 p-3"><strong className="text-sm">{day.label} times</strong>
       {/* A block the student made is named after the class in it now, as in the grid. */}
-      <SlotsEditor slots={editedSlots} periods={draft.periods.map(period => ({ ...period, label: displayPeriodLabel(period, personal.classes.find(cls => cls.id === assignments[period.id])?.name ?? false) }))} disabled={disabled} onChange={setEditedSlots} />
-      <div><Button size="sm" disabled={disabled || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
+      <SlotsEditor slots={editedSlots} periods={draft.periods.map(period => ({ ...period, label: displayPeriodLabel(period, personal.classes.find(cls => cls.id === assignments[period.id])?.name ?? false) }))} disabled={disabled || timesLocked} onChange={setEditedSlots} />
+      <div><Button size="sm" disabled={disabled || timesLocked || !scheduleSchema.safeParse({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }).success} onClick={() => { persist({ ...draft, cycleDays: draft.cycleDays.map(entry => entry.id === day.id ? { ...entry, slots: editedSlots } : entry) }, 'Saving these times', () => setEditing(null)); }}>Save times</Button></div>
     </Panel>)}
-    {(!following || personal.customSchedule) && <div><Button size="sm" icon="plus" disabled={disabled || draft.cycleDays.length >= 366} onClick={() => {
+    {(!following || personal.customSchedule) && <div><Button size="sm" icon="plus" disabled={disabled || timesLocked || draft.cycleDays.length >= 366} onClick={() => {
       const id = slugId(`day-${draft.cycleDays.length + 1}`, draft.cycleDays.map(day => day.id));
       persist(withCycleDay(draft, { id, label: `Day ${draft.cycleDays.length + 1}`, slots: [] }), 'Adding a day');
     }}>Add rotation day</Button></div>}

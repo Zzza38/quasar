@@ -12,6 +12,8 @@ import { Button as ShadButton } from './ui/button';
 import { usePointerDrag, verticalScroller, type DragPoint } from './pointer-drag';
 import { classFill, periodFill, clockTime, minutes, placeTimedPeriod, PLACEMENT_BLOCKED, type PeriodPlacement } from './schedule-placement';
 
+export const BELL_TIMES_LOCKED_MESSAGE = 'Unlock bell times to change the timetable. You can still move classes between existing blocks.';
+
 const snap = (value: number) => Math.round(value / 5) * 5;
 type Resize = { dayId: string; slot: ScheduleSlot; edge: 'start' | 'end'; y: number; start: number; end: number };
 /** A class or block being dragged. `grab` is how far below a block's top it was picked up, so the block does not jump to the pointer. */
@@ -30,7 +32,7 @@ function pageBounds() {
   return { top: bar?.height ? bar.bottom : 0, bottom: dock?.height ? dock.top : window.innerHeight };
 }
 
-export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay, allowStructure = true }: {
+export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay, allowStructure = true, timesLocked = false }: {
   /** Sets the class of each listed period, or clears it with null, in one save. */
   onAssign?: (changes: Record<string, string | null>) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
   /**
@@ -40,8 +42,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
    */
   onChange: (value: Schedule) => boolean | void;
   allowStructure?: boolean;
+  /** Protect timetable structure and times while allowing class assignments in existing blocks. */
+  timesLocked?: boolean;
   onEditDay: (id: string) => void; onRemoveDay: (id: string) => void;
 }) {
+  const timesLockedRef = useRef(timesLocked);
   const [selected, setSelected] = useState<PeriodPlacement | null>(null);
   // `message` is the result of the last action. Selecting does not touch it: the selection has its own bar (`prompt`),
   // out of flow, so picking something up never shifts the timetable under the next tap.
@@ -65,6 +70,12 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   // while the message that reported that change is the one showing.
   const [replaced, setReplaced] = useState<{ changes: Record<string, string | null>; message: string } | null>(null);
   const [removing, setRemoving] = useState<{ dayId: string; dayLabel: string; slot: ScheduleSlot; name: string; keyboard: boolean } | null>(null);
+  useLayoutEffect(() => {
+    timesLockedRef.current = timesLocked;
+    if (!timesLocked) return;
+    resizeRef.current = null; setResizing(null); setHover(null); setCleared(null);
+    setRemoving(current => current && onAssign && personal?.classes.some(cls => cls.id === personal.assignments[current.slot.periodId]) ? current : null);
+  }, [timesLocked, onAssign, personal]);
   // Roving tab stop per day column: one focusable time target instead of one per 15 minutes.
   const [targetFocus, setTargetFocus] = useState<Record<string, number>>({});
   const hintId = useId();
@@ -92,6 +103,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const isGuide = (slot: ScheduleSlot) => !!personalClassesOnly && periodOf(slot.periodId)?.kind === 'class' && !clsFor(slot.periodId);
   /** The timetable with `source` at a time, or why it cannot go there. No block is removed to make room. */
   const timed = (source: PeriodPlacement, dayId: string, start: number, end: number): Schedule | string => {
+    if (timesLockedRef.current) return BELL_TIMES_LOCKED_MESSAGE;
     const next = placeTimedPeriod(value, source, dayId, { start: clockTime(start), end: clockTime(end) }, randomId());
     if (next !== PLACEMENT_BLOCKED) return next;
     const empty = value.cycleDays.find(day => day.id === dayId)?.slots.some(slot => !(source.dayId === dayId && source.slotId === slot.id) && minutes(slot.start) < end && minutes(slot.end) > start && isGuide(slot));
@@ -113,11 +125,16 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const row = contentRef.current?.getBoundingClientRect();
     setFlash(text && row && row.top < visibleBand().top - 8 ? text : '');
   };
+  const changeTimetable = (next: Schedule): boolean | void => {
+    if (disabled) return false;
+    if (timesLockedRef.current) { say(BELL_TIMES_LOCKED_MESSAGE); return false; }
+    return onChange(next);
+  };
   const commit = (source: PeriodPlacement, dayId: string, start: number, end: number): boolean => {
     if (disabled) return false;
     const next = timed(source, dayId, start, end);
     if (typeof next === 'string') { say(next); return false; }
-    const saved = onChange(next) !== false;
+    const saved = changeTimetable(next) !== false;
     // The Classes page saves each change straight to the personal timetable; the school editors keep a draft until Save.
     setSelected(null); setCleared(null); setReplaced(null); say(saved ? `Saved ${formatRange(clockTime(start), clockTime(end))}${personalClassesOnly ? '' : ' in this draft'}.` : '');
     return saved;
@@ -138,6 +155,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const held = onAssign && personal ? Object.fromEntries(Object.entries(personal.assignments).filter(([id]) => clsFor(id))) : undefined;
     const fill = held && classFill(value, held, source, dayId, at, start, end);
     if (!fill) {
+      if (timesLockedRef.current) return { dayId, start, end, label: 'Unlock bell times', problem: BELL_TIMES_LOCKED_MESSAGE };
       // A period that is not a class (advisory, lunch, study hall) fills an empty block too, taking the block's time.
       const taken = held && periodFill(value, held, source, dayId, at, start, end);
       if (taken) {
@@ -156,9 +174,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   /** Returns the start minute of the placed block, or undefined when nothing was placed. */
   const place = (source: PeriodPlacement, spot: Landing): number | undefined => {
     if (disabled) return undefined;
+    if (spot.problem) { say(spot.problem); return undefined; }
+    if (timesLockedRef.current && (!spot.slotId || !spot.changes || spot.schedule)) { say(BELL_TIMES_LOCKED_MESSAGE); return undefined; }
     if (!spot.slotId) return commit(source, spot.dayId, spot.start, spot.end) ? spot.start : undefined;
     if (spot.schedule) {
-      const saved = onChange(spot.schedule) !== false;
+      const saved = changeTimetable(spot.schedule) !== false;
       setSelected(null); setCleared(null); setReplaced(null); say(saved ? spot.done ?? '' : '');
       return saved ? spot.start : undefined;
     }
@@ -181,17 +201,19 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const activeTarget: Record<string, number> = Object.fromEntries(value.cycleDays.map(day => [day.id, Math.min(targetCount - 1, targetFocus[day.id] ?? defaultTarget(day.id))]));
   const undoClear = () => {
     if (!cleared) return;
+    if (timesLockedRef.current) { say(BELL_TIMES_LOCKED_MESSAGE); return; }
     const day = value.cycleDays.find(entry => entry.id === cleared.dayId);
     const restored = day && { ...day, slots: [...day.slots, cleared.slot].sort((a, b) => a.start.localeCompare(b.start)) };
     if (!restored || !value.periods.some(period => period.id === cleared.slot.periodId) || !cycleDaySchema.safeParse(restored).success) { setCleared(null); say('That time is taken now, so the block was not restored.'); return; }
-    const saved = onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === restored.id ? restored : entry) }) !== false;
+    const saved = changeTimetable({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === restored.id ? restored : entry) }) !== false;
     setCleared(null); say(saved ? `Restored ${formatRange(cleared.slot.start, cleared.slot.end)}.` : '');
   };
   const clearBlock = () => {
     if (!removing || disabled) return;
+    if (timesLockedRef.current) { setRemoving(null); say(BELL_TIMES_LOCKED_MESSAGE); return; }
     const { dayId, slot, name, keyboard } = removing;
     const next = { ...value, cycleDays: value.cycleDays.map(entry => entry.id === dayId ? { ...entry, slots: entry.slots.filter(item => item.id !== slot.id) } : entry) };
-    if (onChange(next) === false) { setRemoving(null); return; }
+    if (changeTimetable(next) === false) { setRemoving(null); return; }
     if (selected?.slotId === slot.id) setSelected(null);
     setCleared({ dayId, slot, keyboard }); setReplaced(null);
     say(`Cleared ${name} from ${value.cycleDays.find(day => day.id === dayId)?.label ?? 'the timetable'}.`);
@@ -277,13 +299,14 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const hoverDay = hover && value.cycleDays.find(day => day.id === hover.dayId);
   const undoable = !!replaced && !cleared && replaced.message === message;
   const beginResize = (event: PointerEvent<HTMLButtonElement>, dayId: string, slot: ScheduleSlot, edge: 'start' | 'end') => {
-    if (disabled) return;
+    if (disabled || timesLockedRef.current) return;
     event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
     const state = { dayId, slot, edge, y: event.clientY, start: minutes(slot.start), end: minutes(slot.end) };
     resizeRef.current = state; setResizing(state);
   };
   const moveResize = (event: PointerEvent<HTMLButtonElement>) => {
     const current = resizeRef.current;
+    if (disabled || timesLockedRef.current) { resizeRef.current = null; setResizing(null); return; }
     if (!current) return;
     const originalTime = minutes(current.slot[current.edge]);
     const delta = snap(axis.time(axis.y(originalTime) + event.clientY - current.y)) - originalTime;
@@ -302,9 +325,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
           const active = selected?.periodId === period.id && !selected.dayId;
           const lifted = !!carry && !carry.source.dayId && carry.source.periodId === period.id;
-          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', active && 'ring-2 ring-ring/60', lifted && 'opacity-50')} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
-            style={{ borderColor: 'transparent', background: `color-mix(in srgb, ${color.dot} 22%, var(--card))` }} onPointerDown={event => { if (!disabled) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); }}
+          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', active && 'ring-2 ring-ring/60', lifted && 'opacity-50')} disabled={disabled || (timesLocked && !(cls && onAssign))} aria-label={`Place ${label}`} aria-pressed={active}
+            style={{ borderColor: 'transparent', background: `color-mix(in srgb, ${color.dot} 22%, var(--card))` }} onPointerDown={event => { if (!disabled && (!timesLockedRef.current || cls && onAssign)) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); }}
             onClick={event => {
+              if (disabled) return;
+              if (timesLockedRef.current && !(cls && onAssign)) { say(BELL_TIMES_LOCKED_MESSAGE); return; }
               if (active) { cancelSelection(); return; }
               // Tap works in either order: with an empty block selected, tapping a class puts it in that block.
               const block = slotOf(selected);
@@ -324,7 +349,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
       <div className={cn('timetable-status', message || cleared ? 'flex flex-wrap items-center gap-x-2' : 'contents')}>
         <p role="status" className={message ? 'text-xs text-muted-foreground' : 'sr-only'}>{message}</p>
         {/* Keyed per clear so a keyboard clear, which removes the focused ×, lands focus on Undo. */}
-        {cleared && <Button key={cleared.slot.id} size="sm" variant="ghost" autoFocus={cleared.keyboard} disabled={disabled} onClick={undoClear}>Undo</Button>}
+        {cleared && <Button key={cleared.slot.id} size="sm" variant="ghost" autoFocus={cleared.keyboard} disabled={disabled || timesLocked} onClick={undoClear}>Undo</Button>}
         {undoable && <Button size="sm" variant="ghost" disabled={disabled} onClick={undoAssign}>Undo</Button>}
       </div>
       <span id={hintId} className="sr-only">Use the arrow keys to choose a time, then press Enter.</span>
@@ -334,14 +359,14 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
             <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>
             {days.map((day, index) => <div key={day.id} className="time-canvas-heading">
-              {allowStructure ? <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return onChange({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} /> : <strong className="px-2 text-sm">{day.label}</strong>}
-              <div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => onEditDay(day.id)}>Edit times<span className="sr-only"> for {day.label}</span></Button>{allowStructure && <IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => onRemoveDay(day.id)} />}</div>
+              {allowStructure ? <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled || timesLocked} onCommit={label => { setCleared(null); return changeTimetable({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} /> : <strong className="px-2 text-sm">{day.label}</strong>}
+              <div className="flex items-center justify-between"><Button size="sm" variant="ghost" disabled={disabled || timesLocked} onClick={() => { if (!disabled && !timesLockedRef.current) onEditDay(day.id); }}>Edit times<span className="sr-only"> for {day.label}</span></Button>{allowStructure && <IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || timesLocked || value.cycleDays.length <= 1} onClick={() => { if (!disabled && !timesLockedRef.current) onRemoveDay(day.id); }} />}</div>
             </div>)}
             <div className="time-axis" style={{ height }}>{Array.from({ length: Math.ceil((endMinute - startMinute) / 60) }, (_, index) => <span key={index} style={{ top: axis.y(startMinute + index * 60) }}>{formatTime(clockTime(startMinute + index * 60))}</span>)}</div>
             {days.map(day => <div key={day.id} className="time-day" data-column={day.id} role="group" aria-label={`${day.label} time canvas`} style={{ height }}>
               <div className="time-targets" role="group" aria-label={`${day.label} times`} aria-describedby={hintId}>{Array.from({ length: targetCount }, (_, index) => {
                 const start = startMinute + index * 15;
-                return <button key={start} type="button" disabled={disabled || !selected} tabIndex={index === activeTarget[day.id] ? 0 : -1} aria-label={`Place in ${day.label} at ${formatTime(clockTime(start))}`} style={{ height: axis.y(Math.min(endMinute, start + 15)) - axis.y(start) }}
+                return <button key={start} type="button" disabled={disabled || timesLocked || !selected} tabIndex={index === activeTarget[day.id] ? 0 : -1} aria-label={`Place in ${day.label} at ${formatTime(clockTime(start))}`} style={{ height: axis.y(Math.min(endMinute, start + 15)) - axis.y(start) }}
                   onFocus={() => setTargetFocus(current => current[day.id] === index ? current : { ...current, [day.id]: index })}
                   onKeyDown={event => {
                     const next = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? targetCount - 1 : null;
@@ -358,7 +383,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 // A slot can outlive its period (a school removed it under a student's day override); never show the raw ID.
                 const name = cls?.name ?? displayPeriodLabel(period, !personalClassesOnly);
                 const color = classColor(cls?.id ?? period?.id, period?.kind, cls?.color);
-                const active = resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
+                const active = !timesLocked && resizing?.dayId === day.id && resizing.slot.id === slot.id ? resizing : null;
                 const start = active?.start ?? minutes(slot.start); const end = active?.end ?? minutes(slot.end);
                 const blockHeight = axis.y(end) - axis.y(start);
                 const compact = blockHeight < 48;
@@ -367,9 +392,11 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const own = selected?.slotId === slot.id && selected.dayId === day.id;
                 const lifted = carry?.source.slotId === slot.id && carry.source.dayId === day.id;
                 return <div key={slot.id} className={`time-block${guide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}${own ? ' time-block-open' : ''}${lifted ? ' time-drag-source' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, '--block-color': color.dot, background: guide ? undefined : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
-                  <button type="button" title={`${name} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} disabled={disabled} aria-pressed={own} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${name}`}
-                    onPointerDown={event => { if (!disabled) lift(event, { source: { periodId: slot.periodId, dayId: day.id, slotId: slot.id }, label: name, color: color.dot, grab: event.clientY - event.currentTarget.getBoundingClientRect().top }); }}
+                  <button type="button" title={`${name} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} disabled={disabled || (timesLocked && !(cls && onAssign) && !guide)} aria-pressed={own} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${name}`}
+                    onPointerDown={event => { if (!disabled && (!timesLockedRef.current || cls && onAssign || guide)) lift(event, { source: { periodId: slot.periodId, dayId: day.id, slotId: slot.id }, label: name, color: color.dot, grab: event.clientY - event.currentTarget.getBoundingClientRect().top }); }}
                     onClick={event => {
+                      if (disabled) return;
+                      if (timesLockedRef.current && !(cls && onAssign) && !guide) { say(BELL_TIMES_LOCKED_MESSAGE); return; }
                       if (own) { cancelSelection(); return; }
                       if (selected && (placingClass || (fillsBlocks && guide))) { followWithFocus(event.detail, day.id, placeAt(selected, day.id, minutes(slot.start))); return; }
                       select({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, guide ? 'Empty block selected. Tap a class or period to put it here, or tap an empty time to move the block.' : cls && onAssign ? `${name} selected. Tap another block to move the class there, or tap an empty time to move this block.` : onAssign && period && period.kind !== 'class' ? `${name} selected. Tap an empty block to move it there, or tap an empty time.` : 'Select another time to move this block.');
@@ -379,12 +406,12 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                     <span>{formatRange(clockTime(start), clockTime(end)).replace(/\s?[AP]M/g, '')}</span>
                   </button>
                   <div className="time-block-detail" aria-hidden="true"><strong>{name}</strong><span>{formatRange(clockTime(start), clockTime(end))}</span></div>
-                  <button type="button" className="time-block-clear" aria-label={`${cls && onAssign ? 'Remove class from' : 'Remove time block from'} ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled} onClick={event => setRemoving({ dayId: day.id, dayLabel: day.label, slot, name, keyboard: event.detail === 0 })}>×</button>
-                  {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled} aria-label={`Resize ${day.label} ${period ? displayPeriodLabel(period, cls?.name ?? !personalClassesOnly) : name} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
+                  <button type="button" className="time-block-clear" aria-label={`${cls && onAssign ? 'Remove class from' : 'Remove time block from'} ${day.label} ${formatRange(slot.start, slot.end)}`} disabled={disabled || (timesLocked && !(cls && onAssign))} onClick={event => { if (timesLockedRef.current && !(cls && onAssign)) { say(BELL_TIMES_LOCKED_MESSAGE); return; } setRemoving({ dayId: day.id, dayLabel: day.label, slot, name, keyboard: event.detail === 0 }); }}>×</button>
+                  {(['start', 'end'] as const).map(edge => <button key={edge} type="button" className={`time-resize time-resize-${edge}`} disabled={disabled || timesLocked} aria-label={`Resize ${day.label} ${period ? displayPeriodLabel(period, cls?.name ?? !personalClassesOnly) : name} ${edge}`} title={`Drag to change ${edge}; arrow keys adjust by 5 minutes`}
                     onPointerDown={event => beginResize(event, day.id, slot, edge)} onPointerMove={moveResize}
-                    onPointerUp={event => { const current = resizeRef.current; if (!current) return; event.stopPropagation(); if (current.start !== minutes(current.slot.start) || current.end !== minutes(current.slot.end)) commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
+                    onPointerUp={event => { const current = resizeRef.current; if (disabled || timesLockedRef.current) { resizeRef.current = null; setResizing(null); return; } if (!current) return; event.stopPropagation(); if (current.start !== minutes(current.slot.start) || current.end !== minutes(current.slot.end)) commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, current.start, current.end); resizeRef.current = null; setResizing(null); }}
                     onPointerCancel={() => { resizeRef.current = null; setResizing(null); }} onClick={event => event.stopPropagation()}
-                    onKeyDown={event => { if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const delta = event.key === 'ArrowUp' ? -5 : 5; commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, minutes(slot.start) + (edge === 'start' ? delta : 0), minutes(slot.end) + (edge === 'end' ? delta : 0)); }} />)}
+                    onKeyDown={event => { if (disabled || timesLockedRef.current) return; if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const delta = event.key === 'ArrowUp' ? -5 : 5; commit({ periodId: slot.periodId, dayId: day.id, slotId: slot.id }, day.id, minutes(slot.start) + (edge === 'start' ? delta : 0), minutes(slot.end) + (edge === 'end' ? delta : 0)); }} />)}
                 </div>;
               })}
               {hover?.dayId === day.id && <div className="time-drop-preview" data-invalid={hover.problem ? '' : undefined} style={{ top: axis.y(hover.start), height: axis.y(hover.end) - axis.y(hover.start) }}>{hover.label ?? formatRange(clockTime(hover.start), clockTime(hover.end))}</div>}
@@ -399,7 +426,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     <strong>{carry.label}</strong>{hover && hoverDay && <span>{hoverDay.label} · {hover.label ?? formatRange(clockTime(hover.start), clockTime(hover.end))}</span>}
   </div>, document.body)}
   <Modal open={!!removing} onClose={() => setRemoving(null)} title={removing && clsFor(removing.slot.periodId) && onAssign ? `Remove ${removing.name} from this block?` : `Remove ${removing?.name ?? 'time block'}?`}
-    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button><Spacer /><Button variant="danger" disabled={disabled} onClick={removing && clsFor(removing.slot.periodId) && onAssign ? clearClass : clearBlock}>{removing && clsFor(removing.slot.periodId) && onAssign ? 'Remove class' : 'Remove time block'}</Button></>}>
+    footer={<><Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button><Spacer /><Button variant="danger" disabled={disabled || (timesLocked && !(removing && clsFor(removing.slot.periodId) && onAssign))} onClick={removing && clsFor(removing.slot.periodId) && onAssign ? clearClass : clearBlock}>{removing && clsFor(removing.slot.periodId) && onAssign ? 'Remove class' : 'Remove time block'}</Button></>}>
     <p className="text-sm text-muted-foreground">{removing && `${removing.dayLabel}, ${formatRange(removing.slot.start, removing.slot.end)}`}. {removing && clsFor(removing.slot.periodId) && onAssign ? `${blocksOf(removing.slot.periodId) > 1 ? `${removing.name} is in ${blocksOf(removing.slot.periodId)} blocks of this period and leaves all of them. ` : ''}The class stays saved, and the time block stays on your timetable. Use × again to remove an empty block.` : 'This removes the time block from the timetable.'}</p>
   </Modal></>;
 }
@@ -409,7 +436,9 @@ function DayNameInput({ name, label, disabled, onCommit }: { name: string; label
   const [text, setText] = useState(label);
   const [shown, setShown] = useState(label);
   if (shown !== label) { setShown(label); setText(label); }
+  useEffect(() => { if (disabled) setText(label); }, [disabled, label]);
   const commit = () => {
+    if (disabled) { setText(label); return; }
     if (!text.trim()) { setText(label); return; }
     if (text !== label && onCommit(text) === false) setText(label);
   };
