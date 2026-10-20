@@ -36,8 +36,12 @@ export interface TaskGroup {
 
 export interface TaskDay {
   date: string;
-  /** "Thursday, Oct 22" */
+  /** "Thursday, Oct 22", the accessible name */
   title: string;
+  /** The parts of the date block beside the day's rows: "Thu", "22", "Oct". */
+  weekday: string;
+  day: string;
+  month: string;
   items: TaskItem[];
 }
 
@@ -51,7 +55,10 @@ export function splitByDay(items: TaskItem[]): TaskDay[] {
     const date = item.task.dueDate!;
     days.set(date, [...(days.get(date) ?? []), item]);
   }
-  return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, dayItems]) => ({ date, title: formatDate(date, { weekday: 'long' }), items: dayItems }));
+  return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, dayItems]) => {
+    const [month, day] = formatDate(date).split(' ');
+    return { date, title: formatDate(date, { weekday: 'long' }), weekday: formatDate(date, { weekday: 'short' }).split(',')[0], day, month, items: dayItems };
+  });
 }
 
 /** Groups whose rows need no date chip: the heading already says when. */

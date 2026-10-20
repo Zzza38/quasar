@@ -105,11 +105,17 @@ export function TasksView({ state }: { state: AppState }) {
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
           {group.detail && <span className="ml-1 rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-bold normal-case tracking-normal text-foreground/80">{group.detail}</span>}
         </h2>
-        {group.days ? group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} className="grid gap-0.5 border-t border-border/60 pt-1.5 first-of-type:border-t-0 first-of-type:pt-0">
-          {/* Each day gets its own heading, so its rows drop the date chip like Today's do. */}
-          <h3 id={`day-${group.key}-${day.date}`} className="px-2.5 pt-1 text-[13px] font-semibold text-foreground/80">{day.title} <span className="font-medium text-muted-foreground/70">· {day.items.length}</span></h3>
+        {group.days ? <div className="grid gap-2 sm:gap-4">{group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} className="grid sm:grid-cols-[3.5rem_minmax(0,1fr)]">
+          {/* An agenda column: the date block sits beside the day's rows, so the rows drop their date chips like Today's do.
+              On phones the block becomes a line above the rows, lined up with the task titles. */}
+          <h3 id={`day-${group.key}-${day.date}`} className="flex items-baseline gap-1.5 pl-11 pt-2 sm:flex-col sm:items-center sm:gap-0.5 sm:pl-0 sm:pt-3">
+            <span className="sr-only">{day.title}</span>
+            <span aria-hidden="true" className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{day.weekday}</span>
+            <span aria-hidden="true" className="text-[13px] font-semibold tabular-nums text-foreground sm:text-[22px] sm:leading-none">{day.day}</span>
+            <span aria-hidden="true" className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">{day.month}</span>
+          </h3>
           <ul className="grid gap-0.5">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} />)}</ul>
-        </section>)
+        </section>)}</div>
           : <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>}
       </CardContent>
     </Card>)}
