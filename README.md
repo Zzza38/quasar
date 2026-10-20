@@ -97,7 +97,7 @@ For logic rather than a whole component, branch on `useBeta('month-grid')`, whic
 
 Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
 
-The `broken-hearts` beta enables a hidden Easter egg: type `savanah` outside editable fields to spawn fading broken hearts. Only members of that beta get the keyboard trigger. Leaving the beta removes the trigger and any hearts still on screen. The effect has no mod-menu entry.
+The `broken-hearts` beta enables a hidden Easter egg: type `savanah` outside editable fields to spawn 80 broken hearts. They bounce around the viewport, dodge the cursor using the I'm Shy physics, and fade away after 7 to 9 seconds. Reduced motion keeps them still. Only members of that beta get the keyboard trigger. Leaving the beta removes the trigger and any hearts still on screen. The effect has no mod-menu entry.
 
 ### 2. Ship it
 
