@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { FIRST_DATE, LAST_DATE } from '@/domain/schedule';
 import { taskSchema, type Task } from '@/domain/task';
@@ -105,22 +105,22 @@ export function TasksView({ state }: { state: AppState }) {
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
           {group.detail && <span className="ml-1 rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-bold normal-case tracking-normal text-foreground/80">{group.detail}</span>}
         </h2>
-        {group.days ? <div className="grid gap-2 sm:gap-4 sm:pt-3">{group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} className="grid sm:grid-cols-[3.5rem_minmax(0,1fr)]">
-          {/* An agenda column: the date block sits beside the day's rows, so the rows drop their date chips like Today's do. Its 42px box
-              matches the first row's checkbox band (TaskRow's 10px top padding + 22px checkbox + 10px), and flex centering lets the block
-              overflow that box evenly, so its middle lines up with the first checkbox (the list's top padding leaves room for that overflow). On phones the block becomes a line above the rows,
-              lined up with the task titles. */}
-          <h3 id={`day-${group.key}-${day.date}`} className="flex items-baseline gap-1.5 pl-11 pt-2 sm:h-[42px] sm:flex-col sm:items-center sm:justify-center sm:gap-0.5 sm:pl-0 sm:pt-0">
+        {group.days ? <div className="grid gap-2 sm:gap-4 sm:pt-1">{group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} style={{ '--day-rows': day.items.length } as CSSProperties}
+          className="grid sm:grid-cols-[3.5rem_minmax(0,1fr)] sm:grid-rows-[repeat(var(--day-rows),auto)] sm:gap-y-0.5">
+          {/* An agenda column: the date block sits beside the day's rows, so the rows drop their date chips like Today's do. The list is a
+              row subgrid, so the block centers on the first task, and that task's checkbox centers on its title and details too.
+              On phones the block becomes a line above the rows, lined up with the task titles. */}
+          <h3 id={`day-${group.key}-${day.date}`} className="flex items-baseline gap-1.5 pl-11 pt-2 sm:col-start-1 sm:row-start-1 sm:flex-col sm:items-center sm:gap-0.5 sm:self-center sm:pl-0 sm:pt-0">
             <span className="sr-only">{day.title}</span>
             {/* Overdue rows lose their red date chip here, so the date block carries the red instead. */}
             <span aria-hidden="true" className={cn('text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground', group.key === 'overdue' && 'text-destructive')}>{day.weekday}</span>
             <span aria-hidden="true" className={cn('text-[13px] font-semibold tabular-nums text-foreground sm:text-[22px] sm:leading-none', group.key === 'overdue' && 'text-destructive')}>{day.day}</span>
             <span aria-hidden="true" className={cn('text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70', group.key === 'overdue' && 'text-destructive/70')}>{day.month}</span>
           </h3>
-          <ul className="grid gap-0.5">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} />)}</ul>
+          <ul className="grid gap-0.5 sm:col-start-2 sm:row-span-(--day-rows) sm:row-start-1 sm:grid-rows-subgrid">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} centered />)}</ul>
         </section>)}</div>
           // With date columns on, No due date keeps its checkboxes in line with the dated groups above it.
-          : <ul className={cn('grid gap-0.5', splitDays && 'sm:pl-14')}>{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>}
+          : <ul className={cn('grid gap-0.5', splitDays && 'sm:pl-14')}>{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} centered={splitDays} />)}</ul>}
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
