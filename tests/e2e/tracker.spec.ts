@@ -838,11 +838,11 @@ test('task-days beta: Next 7 days gives each due date its own heading', async ({
     await expect(friday).not.toContainText('Fri, Oct 23');
     expect((await thursday.boundingBox())!.y).toBeLessThan((await friday.boundingBox())!.y);
     if (width === 1440) {
-      // The date column sits centered on its day's rows.
+      // The date block sits centered on its day's first row, not on the whole day.
       for (const day of [thursday, friday]) {
         const heading = (await day.getByRole('heading').boundingBox())!;
-        const rows = (await day.getByRole('list').boundingBox())!;
-        expect(Math.abs(heading.y + heading.height / 2 - (rows.y + rows.height / 2))).toBeLessThan(2);
+        const first = (await day.getByRole('listitem').first().boundingBox())!;
+        expect(Math.abs(heading.y + heading.height / 2 - (first.y + first.height / 2))).toBeLessThan(2);
       }
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
