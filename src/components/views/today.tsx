@@ -415,7 +415,8 @@ export function useCompletionUndo(state: AppState): { onComplete: (item: TaskIte
   return { onComplete, undoBar };
 }
 
-export function TaskRow({ item, state, showDate = true, onComplete }: { item: TaskItem; state: AppState; showDate?: boolean; onComplete?: (item: TaskItem, options?: { focus?: boolean }) => void }) {
+export function TaskRow({ item, state, showDate = true, centered = false, onComplete }: { item: TaskItem; state: AppState; showDate?: boolean;
+  /** Centers the checkbox on the title and details instead of the title's first line. */ centered?: boolean; onComplete?: (item: TaskItem, options?: { focus?: boolean }) => void }) {
   const [error, setError] = useState('');
   // Checkbox change events carry no pointer type, so remember whether the last press was a key.
   const keyboardRef = useRef(false);
@@ -425,7 +426,7 @@ export function TaskRow({ item, state, showDate = true, onComplete }: { item: Ta
   const overdue = isOverdue(task, state.today, clockTime(state.now, state.timeZone));
   const dueToday = task.dueDate === state.today && !overdue;
   const hasMeta = task.dueDate || cls || task.notes || task.priority || task.subtasks?.length || task.recurrence || task.imported || task.reminder;
-  return <li className="group/task flex items-start gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-muted/70">
+  return <li className={cn('group/task flex gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-muted/70', centered ? 'items-center' : 'items-start')}>
     <Checkbox className="size-[22px] rounded-full border-2 border-control-border shadow-none transition-colors hover:border-primary data-checked:border-primary [&_svg]:size-3.5" checked={task.completed} aria-label={`Mark ${task.title} ${task.completed ? 'incomplete' : 'complete'}`} data-task-check={item.id}
       onKeyDown={() => { keyboardRef.current = true; }} onPointerDown={() => { keyboardRef.current = false; }} onCheckedChange={async (checked) => {
       setError('');
