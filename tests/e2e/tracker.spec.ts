@@ -766,12 +766,12 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/tasks');
   const before = page.getByRole('region', { name: /^Before school resumes/ });
-  const school = page.getByRole('region', { name: /^Tuesday/ });
+  const school = page.getByRole('region', { name: /^Tuesday ·/ });
   const week = page.getByRole('region', { name: /^Next 7 days/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(before).toContainText('Monday video');
-    await expect(before).toContainText('Mon, Oct 12');
+    await expect(before.getByRole('heading', { name: 'Monday, Oct 12' })).toBeVisible();
     await expect(before).toContainText('11:59 PM');
     await expect(school).toContainText('Tuesday homework');
     await expect(school).toContainText('Next school day');
@@ -793,6 +793,52 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
   await expect(week).toContainText('Wednesday quiz');
+});
+
+test('Next 7 days gives each due date its own date column', async ({ page, context }, testInfo) => {
+  const fixture = seed();
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db);
+    for (const [title, dueDate] of [['Unit 2 test', '2026-10-23'], ['Project 1', '2026-10-22'], ['Mongols debate', '2026-10-22']]) {
+      service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
+        data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
+    }
+  } finally { db.close(); }
+  await authenticate(context, fixture.id);
+  // Tuesday 2026-10-20, so Thursday and Friday both fall in Next 7 days.
+  await page.clock.setFixedTime(new Date('2026-10-20T16:00:00Z'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/tasks');
+  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  const thursday = week.getByRole('region', { name: /^Thursday, Oct 22/ });
+  const friday = week.getByRole('region', { name: /^Friday, Oct 23/ });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(thursday.getByRole('heading')).toHaveAccessibleName('Thursday, Oct 22');
+    await expect(thursday).toContainText('Project 1');
+    await expect(thursday).toContainText('Mongols debate');
+    await expect(thursday).not.toContainText('Unit 2 test');
+    await expect(friday).toContainText('Unit 2 test');
+    // The day heading says when, so the rows keep only the time.
+    await expect(friday).toContainText('11:59 PM');
+    await expect(friday).not.toContainText('Fri, Oct 23');
+    expect((await thursday.boundingBox())!.y).toBeLessThan((await friday.boundingBox())!.y);
+    if (width === 1440) {
+      // The date block and the first checkbox both center on the day's first task.
+      const middle = (box: { y: number; height: number } | null) => box!.y + box!.height / 2;
+      for (const day of [thursday, friday]) {
+        const first = middle(await day.getByRole('listitem').first().boundingBox());
+        expect(Math.abs(middle(await day.getByRole('heading').boundingBox()) - first)).toBeLessThan(2);
+        expect(Math.abs(middle(await day.getByRole('checkbox').first().boundingBox()) - first)).toBeLessThan(2);
+      }
+      // ...without running into the group's title above it.
+      const title = (await week.getByRole('heading', { level: 2 }).boundingBox())!;
+      expect((await thursday.getByRole('heading').boundingBox())!.y).toBeGreaterThan(title.y + title.height + 4);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`week-days-${width}.png`), fullPage: true });
+  }
 });
 
 test('imported homework stays visible and grayed in the calendar after completion and refresh', async ({ page, context }) => {

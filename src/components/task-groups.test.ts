@@ -4,7 +4,7 @@ import { scheduleSchema, type Schedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { addDays } from '@/lib/format';
 import type { TaskItem } from './app-state';
-import { DATED_GROUPS, groupTasks, nextSchoolDate } from './task-groups';
+import { groupTasks, nextSchoolDate, splitByDay } from './task-groups';
 
 function item(title: string, dueDate: string | null, dueTime: string | null = null): TaskItem {
   const task: Task = { title, dueDate, dueTime, classId: null, notes: '', completed: false };
@@ -97,7 +97,7 @@ describe('groupTasks', () => {
       ['Tuesday', ['Tuesday homework']],
       ['Next 7 days', ['Wednesday quiz']],
     ]);
-    expect(DATED_GROUPS.has(groups[0].key)).toBe(false);
+    expect(groups[0].days?.map((day) => day.title)).toEqual(['Monday, Oct 12']);
     expect(groups.flatMap((group) => group.items)).toHaveLength(3);
   });
 
@@ -107,6 +107,40 @@ describe('groupTasks', () => {
     // Friday 2026-12-18; school is closed through 2027-01-01, so Monday 2027-01-04 is the first day back.
     const groups = groupTasks([item('Weekend', '2026-12-20'), item('Midweek', '2026-12-23'), item('Break homework', '2026-12-29'), item('Back', '2027-01-04'), item('After', '2027-01-06')], { ...context, schedule: closed, today: '2026-12-18' });
     expect(titles(groups)).toEqual([['Next 7 days', ['Weekend', 'Midweek']], ['Before school resumes', ['Break homework']], ['Monday, Jan 4', ['Back']], ['Later', ['After']]]);
+  });
+
+  it('splits Next 7 days into one section per day', () => {
+    // Tuesday 2026-10-20: Thursday and Friday work sit under their own day headings.
+    const tasks = [item('Quiz retake', '2026-10-22'), item('Project 1', '2026-10-22', '23:59'), item('Unit 2 test', '2026-10-23', '23:59'), item('Monday reading', '2026-10-26')];
+    const groups = groupTasks(tasks, { ...context, today: '2026-10-20' });
+    const week = groups.find((group) => group.key === 'week')!;
+    expect(week.days?.map((day) => [day.title, day.items.map((entry) => entry.task.title)])).toEqual([
+      ['Thursday, Oct 22', ['Quiz retake', 'Project 1']],
+      ['Friday, Oct 23', ['Unit 2 test']],
+      ['Monday, Oct 26', ['Monday reading']],
+    ]);
+    expect(groups.find((group) => group.key === 'today')).toBeUndefined();
+  });
+
+  it('gives every dated group day sections and leaves No due date alone', () => {
+    const groups = groupTasks([
+      item('Late', '2026-10-19'), item('Earlier late', '2026-10-16'), item('Now', '2026-10-20'), item('Next', '2026-10-21'),
+      item('Week', '2026-10-23'), item('Far', '2026-11-05'), item('Far later', '2026-11-12'), item('Someday', null),
+    ], { ...context, today: '2026-10-20' });
+    expect(groups.map((group) => [group.key, group.days?.map((day) => day.date)])).toEqual([
+      ['overdue', ['2026-10-16', '2026-10-19']],
+      ['today', ['2026-10-20']],
+      ['tomorrow', ['2026-10-21']],
+      ['week', ['2026-10-23']],
+      ['later', ['2026-11-05', '2026-11-12']],
+      ['undated', undefined],
+    ]);
+    expect(groups[0].days![0]).toMatchObject({ weekday: 'Fri', day: '16', month: 'Oct', title: 'Friday, Oct 16' });
+  });
+
+  it('orders day sections by date and keeps the incoming order within a day', () => {
+    const days = splitByDay([item('High Friday', '2026-10-23'), item('High Thursday', '2026-10-22'), item('Low Friday', '2026-10-23')]);
+    expect(days.map((day) => [day.date, day.items.map((entry) => entry.task.title)])).toEqual([['2026-10-22', ['High Thursday']], ['2026-10-23', ['High Friday', 'Low Friday']]]);
   });
 
   it('keeps the incoming order inside each group so a priority sort survives', () => {
