@@ -838,12 +838,15 @@ test('task-days beta: Next 7 days gives each due date its own heading', async ({
     await expect(friday).not.toContainText('Fri, Oct 23');
     expect((await thursday.boundingBox())!.y).toBeLessThan((await friday.boundingBox())!.y);
     if (width === 1440) {
-      // The date block sits centered on its day's first row, not on the whole day.
+      // The date block lines up with its day's first checkbox.
       for (const day of [thursday, friday]) {
         const heading = (await day.getByRole('heading').boundingBox())!;
-        const first = (await day.getByRole('listitem').first().boundingBox())!;
+        const first = (await day.getByRole('checkbox').first().boundingBox())!;
         expect(Math.abs(heading.y + heading.height / 2 - (first.y + first.height / 2))).toBeLessThan(2);
       }
+      // ...without running into the group's title above it.
+      const title = (await week.getByRole('heading', { level: 2 }).boundingBox())!;
+      expect((await thursday.getByRole('heading').boundingBox())!.y).toBeGreaterThan(title.y + title.height + 4);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`week-days-${width}.png`), fullPage: true });
