@@ -61,9 +61,6 @@ export function splitByDay(items: TaskItem[]): TaskDay[] {
   });
 }
 
-/** Groups whose rows need no date chip: the heading already says when. */
-export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorrow', 'next-school-day']);
-
 /**
  * The Tasks page groups, in display order, with empty groups dropped. Open tasks fall into Overdue, Today,
  * Tomorrow, the next school day, Next 7 days, Later or No due date. The next school day gets its own group
@@ -71,10 +68,10 @@ export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorr
  * rest of the week. Work due on days off before school resumes goes ahead of that group, with date chips.
  * When a break pushes the next school day past the week window, Next 7 days comes first, then any remaining
  * work before school resumes, then the next school day and Later. Groups stay in date order.
- * Items keep their incoming order within each group. With `splitDays` (the task-days beta), every group except
- * No due date also carries one section per due date.
+ * Items keep their incoming order within each group. Every group except No due date also carries one section
+ * per due date.
  */
-export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule; splitDays?: boolean }): TaskGroup[] {
+export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule }): TaskGroup[] {
   const { today, nowTime } = context;
   const tomorrow = addDays(today, 1);
   const school = nextSchoolDate(context.schedule, context.personal, today);
@@ -113,5 +110,5 @@ export function groupTasks(items: TaskItem[], context: { today: string; nowTime:
   ];
   return groups
     .filter((group): group is TaskGroup => group !== null && group.items.length > 0)
-    .map((group) => context.splitDays && !UNDATED_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
+    .map((group) => !UNDATED_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
 }
