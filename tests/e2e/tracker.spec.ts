@@ -2,14 +2,12 @@ import { test, expect, hydrating } from './fixtures';
 import { type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
 import { CalendarService } from '../../src/server/calendar';
 import { exampleSchedule } from '../../src/domain/example';
 import { cycleDaySlots, emptyPersonalSchedule, personalScheduleSchema } from '../../src/domain/schedule';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 
 function seed(email = `${randomUUID()}@example.com`, joined = true, schedule = exampleSchedule) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -768,12 +766,12 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/tasks');
   const before = page.getByRole('region', { name: /^Before school resumes/ });
-  const school = page.getByRole('region', { name: /^Tuesday/ });
+  const school = page.getByRole('region', { name: /^Tuesday ·/ });
   const week = page.getByRole('region', { name: /^Next 7 days/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(before).toContainText('Monday video');
-    await expect(before).toContainText('Mon, Oct 12');
+    await expect(before.getByRole('heading', { name: 'Monday, Oct 12' })).toBeVisible();
     await expect(before).toContainText('11:59 PM');
     await expect(school).toContainText('Tuesday homework');
     await expect(school).toContainText('Next school day');
@@ -797,11 +795,8 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await expect(week).toContainText('Wednesday quiz');
 });
 
-test('task-days beta: Next 7 days gives each due date its own heading', async ({ page, context }, testInfo) => {
+test('Next 7 days gives each due date its own date column', async ({ page, context }, testInfo) => {
   const fixture = seed();
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === 'task-days')) writeBetaRegistry(createBeta(registry, { key: 'task-days', name: 'Tasks by day' }), listPath);
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db);
@@ -818,14 +813,6 @@ test('task-days beta: Next 7 days gives each due date its own heading', async ({
   const week = page.getByRole('region', { name: /^Next 7 days/ });
   const thursday = week.getByRole('region', { name: /^Thursday, Oct 22/ });
   const friday = week.getByRole('region', { name: /^Friday, Oct 23/ });
-  // Outside the beta the week stays one list with date chips.
-  await expect(week).toContainText('Fri, Oct 23 · 11:59 PM');
-  await expect(thursday).toHaveCount(0);
-
-  const joinDb = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try { joinDb.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run('task-days', fixture.id, new Date().toISOString()); }
-  finally { joinDb.close(); }
-  await page.reload();
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(thursday.getByRole('heading')).toHaveAccessibleName('Thursday, Oct 22');

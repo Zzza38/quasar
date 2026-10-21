@@ -8,8 +8,7 @@ import { addDays, classColor, formatTime, formatTimeZone, reminderLabel } from '
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
-import { useBeta } from '../betas';
-import { DATED_GROUPS, groupTasks, type TaskGroupKey } from '../task-groups';
+import { groupTasks, type TaskGroupKey } from '../task-groups';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
 import { Button, Callout, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Select, Spacer, Textarea } from '../primitives';
@@ -64,7 +63,6 @@ export function TasksView({ state }: { state: AppState }) {
   const [sort, setSort] = useState('due');
   const editParam = state.params.get('edit');
   const { onComplete, undoBar } = useCompletionUndo(state);
-  const splitDays = useBeta('task-days');
   useEffect(() => { if (editParam) { setEditing(editParam); state.navigate('tasks', undefined, { replace: true }); } }, [editParam, state]);
 
   const filtered = open.filter((item) => (!classFilter || item.task.classId === classFilter) && (!priorityFilter || (item.task.priority ?? 'normal') === priorityFilter));
@@ -73,7 +71,7 @@ export function TasksView({ state }: { state: AppState }) {
   const nowTime = clockTime(state.now, state.timeZone);
   const late = (item: TaskItem) => isOverdue(item.task, state.today, nowTime);
   // Groups follow the school calendar: the next school day stands apart from the weekend or holiday before it.
-  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal, splitDays });
+  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal });
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter(late).length;
   const filterToggle = 'h-9 shrink-0 gap-1.5 pointer-coarse:h-10 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
@@ -119,8 +117,8 @@ export function TasksView({ state }: { state: AppState }) {
           </h3>
           <ul className="grid gap-0.5 sm:col-start-2 sm:row-span-(--day-rows) sm:row-start-1 sm:grid-rows-subgrid">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} centered />)}</ul>
         </section>)}</div>
-          // With date columns on, No due date keeps its checkboxes in line with the dated groups above it.
-          : <ul className={cn('grid gap-0.5', splitDays && 'sm:pl-14')}>{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} centered={splitDays} />)}</ul>}
+          // No due date keeps its checkboxes in line with the dated groups above it.
+          : <ul className="grid gap-0.5 sm:pl-14">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} centered />)}</ul>}
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
