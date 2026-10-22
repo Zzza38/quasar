@@ -3,6 +3,7 @@ import { Admin, type AdminBoot } from '@/components/admin';
 import { adminSignInAllowed } from '@/lib/admin-session';
 import { getAuth } from '@/server/auth';
 import { getDb } from '@/server/db';
+import { BetaService } from '@/server/betas';
 import { Service } from '@/server/service';
 
 // Rendered per request: the session cookie decides between the sign-in notice, the refusal and the support tools.
@@ -16,8 +17,9 @@ export default async function AdminPage() {
   let initial: AdminBoot | undefined;
   try {
     const { userId, authAt } = await getAuth();
-    const isAdmin = !!userId && new Service(getDb()).isAdmin(userId);
-    initial = { accountId: userId, isAdmin, adminReady: isAdmin && adminSignInAllowed(authAt) };
+    const service = new Service(getDb());
+    const isAdmin = !!userId && service.isAdmin(userId);
+    initial = { accountId: userId, isAdmin, adminReady: isAdmin && adminSignInAllowed(authAt), betas: isAdmin ? new BetaService(service).joined(userId) : [] };
   } catch {
     initial = undefined; // The client checks the session itself.
   }
