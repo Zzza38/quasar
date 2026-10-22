@@ -289,6 +289,9 @@ html[data-rgb-mode] body > div:first-of-type {
      wide intrinsic min-width that ignores w-full and spilled Due date over Due time. */
   .task-form-fit .grid > * { min-width: 0; }
   .task-form-fit input[type="date"], .task-form-fit input[type="time"] { max-width: 100%; }
+  /* The form draws its own calendar/clock icon; the browser's indicator is spread invisibly over the input so a tap anywhere opens the picker. */
+  .task-form-fit input[type="date"]::-webkit-calendar-picker-indicator, .task-form-fit input[type="time"]::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; opacity: 0; }
+  .task-form-fit input[type="date"], .task-form-fit input[type="time"] { position: relative; }
   @supports (-webkit-touch-callout: none) {
     .task-form-fit input[type="date"], .task-form-fit input[type="time"] { -webkit-appearance: none; appearance: none; display: block; box-sizing: border-box; width: 100%; min-width: 0; }
     .task-form-fit input::-webkit-date-and-time-value { text-align: start; margin: 0; min-width: 0; }
