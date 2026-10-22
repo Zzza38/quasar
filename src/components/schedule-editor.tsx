@@ -316,7 +316,7 @@ export function ExceptionRow({ exception, summary, expanded, onToggle, removeLab
       <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={onToggle}>{expanded ? 'Done' : 'Edit'}</Button>
       <IconButton size="sm" icon="trash" label={removeLabel} disabled={disabled} onClick={onRemove} />
     </div>
-    {expanded && <div className="grid gap-5 border-t border-foreground/[0.06] px-3 pt-4 pb-4 sm:px-4">{children}</div>}
+    {expanded && <div className="exception-form grid gap-5 border-t border-foreground/[0.06] px-3 pt-4 pb-4 sm:px-4">{children}</div>}
   </div>;
 }
 
@@ -400,7 +400,7 @@ export function ExceptionForm({ exception, schedule, onChange, disabled, copySou
   const hasSlots = exception.kind === 'replacement' || (exception.kind === 'reset' && exception.slots !== undefined);
   return <>
     <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] sm:items-start">
-      <Field label="Date" htmlFor={`exception-date-${exception.date}`} error={dateTaken ? 'Another exception already uses this date.' : undefined}><Input id={`exception-date-${exception.date}`} type="date" value={shownDate} disabled={disabled} min="1900-01-01" max="2199-12-31" aria-invalid={dateTaken || undefined} onChange={(event) => setDraftDate(event.target.value || null)} onBlur={commitDate} onKeyDown={(event) => { if (event.key === 'Enter') commitDate(); }} /></Field>
+      <Field label="Date" htmlFor={`exception-date-${exception.date}`} error={dateTaken ? 'Another exception already uses this date.' : undefined}><div className="relative"><Input id={`exception-date-${exception.date}`} className="pr-9" type="date" value={shownDate} disabled={disabled} min="1900-01-01" max="2199-12-31" aria-invalid={dateTaken || undefined} onChange={(event) => setDraftDate(event.target.value || null)} onBlur={commitDate} onKeyDown={(event) => { if (event.key === 'Enter') commitDate(); }} /><Icon name="calendar" className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" /></div></Field>
       <div className="grid gap-1.5">
         <span className="text-[13px] font-semibold text-foreground/80">What happens</span>
         <ChoiceGroup label="Exception type" value={exception.kind} onChange={change} disabled={disabled} className="grid grid-cols-3 gap-1.5">

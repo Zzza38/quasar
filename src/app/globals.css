@@ -285,6 +285,16 @@ html[data-rgb-mode] body > div:first-of-type {
 }
 
 @layer components {
+  /* Beta exception-editor. iOS Safari draws native date inputs wider than their grid column, so the exception date ran
+     into the type tiles; cells may shrink and the input loses its native minimum width. */
+  .exception-form .grid > * { min-width: 0; }
+  .exception-form input[type="date"] { position: relative; max-width: 100%; }
+  /* The form draws its own calendar icon; the browser's indicator is spread invisibly over the input so a tap anywhere opens the picker. */
+  .exception-form input[type="date"]::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; opacity: 0; }
+  @supports (-webkit-touch-callout: none) {
+    .exception-form input[type="date"] { -webkit-appearance: none; appearance: none; display: block; box-sizing: border-box; width: 100%; min-width: 0; }
+    .exception-form input::-webkit-date-and-time-value { text-align: start; margin: 0; min-width: 0; }
+  }
   /* Page backdrop for the signed-in app: a faint accent wash at the top so cards read as elevated. */
   .app-canvas {
     background:
