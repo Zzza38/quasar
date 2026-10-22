@@ -16,11 +16,11 @@ import { Label } from '../ui/label';
 import { Skeleton } from '../ui/skeleton';
 import { Timeline } from './today';
 
-type Member = RouterOutput['community']['members']['members'][number];
+export type Member = RouterOutput['community']['members']['members'][number];
 type Friends = RouterOutput['community']['friends'];
 type Profile = RouterOutput['community']['profile'];
 
-function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: string) => void; children?: React.ReactNode }) {
+export function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: string) => void; children?: React.ReactNode }) {
   const detailId = useId();
   const detail = [member.fullName, member.grade ? gradeLabel(member.grade) : null, member.friendState === 'friends' ? 'Friend' : member.friendState === 'requested' ? 'Request sent' : member.friendState === 'incoming' ? 'Wants to be friends' : null].filter(Boolean).join(' · ') || 'Member';
   // The short label keeps the button name stable; the details (verified, full name, grade, friend state) are its description.
@@ -37,11 +37,15 @@ function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: 
 }
 
 /** Placeholder rows while a list loads. */
-function LoadingRows({ count = 2 }: { count?: number }) {
+export function LoadingRows({ count = 2 }: { count?: number }) {
   return <div role="status" aria-label="Loading" className="grid gap-2">{Array.from({ length: count }, (_, index) => <Skeleton key={index} className="h-16 rounded-2xl" />)}</div>;
 }
 
-export function PeopleView({ state }: { state: AppState }) {
+/**
+ * The People page's data and actions: both lists, the search, the open profile and proof sheets, and the friendship
+ * actions with their result messages. The current page and the people-redesign beta layouts share it.
+ */
+export function usePeople(state: AppState) {
   const { context, online } = state;
   const accountId = context.user.id;
   const verification = context.community?.verification ?? { status: 'none' as const, method: null };
@@ -110,6 +114,24 @@ export function PeopleView({ state }: { state: AppState }) {
   const directory = (members ?? []).filter(member => member.friendState === 'none');
   const friendsLoading = online && friends === null && !failed.friends;
   const membersLoading = online && members === null && !failed.members;
+  const actions = {
+    accept: (member: Member) => run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: true }).then(() => undefined), `You and ${member.displayName} are now friends.`),
+    decline: (member: Member) => run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: false }).then(() => undefined)),
+    cancel: (member: Member) => run(() => api.community.remove.mutate({ accountId, userId: member.id }).then(() => undefined)),
+    add: (member: Member) => run(() => api.community.request.mutate({ accountId, userId: member.id }).then(() => undefined), `Request sent to ${member.displayName}.`),
+    unblock: (member: Member) => run(() => api.community.block.mutate({ accountId, userId: member.id, blocked: false }).then(() => undefined), `${member.displayName} is unblocked.`),
+  };
+  /** The profile and proof sheets, rendered once by whichever layout is on screen. */
+  const sheets = <>
+    {profileId && <ProfileSheet key={profileId} userId={profileId} state={state} onClose={closeProfile} onChanged={refresh} />}
+    {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async result => { setProofOpen(false); await state.refresh(); setNotice(verificationNotice(result)); }} />}
+  </>;
+  return { verification, friends, members, directory, query, setQuery, error, notice, failed, pending, friendsLoading, membersLoading, actions, openProfile: setProfileId, openProof: () => setProofOpen(true), sheets };
+}
+
+export function PeopleView({ state }: { state: AppState }) {
+  const { context, online } = state;
+  const { verification, friends, members, directory, query, setQuery, error, notice, failed, pending, friendsLoading, membersLoading, actions, openProfile: setProfileId, openProof, sheets } = usePeople(state);
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header data-attention-zone="page-header" className="flex items-stretch gap-4">
@@ -133,7 +155,7 @@ export function PeopleView({ state }: { state: AppState }) {
             <p><strong>Have a school email?</strong> {(context.school.emailDomains ?? []).length ? `Sign in with an address ending in ${context.school.emailDomains.map(domain => `@${domain}`).join(' or ')} to verify automatically.` : 'Support has not attached a school email domain yet. Ask support to add one, or send proof below.'}</p>
             <p><strong>No school email?</strong> Send support another proof, such as a link to a photo of your student ID with the number covered, or a school portal screenshot.</p>
           </Panel>
-          <div><Button variant="primary" icon="checkCircle" disabled={!online} onClick={() => setProofOpen(true)}>Verify my school</Button></div>
+          <div><Button variant="primary" icon="checkCircle" disabled={!online} onClick={openProof}>Verify my school</Button></div>
         </>}
       </Section>
 
@@ -141,11 +163,11 @@ export function PeopleView({ state }: { state: AppState }) {
         {friendsLoading && <LoadingRows count={1} />}
         {friends && friends.incoming.length === 0 && friends.outgoing.length === 0 && <Hint>No requests waiting.</Hint>}
         {!!friends?.incoming.length && <ul className="grid gap-2" aria-label="Incoming friend requests">{friends.incoming.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-          <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: true }).then(() => undefined), `You and ${member.displayName} are now friends.`)}>Accept</Button>
-          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.respond.mutate({ accountId, userId: member.id, accept: false }).then(() => undefined))}>Decline</Button>
+          <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void actions.accept(member)}>Accept</Button>
+          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.decline(member)}>Decline</Button>
         </MemberRow>)}</ul>}
         {!!friends?.outgoing.length && <ul className="grid gap-2" aria-label="Sent friend requests">{friends.outgoing.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.remove.mutate({ accountId, userId: member.id }).then(() => undefined))}>Cancel request</Button>
+          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.cancel(member)}>Cancel request</Button>
         </MemberRow>)}</ul>}
       </Section>
     </div>
@@ -165,15 +187,14 @@ export function PeopleView({ state }: { state: AppState }) {
       {membersLoading && <LoadingRows count={3} />}
       {members && directory.length === 0 && <Hint>{query.trim() ? 'No other schoolmates match that name.' : members.length ? 'Everyone here is already a friend or has a pending request.' : 'Nobody else has joined yet. Invite your schoolmates.'}</Hint>}
       {directory.length > 0 && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Schoolmates">{directory.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-        <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => void run(() => api.community.request.mutate({ accountId, userId: member.id }).then(() => undefined), `Request sent to ${member.displayName}.`)}>Add friend</Button>
+        <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => void actions.add(member)}>Add friend</Button>
       </MemberRow>)}</ul>}
       {!!friends?.blocked.length && <details className="group text-sm"><summary className="inline-flex cursor-pointer list-none items-center gap-1 font-semibold text-muted-foreground marker:hidden [&::-webkit-details-marker]:hidden">Blocked ({friends.blocked.length})<Icon name="chevronDown" size={14} className="transition-transform group-open:rotate-180" /></summary>
-        <ul className="mt-2 grid gap-2">{friends.blocked.map(member => <li key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2"><span>{member.displayName}</span><Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void run(() => api.community.block.mutate({ accountId, userId: member.id, blocked: false }).then(() => undefined), `${member.displayName} is unblocked.`)}>Unblock</Button></li>)}</ul>
+        <ul className="mt-2 grid gap-2">{friends.blocked.map(member => <li key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2"><span>{member.displayName}</span><Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.unblock(member)}>Unblock</Button></li>)}</ul>
       </details>}
     </Section>
 
-    {profileId && <ProfileSheet key={profileId} userId={profileId} state={state} onClose={closeProfile} onChanged={refresh} />}
-    {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async result => { setProofOpen(false); await state.refresh(); setNotice(verificationNotice(result)); }} />}
+    {sheets}
   </div>;
 }
 
