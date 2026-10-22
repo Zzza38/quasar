@@ -139,6 +139,12 @@ export function TasksView({ state }: { state: AppState }) {
   </div>;
 }
 
+/** Beta task-form-layout: a trailing icon on native date/time inputs, matching the chevron on selects. */
+function Dated({ fit, icon, children }: { fit: boolean; icon: 'calendar' | 'clock'; children: React.ReactNode }) {
+  if (!fit) return <>{children}</>;
+  return <div className="relative">{children}<Icon name={icon} className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" /></div>;
+}
+
 function FormGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return <div className="grid gap-3 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04]">
     <Eyebrow>{title}</Eyebrow>
@@ -176,8 +182,8 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
       <Field label="Task" htmlFor="task-title"><Input id="task-title" autoFocus={isNew} required maxLength={300} value={draft.title} placeholder="What needs to get done?" className="h-12 text-[17px] font-semibold" onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>
       <FormGroup title="When">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Due date" htmlFor="task-date"><Input id="task-date" type="date" min={FIRST_DATE} max={LAST_DATE} value={draft.dueDate ?? ''} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value || null, dueTime: event.target.value ? draft.dueTime : null, recurrence: event.target.value ? (draft.recurrence ? { ...draft.recurrence, anchorDate: event.target.value } : draft.recurrence) : null, reminder: event.target.value ? draft.reminder : null })} /></Field>
-          <Field label="Due time" htmlFor="task-time" hint={!draft.dueDate ? 'Pick a date first' : undefined}><Input id="task-time" type="time" disabled={!draft.dueDate} value={draft.dueTime ?? ''} onChange={(event) => setDraft({ ...draft, dueTime: event.target.value || null })} /></Field>
+          <Field label="Due date" htmlFor="task-date"><Dated fit={fit} icon="calendar"><Input id="task-date" className={cn(fit && 'pr-9')} type="date" min={FIRST_DATE} max={LAST_DATE} value={draft.dueDate ?? ''} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value || null, dueTime: event.target.value ? draft.dueTime : null, recurrence: event.target.value ? (draft.recurrence ? { ...draft.recurrence, anchorDate: event.target.value } : draft.recurrence) : null, reminder: event.target.value ? draft.reminder : null })} /></Dated></Field>
+          <Field label="Due time" htmlFor="task-time" hint={!draft.dueDate ? 'Pick a date first' : undefined}><Dated fit={fit} icon="clock"><Input id="task-time" className={cn(fit && 'pr-9')} type="time" disabled={!draft.dueDate} value={draft.dueTime ?? ''} onChange={(event) => setDraft({ ...draft, dueTime: event.target.value || null })} /></Dated></Field>
         </div>
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick due dates">
           {quick.map((entry) => {
