@@ -1,6 +1,45 @@
-import { GRADES, scheduleForGrade, type Grade, type Schedule } from './schedule';
+import { GRADES, scheduleForGrade, type Grade, type Schedule, type ScheduleSlot } from './schedule';
 
 type SchoolException = Schedule['exceptions'][number];
+
+/** A rotation day or another special-schedule date whose periods an exception can copy. */
+export type SlotCopySource = { key: string; kind: 'day' | 'date'; name: string; grades?: Grade[]; slots: ScheduleSlot[] };
+
+/**
+ * The periods an exception on `date` can copy, rotation days first and then other special dates. Grades with the
+ * same times share one entry; `grades` is set only when that day or date has different times for different grades.
+ * Sources that use a period missing from any target schedule are left out, since the copy would not validate there.
+ */
+export function slotCopySources(sources: Array<{ schedule: Schedule; grade?: Grade }>, targets: Schedule[], date: string): SlotCopySource[] {
+  const found = new Map<string, { kind: 'day' | 'date'; name: string; variants: Map<string, { slots: ScheduleSlot[]; grades: Grade[] }> }>();
+  const add = (kind: 'day' | 'date', name: string, slots: ScheduleSlot[], grade?: Grade) => {
+    if (!slots.length) return;
+    const id = `${kind}:${name}`;
+    let entry = found.get(id);
+    if (!entry) found.set(id, entry = { kind, name, variants: new Map() });
+    const times = JSON.stringify(slots.map(({ periodId, start, end }) => [periodId, start, end]));
+    let variant = entry.variants.get(times);
+    if (!variant) entry.variants.set(times, variant = { slots, grades: [] });
+    if (grade && !variant.grades.includes(grade)) variant.grades.push(grade);
+  };
+  for (const { schedule, grade } of sources) {
+    for (const day of schedule.cycleDays) add('day', day.label, day.slots, grade);
+    for (const exception of schedule.exceptions) {
+      if (exception.date !== date && 'slots' in exception && exception.slots) add('date', exception.date, exception.slots, grade);
+    }
+  }
+  const usable = (slots: ScheduleSlot[]) => targets.every(target => slots.every(slot => target.periods.some(period => period.id === slot.periodId)));
+  const entries = [...found.values()];
+  const days = entries.filter(entry => entry.kind === 'day');
+  const dates = entries.filter(entry => entry.kind === 'date').sort((left, right) => left.name.localeCompare(right.name));
+  return [...days, ...dates].flatMap(entry => {
+    const variants = [...entry.variants.values()].filter(variant => usable(variant.slots));
+    return variants.map((variant, index) => ({
+      key: `${entry.kind}:${entry.name}:${index}`, kind: entry.kind, name: entry.name, slots: variant.slots,
+      ...(entry.variants.size > 1 && variant.grades.length ? { grades: [...variant.grades].sort((left, right) => GRADES.indexOf(left) - GRADES.indexOf(right)) } : {}),
+    }));
+  });
+}
 
 export type SchoolExceptionGroup = {
   exception: SchoolException;

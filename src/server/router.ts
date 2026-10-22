@@ -104,7 +104,8 @@ export const appRouter = t.router({
   session: t.procedure.query(({ ctx }) => {
     if (!ctx.userId) return null;
     const isAdmin = ctx.service.isAdmin(ctx.userId);
-    return { user: ctx.service.user(ctx.userId), isAdmin, adminReady: isAdmin && adminSignInAllowed(ctx.authAt) };
+    // /admin is outside the workspace, so the owner's betas (for <Beta> in the school review) come with the session.
+    return { user: ctx.service.user(ctx.userId), isAdmin, adminReady: isAdmin && adminSignInAllowed(ctx.authAt), betas: isAdmin ? betas(ctx.service).joined(ctx.userId) : [] };
   }),
   profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
   // Profile pictures (docs/CHAT.md §13): an uploaded picture, or back to the Google picture or initials.
