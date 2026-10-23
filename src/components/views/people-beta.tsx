@@ -76,13 +76,6 @@ function useFriendDays(state: AppState): Map<string, FriendDay> {
   }, [classmates, schoolSchedule, schedule, personal, today, now]);
 }
 
-const DAY_ORDER: Record<FriendDay['kind'], number> = { now: 0, next: 1, done: 2, off: 3 };
-/** Friends in class now first (shared classes before others), then by what comes next, then by name. */
-function byDay(members: Member[], days: Map<string, FriendDay>): Member[] {
-  const rank = (member: Member) => { const day = days.get(member.id); return day ? DAY_ORDER[day.kind] * 2 + (day.together ? 0 : 1) : 9; };
-  return [...members].sort((a, b) => rank(a) - rank(b) || a.displayName.localeCompare(b.displayName));
-}
-
 const periodName = (period: ResolvedPeriod) => period.class?.name || period.label;
 
 /** "Chemistry · until 10:45 AM", "Next: Lunch at 12:05 PM", "Done for today". */
@@ -209,28 +202,72 @@ function NoFriends() {
   return <EmptyState icon="users" title="No friends yet">Find schoolmates and send a request. Once they accept, you can compare classes and see each other’s day.</EmptyState>;
 }
 
-/* ---------- 1. Live: friends first, with where each one is right now ---------- */
+/* ---------- 1. Live: where friends are right now, one card per class ---------- */
 
-function FriendStatusBox({ day }: { day: FriendDay | undefined }) {
-  const active = day && (day.kind === 'now' || day.kind === 'next') && day.period;
-  if (!active) return <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 text-[13px] text-muted-foreground"><Icon name={day ? 'moon' : 'school'} size={14} />{statusText(day)}</div>;
-  const period = day.period!;
+/** Friends in the same class (or the same free block) at the same time, now or next. */
+type ClassGroup = { kind: 'now' | 'next'; period: ResolvedPeriod; room: string | null; together: boolean; friends: Member[] };
+type IdleGroup = { kind: 'done' | 'off' | 'away'; friends: Member[] };
+
+/** The same class by directory entry or name (sameClass); a period with no class matches by its label. */
+function sameActivity(a: ResolvedPeriod, b: ResolvedPeriod): boolean {
+  if (a.class && b.class) return sameClass(a.class, b.class);
+  return !a.class && !b.class && a.kind === b.kind && a.label === b.label;
+}
+
+/** Groups friends by their current or next period. Classes running now come first, the viewer's own class first among them. */
+function groupByClass(friends: Member[], days: Map<string, FriendDay>): { classes: ClassGroup[]; idle: IdleGroup[] } {
+  const classes: ClassGroup[] = [];
+  const idle: Record<IdleGroup['kind'], Member[]> = { done: [], off: [], away: [] };
+  for (const friend of [...friends].sort((a, b) => a.displayName.localeCompare(b.displayName))) {
+    const day = days.get(friend.id);
+    if (!day) { idle.away.push(friend); continue; }
+    if ((day.kind === 'now' || day.kind === 'next') && day.period) {
+      const period = day.period;
+      const group = classes.find(entry => entry.kind === day.kind && entry.period.startAt === period.startAt && sameActivity(entry.period, period));
+      // Friends type rooms by hand, so the first one who entered a room names it for the card.
+      if (group) { group.friends.push(friend); group.together ||= day.together; group.room ||= period.class?.room || null; }
+      else classes.push({ kind: day.kind, period, room: period.class?.room || null, together: day.together, friends: [friend] });
+      continue;
+    }
+    idle[day.kind === 'done' ? 'done' : 'off'].push(friend);
+  }
+  classes.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'now' ? -1 : 1) || Number(b.together) - Number(a.together)
+    || b.friends.length - a.friends.length || a.period.startAt.localeCompare(b.period.startAt) || periodName(a.period).localeCompare(periodName(b.period)));
+  return { classes, idle: (['done', 'off', 'away'] as const).map(kind => ({ kind, friends: idle[kind] })).filter(group => group.friends.length) };
+}
+
+const IDLE_LABEL: Record<IdleGroup['kind'], string> = { done: 'Done for today', off: 'No school today', away: 'At another school' };
+
+function ClassHeader({ group }: { group: ClassGroup }) {
+  const { period, kind } = group;
   const color = classColor(period.class?.id, period.kind === 'lunch' ? 'lunch' : period.class ? 'class' : 'other', period.class?.color);
-  const room = period.class?.room ? formatRoom(period.class.room) : null;
-  return <div className="flex items-center gap-2.5 rounded-xl px-3 py-2 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
+  return <div className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
     <ColorDot color={color.dot} size={9} />
     <span className="grid min-w-0 flex-1">
-      <span className="truncate text-[13px] font-bold">{day.kind === 'next' && <span className="font-semibold text-muted-foreground">Next · </span>}{periodName(period)}</span>
-      <span className="truncate text-xs text-muted-foreground">{[day.kind === 'now' ? `Until ${formatTime(period.end)}` : `Starts ${formatTime(period.start)}`, room].filter(Boolean).join(' · ')}</span>
+      <span className="truncate text-sm font-bold"><span className="font-semibold text-muted-foreground">{kind === 'now' ? 'Now' : 'Next'} · </span>{periodName(period)}</span>
+      <span className="truncate text-xs text-muted-foreground">{[kind === 'now' ? `Until ${formatTime(period.end)}` : `Starts ${formatTime(period.start)}`, group.room && formatRoom(group.room)].filter(Boolean).join(' · ')}</span>
     </span>
-    {day.together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
+    {group.together && <Chip tone="accent" icon="check" className="shrink-0">You too</Chip>}
   </div>;
 }
 
+/** The friends on a class card: tap a name for their profile and day, or message them. */
+function GroupFriends({ state, people, friends, label }: { state: AppState; people: People; friends: Member[]; label: string }) {
+  return <ul className="grid gap-0.5" aria-label={label}>{friends.map(friend => <li key={friend.id} className="flex items-center gap-2">
+    <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1.5 py-1.5 text-left hover:bg-muted/70" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`}>
+      <MemberAvatar name={friend.displayName} src={friend.avatar} size="sm" />
+      <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span>{friend.verified && <Icon name="checkCircle" size={13} className="shrink-0 text-success" />}</span>
+    </button>
+    <MessageButton state={state} member={friend} compact />
+  </li>)}</ul>;
+}
+
+const GROUP_CARD = 'grid content-start gap-2.5 rounded-2xl bg-card p-3 shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]';
+
 function LiveDesign({ state, people, days }: Props) {
   const incoming = people.friends?.incoming ?? [];
-  const friends = byDay(people.friends?.friends ?? [], days);
-  const inClass = friends.filter(friend => { const day = days.get(friend.id); return day?.kind === 'now' && !!day.period?.class && day.period.kind === 'class'; }).length;
+  const friends = people.friends?.friends ?? [];
+  const { classes, idle } = useMemo(() => groupByClass(friends, days), [friends, days]);
   return <>
     {incoming.length > 0 && <section aria-labelledby="live-requests" className="grid gap-2.5">
       <h2 id="live-requests" className="text-[15.5px] font-bold">Wants to be friends</h2>
@@ -238,25 +275,21 @@ function LiveDesign({ state, people, days }: Props) {
     </section>}
     <section aria-labelledby="live-friends" className="grid gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <h2 id="live-friends" className="text-[15.5px] font-bold">Your friends today</h2>
-        {friends.length > 0 && <Hint>{inClass ? `${inClass} in class right now` : pluralize(friends.length, 'friend')}</Hint>}
+        <h2 id="live-friends" className="text-[15.5px] font-bold">Where your friends are</h2>
+        {friends.length > 0 && <Hint>{`${pluralize(friends.length, 'friend')} · ${pluralize(classes.length, 'class', 'classes')}`}</Hint>}
       </div>
       {people.friendsLoading && <LoadingRows count={2} />}
       {people.friends && friends.length === 0 && <NoFriends />}
-      {friends.length > 0 && <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Friends">{friends.map(friend => <li key={friend.id} className="grid content-start gap-3 rounded-2xl bg-card p-3.5 shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]">
-        <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`}>
-          <MemberAvatar name={friend.displayName} src={friend.avatar} />
-          <span className="grid min-w-0">
-            <strong className="flex min-w-0 items-center gap-1.5 text-sm font-bold"><span className="truncate">{friend.displayName}</span>{friend.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong>
-            <Hint className="truncate">{memberDetail(friend)}</Hint>
-          </span>
-        </button>
-        <FriendStatusBox day={days.get(friend.id)} />
-        <div className="flex gap-2">
-          <MessageButton state={state} member={friend} />
-          <Button size="sm" iconRight="arrowRight" onClick={() => people.openProfile(friend.id)}>See day</Button>
-        </div>
-      </li>)}</ul>}
+      {friends.length > 0 && <ul className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Friends by class">
+        {classes.map(group => <li key={`${group.kind}-${group.period.startAt}-${periodName(group.period)}`} className={GROUP_CARD}>
+          <ClassHeader group={group} />
+          <GroupFriends state={state} people={people} friends={group.friends} label={`Friends in ${periodName(group.period)}`} />
+        </li>)}
+        {idle.map(group => <li key={group.kind} className={GROUP_CARD}>
+          <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-3 py-2.5 text-sm font-semibold text-muted-foreground"><Icon name={group.kind === 'away' ? 'school' : 'moon'} size={14} />{IDLE_LABEL[group.kind]}</div>
+          <GroupFriends state={state} people={people} friends={group.friends} label={IDLE_LABEL[group.kind]} />
+        </li>)}
+      </ul>}
     </section>
     <FindPeople state={state} people={people} />
   </>;
