@@ -202,7 +202,7 @@ function NoFriends() {
   return <EmptyState icon="users" title="No friends yet">Find schoolmates and send a request. Once they accept, you can compare classes and see each other’s day.</EmptyState>;
 }
 
-/* ---------- 1. Live: where friends are right now, one card per class ---------- */
+/* ---------- 1. Live: where friends are right now, one row per class ---------- */
 
 /** Friends in the same class (or the same free block) at the same time, now or next. */
 type ClassGroup = { kind: 'now' | 'next'; period: ResolvedPeriod; room: string | null; together: boolean; friends: Member[] };
@@ -238,58 +238,82 @@ function groupByClass(friends: Member[], days: Map<string, FriendDay>): { classe
 
 const IDLE_LABEL: Record<IdleGroup['kind'], string> = { done: 'Done for today', off: 'No school today', away: 'At another school' };
 
-function ClassHeader({ group }: { group: ClassGroup }) {
-  const { period, kind } = group;
-  const color = classColor(period.class?.id, period.kind === 'lunch' ? 'lunch' : period.class ? 'class' : 'other', period.class?.color);
-  return <div className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
-    <ColorDot color={color.dot} size={9} />
-    <span className="grid min-w-0 flex-1">
-      <span className="truncate text-sm font-bold"><span className="font-semibold text-muted-foreground">{kind === 'now' ? 'Now' : 'Next'} · </span>{periodName(period)}</span>
-      <span className="truncate text-xs text-muted-foreground">{[kind === 'now' ? `Until ${formatTime(period.end)}` : `Starts ${formatTime(period.start)}`, group.room && formatRoom(group.room)].filter(Boolean).join(' · ')}</span>
-    </span>
-    {group.together && <Chip tone="accent" icon="check" className="shrink-0">You too</Chip>}
-  </div>;
+/** Class groups that start and end together, so the block's time is said once above its rows. */
+type Block = { kind: 'now' | 'next'; period: ResolvedPeriod; groups: ClassGroup[] };
+
+function byBlock(classes: ClassGroup[]): Block[] {
+  const blocks: Block[] = [];
+  for (const group of classes) {
+    const block = blocks.find(entry => entry.kind === group.kind && entry.period.startAt === group.period.startAt && entry.period.endAt === group.period.endAt);
+    if (block) block.groups.push(group); else blocks.push({ kind: group.kind, period: group.period, groups: [group] });
+  }
+  return blocks.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'now' ? -1 : 1) || a.period.startAt.localeCompare(b.period.startAt));
 }
 
-/** The friends on a class card: tap a name for their profile and day, or message them. */
-function GroupFriends({ state, people, friends, label }: { state: AppState; people: People; friends: Member[]; label: string }) {
-  return <ul className="grid gap-0.5" aria-label={label}>{friends.map(friend => <li key={friend.id} className="flex items-center gap-2">
-    <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1.5 py-1.5 text-left hover:bg-muted/70" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`}>
-      <MemberAvatar name={friend.displayName} src={friend.avatar} size="sm" />
-      <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span>{friend.verified && <Icon name="checkCircle" size={13} className="shrink-0 text-success" />}</span>
+/** Friends as small name chips; a tap opens the profile, which has their day and Message. */
+function FriendChips({ people, friends, label }: { people: People; friends: Member[]; label: string }) {
+  // On phones the chips always sit under the title, lined up with its text, so short and long rows look alike.
+  return <ul className="flex flex-wrap gap-1.5 max-sm:w-full max-sm:pl-[19px]" aria-label={label}>{friends.map(friend => <li key={friend.id}>
+    <button type="button" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`}
+      className="flex items-center gap-1.5 rounded-full bg-muted/80 py-0.5 pl-0.5 pr-2.5 text-[13px] font-semibold ring-1 ring-inset ring-foreground/[0.05] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+      <MemberAvatar name={friend.displayName} src={friend.avatar} size="sm" />{friend.displayName}
     </button>
-    <MessageButton state={state} member={friend} compact />
   </li>)}</ul>;
 }
 
-const GROUP_CARD = 'grid content-start gap-2.5 rounded-2xl bg-card p-3 shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]';
+/** One line of the timetable: what it is on the left, who is there on the right (below it on narrow screens). */
+function LiveRow({ marker, title, detail, muted, aside, children }: { marker: ReactNode; title: string; detail?: string | null; muted?: boolean; aside?: ReactNode; children: ReactNode }) {
+  return <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+    <span className="flex min-w-0 flex-1 basis-56 items-center gap-2.5">
+      {marker}
+      <span className="grid min-w-0">
+        <strong className={cn('truncate text-sm', muted ? 'font-semibold text-muted-foreground' : 'font-bold')}>{title}</strong>
+        {detail && <span className="truncate text-xs text-muted-foreground">{detail}</span>}
+      </span>
+      {aside}
+    </span>
+    {children}
+  </li>;
+}
+
+const LIVE_LIST = 'divide-y divide-border overflow-hidden rounded-2xl bg-card shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]';
 
 function LiveDesign({ state, people, days }: Props) {
   const incoming = people.friends?.incoming ?? [];
   const friends = people.friends?.friends ?? [];
   const { classes, idle } = useMemo(() => groupByClass(friends, days), [friends, days]);
+  const blocks = useMemo(() => byBlock(classes), [classes]);
   return <>
     {incoming.length > 0 && <section aria-labelledby="live-requests" className="grid gap-2.5">
       <h2 id="live-requests" className="text-[15.5px] font-bold">Wants to be friends</h2>
       <ul className="grid gap-2 sm:grid-cols-2" aria-label="Incoming friend requests">{incoming.map(member => <MemberRow key={member.id} member={member} onOpen={people.openProfile}><AcceptDecline state={state} people={people} member={member} /></MemberRow>)}</ul>
     </section>}
-    <section aria-labelledby="live-friends" className="grid gap-3">
+    <section aria-labelledby="live-friends" className="grid gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
         <h2 id="live-friends" className="text-[15.5px] font-bold">Where your friends are</h2>
         {friends.length > 0 && <Hint>{`${pluralize(friends.length, 'friend')} · ${pluralize(classes.length, 'class', 'classes')}`}</Hint>}
       </div>
       {people.friendsLoading && <LoadingRows count={2} />}
       {people.friends && friends.length === 0 && <NoFriends />}
-      {friends.length > 0 && <ul className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Friends by class">
-        {classes.map(group => <li key={`${group.kind}-${group.period.startAt}-${periodName(group.period)}`} className={GROUP_CARD}>
-          <ClassHeader group={group} />
-          <GroupFriends state={state} people={people} friends={group.friends} label={`Friends in ${periodName(group.period)}`} />
-        </li>)}
-        {idle.map(group => <li key={group.kind} className={GROUP_CARD}>
-          <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-3 py-2.5 text-sm font-semibold text-muted-foreground"><Icon name={group.kind === 'away' ? 'school' : 'moon'} size={14} />{IDLE_LABEL[group.kind]}</div>
-          <GroupFriends state={state} people={people} friends={group.friends} label={IDLE_LABEL[group.kind]} />
-        </li>)}
-      </ul>}
+      {blocks.map(block => <div key={`${block.kind}-${block.period.startAt}`} className="grid gap-2">
+        <h3 className="flex items-baseline gap-2 px-1 text-sm font-bold">{block.kind === 'now' ? 'Now' : 'Next'}
+          <span className="text-xs font-medium text-muted-foreground">{block.kind === 'now' ? `until ${formatTime(block.period.end)}` : `${formatTime(block.period.start)} – ${formatTime(block.period.end)}`}</span>
+        </h3>
+        <ul className={LIVE_LIST} aria-label={block.kind === 'now' ? 'Classes now' : 'Classes next'}>{block.groups.map(group => {
+          const { period } = group;
+          const color = classColor(period.class?.id, period.kind === 'lunch' ? 'lunch' : period.class ? 'class' : 'other', period.class?.color);
+          return <LiveRow key={periodName(period)} marker={<ColorDot color={color.dot} size={9} />} title={periodName(period)} detail={group.room && formatRoom(group.room)} muted={!period.class}
+            aside={group.together && <Chip tone="accent" className="shrink-0">You too</Chip>}>
+            <FriendChips people={people} friends={group.friends} label={`Friends in ${periodName(period)}`} />
+          </LiveRow>;
+        })}</ul>
+      </div>)}
+      {idle.length > 0 && <div className="grid gap-2">
+        <h3 className="px-1 text-sm font-bold">Not in class</h3>
+        <ul className={LIVE_LIST} aria-label="Not in class">{idle.map(group => <LiveRow key={group.kind} marker={<Icon name={group.kind === 'away' ? 'school' : 'moon'} size={14} className="shrink-0 text-muted-foreground" />} title={IDLE_LABEL[group.kind]} muted>
+          <FriendChips people={people} friends={group.friends} label={IDLE_LABEL[group.kind]} />
+        </LiveRow>)}</ul>
+      </div>}
     </section>
     <FindPeople state={state} people={people} />
   </>;
