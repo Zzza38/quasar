@@ -106,25 +106,46 @@ export function classSearchScore(query: string, name: string): number | null {
 
 export type DirectoryDetails = { name: string; teacher?: string; room?: string };
 
-/** No teacher or room that both sides filled in disagrees. A blank field never conflicts. */
-function sameSection(left: Pick<DirectoryDetails, 'teacher' | 'room'>, right: Pick<DirectoryDetails, 'teacher' | 'room'>): boolean {
-  return (['teacher', 'room'] as const).every(field => !left[field]?.trim() || !right[field]?.trim() || classKey(left[field]!) === classKey(right[field]!));
-}
-
 /** Printed teacher/room conflicts keep separate sections from being automatically linked. */
 export function directoryCandidates<T extends DirectoryDetails>(printed: DirectoryDetails, entries: T[]): { matches: T[]; similar: T[] } {
-  const compatible = entries.filter(entry => sameSection(printed, entry));
+  const compatible = entries.filter(entry => (['teacher', 'room'] as const).every(field => !printed[field]?.trim() || !entry[field]?.trim() || classKey(printed[field]!) === classKey(entry[field]!)));
   return {
     matches: compatible.filter(entry => couldBeClass(printed.name, entry.name)),
     similar: compatible.filter(entry => !couldBeClass(printed.name, entry.name) && similarClassName(printed.name, entry.name)),
   };
 }
 
+const TITLES = new Set(['mr', 'mrs', 'ms', 'mx', 'miss', 'dr', 'prof', 'sr', 'sra', 'srta', 'mme', 'mlle']);
+
+/**
+ * Do two hand-typed teacher names mean one person? Titles are ignored, and every word of the shorter name pairs with
+ * its own word of the longer one: the same word, a shortening ("Matt" / "Matthew", "R" / "Ray") or a small typo
+ * ("Louissant" / "Louissaint"). So "Mr. Wise" is "Ray Wise", and "Ray Wise" is never "Polly Duke".
+ */
+export function sameTeacher(left: string, right: string): boolean {
+  const words = (name: string) => name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .split(/[^\p{L}\p{N}\p{M}]+/u).filter(word => word && !TITLES.has(word));
+  let a = words(left), b = words(right);
+  if (!a.length || !b.length) return classKey(left) !== '' && classKey(left) === classKey(right);
+  if (a.length > b.length) [a, b] = [b, a];
+  return wordsPair(a, b, (x, y) => x.startsWith(y) || y.startsWith(x) || closeWord(x, y));
+}
+
+/**
+ * Could these be one section? A teacher teaches one section at a time, so when both list a teacher, the teacher
+ * decides and the room is ignored (one of them may have typed it wrong). Without two teachers, two different rooms
+ * mean two sections. A blank field never conflicts.
+ */
+function sameSection(left: ClassLike, right: ClassLike): boolean {
+  if (left.teacher?.trim() && right.teacher?.trim()) return sameTeacher(left.teacher, right.teacher);
+  return !left.room?.trim() || !right.room?.trim() || classKey(left.room) === classKey(right.room);
+}
+
 export type ClassLike = { name: string; directoryId?: string | null; teacher?: string; room?: string };
 
 /**
- * Two directory classes match by entry. Otherwise the names must match and the sections must too: the same course
- * name with a different teacher or room is another section of it, not the same class.
+ * Two directory classes match by entry. Otherwise the names must match and the section must too: callers compare the
+ * same period, so the same course name with another teacher (or, with no teachers, another room) is another section.
  */
 export function sameClass(left: ClassLike, right: ClassLike): boolean {
   if (left.directoryId && right.directoryId) return left.directoryId === right.directoryId;
@@ -135,11 +156,12 @@ export function sameClass(left: ClassLike, right: ClassLike): boolean {
 /**
  * Could two classes that sameClass keeps apart still be one class? Only when both list a teacher and a room, both
  * agree, and the names are close: one abbreviates, reorders or adds words to the other, or has a small typo, at
- * compatible levels ("Foundations in Literature" / "Foundations in Literature: Inquiry and Analysis E"). This is a
+ * compatible levels ("Foundations in Literature" / "Foundations in Literature: Inquiry and Analysis E"). Two
+ * directory entries with the same details count too, since the directory can hold a course twice. This is a
  * suggestion to show, never a match: "Spanish 2" and "Spanish 3" stay apart even in the same room.
  */
 export function maybeSameClass(left: ClassLike, right: ClassLike): boolean {
-  if (sameClass(left, right)) return false;
-  const filled = (['teacher', 'room'] as const).every(field => left[field]?.trim() && right[field]?.trim());
-  return filled && sameSection(left, right) && (classSearchScore(left.name, right.name) !== null || classSearchScore(right.name, left.name) !== null);
+  if (sameClass(left, right) || !left.teacher?.trim() || !right.teacher?.trim() || !left.room?.trim() || !right.room?.trim()) return false;
+  return sameTeacher(left.teacher, right.teacher) && classKey(left.room) === classKey(right.room)
+    && (classSearchScore(left.name, right.name) !== null || classSearchScore(right.name, left.name) !== null);
 }
