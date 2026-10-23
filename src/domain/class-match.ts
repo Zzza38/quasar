@@ -106,19 +106,40 @@ export function classSearchScore(query: string, name: string): number | null {
 
 export type DirectoryDetails = { name: string; teacher?: string; room?: string };
 
+/** No teacher or room that both sides filled in disagrees. A blank field never conflicts. */
+function sameSection(left: Pick<DirectoryDetails, 'teacher' | 'room'>, right: Pick<DirectoryDetails, 'teacher' | 'room'>): boolean {
+  return (['teacher', 'room'] as const).every(field => !left[field]?.trim() || !right[field]?.trim() || classKey(left[field]!) === classKey(right[field]!));
+}
+
 /** Printed teacher/room conflicts keep separate sections from being automatically linked. */
 export function directoryCandidates<T extends DirectoryDetails>(printed: DirectoryDetails, entries: T[]): { matches: T[]; similar: T[] } {
-  const compatible = entries.filter(entry => (['teacher', 'room'] as const).every(field => !printed[field]?.trim() || !entry[field]?.trim() || classKey(printed[field]!) === classKey(entry[field]!)));
+  const compatible = entries.filter(entry => sameSection(printed, entry));
   return {
     matches: compatible.filter(entry => couldBeClass(printed.name, entry.name)),
     similar: compatible.filter(entry => !couldBeClass(printed.name, entry.name) && similarClassName(printed.name, entry.name)),
   };
 }
 
-export type ClassLike = { name: string; directoryId?: string | null };
+export type ClassLike = { name: string; directoryId?: string | null; teacher?: string; room?: string };
 
+/**
+ * Two directory classes match by entry. Otherwise the names must match and the sections must too: the same course
+ * name with a different teacher or room is another section of it, not the same class.
+ */
 export function sameClass(left: ClassLike, right: ClassLike): boolean {
   if (left.directoryId && right.directoryId) return left.directoryId === right.directoryId;
   const key = classKey(left.name);
-  return key !== '' && key === classKey(right.name);
+  return key !== '' && key === classKey(right.name) && sameSection(left, right);
+}
+
+/**
+ * Could two classes that sameClass keeps apart still be one class? Only when both list a teacher and a room, both
+ * agree, and the names are close: one abbreviates, reorders or adds words to the other, or has a small typo, at
+ * compatible levels ("Foundations in Literature" / "Foundations in Literature: Inquiry and Analysis E"). This is a
+ * suggestion to show, never a match: "Spanish 2" and "Spanish 3" stay apart even in the same room.
+ */
+export function maybeSameClass(left: ClassLike, right: ClassLike): boolean {
+  if (sameClass(left, right)) return false;
+  const filled = (['teacher', 'room'] as const).every(field => left[field]?.trim() && right[field]?.trim());
+  return filled && sameSection(left, right) && (classSearchScore(left.name, right.name) !== null || classSearchScore(right.name, left.name) !== null);
 }
