@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { GoogleLogo } from './google-logo';
 import { BrandLockup, BrandMark } from './shell';
-import { AppearanceToggle } from './theme-picker';
 import { Callout } from './primitives';
 import { cn } from '@/lib/utils';
+import { useLightAppearance } from '@/lib/theme';
 import { signInErrorMessage, signInReturnPath, type SignInReturn } from '@/lib/sign-in';
 
 export { signInErrorMessage, signInReturnPath };
@@ -18,14 +18,18 @@ export { signInErrorMessage, signInReturnPath };
  * key phrases carry a marker highlight, the features are sticky notes, and
  * the closing checklist is laid out like a syllabus. The voice is a student's.
  *
- * Paper, rule and shadow colours are local CSS variables so the dark
- * appearance swaps to a dark sheet. Sticky notes and the "Today" card are
- * physical objects on the page and stay light in both appearances.
+ * The page has no dark design: it paints itself light whatever appearance
+ * the device has chosen, and the choice comes back once the student is signed in.
  */
 
-const PAPER = '[--paper:#fcf9f1] [--rule:#cfe0f1] [--margin:#efaaaa] [--ink:#1f2430] [--pencil:#5b6270] [--shadow:#d9e2ef] dark:[--paper:#15161a] dark:[--rule:#232a36] dark:[--margin:#7a3b3b] dark:[--ink:#edf0f4] dark:[--pencil:#a2aab8] dark:[--shadow:#0a0b0e]';
+const PAPER = '[--paper:#fcf9f1] [--rule:#cfe0f1] [--margin:#efaaaa] [--ink:#1f2430] [--pencil:#5b6270] [--shadow:#d9e2ef]';
 const SERIF = '"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif';
-const HIGHLIGHT = 'bg-[linear-gradient(transparent_40%,#fff27a_40%_92%,transparent_92%)] px-1 box-decoration-clone dark:bg-[linear-gradient(transparent_40%,#6b6100_40%_92%,transparent_92%)]';
+/**
+ * Marker highlight drawn as a thick underline pulled up behind the whole word, from the ascenders to just under
+ * the baseline. An underline is measured from the baseline in every font, where a background band follows each
+ * font's own line box and covered only the lower half of the letters in Iowan on iPad.
+ */
+const HIGHLIGHT = 'underline decoration-[#fff27a] decoration-[0.86em] underline-offset-[-0.74em] [text-decoration-skip-ink:none]';
 const INK_BUTTON = 'inline-flex items-center gap-2.5 rounded-[10px] bg-[var(--ink)] px-[18px] py-[11px] font-sans text-[14px] leading-none font-semibold text-[var(--paper)] shadow-[3px_3px_0_var(--shadow)] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0_var(--shadow)]';
 const OUTLINE_BUTTON = 'inline-flex items-center rounded-[10px] border-[1.5px] border-[var(--ink)] bg-white px-[18px] py-[11px] font-sans text-[14px] leading-none font-semibold text-[#1f2430] shadow-[3px_3px_0_var(--shadow)] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0_var(--shadow)]';
 
@@ -127,6 +131,7 @@ function Highlight({ children }: { children: React.ReactNode }) {
 export function Welcome({ message, signInReturn }: { message?: string; signInReturn?: SignInReturn }) {
   const { error: signInError, callbackPath } = useSignInReturn(signInReturn);
   const continueWithGoogle = () => signInWithGoogle(callbackPath);
+  useLightAppearance();
   return <div
     className={cn('min-h-dvh overflow-x-clip text-[17px] leading-relaxed text-[var(--ink)] antialiased', PAPER)}
     style={{ fontFamily: SERIF, background: 'var(--paper) repeating-linear-gradient(transparent 0 31px, var(--rule) 31px 32px)' }}
@@ -139,22 +144,18 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
         <a className="inline-flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-[var(--ink)] no-underline hover:no-underline" href="/" aria-label="Quasar home">
           <BrandMark size={26} />Quasar
         </a>
-        <div className="flex items-center gap-2">
-          <AppearanceToggle />
-          <button type="button" className={INK_BUTTON} onClick={continueWithGoogle}>Sign in</button>
-        </div>
+        <button type="button" className={INK_BUTTON} onClick={continueWithGoogle}>Sign in</button>
       </header>
 
       <main>
         {/* Hero */}
         <section className="grid items-center gap-10 py-11 pb-10 lg:grid-cols-[1.2fr_0.8fr]">
           <div>
-            <p className="mb-3 font-sans text-[13px] tracking-[0.08em] text-[var(--pencil)] uppercase">Thursday · Cycle day 4 · running as a Monday, apparently</p>
             <h1 className="[font-family:inherit] mb-[18px] text-[clamp(38px,5.6vw,66px)] leading-[1.05] font-semibold tracking-[-0.02em]">
               The schedule app for schools that <Highlight>can’t make up their mind.</Highlight>
             </h1>
             <p className="mb-[26px] max-w-[520px] text-[19px] text-[var(--pencil)]">
-              Snow days, two-hour delays, a Thursday that runs on a Monday schedule, lunch in two waves. Quasar keeps up. It’s free, it works with no signal, and it never shows you an ad.
+              Snow days, two-hour delays, a Thursday that runs on a Monday schedule, lunch in two waves. Quasar keeps up. It’s free*, it works with no signal, and it never shows you an ad.
             </p>
             {(signInError || message) && <Callout tone="warning" icon="info" role="status" className="mb-6 max-w-lg font-sans">{signInError || message}</Callout>}
             <div className="flex flex-wrap items-center gap-3">
@@ -166,7 +167,6 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
                 target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
                 history.pushState(null, '', '#why');
               }}>See what it handles</a>
-              <small className="font-sans text-[13px] text-[var(--pencil)]">Two minutes to set up.</small>
             </div>
           </div>
           <TodayCard />
@@ -179,7 +179,7 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
           </h2>
           <p className="mb-[26px] max-w-[600px] text-[var(--pencil)]">Every one of these is a setting, not a workaround.</p>
           <ul className="grid gap-[22px] md:grid-cols-2 lg:grid-cols-3">
-            {STICKIES.map((sticky) => <li key={sticky.title} className={cn('relative min-h-[190px] px-5 pt-[22px] pb-6 font-sans text-[#333a48] shadow-[2px_6px_14px_rgba(0,0,0,0.12)] dark:shadow-[2px_6px_14px_rgba(0,0,0,0.5)]', sticky.color, sticky.tilt)}>
+            {STICKIES.map((sticky) => <li key={sticky.title} className={cn('relative min-h-[190px] px-5 pt-[22px] pb-6 font-sans text-[#333a48] shadow-[2px_6px_14px_rgba(0,0,0,0.12)]', sticky.color, sticky.tilt)}>
               <span aria-hidden="true" className="absolute -top-2 left-1/2 h-[18px] w-[70px] -translate-x-1/2 -rotate-2 bg-white/55 shadow-[0_1px_2px_rgba(0,0,0,0.08)]" />
               <h3 className="mb-1.5 text-[17px] font-bold tracking-[-0.01em] text-[#1f2430]">{sticky.title}</h3>
               <p className="text-[14px] leading-normal">{sticky.body}</p>
@@ -230,6 +230,7 @@ export function Welcome({ message, signInReturn }: { message?: string; signInRet
       <footer className="flex flex-wrap justify-between gap-2.5 py-5 pb-10 font-sans text-[13px] text-[var(--pencil)]">
         <span>© 2026 Quasar · Made by Zion A, a student, for students · <a className={FOOTER_LINK} href="https://ziona.dev">ziona.dev</a></span>
         <span>Your schedule stays on your account. · <a className={FOOTER_LINK} href="https://github.com/Zzza38/quasar">Source on GitHub</a></span>
+        <p className="w-full">* Quasar is free to use. Some optional AI features may not be.</p>
       </footer>
     </div>
   </div>;
