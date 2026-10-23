@@ -285,7 +285,7 @@ html[data-rgb-mode] body > div:first-of-type {
 }
 
 @layer components {
-  /* Beta task-form-layout. Grid cells in the task form may shrink, and iOS Safari's native date/time inputs lose the
+  /* Task form. Grid cells in the task form may shrink, and iOS Safari's native date/time inputs lose the
      wide intrinsic min-width that ignores w-full and spilled Due date over Due time. */
   .task-form-fit .grid > * { min-width: 0; }
   .task-form-fit input[type="date"], .task-form-fit input[type="time"] { max-width: 100%; }
