@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { exampleSchedule } from './example';
 import { applySchoolExceptions, emptyPersonalSchedule, GRADES, resolveDay, scheduleForGrade, scheduleSchema, type Schedule } from './schedule';
-import { applySchoolDefaultEdits, schoolExceptionGroups, setSchoolExceptionForGrades } from './school-exceptions';
+import { applySchoolDefaultEdits, schoolExceptionGroups, setSchoolExceptionForGrades, slotCopySources } from './school-exceptions';
 
 const date = '2026-10-12';
 const closure = { date, kind: 'closure' as const, advanceCycle: false };
@@ -170,4 +170,27 @@ it('preserves unrelated invalid exception references while editing regular field
   const result = applySchoolDefaultEdits(current, { ...current, timeZone: 'America/Chicago' });
   expect(scheduleForGrade(result, '9').exceptions).toEqual([invalidReset, invalidReplacement]);
   expect(scheduleForGrade(result, '9').timeZone).toBe('America/Chicago');
+});
+
+it('offers each rotation day and other special date to copy, split by grade only where the times differ', () => {
+  const special = { date: '2026-10-19', kind: 'replacement' as const, slots: exampleSchedule.cycleDays[2].slots.slice(0, 2), advanceCycle: true };
+  const ninth: Schedule = {
+    ...exampleSchedule,
+    cycleDays: exampleSchedule.cycleDays.map((day, index) => index === 0 ? { ...day, slots: day.slots.map(slot => ({ ...slot, start: slot.start === '08:00' ? '08:20' : slot.start })) } : day),
+    exceptions: [special, { ...special, date }],
+  };
+  const sources = slotCopySources([{ grade: '9', schedule: ninth }, { grade: '10', schedule: exampleSchedule }], [ninth, exampleSchedule], date);
+  const [first, second] = exampleSchedule.cycleDays;
+  expect(sources.filter(source => source.name === first.label)).toMatchObject([{ kind: 'day', grades: ['9'] }, { kind: 'day', grades: ['10'], slots: first.slots }]);
+  expect(sources.find(source => source.name === second.label)).toEqual({ key: expect.any(String), kind: 'day', name: second.label, slots: second.slots });
+  // The exception being edited is not offered as its own source.
+  expect(sources.filter(source => source.kind === 'date')).toEqual([{ key: expect.any(String), kind: 'date', name: '2026-10-19', slots: special.slots }]);
+  expect(new Set(sources.map(source => source.key)).size).toBe(sources.length);
+});
+
+it('leaves out copy sources that use a period some target schedule lacks', () => {
+  const extra = { id: 'extra', label: 'Extra', kind: 'class' as const };
+  const withExtra: Schedule = { ...exampleSchedule, periods: [...exampleSchedule.periods, extra], cycleDays: [{ id: 'x', label: 'Day X', slots: [{ id: 's', periodId: 'extra', start: '08:00', end: '09:00' }] }], anchorCycleDayId: 'x' };
+  expect(slotCopySources([{ grade: '10', schedule: withExtra }], [withExtra], date).map(source => source.name)).toEqual(['Day X']);
+  expect(slotCopySources([{ grade: '10', schedule: withExtra }], [withExtra, exampleSchedule], date)).toEqual([]);
 });

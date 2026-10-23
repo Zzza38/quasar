@@ -281,8 +281,8 @@ export function Segmented<T extends string>({ value, options, onChange, label, d
  * that Segmented uses, but unstyled: the group is a radiogroup with one Tab stop, and the arrow keys, Home and End
  * move between its ChoiceItems. Tapping the chosen item again keeps it chosen.
  */
-export function ChoiceGroup<T extends string>({ value, onChange, label, children, className }: { value: T | null; onChange: (value: T) => void; label: string; children: ReactNode; className?: string }) {
-  return <ToggleGroupPrimitive.Root type="single" value={value ?? ''} onValueChange={(next) => { if (next) onChange(next as T); }} aria-label={label} className={className}>{children}</ToggleGroupPrimitive.Root>;
+export function ChoiceGroup<T extends string>({ value, onChange, label, children, className, disabled }: { value: T | null; onChange: (value: T) => void; label: string; children: ReactNode; className?: string; disabled?: boolean }) {
+  return <ToggleGroupPrimitive.Root type="single" value={value ?? ''} onValueChange={(next) => { if (next) onChange(next as T); }} aria-label={label} disabled={disabled} className={className}>{children}</ToggleGroupPrimitive.Root>;
 }
 
 /** One radio in a ChoiceGroup. It carries `data-state="on"` when chosen, for styling. */
