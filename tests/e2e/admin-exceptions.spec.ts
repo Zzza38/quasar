@@ -2,21 +2,10 @@ import { test, expect } from './fixtures';
 import type { Locator } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { encode } from 'next-auth/jwt';
-import { dirname, join } from 'node:path';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 import { emptyPersonalSchedule, GRADES, resolveDay, scheduleForGrade, type Schedule } from '../../src/domain/schedule';
-
-/** Puts the account in the exception-editor beta, creating it in the test server's beta list the first time. */
-function joinExceptionEditorBeta(db: ReturnType<typeof openDatabase>, userId: string) {
-  const key = 'exception-editor';
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some(beta => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Exception editor' }), listPath);
-  db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, userId, new Date().toISOString());
-}
 
 async function choose(select: Locator, option: string) {
   await select.click();
@@ -40,8 +29,6 @@ test('school exception grade choices persist and reach only the selected grades 
     });
     schoolId = school.id;
     schoolName = school.name;
-    // This owner gets the exception-editor beta; the other tests here keep the regular editor.
-    joinExceptionEditorBeta(db, ownerId);
   } finally { db.close(); }
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: ownerId, authAt: Date.now() }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true }]);
@@ -198,9 +185,6 @@ test('editing a school-default-only exception preserves its scope and rejects an
   await page.goto('/admin');
   await openDefault();
   const grades = sheet.getByRole('group', { name: 'Grades for this exception', exact: true });
-  // Without the exception-editor beta the regular editor shows, with no copy picker.
-  await expect(sheet.getByRole('radio', { name: 'No school', exact: true })).toBeVisible();
-  await expect(sheet.getByText('What happens', { exact: true })).toHaveCount(0);
   for (const grade of GRADES) await expect(grades.getByRole('button', { name: `Grade ${grade}`, exact: true })).toHaveAttribute('aria-pressed', 'false');
   const advance = sheet.getByRole('switch', { name: 'The rotation still advances past this date', exact: true });
   await expect(advance).not.toBeChecked();
