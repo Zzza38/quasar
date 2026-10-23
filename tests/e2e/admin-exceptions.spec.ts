@@ -118,6 +118,21 @@ test('school exception grade choices persist and reach only the selected grades 
     expect(resolveDay(persisted, '2026-09-21', personal).periods.map(period => [period.start, period.end])).toEqual([['09:30', '10:30']]);
     expect(resolveDay(persisted, '2026-09-22', personal).cycleDayId).toBe('day-4');
   }
+
+  // Copy a rotation day's periods, then replace them with Grade 9's own Day 1 times after confirming.
+  await addOn('2026-09-24');
+  await sheet.getByRole('radio', { name: 'Special schedule', exact: true }).click();
+  const copyFrom = sheet.getByRole('combobox', { name: 'Copy periods from', exact: true });
+  await choose(copyFrom, `Day 2 · Grades 10, 11, 12 · ${exampleSchedule.cycleDays[1].slots.length} periods`);
+  await expect(sheet.getByRole('combobox', { name: `Slot ${exampleSchedule.cycleDays[1].slots.length} period`, exact: true })).toBeVisible();
+  await choose(copyFrom, `Day 1 · Grade 9 · ${ninth.cycleDays[0].slots.length} periods`);
+  await sheet.getByRole('button', { name: 'Replace periods', exact: true }).click();
+  await publish();
+  persisted = readSchedule();
+  for (const grade of GRADES) {
+    const copied = resolveDay(persisted, '2026-09-24', { ...emptyPersonalSchedule(), grade });
+    expect(copied.periods.map(period => [period.start, period.end])).toEqual(ninth.cycleDays[0].slots.map(slot => [slot.start, slot.end]));
+  }
 });
 
 test('editing a school-default-only exception preserves its scope and rejects another default exception date', async ({ page, context }) => {
