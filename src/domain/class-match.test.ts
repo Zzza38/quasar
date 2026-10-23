@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classKey, couldBeClass, maybeSameClass, sameClass, similarClassName, classSearchScore, directoryCandidates } from './class-match';
+import { classKey, couldBeClass, maybeSameClass, sameClass, sameTeacher, similarClassName, classSearchScore, directoryCandidates } from './class-match';
 
 describe('directory name suggestions', () => {
   it('suggests small typos and incomplete names without making them automatic matches', () => {
@@ -60,16 +60,25 @@ describe('class matching', () => {
     // A directory class and a hand-typed class still match by name.
     expect(sameClass({ name: 'Spanish 2 Honors', directoryId: 'd1' }, { name: 'Honors Spanish 2' })).toBe(true);
   });
-  it('keeps two sections with the same name apart when their teacher or room differs', () => {
+  it('keeps two sections with the same name apart when their teacher differs', () => {
     const lit = 'Foundations in Literature: Inquiry and Analysis E';
-    expect(sameClass({ name: lit, teacher: 'Ray Wise', room: '323' }, { name: lit, teacher: 'Dana Park', room: '210' })).toBe(false);
-    expect(sameClass({ name: lit, teacher: 'Ray Wise' }, { name: lit, teacher: 'Dana Park' })).toBe(false);
-    expect(sameClass({ name: lit, room: '323' }, { name: lit, room: '210' })).toBe(false);
-    expect(sameClass({ name: lit, directoryId: 'd1', room: '323' }, { name: lit, room: '210' })).toBe(false);
-    // Matching or missing details still match, and a shared directory entry wins over typed details.
-    expect(sameClass({ name: lit, teacher: 'Ray Wise', room: '323' }, { name: lit, teacher: 'ray wise', room: ' 323 ' })).toBe(true);
+    expect(sameClass({ name: lit, teacher: 'Ray Wise', room: '323' }, { name: lit, teacher: 'Polly Duke', room: '406' })).toBe(false);
+    expect(sameClass({ name: lit, teacher: 'Ray Wise' }, { name: lit, teacher: 'Polly Duke' })).toBe(false);
+    // With no teacher on one side, the rooms decide.
+    expect(sameClass({ name: lit, room: '323' }, { name: lit, room: '406' })).toBe(false);
+    expect(sameClass({ name: lit, teacher: 'Ray Wise', room: '323' }, { name: lit, room: '406' })).toBe(false);
+    expect(sameClass({ name: lit, directoryId: 'd1', room: '323' }, { name: lit, room: '406' })).toBe(false);
+    // Missing details still match, and a shared directory entry wins over typed details.
     expect(sameClass({ name: lit, teacher: 'Ray Wise', room: '323' }, { name: lit })).toBe(true);
-    expect(sameClass({ name: lit, directoryId: 'd1', room: '323' }, { name: lit, directoryId: 'd1', room: '210' })).toBe(true);
+    expect(sameClass({ name: lit, directoryId: 'd1', room: '323' }, { name: lit, directoryId: 'd1', room: '406' })).toBe(true);
+  });
+  it('lets the teacher decide over the room, and forgives how the teacher was typed', () => {
+    const algebra = 'Algebra II and Trigonometry';
+    expect(sameClass({ name: algebra, teacher: 'Matthew Walker', room: 'Lib Base Physics' }, { name: algebra, teacher: 'Matt Walker', room: '322' })).toBe(true);
+    const history = 'Foundations of History: Inquiry and Analysis';
+    expect(sameClass({ name: history, teacher: 'Allen Louissaint', room: '304' }, { name: history, teacher: 'Allen Louissant', room: '304' })).toBe(true);
+    for (const [left, right] of [['Ray Wise', 'ray wise'], ['Mr. Wise', 'Ray Wise'], ['R. Wise', 'Ray Wise'], ['Dr Polly Duke', 'Polly Duke']]) expect(sameTeacher(left, right), `${left} / ${right}`).toBe(true);
+    for (const [left, right] of [['Ray Wise', 'Polly Duke'], ['Ray Wise', 'Ray Duke'], ['Mr. Wise', 'Ms. Duke']]) expect(sameTeacher(left, right), `${left} / ${right}`).toBe(false);
   });
   it('suggests a close name with the same teacher and room as maybe the same class', () => {
     const section = { teacher: 'Ray Wise', room: '323' };
@@ -77,13 +86,16 @@ describe('class matching', () => {
       expect(maybeSameClass({ name: left, ...section }, { name: right, ...section }), `${left} / ${right}`).toBe(true);
       expect(maybeSameClass({ name: right, ...section }, { name: left, ...section }), `${right} / ${left}`).toBe(true);
     }
+    // A course the directory lists twice, and a teacher typed differently, still get the suggestion.
+    expect(maybeSameClass({ name: 'Honors Spanish 2', directoryId: 'd1', ...section }, { name: 'Honors Spanish 2', directoryId: 'd2', ...section })).toBe(true);
+    expect(maybeSameClass({ name: 'AP Chem', ...section }, { name: 'AP Chemistry', teacher: 'Mr. Wise', room: '323' })).toBe(true);
   });
   it('does not suggest when the class already matches, a detail is missing or differs, or the course differs', () => {
     const section = { teacher: 'Ray Wise', room: '323' };
     expect(maybeSameClass({ name: 'Algebra II', ...section }, { name: 'Algebra II', ...section })).toBe(false);
     expect(maybeSameClass({ name: 'AP Chem', teacher: 'Ray Wise' }, { name: 'AP Chemistry', teacher: 'Ray Wise' })).toBe(false);
     expect(maybeSameClass({ name: 'AP Chem', ...section }, { name: 'AP Chemistry', teacher: 'Ray Wise', room: '210' })).toBe(false);
-    expect(maybeSameClass({ name: 'AP Chem', ...section }, { name: 'AP Chemistry', teacher: 'Dana Park', room: '323' })).toBe(false);
+    expect(maybeSameClass({ name: 'AP Chem', ...section }, { name: 'AP Chemistry', teacher: 'Polly Duke', room: '323' })).toBe(false);
     expect(maybeSameClass({ name: 'Spanish 2', ...section }, { name: 'Spanish 3', ...section })).toBe(false);
     expect(maybeSameClass({ name: 'Chemistry', ...section }, { name: 'Physics', ...section })).toBe(false);
   });
