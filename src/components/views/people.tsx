@@ -8,6 +8,7 @@ import { sameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
+import { useBeta } from '../betas';
 import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
@@ -314,6 +315,20 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     setReporting(false); setReason(''); setIncludeChat(true);
   };
   const cancelReport = () => { setReporting(false); setReason(''); setIncludeChat(true); };
+  /** Their classes. The people-redesign beta shows them after the day, the regular sheet before it. */
+  const classesLast = useBeta('people-redesign');
+  const classesSection = profile?.shared && <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? [pluralize(profile.shared.classes.length, 'class', 'classes'), profile.sameSchool ? `${profile.shared.classes.filter(sharedClass).length} in common with you` : null].filter(Boolean).join(' · ') : undefined}>
+    {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
+    {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
+      const color = classColor(cls.id, 'class', cls.color);
+      const together = sharedClass(cls);
+      return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
+        <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
+        <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint></span>
+        {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
+      </li>;
+    })}</ul>}
+  </Section>;
   return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={name} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(instantParts(profile.joinedAt, state.timeZone).date, { year: true })}`].filter(Boolean).join(' · ') : undefined}
     footer={nextStep ? <><Spacer />{nextStep}</> : undefined}>
     {(!profile || resultAt === 'top') && result}
@@ -329,18 +344,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </div>
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
-        <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? [pluralize(profile.shared.classes.length, 'class', 'classes'), profile.sameSchool ? `${profile.shared.classes.filter(sharedClass).length} in common with you` : null].filter(Boolean).join(' · ') : undefined}>
-          {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
-          {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
-            const color = classColor(cls.id, 'class', cls.color);
-            const together = sharedClass(cls);
-            return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
-              <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
-              <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint></span>
-              {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
-            </li>;
-          })}</ul>}
-        </Section>
+        {!classesLast && classesSection}
         <Section id="profile-day" title={`${name}’s day`} icon="calendar"
           description={day ? (day.closed ? `${dayLabel} · no school` : `${dayLabel} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}
           action={day ? <div className="flex items-center gap-1">
@@ -350,6 +354,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
           {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class) ? 'Together' : null} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
+        {classesLast && classesSection}
       </>}
       <div role="group" aria-label="Manage" className="grid gap-3 border-t pt-4">
         <Eyebrow>Manage</Eyebrow>
