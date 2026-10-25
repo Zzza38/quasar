@@ -149,9 +149,27 @@ function resolveScan(personal: PersonalSchedule, rows: Draft[]) {
   return { classes, assignments, targets };
 }
 
-/** Turns confirmed rows into saved classes and period assignments, reusing classes the student already has. */
-export function applyScan(personal: PersonalSchedule, rows: Draft[]): PersonalSchedule {
+/** The free periods saving leaves empty: a period an included row also picks stays that row's class. */
+export function freedPeriods(rows: Draft[], free: string[]): string[] {
+  const claimed = new Set(rows.flatMap(row => row.include && row.name.trim() ? row.periodIds : []));
+  return free.filter(periodId => !claimed.has(periodId));
+}
+
+/** The saved classes that free periods take off the timetable. */
+export function clearedClasses(personal: PersonalSchedule, rows: Draft[], free: string[]): { periodId: string; name: string }[] {
+  return freedPeriods(rows, free).flatMap(periodId => {
+    const cls = personal.classes.find(entry => entry.id === personal.assignments[periodId]);
+    return cls ? [{ periodId, name: cls.name }] : [];
+  });
+}
+
+/**
+ * Turns confirmed rows into saved classes and period assignments, reusing classes the student already has.
+ * `free` holds the periods the timetable marks unassigned; they are left empty.
+ */
+export function applyScan(personal: PersonalSchedule, rows: Draft[], free: string[] = []): PersonalSchedule {
   const { classes, assignments } = resolveScan(personal, rows);
+  for (const periodId of freedPeriods(rows, free)) delete assignments[periodId];
   return { ...personal, classes, assignments };
 }
 
@@ -171,11 +189,15 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const [pdfTexts, setPdfTexts] = useState<Record<string, string>>({});
   const [limited, setLimited] = useState(false);
   const [rows, setRows] = useState<Draft[] | null>(null);
+  /** The periods the scan found unassigned, and those the student keeps free. */
+  const [freeFound, setFreeFound] = useState<string[]>([]);
+  const [free, setFree] = useState<string[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
-  useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setLimited(false); setRows(null); setNotes([]); setError(''); setSavedNotice(''); } }, [open]);
+  const clearResult = () => { setRows(null); setFreeFound([]); setFree([]); setNotes([]); };
+  useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setLimited(false); clearResult(); setError(''); setSavedNotice(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -208,7 +230,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
       if (prepared.length) {
         setPhotos(current => [...current, ...prepared].slice(0, MAX_PHOTOS));
         setPdfTexts(current => ({ ...current, ...texts }));
-        setRows(null); setNotes([]);
+        clearResult();
       }
       if (failed.length) throw new Error(photoError(files.length, failed, prepared.length));
     });
@@ -218,13 +240,15 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     const next = photos.filter((_, i) => i !== index);
     setPhotos(next);
     if (removed?.pdf && !next.some(photo => photo.pdf?.id === removed.pdf!.id)) setPdfTexts(({ [removed.pdf!.id]: _gone, ...rest }) => rest);
-    setLimited(false); setRows(null); setNotes([]); setError('');
+    setLimited(false); clearResult(); setError('');
   };
   const scan = () => run(async () => {
     if (photos.length === 0) return;
     const text = Object.values(pdfTexts).join('\n\n').slice(0, MAX_PDF_TEXT);
     const result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}) });
     setRows(result.rows.map(draftRow));
+    setFreeFound(result.freePeriodIds);
+    setFree(result.freePeriodIds);
     setNotes(result.notes);
   });
   const update = (index: number, patch: Partial<Draft>) => setRows(current => current?.map((row, i) => i === index ? { ...row, ...patch } : row) ?? null);
@@ -240,35 +264,42 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     name: entry.name, directoryId: entry.id, teacher: entry.teacher ?? '', room: entry.room ?? '',
     scanned: { name: entry.name, directoryId: entry.id }, correctName: false, expectedVersion: undefined, separate: false,
   });
+  const freeing = rows ? freedPeriods(rows, free) : [];
   const save = () => run(async () => {
-    if (!rows || !ready.length || unresolved || !directory) return;
-    personalScheduleSchema.parse(applyScan(personal, rows));
-    const result = await api.directory.importClasses.mutate({ accountId, schoolId, grade: personal.grade,
-      rows: ready.map(row => ({ name: row.name.trim(), ...details(row), directoryId: row.directoryId, correctName: row.correctName, expectedVersion: row.expectedVersion, separate: row.separate })),
-    });
-    let at = 0;
-    const linked = rows.map(row => {
-      if (!row.include || !row.name.trim()) return row;
-      const imported = result.rows[at++];
-      const keepPersonalSpelling = row.correctName && !result.canEdit;
-      return { ...row, ...imported, correctName: keepPersonalSpelling, expectedVersion: keepPersonalSpelling ? row.expectedVersion : undefined, separate: row.separate,
-        scanned: !keepPersonalSpelling && imported.directoryId ? { name: imported.name, directoryId: imported.directoryId } : undefined };
-    });
-    // Keep the reconciled links if the personal save fails, so retrying cannot add another directory copy.
-    setRows(linked);
-    await onSave(applyScan(personal, linked));
-    if (result.skipped) setSavedNotice('Classes added to your timetable. The school directory is locked, so new classes and spelling corrections were saved in your personal copy only.');
+    if (!rows || (!ready.length && !freeing.length) || unresolved || !directory) return;
+    personalScheduleSchema.parse(applyScan(personal, rows, free));
+    let linked = rows, skipped = 0;
+    if (ready.length) {
+      const result = await api.directory.importClasses.mutate({ accountId, schoolId, grade: personal.grade,
+        rows: ready.map(row => ({ name: row.name.trim(), ...details(row), directoryId: row.directoryId, correctName: row.correctName, expectedVersion: row.expectedVersion, separate: row.separate })),
+      });
+      let at = 0;
+      linked = rows.map(row => {
+        if (!row.include || !row.name.trim()) return row;
+        const imported = result.rows[at++];
+        const keepPersonalSpelling = row.correctName && !result.canEdit;
+        return { ...row, ...imported, correctName: keepPersonalSpelling, expectedVersion: keepPersonalSpelling ? row.expectedVersion : undefined, separate: row.separate,
+          scanned: !keepPersonalSpelling && imported.directoryId ? { name: imported.name, directoryId: imported.directoryId } : undefined };
+      });
+      skipped = result.skipped;
+      // Keep the reconciled links if the personal save fails, so retrying cannot add another directory copy.
+      setRows(linked);
+    }
+    await onSave(applyScan(personal, linked, free));
+    if (skipped) setSavedNotice('Classes added to your timetable. The school directory is locked, so new classes and spelling corrections were saved in your personal copy only.');
     else onClose();
   });
   const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
   const clashes = rows ? periodClashes(personal, rows) : [];
   const replacements = rows ? replacedClasses(personal, rows) : [];
+  const cleared = rows ? clearedClasses(personal, rows, free) : [];
+  const claimed = new Set(ready.flatMap(row => row.periodIds));
 
   if (savedNotice) return <Modal open={open} onClose={onClose} title="Classes added" footer={<Button variant="primary" onClick={onClose}>Done</Button>}><Callout tone="success" role="status">{savedNotice}</Callout></Modal>;
 
   return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Import your schedule" description="Upload the schedule PDF from your school portal, a screenshot, or photos of a printed copy. Check what was read, then add the classes to your timetable."
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
-      {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || !online || !directory || unresolved || ready.length === 0} onClick={() => void save()}>Add {ready.length} {ready.length === 1 ? 'class' : 'classes'}</Button>
+      {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || !online || !directory || unresolved || (ready.length === 0 && freeing.length === 0)} onClick={() => void save()}>{ready.length === 0 && freeing.length > 0 ? `Save ${freeing.length} free ${freeing.length === 1 ? 'period' : 'periods'}` : `Add ${ready.length} ${ready.length === 1 ? 'class' : 'classes'}`}</Button>
         : <Button variant="primary" icon="sparkle" busy={pending} disabled={!online || photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
     <input ref={fileRef} type="file" accept="application/pdf,.pdf,image/*" className="sr-only" tabIndex={-1} aria-hidden="true" multiple aria-label="Choose a schedule PDF or picture" onChange={choose} />
     <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true" aria-label="Take a timetable photo" onChange={choose} />
@@ -351,6 +382,20 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
             })}
           </ul>
         </>}
+        {rows && freeFound.length > 0 && <div className="grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+          <Field label="Free periods" hint="Your timetable shows these as unassigned or free, so they stay empty. Tap one off if you do have a class there.">
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Free periods">
+              {schedule.periods.filter(period => freeFound.includes(period.id)).map(period => {
+                const taken = claimed.has(period.id);
+                const on = !taken && free.includes(period.id);
+                return <Toggle key={period.id} variant="outline" size="sm" pressed={on} disabled={taken || pending} title={taken ? 'A class above is picked for this period' : undefined}
+                  className="min-w-[44px] rounded-full bg-card px-3 font-semibold data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                  onPressedChange={() => setFree(current => on ? current.filter(id => id !== period.id) : [...current, period.id])}>{period.label}</Toggle>;
+              })}
+            </div>
+          </Field>
+          {cleared.length > 0 && <Hint tone="danger">Clears {cleared.map(entry => `${entry.name} from ${label(entry.periodId)}`).join(', ')}.</Hint>}
+        </div>}
       </div>
     </div>}
   </Modal>;
