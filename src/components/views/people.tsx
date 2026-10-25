@@ -8,7 +8,6 @@ import { maybeSameClass, sameClass, type ClassLike } from '@/domain/class-match'
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
-import { useBeta } from '../betas';
 import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
@@ -272,13 +271,12 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   };
   /** True when we sit in this class of theirs in at least one shared period. */
   const sharedClass = (cls: ClassLike & { id: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls));
-  const suggestSimilar = useBeta('similar-classes');
   /**
    * My class in this period when it is not a match but maybeSameClass: same teacher and room, a slightly different
-   * name (similar-classes beta). Shown as a suggestion only.
+   * name. Shown as a suggestion only.
    */
   const similarIn = (periodId: string, theirs: ClassLike) => {
-    if (!suggestSimilar || !profile?.sameSchool) return null;
+    if (!profile?.sameSchool) return null;
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
     return own && maybeSameClass(own, theirs) ? own : null;
   };
