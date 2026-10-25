@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyScan, draftRow, keptDetails, periodClashes, photoError, renameRow, replacedClasses } from './scan-schedule';
+import { applyScan, clearedClasses, draftRow, freedPeriods, keptDetails, periodClashes, photoError, renameRow, replacedClasses } from './scan-schedule';
 import { emptyPersonalSchedule } from '@/domain/schedule';
 
 const DIR = '3f6e4a2b-1c5d-4e8f-9a0b-2c3d4e5f6a7b';
@@ -47,6 +47,20 @@ describe('applying a confirmed scan', () => {
     expect(keptDetails(personal.classes, rows[1]!)).toEqual({ name: 'Chem', kept: ['room 110'] });
     expect(keptDetails(personal.classes, row('Algebra II', { teacher: 'Ms. Ortiz' }))).toBeNull();
     expect(keptDetails(personal.classes, row('Geometry', { teacher: 'Mr. Lee' }))).toBeNull();
+  });
+});
+
+describe('free periods from a scan', () => {
+  it('leaves unassigned periods empty, except one an included class also picks', () => {
+    const personal = { ...emptyPersonalSchedule(), classes: [{ id: 'art', name: 'Art' }, { id: 'gym', name: 'Gym' }], assignments: { P3: 'art', P4: 'gym', P6: 'art' } };
+    const rows = [row('Chemistry', { periodIds: ['P4'] }), row('Band', { include: false, periodIds: ['P6'] })];
+    expect(freedPeriods(rows, ['P3', 'P4', 'P6'])).toEqual(['P3', 'P6']);
+    expect(clearedClasses(personal, rows, ['P3', 'P4', 'P6'])).toEqual([{ periodId: 'P3', name: 'Art' }, { periodId: 'P6', name: 'Art' }]);
+    const next = applyScan(personal, rows, ['P3', 'P4', 'P6']);
+    expect(next.assignments).toEqual({ P4: 'Chemistry' });
+    // The class itself stays saved; only its periods are freed.
+    expect(next.classes.map(cls => cls.id)).toEqual(['art', 'gym', 'Chemistry']);
+    expect(applyScan(personal, rows).assignments).toEqual({ P3: 'art', P4: 'Chemistry', P6: 'art' });
   });
 });
 

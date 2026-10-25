@@ -152,6 +152,25 @@ describe('timetable scanning', () => {
     expect(result.notes).toEqual(['Skipped a line the scanner could not read.']);
   });
 
+  it('treats unassigned periods as free, never as a class, unless a class meets there on another day', async () => {
+    const f = fixture();
+    const [p1, p2, p3, p4] = exampleSchedule.periods.filter(period => period.kind === 'class');
+    f.fetcher.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      rows: [
+        { className: 'Algebra II', periodIds: [p1.id] },
+        { className: 'Unassigned', periodIds: [p2.id, p1.id] },
+        { className: 'free period', periodLabel: p3.label },
+      ],
+      freePeriodIds: [p4.id, 'no-such-period', 7],
+    }) } }] }), { status: 200 }));
+    const result = await f.scan.scan(f.student, image);
+    expect(result.rows.map(row => row.name)).toEqual(['Algebra II']);
+    expect(result.freePeriodIds).toEqual([p2.id, p3.id, p4.id]);
+    const prompt = JSON.parse(f.fetcher.mock.calls[0][1].body as string).messages[0].content as string;
+    expect(prompt).toContain('"Unassigned"');
+    expect(prompt).toContain('freePeriodIds');
+  });
+
   it('keeps one row per class with every period it meets in', async () => {
     const f = fixture();
     f.fetcher.mockResolvedValue(answer([
