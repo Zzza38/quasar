@@ -115,7 +115,7 @@ Merge and deploy as usual. Until the beta exists in the list, nobody is in it, s
 
 ### 2. Create the beta
 
-Run the command in the checkout whose server should have the beta. For the live site that is the production checkout, `/srv/NAS/Private/school-schedule-tracker`: the command loads `.env.local` there, so it edits the same list the live server reads.
+Run the command in the checkout whose server should have the beta. For the live site that is the production checkout, `/srv/NAS/Private/GitHub/quasar`: the command loads `.env.local` there, so it edits the same list the live server reads.
 
 ```sh
 npm run beta -- create month-grid --name "Month grid" --description "Try the month view in Schedule." --max 30
