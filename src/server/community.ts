@@ -35,7 +35,7 @@ export const FRIEND_REQUEST_LIMIT = 30;
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
 /** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
-export type Classmate = { id: string; displayName: string; personal: PersonalSchedule };
+export type Classmate = { id: string; displayName: string; avatar: string | null; personal: PersonalSchedule };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
@@ -372,10 +372,10 @@ export class CommunityService {
    * ("p1", "A"), so a friend at another school never shares a class with the viewer.
    */
   classmates(userId: string): Classmate[] {
-    const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
+    const rows = this.db.prepare(`SELECT u.id, u.display_name, u.google_picture, u.avatar_version, u.avatar_hidden FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       JOIN users me ON me.id=?
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
-      ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as { id: string; display_name: string }[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, personal: this.personalOf(row.id) }));
+      ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as (AvatarRow & { display_name: string })[];
+    return rows.map(row => ({ id: row.id, displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
   }
 }
