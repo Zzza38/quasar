@@ -82,6 +82,29 @@ describe('censorBody and censoredLinkParts', () => {
     expect(censorBody('https://example.com/w0p/ and http://example.com/w0p/')).toBe('https://example.com/w0p/ and http://example.com/***/');
     expect(censorBody('')).toBe('');
   });
+  it('censors a slur split by markdown styling, and leaves ordinary styling alone', () => {
+    for (const text of ['n**igg**er', 'nig*g*er', 'ni~~gg~~er', 'nig`g`er'])
+      expect(censorBody(text), text).toBe('******');
+    expect(censorBody('**nig**ger lol')).toBe('******** lol');
+    expect(censorBody('fa**g**master')).toBe('*********');
+    expect(censorBody('fa*g*bucket')).toMatch(/^\*+$/);
+    expect(censorBody('n**ig**\u2219ger')).toBe('******');
+    for (const text of ['**bold** and *italics* ~~gone~~', 'snake_case_name', 'Japan_trip', 'what the f***', '`npm i` then **go**'])
+      expect(censorBody(text), text).toBe(text);
+  });
+  it('reads a run of one-word lines as one word', () => {
+    expect(censorBody('nig\nger')).toBe('******');
+    expect(censorBody('hey\nre\ntarded\nlol')).toBe('hey\n********\nlol');
+    for (const text of ['i got wet\nback home', 'ok\ncool\nsee you', 'Raccoon\nCity', 'Japan\ntrip'])
+      expect(censorBody(text), text).toBe(text);
+  });
+  it('reads a word broken across a line inside a sentence', () => {
+    expect(censorBody('hey ni\ngga dude')).toBe('hey ***** dude');
+    expect(censorBody('you re\ntarded')).toBe('you ********');
+    expect(censorBody('fa\n**ggot** dude')).toBe('******** dude');
+    for (const text of ['do re mi fa\ngot it', 'i got wet\nback home', 'see you\nat lunch', 'retaliatory\nmeasures'])
+      expect(censorBody(text), text).toBe(text);
+  });
   it('is stable when the censored text is censored again (a retry sends the censored body)', () => {
     const once = censorBody(`you f4ggot ${wiki}`);
     expect(censorBody(once)).toBe(once);
