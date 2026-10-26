@@ -2,12 +2,14 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { scheduledPeriodIds } from '@/domain/period-status';
+import { slotCopySources, type SlotCopySource } from '@/domain/school-exceptions';
 import { clampDate, describeDayIssues, gradeLabel, REMOVED_PERIOD_LABEL, resolveDay, resolveDayInRange, rotationNeverAdvances, scheduleSchema, withCycleDay, type Grade, type Schedule, type PersonalSchedule, type SchoolPeriod, type ScheduleSlot } from '@/domain/schedule';
-import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
-import { Icon } from './icon';
+import { addDays, browserTimeZone, formatDate, formatRange, formatTimeZone, pluralize, randomId, slugId, timeZones, todayIn, weekOf } from '@/lib/format';
+import { cn } from '@/lib/utils';
+import { Icon, type IconName } from './icon';
 import { ScheduleGrid } from './schedule-grid';
 import { ScheduleTimeInput } from './schedule-time-input';
-import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Panel, Segmented, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
+import { Button, Callout, ChoiceGroup, ChoiceItem, Chip, Field, Hint, IconButton, Input, Modal, Panel, Select, Spacer, Toggle, WeekStrip, WeekdayPicker } from './primitives';
 import { Label } from './ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 
@@ -284,11 +286,34 @@ export function Days({ value, set, disabled, personal }: { personal?: PersonalSc
   </div>;
 }
 
-function summarizeException(exception: Exception, schedule: Schedule): string {
+const EXCEPTION_KINDS: Array<{ value: Exception['kind']; label: string; icon: IconName; tone: string }> = [
+  { value: 'closure', label: 'No school', icon: 'coffee', tone: 'bg-secondary text-secondary-foreground' },
+  { value: 'replacement', label: 'Special schedule', icon: 'clock', tone: 'bg-now-soft text-now-foreground' },
+  { value: 'reset', label: 'Restart rotation', icon: 'refresh', tone: 'bg-primary-soft text-primary-soft-foreground' },
+];
+
+export function summarizeException(exception: Exception, schedule: Schedule): string {
   if (exception.kind === 'closure') return `No school${exception.advanceCycle ? ' · rotation still advances' : ''}`;
-  if (exception.kind === 'replacement') return `Special schedule · ${exception.slots.length} periods${exception.advanceCycle ? '' : ' · rotation pauses'}`;
+  if (exception.kind === 'replacement') return `Special schedule · ${pluralize(exception.slots.length, 'period')}${exception.advanceCycle ? '' : ' · rotation pauses'}`;
   const day = schedule.cycleDays.find((entry) => entry.id === exception.cycleDayId);
   return `Restart on ${day?.label ?? exception.cycleDayId}${exception.closed ? ' · closed that day' : exception.slots ? ' · special periods' : ''}`;
+}
+
+/** One exception in a list: its date and summary, with the editor opening beneath when expanded. */
+export function ExceptionRow({ exception, summary, expanded, onToggle, removeLabel, onRemove, disabled, children }: { exception: Exception; summary: ReactNode; expanded: boolean; onToggle: () => void; removeLabel: string; onRemove: () => void; disabled?: boolean; children?: ReactNode }) {
+  const kind = EXCEPTION_KINDS.find((entry) => entry.value === exception.kind) ?? EXCEPTION_KINDS[0];
+  return <div className={cn('overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/[0.07] transition-shadow', expanded && 'shadow-card ring-foreground/[0.12]')}>
+    <div className="flex items-center gap-3 px-3 py-2.5">
+      <span aria-hidden="true" className={cn('grid size-9 shrink-0 place-items-center rounded-xl', kind.tone)}><Icon name={kind.icon} size={16} /></span>
+      <div className="min-w-0 flex-1">
+        <strong className="block text-sm font-bold">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
+        <Hint className="text-[13px]">{summary}</Hint>
+      </div>
+      <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={onToggle}>{expanded ? 'Done' : 'Edit'}</Button>
+      <IconButton size="sm" icon="trash" label={removeLabel} disabled={disabled} onClick={onRemove} />
+    </div>
+    {expanded && <div className="exception-form grid gap-5 border-t border-foreground/[0.06] px-3 pt-4 pb-4 sm:px-4">{children}</div>}
+  </div>;
 }
 
 function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Partial<Schedule>) => void; disabled?: boolean }) {
@@ -308,30 +333,50 @@ function Exceptions({ value, set, disabled }: { value: Schedule; set: (patch: Pa
   return <div className="grid gap-4">
     {sorted.length === 0 && <Hint>No exceptions yet.</Hint>}
     <div className="grid gap-2">
-      {sorted.map(({ exception, index }) => {
-        const expanded = editing === index;
-        return <div key={index} className="overflow-hidden rounded-2xl bg-muted/60 ring-1 ring-inset ring-foreground/[0.04]">
-          <div className="flex items-center gap-3 p-3">
-            <span aria-hidden="true" className={`grid size-9 shrink-0 place-items-center rounded-xl ${exception.kind === 'closure' ? 'bg-secondary text-secondary-foreground' : exception.kind === 'replacement' ? 'bg-now-soft text-now-foreground' : 'bg-primary-soft text-primary-soft-foreground'}`}><Icon name={exception.kind === 'closure' ? 'coffee' : exception.kind === 'replacement' ? 'clock' : 'refresh'} size={16} /></span>
-            <div className="min-w-0 flex-1">
-              <strong className="text-sm font-bold">{formatDate(exception.date, { weekday: 'short', year: true })}</strong>
-              <Hint>{summarizeException(exception, value)}</Hint>
-            </div>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(expanded ? null : index)} aria-expanded={expanded}>{expanded ? 'Done' : 'Edit'}</Button>
-            <IconButton size="sm" label={`Remove exception on ${exception.date}`} icon="trash" disabled={disabled} onClick={() => replace(index, null)} />
-          </div>
-          {expanded && <div className="grid gap-3 border-t border-foreground/[0.05] bg-card p-3">
-            <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(index, next)} />
-          </div>}
-        </div>;
-      })}
+      {sorted.map(({ exception, index }) => <ExceptionRow key={index} exception={exception} summary={summarizeException(exception, value)} expanded={editing === index}
+        onToggle={() => setEditing(editing === index ? null : index)} removeLabel={`Remove exception on ${exception.date}`} disabled={disabled} onRemove={() => replace(index, null)}>
+        <ExceptionForm exception={exception} schedule={value} disabled={disabled} onChange={(next) => replace(index, next)} />
+      </ExceptionRow>)}
     </div>
     <div><Button size="sm" icon="plus" disabled={disabled} onClick={add}>Add exception</Button></div>
   </div>;
 }
 
-export function ExceptionForm({ exception, schedule, onChange, disabled }: { exception: Exception; schedule: Schedule; onChange: (next: Exception) => void; disabled?: boolean }) {
-  const kinds: Array<{ value: Exception['kind']; label: string }> = [{ value: 'closure', label: 'No school' }, { value: 'replacement', label: 'Special schedule' }, { value: 'reset', label: 'Restart rotation' }];
+const gradeList = (grades: Grade[]) => grades.length === 1 ? gradeLabel(grades[0]) : `Grades ${grades.join(', ')}`;
+function copySourceName(source: SlotCopySource): string {
+  const name = source.kind === 'day' ? source.name : `${formatDate(source.name, { weekday: 'short' })} special schedule`;
+  return source.grades ? `${name} · ${gradeList(source.grades)}` : name;
+}
+
+/**
+ * Periods for a special date, with a picker that copies a rotation day's or another special date's periods.
+ * Copying over periods that are already there asks first.
+ */
+function ExceptionSlots({ slots, schedule, sources, disabled, onChange }: { slots: ScheduleSlot[]; schedule: Schedule; sources: SlotCopySource[]; disabled?: boolean; onChange: (slots: ScheduleSlot[]) => void }) {
+  const [pending, setPending] = useState<SlotCopySource | null>(null);
+  const copy = (source: SlotCopySource) => { onChange(source.slots.map((slot) => ({ ...slot }))); setPending(null); };
+  return <div className="grid gap-2.5">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <Label className="text-[13px] font-semibold text-foreground/80">Periods on this date</Label>
+      {sources.length > 0 && <div className="w-full sm:w-72">
+        <Select small aria-label="Copy periods from" value="" disabled={disabled} onChange={(event) => {
+          const source = sources.find((entry) => entry.key === event.target.value);
+          if (source) { if (slots.length) setPending(source); else copy(source); }
+        }}>
+          <option value="" disabled>Copy periods from…</option>
+          {sources.map((source) => <option key={source.key} value={source.key}>{copySourceName(source)} · {pluralize(source.slots.length, 'period')}</option>)}
+        </Select>
+      </div>}
+    </div>
+    {pending && <Callout tone="warning" icon="copy" role="alert" title={`Replace ${pluralize(slots.length, 'period')} with ${copySourceName(pending)}?`} actions={<>
+      <Button size="sm" variant="primary" disabled={disabled} onClick={() => copy(pending)}>Replace periods</Button>
+      <Button size="sm" autoFocus onClick={() => setPending(null)}>Cancel</Button>
+    </>}>This date gets its {pluralize(pending.slots.length, 'period')} and times. You can still edit them after.</Callout>}
+    <SlotsEditor slots={slots} periods={schedule.periods} disabled={disabled} onChange={onChange} emptyText={sources.length ? 'No periods yet. Copy a day above or add them one at a time.' : undefined} />
+  </div>;
+}
+
+export function ExceptionForm({ exception, schedule, onChange, disabled, copySources, scope }: { exception: Exception; schedule: Schedule; onChange: (next: Exception) => void; disabled?: boolean; copySources?: SlotCopySource[]; scope?: ReactNode }) {
   const change = (kind: Exception['kind']) => {
     if (kind === exception.kind) return;
     if (kind === 'closure') onChange({ date: exception.date, kind, advanceCycle: false });
@@ -346,22 +391,37 @@ export function ExceptionForm({ exception, schedule, onChange, disabled }: { exc
     if (draftDate && draftDate !== exception.date && !dateTaken && draftDate >= '1900-01-01' && draftDate <= '2199-12-31') onChange({ ...exception, date: draftDate });
     setDraftDate(null);
   };
+  const sources = copySources ?? slotCopySources([{ schedule }], [schedule], exception.date);
   const normallyAdvances = schedule.advanceWeekdays.includes(new Date(`${exception.date}T12:00:00Z`).getUTCDay() === 0 ? 7 : new Date(`${exception.date}T12:00:00Z`).getUTCDay());
+  const hasSlots = exception.kind === 'replacement' || (exception.kind === 'reset' && exception.slots !== undefined);
   return <>
-    <div className="grid items-end gap-3 sm:grid-cols-[180px_1fr]">
-      <Field label="Date" htmlFor={`exception-date-${exception.date}`} error={dateTaken ? 'Another exception already uses this date.' : undefined}><Input id={`exception-date-${exception.date}`} small type="date" value={shownDate} disabled={disabled} min="1900-01-01" max="2199-12-31" aria-invalid={dateTaken || undefined} onChange={(event) => setDraftDate(event.target.value || null)} onBlur={commitDate} onKeyDown={(event) => { if (event.key === 'Enter') commitDate(); }} /></Field>
-      <Segmented label="Exception type" value={exception.kind} onChange={change} options={kinds} disabled={disabled} />
+    <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] sm:items-start">
+      <Field label="Date" htmlFor={`exception-date-${exception.date}`} error={dateTaken ? 'Another exception already uses this date.' : undefined}><div className="relative"><Input id={`exception-date-${exception.date}`} className="pr-9" type="date" value={shownDate} disabled={disabled} min="1900-01-01" max="2199-12-31" aria-invalid={dateTaken || undefined} onChange={(event) => setDraftDate(event.target.value || null)} onBlur={commitDate} onKeyDown={(event) => { if (event.key === 'Enter') commitDate(); }} /><Icon name="calendar" className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" /></div></Field>
+      <div className="grid gap-1.5">
+        <span className="text-[13px] font-semibold text-foreground/80">What happens</span>
+        <ChoiceGroup label="Exception type" value={exception.kind} onChange={change} disabled={disabled} className="grid grid-cols-3 gap-1.5">
+          {EXCEPTION_KINDS.map((kind) => <ChoiceItem key={kind.value} value={kind.value}
+            className="flex min-h-10 flex-col items-center justify-center gap-1 rounded-xl bg-card px-2 py-2 text-center text-[13px] leading-tight font-semibold text-muted-foreground ring-1 ring-foreground/[0.1] transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-primary-soft data-[state=on]:text-primary-soft-foreground data-[state=on]:ring-primary/40 sm:flex-row sm:gap-2 sm:py-0 dark:bg-input/20">
+            <Icon name={kind.icon} size={15} className="shrink-0" />{kind.label}
+          </ChoiceItem>)}
+        </ChoiceGroup>
+      </div>
     </div>
-    {exception.kind === 'reset' && <Field label="Rotation day on this date" htmlFor={`reset-${exception.date}`}>
-      <Select id={`reset-${exception.date}`} small value={exception.cycleDayId} disabled={disabled} onChange={(event) => onChange({ ...exception, cycleDayId: event.target.value })}>
-        {schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
-      </Select>
-    </Field>}
-    {exception.kind === 'reset' && <Toggle label="School is closed on this date" checked={exception.closed === true} disabled={disabled} onChange={(closed) => onChange(closed ? { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle, closed: true } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />}
-    {exception.kind === 'reset' && !exception.closed && <Toggle label="Use special periods on this date" checked={exception.slots !== undefined} disabled={disabled} onChange={(special) => onChange(special ? { ...exception, slots: [] } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />}
-    {(exception.kind === 'replacement' || (exception.kind === 'reset' && exception.slots !== undefined)) && <div className="grid gap-1.5"><Label className="text-muted-foreground">Periods on this date</Label><SlotsEditor slots={exception.slots ?? []} periods={schedule.periods} disabled={disabled} onChange={(slots) => onChange({ ...exception, slots })} /></div>}
-    {schedule.cycleDays.length > 1 && <Toggle label={exception.kind === 'closure' ? 'The rotation still advances past this date' : 'This date counts as a rotation day'} checked={exception.advanceCycle} disabled={disabled} onChange={(advanceCycle) => onChange({ ...exception, advanceCycle })} />}
-    {schedule.cycleDays.length > 1 && exception.advanceCycle !== normallyAdvances && <Hint>This differs from a normal {normallyAdvances ? 'advancing' : 'non-advancing'} weekday, so the following dates shift by one rotation day.</Hint>}
+    {scope}
+    {exception.kind === 'reset' && <div className="grid gap-3">
+      <Field label="Rotation day on this date" htmlFor={`reset-${exception.date}`} className="sm:max-w-xs">
+        <Select id={`reset-${exception.date}`} value={exception.cycleDayId} disabled={disabled} onChange={(event) => onChange({ ...exception, cycleDayId: event.target.value })}>
+          {schedule.cycleDays.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
+        </Select>
+      </Field>
+      <Toggle label="School is closed on this date" checked={exception.closed === true} disabled={disabled} onChange={(closed) => onChange(closed ? { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle, closed: true } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />
+      {!exception.closed && <Toggle label="Use special periods on this date" checked={exception.slots !== undefined} disabled={disabled} onChange={(special) => onChange(special ? { ...exception, slots: [] } : { date: exception.date, kind: 'reset', cycleDayId: exception.cycleDayId, advanceCycle: exception.advanceCycle })} />}
+    </div>}
+    {hasSlots && <ExceptionSlots slots={exception.slots ?? []} schedule={schedule} sources={sources} disabled={disabled} onChange={(slots) => onChange({ ...exception, slots })} />}
+    {schedule.cycleDays.length > 1 && <div className="grid gap-2 border-t border-foreground/[0.06] pt-4">
+      <Toggle label={exception.kind === 'closure' ? 'The rotation still advances past this date' : 'This date counts as a rotation day'} checked={exception.advanceCycle} disabled={disabled} onChange={(advanceCycle) => onChange({ ...exception, advanceCycle })}
+        description={exception.advanceCycle !== normallyAdvances ? `This differs from a normal ${normallyAdvances ? 'advancing' : 'non-advancing'} weekday, so the following dates shift by one rotation day.` : undefined} />
+    </div>}
   </>;
 }
 

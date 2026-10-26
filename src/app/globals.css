@@ -285,6 +285,29 @@ html[data-rgb-mode] body > div:first-of-type {
 }
 
 @layer components {
+  /* Task form. Grid cells in the task form may shrink, and iOS Safari's native date/time inputs lose the
+     wide intrinsic min-width that ignores w-full and spilled Due date over Due time. */
+  .task-form-fit .grid > * { min-width: 0; }
+  .task-form-fit input[type="date"], .task-form-fit input[type="time"] { max-width: 100%; }
+  /* The form draws its own calendar/clock icon; the browser's indicator is spread invisibly over the input so a tap anywhere opens the picker. */
+  .task-form-fit input[type="date"]::-webkit-calendar-picker-indicator, .task-form-fit input[type="time"]::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; opacity: 0; }
+  .task-form-fit input[type="date"], .task-form-fit input[type="time"] { position: relative; }
+  @supports (-webkit-touch-callout: none) {
+    /* With the native look off, iOS lays the value out as a span pinned to the top of the box; flex centres it. */
+    .task-form-fit input[type="date"], .task-form-fit input[type="time"] { -webkit-appearance: none; appearance: none; display: flex; align-items: center; box-sizing: border-box; width: 100%; min-width: 0; line-height: 1; }
+    .task-form-fit input::-webkit-date-and-time-value { display: flex; align-items: center; height: 100%; text-align: start; margin: 0; min-width: 0; }
+  }
+  /* Exception form (school schedule editor). iOS Safari draws native date inputs wider than their grid column, so the exception date ran
+     into the type tiles; cells may shrink and the input loses its native minimum width. */
+  .exception-form .grid > * { min-width: 0; }
+  .exception-form input[type="date"] { position: relative; max-width: 100%; }
+  /* The form draws its own calendar icon; the browser's indicator is spread invisibly over the input so a tap anywhere opens the picker. */
+  .exception-form input[type="date"]::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; opacity: 0; }
+  @supports (-webkit-touch-callout: none) {
+    /* With the native look off, iOS lays the value out as a span pinned to the top of the box; flex centres it. */
+    .exception-form input[type="date"] { -webkit-appearance: none; appearance: none; display: flex; align-items: center; box-sizing: border-box; width: 100%; min-width: 0; line-height: 1; }
+    .exception-form input::-webkit-date-and-time-value { display: flex; align-items: center; height: 100%; text-align: start; margin: 0; min-width: 0; }
+  }
   /* Page backdrop for the signed-in app: a faint accent wash at the top so cards read as elevated. */
   .app-canvas {
     background:

@@ -67,8 +67,20 @@ export function previewAccent(accent: string): void {
   if (isAccent(accent)) apply(isAppearance(appearance) ? appearance : 'system', accent);
 }
 
+/** Screens mounted right now that only have a light design (the signed-out home page); while any is, light wins over the stored choice. */
+let lightOnly = 0;
+
+/** Paints the page light while the calling screen is mounted, then returns to the stored choice. The choice itself is untouched. */
+export function useLightAppearance(): void {
+  useEffect(() => {
+    lightOnly++;
+    sync();
+    return () => { lightOnly--; sync(); };
+  }, []);
+}
+
 function apply(appearance: Appearance, accent: AccentId): 'light' | 'dark' {
-  const dark = appearance === 'dark' || (appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const dark = !lightOnly && (appearance === 'dark' || (appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches));
   const root = document.documentElement;
   root.dataset.appearance = dark ? 'dark' : 'light';
   root.dataset.appearancePreference = appearance;

@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
+import { BetaProvider, type JoinedBeta } from './betas';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -62,7 +63,7 @@ function formatInstant(iso: string): string {
 }
 
 /** What the server knows about the request's session (src/app/admin/page.tsx), so the page paints its verdict at once. */
-export type AdminBoot = { accountId: string | null; isAdmin: boolean; adminReady: boolean };
+export type AdminBoot = { accountId: string | null; isAdmin: boolean; adminReady: boolean; betas: JoinedBeta[] };
 
 export function Admin({ initial }: { initial?: AdminBoot }) {
   const [schools, setSchools] = useState<School[]>([]);
@@ -92,6 +93,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   // Bumped when a change made outside the open record (a messaging pause) should reload it.
   const [memberKey, setMemberKey] = useState(0);
   const [signedIn, setSignedIn] = useState(!!initial?.accountId);
+  // The owner's own betas, so beta UI inside the support tools (the school review) follows their enrollment.
+  const [betas, setBetas] = useState<JoinedBeta[]>(initial?.betas ?? []);
   const [loading, setLoading] = useState(true);
   // Whether the page knows who is asking: from the server render, or after the first session check.
   const [decided, setDecided] = useState(!!initial);
@@ -114,6 +117,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       if (accountRef.current !== nextAccount) setEvidence({});
       accountRef.current = nextAccount; setAccountId(nextAccount);
       setReauth(!!session?.isAdmin && !session.adminReady);
+      setBetas(session?.betas ?? []);
       if (!session?.adminReady) { revoke(); return; }
       const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query(), api.admin.security.query(), api.admin.bans.query()]);
       setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
@@ -198,7 +202,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     } catch (err) { setError(errorMessage(err)); }
     finally { setHiding(null); }
   };
-  return <div className="app-canvas min-h-dvh">
+  return <BetaProvider accountId={accountId ?? ''} betas={betas} online refresh={refresh}><div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
         <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip>{security && security.until !== null && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
@@ -345,7 +349,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     {member && accountId && <MemberRecord key={member.userId} accountId={accountId} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
       onClose={() => setMember(null)} onOpenMember={openMember} onPause={setPauseTarget} onChanged={refresh} />}
     {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={async () => { await refresh(); setMemberKey((key) => key + 1); }} />}
-  </div>;
+  </div></BetaProvider>;
 }
 
 function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: () => void; onSaved: () => Promise<void> }) {
