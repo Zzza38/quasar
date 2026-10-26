@@ -304,7 +304,10 @@ describe('timetable scanning', () => {
     await expect(blank.scan.scan(blank.student, image)).rejects.toThrow('empty answer');
     expect(error).not.toHaveBeenCalled();
     const failing = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('quota', { status: 402 })));
-    await expect(failing.scan.scan(failing.student, image)).rejects.toThrow('having trouble');
+    await expect(failing.scan.scan(failing.student, image)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: expect.stringContaining('out of credit') });
+    const broken = fixture(vi.fn<ScanFetch>().mockResolvedValue(new Response('boom', { status: 500 })));
+    // 503, never 502: Cloudflare would replace a 502 body with its own HTML page before the browser saw the message.
+    await expect(broken.scan.scan(broken.student, image)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: expect.stringContaining('having trouble') });
     const offline = fixture(vi.fn<ScanFetch>().mockRejectedValue(new TypeError('fetch failed')));
     await expect(offline.scan.scan(offline.student, image)).rejects.toThrow('Could not reach');
     error.mockRestore();
