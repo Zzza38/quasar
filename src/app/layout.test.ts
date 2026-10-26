@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import config, { contentSecurityPolicy, httpsRedirects, permissionsPolicy } from '../../next.config';
+import config, { contentSecurityPolicy, httpsRedirects, permissionsPolicy, wwwRedirects } from '../../next.config';
 
 const directives = new Map(contentSecurityPolicy.split(';').map((part) => part.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
 
@@ -33,7 +33,7 @@ describe('response security headers', () => {
 
   it('sends a proxied plain-HTTP visit to the same path on HTTPS, for good', async () => {
     const rules = await config.redirects!();
-    expect(rules).toEqual(httpsRedirects);
+    expect(rules).toEqual([...wwwRedirects, ...httpsRedirects]);
     for (const rule of httpsRedirects) {
       expect(rule.source).toBe('/:path*');
       expect(rule.destination).toBe('https://:host/:path*');
@@ -42,5 +42,16 @@ describe('response security headers', () => {
       expect(rule.has.map((condition) => condition.type)).toEqual(['header', 'host']);
     }
     expect(httpsRedirects.map((rule) => rule.has[0].key)).toEqual(['x-forwarded-proto', 'cf-visitor']);
+  });
+
+  it('sends www to the same path on the bare domain, for good, ahead of the HTTPS rule', async () => {
+    const rules = await config.redirects!();
+    expect(rules[0]).toEqual(wwwRedirects[0]);
+    expect(wwwRedirects[0].destination).toBe('https://getquasarapp.com/:path*');
+    expect(wwwRedirects[0].permanent).toBe(true);
+    const host = new RegExp(`^${wwwRedirects[0].has[0].value}$`);
+    expect(host.test('www.getquasarapp.com')).toBe(true);
+    expect(host.test('getquasarapp.com')).toBe(false);
+    expect(host.test('wwwxgetquasarapp.com')).toBe(false);
   });
 });
