@@ -12,7 +12,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Every time you launch a dev or branch preview server, first create a fresh copy of the production database and use that copy as the server's `DATABASE_PATH`. This includes previews served through Tailscale and branch previews run with `next start`.
 
-Read the production database path from `/srv/NAS/Private/school-schedule-tracker/.env.local`. Use SQLite's backup API to create a consistent snapshot, including committed data still in the WAL. Do not copy the live database file with `cp`.
+Read the production database path from `/srv/NAS/Private/GitHub/quasar/.env.local`. Use SQLite's backup API to create a consistent snapshot, including committed data still in the WAL. Do not copy the live database file with `cp`.
 
 Keep the copy in the dev checkout's ignored `data/` directory. Stop any dev server using the destination before replacing it. Never point a dev server at the production database or overwrite the production database. If the production database is unavailable, report the blocker instead of launching with an empty database.
 
@@ -22,7 +22,7 @@ Production snapshots contain private account data. Bind preview servers to loopb
 
 To put a change in beta, wrap it in `<Beta id="key">` or `useBeta('key')` from `src/components/betas.tsx`, then create the beta with `npm run beta -- create <key> --name "Name" [--description "…"] [--max N] [--code "…"]` (see README "Running a beta" and `npm run beta -- --help`). Without `--code` a code is generated. Never create or change betas any other way: not from `/admin`, not by writing `betas.json` by hand, not in a migration.
 
-The beta list (`betas.json` beside the database, or `BETAS_PATH`) holds the join codes, so it is gitignored. Never commit it or copy its codes into the repository, a PR or CI. A beta for the live site is created by running the command in the production checkout, `/srv/NAS/Private/school-schedule-tracker`, and it takes effect immediately; a preview server's list sits beside its database snapshot in the dev checkout. Report the code the command prints to the owner, who can also read it on `/admin` → Betas.
+The beta list (`betas.json` beside the database, or `BETAS_PATH`) holds the join codes, so it is gitignored. Never commit it or copy its codes into the repository, a PR or CI. A beta for the live site is created by running the command in the production checkout, `/srv/NAS/Private/GitHub/quasar`, and it takes effect immediately; a preview server's list sits beside its database snapshot in the dev checkout. Report the code the command prints to the owner, who can also read it on `/admin` → Betas.
 
 # UI rule: every form control is shadcn/ui
 
