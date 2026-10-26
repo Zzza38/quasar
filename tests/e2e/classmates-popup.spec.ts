@@ -86,8 +86,10 @@ test('classmates popup beta: the chip shows faces and opens every friend in the 
     await expect(after.getByRole('listitem').nth(1)).toContainText('Ian');
     await page.screenshot({ path: testInfo.outputPath('classmates-popup-phone.png') });
 
-    // One friend gets a single row: face, name and where they go next.
+    // One friend gets a single row: face, name and where they go next. The first popup has to finish closing
+    // before the next opens, or both dialogs (and both Ians) are on screen at once.
     await page.keyboard.press('Escape');
+    await expect(popup).toHaveCount(0);
     const single = page.getByRole('button', { name: 'In this class with Ian', exact: true });
     await expect(single).toContainText('With Ian');
     await single.click();
