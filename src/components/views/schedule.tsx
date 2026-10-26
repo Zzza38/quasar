@@ -58,9 +58,10 @@ export function ScheduleView({ state }: { state: AppState }) {
   const due = useMemo(() => date < today ? [] : sortByDue(taskItems(state.snapshot.entities).filter((item) => !item.task.imported && !item.task.completed && item.task.dueDate === date)), [state.snapshot.entities, date, today]);
   const dueCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of taskItems(state.snapshot.entities)) if (!item.task.imported && !item.task.completed && item.task.dueDate && item.task.dueDate >= today) counts.set(item.task.dueDate, (counts.get(item.task.dueDate) ?? 0) + 1);
+    // The month-days beta also marks imported assignments; the day lists them under "From your calendars".
+    for (const item of taskItems(state.snapshot.entities)) if ((calmDays || !item.task.imported) && !item.task.completed && item.task.dueDate && item.task.dueDate >= today) counts.set(item.task.dueDate, (counts.get(item.task.dueDate) ?? 0) + 1);
     return counts;
-  }, [state.snapshot.entities, today]);
+  }, [state.snapshot.entities, today, calmDays]);
   const dueTitle = `Due ${isRelative ? relative.toLowerCase() : formatDate(date, { weekday: 'long' })}`;
   const pickDate = (value: string) => { if (value && dateSchema.safeParse(value).success) setDate(value); };
   const pageMonth = (direction: -1 | 1) => setPaged(clampDate(addDays(month.start, direction < 0 ? -1 : month.days)));
