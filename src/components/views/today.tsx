@@ -6,12 +6,14 @@ import { errorMessage } from '@/client/api';
 import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
 import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { heroBase } from '@/lib/color';
-import { classmatesFor, withLabel } from '@/lib/classmates';
+import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, withLabel, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
+import { Beta } from '../betas';
 import { Icon } from '../icon';
+import { MemberAvatar } from '../member-avatar';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
 import { PeriodSheet } from '../period-sheet';
@@ -21,6 +23,7 @@ import { buttonVariants } from '../ui/button';
 import { SetupChecklist, coreSetupDone } from '../setup-checklist';
 import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Progress } from '../ui/progress';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
 
@@ -278,19 +281,102 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
 }
 
 /**
- * "With Bob" on a timeline row; opens that friend's profile, or People when there are several.
+ * "With Bob" on a timeline row; opens that friend's profile, or People when there are several. In the
+ * `classmates-popup` beta it opens ClassmatesPopup instead.
  * A plain function, not a component, so rows without classmates get null and no empty wrapper.
  */
 export function classmatesTag(state: AppState, date: string, period: ResolvedPeriod): ReactNode {
   const mates = classmatesFor(state.context, state.schedule, date, period);
-  const label = withLabel(mates);
-  if (!label) return null;
+  if (!mates.length) return null;
+  return <ClassmatesTag state={state} date={date} period={period} mates={mates} />;
+}
+
+const TAG_BUTTON = 'rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+
+function ClassmatesTag({ state, date, period, mates }: { state: AppState; date: string; period: ResolvedPeriod; mates: Classmate[] }) {
   const only = mates.length === 1 ? mates[0] : null;
   const action = only ? `See ${only.displayName}’s day` : 'See your friends';
-  return <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" title={action} onClick={() => state.navigate('people', only ? { member: only.id } : undefined)}>
-    <Chip tone="accent" icon="users" className="transition-colors hover:bg-primary/20">{label}</Chip>
+  const chip = <button type="button" className={TAG_BUTTON} title={action} onClick={() => state.navigate('people', only ? { member: only.id } : undefined)}>
+    <Chip tone="accent" icon="users" className="transition-colors hover:bg-primary/20">{withLabel(mates)}</Chip>
     <span className="sr-only">. {action}</span>
   </button>;
+  return <Beta id="classmates-popup" fallback={chip}><ClassmatesPopup state={state} date={date} period={period} mates={mates} /></Beta>;
+}
+
+/** Up to three overlapping faces, ringed in the colour behind them. */
+function FaceStack({ mates, className, ring = 'ring-background' }: { mates: Classmate[]; className?: string; ring?: string }) {
+  return <span aria-hidden="true" className={cn('flex shrink-0 -space-x-1', className)}>
+    {mates.slice(0, 3).map((mate) => <MemberAvatar key={mate.id} name={mate.displayName} src={mate.avatar} size="xs" className={cn('size-5 text-[9px] ring-2', ring)} />)}
+  </span>;
+}
+
+/** "Next: Chemistry · STU 2", "Free next", "Done for today" for one NextStop. */
+function nextStopText(stop: NextStop): string {
+  if (stop.title === DONE_FOR_TODAY) return DONE_FOR_TODAY;
+  if (stop.title === FREE_PERIOD) return 'Free next';
+  return [`Next: ${stop.title}`, stop.room && formatRoom(stop.room)].filter(Boolean).join(' · ');
+}
+
+const firstName = (mate: Classmate) => mate.displayName.split(/\s+/)[0];
+const POPUP_ROW = 'rounded-xl outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring';
+
+/**
+ * Beta `classmates-popup`: the chip shows friends' faces and opens a popover with every friend in the class, then
+ * where each of them goes next ("Chemistry · Liam, Sofia · STU 2") so you can walk over together. With one friend
+ * it is a single row: their face, name and next stop.
+ */
+function ClassmatesPopup({ state, date, period, mates }: { state: AppState; date: string; period: ResolvedPeriod; mates: Classmate[] }) {
+  const [open, setOpen] = useState(false);
+  const stops = useMemo(() => open ? nextStops(state.context, state.schedule, date, period, mates) : [], [open, state.context, state.schedule, date, period, mates]);
+  const names = mates.map((mate) => mate.displayName);
+  const only = mates.length === 1 ? mates[0] : null;
+  const go = (member?: string) => { setOpen(false); state.navigate('people', member ? { member } : undefined); };
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger asChild>
+      <button type="button" className={cn('group', TAG_BUTTON)} aria-label={`In this class with ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]}`}>
+        <Chip tone="accent" className="gap-1.5 py-0.5 pl-0.5 transition-colors hover:bg-primary/20 group-data-[state=open]:ring-1 group-data-[state=open]:ring-primary/50">
+          <FaceStack mates={mates} ring="ring-primary-soft" />
+          {only ? `With ${only.displayName}` : `${mates.length} friends`}
+        </Chip>
+      </button>
+    </PopoverTrigger>
+    {only
+      ? <PopoverContent align="start" sideOffset={8} collisionPadding={12} className="w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl p-1.5 shadow-pop">
+        <button type="button" title={`See ${only.displayName}’s day`} onClick={() => go(only.id)} className={cn('flex w-full items-center gap-3 p-2 text-left', POPUP_ROW)}>
+          <MemberAvatar name={only.displayName} src={only.avatar} />
+          <span className="min-w-0 flex-1">
+            <strong className="block truncate text-sm">{only.displayName}</strong>
+            {stops[0] && <span className="line-clamp-2 text-xs text-muted-foreground">{nextStopText(stops[0])}</span>}
+          </span>
+          <Icon name="chevronRight" size={16} className="shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverContent>
+      : <PopoverContent align="start" sideOffset={8} collisionPadding={12} className="w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl p-0 shadow-pop">
+        <ul className="flex gap-1 overflow-x-auto px-2 pt-3 pb-2 [scrollbar-width:none]" aria-label="Friends in this class">
+          {mates.map((mate) => <li key={mate.id} className="shrink-0">
+            <button type="button" title={`See ${mate.displayName}’s day`} onClick={() => go(mate.id)} className={cn('grid w-16 justify-items-center gap-1.5 px-0.5 py-1.5', POPUP_ROW)}>
+              <MemberAvatar name={mate.displayName} src={mate.avatar} />
+              <span className="max-w-full truncate text-xs font-bold">{firstName(mate)}</span>
+            </button>
+          </li>)}
+        </ul>
+        <section className="border-t px-2 pt-2.5 pb-1" aria-labelledby={`after-${period.slotId}`}>
+          <Eyebrow className="block px-2 pb-1"><span id={`after-${period.slotId}`}>After class</span></Eyebrow>
+          <ul className="grid">
+            {stops.map((stop) => <li key={`${stop.title}|${stop.room ?? ''}`} className="flex items-center gap-3 px-2 py-1.5">
+              <div className="min-w-0 flex-1">
+                <strong className="line-clamp-2 text-[13.5px] leading-snug">{stop.title}</strong>
+                <Hint className="truncate">{[stop.classmates.map(firstName).join(', '), stop.room && formatRoom(stop.room)].filter(Boolean).join(' · ')}</Hint>
+              </div>
+              <FaceStack mates={stop.classmates} ring="ring-popover" />
+            </li>)}
+          </ul>
+        </section>
+        <div className="p-2 pt-1">
+          <Button size="sm" icon="users" className="w-full" onClick={() => go()}>Open People</Button>
+        </div>
+      </PopoverContent>}
+  </Popover>;
 }
 
 export type QuickAddExtra = { dueDate?: string | null; classId?: string | null };
