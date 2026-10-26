@@ -13,6 +13,7 @@ import { CommunityService, emailDomainsSchema, parseEmailDomains } from './commu
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
 import { BetaService } from './betas';
+import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
 
@@ -230,7 +231,7 @@ export class Service {
       if (ban.appealed) fail('CONFLICT', 'You already sent an appeal. Support will review it.');
       schoolId = ban.schoolId;
     }
-    const open = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(id) as {n: number};
+    const open = this.db.prepare(`SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL AND kind<>'${MERGE_KIND}'`).get(id) as {n: number};
     if (open.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind) VALUES(?,?,?,?,?,?)').run(randomUUID(), schoolId, id, input.message, now(), `appeal:${input.kind}`);
   }
@@ -568,16 +569,18 @@ export class Service {
   }
   private sendSupportRequest(id: string, schoolId: string | null, message: string) {
     const text = z.string().trim().min(10).max(5000).parse(message);
-    const count = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(id) as {n: number};
+    const count = this.db.prepare(`SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL AND kind<>'${MERGE_KIND}'`).get(id) as {n: number};
     if (count.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), schoolId, id, text, now());
   }
   requests(id: string) {
     this.admin(id);
-    // `detail` is a beta report's diagnostics (src/server/betas.ts); other kinds have none.
+    // `detail` is a beta report's diagnostics (src/server/betas.ts) or a class merge (src/server/directory.ts); other kinds have none.
     const rows = this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind,r.detail
-      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban' | `beta:${string}`; detail: string | null}[];
-    return rows.map(({ detail, ...row }) => ({ ...row, diagnostics: detail ? JSON.parse(detail) as StoredBetaDiagnostics : null }));
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban' | `beta:${string}` | typeof MERGE_KIND; detail: string | null}[];
+    return rows.map(({ detail, ...row }) => row.kind === MERGE_KIND
+      ? { ...row, diagnostics: null, merge: detail ? mergeRequestView(this.db, row.schoolId, detail) : null }
+      : { ...row, diagnostics: detail ? JSON.parse(detail) as StoredBetaDiagnostics : null, merge: null });
   }
   resolveRequest(id: string, requestId: string) {
     this.admin(id);

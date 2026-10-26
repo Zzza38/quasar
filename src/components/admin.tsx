@@ -30,12 +30,14 @@ type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type BanRow = RouterOutput['admin']['bans'][number];
 /**
  * What a support request is: a correction request or feedback, an appeal against a pause or a removal (docs/CHAT.md
- * §14), or feedback about a beta (src/server/betas.ts).
+ * §14), feedback about a beta (src/server/betas.ts), or spellings students linked in the class directory
+ * (src/server/directory.ts).
  */
 function requestKind(kind: Request['kind']): { label: string; appeal?: 'pause' | 'ban' } | null {
   if (kind === 'appeal:pause') return { label: 'Appeal: messaging pause', appeal: 'pause' };
   if (kind === 'appeal:ban') return { label: 'Appeal: removal from school', appeal: 'ban' };
   if (kind.startsWith('beta:')) return { label: `Beta feedback: ${kind.slice('beta:'.length)}` };
+  if (kind === 'directory:merge') return { label: 'Class merge' };
   return null;
 }
 type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
@@ -255,8 +257,10 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
             <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{appeal ? request.displayName || request.email : request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email}{appeal && request.schoolName ? ` · ${request.schoolName}` : ''})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
             <p className="whitespace-pre-wrap text-sm">{request.message}</p>
             {request.diagnostics && <BetaDiagnosticsDetails diagnostics={request.diagnostics} />}
+            {request.merge && <MergeReview merge={request.merge} disabled={!accountId}
+              onDecide={(decision, name) => { if (accountId) void act(() => api.admin.resolveMerge.mutate({ accountId, requestId: request.id, decision, name })); }} />}
             <div className="flex flex-wrap gap-2">
-              {!appeal && request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
+              {(!appeal || request.merge) && request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
               {appeal?.appeal === 'pause' && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: request.userId })); }}>Lift pause</Button>}
               {appeal?.appeal === 'ban' && request.schoolId && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: request.userId, schoolId: request.schoolId! })); }}>Lift removal</Button>}
               <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName || request.email })}>Open member</Button>
@@ -418,4 +422,29 @@ function PauseSheet({ target, accountId, onClose, onPaused }: { target: PauseTar
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     </div>
   </Modal>;
+}
+
+type Merge = NonNullable<Request['merge']>;
+const describeClass = (form: { name: string; teacher?: string; room?: string }) => [form.teacher, form.room].filter(Boolean).join(' · ');
+
+/**
+ * A class merge: the entry, the spellings students linked to it, and any duplicate entries. Merge keeps them as one
+ * class under the chosen name and moves the duplicates' students over; Keep separate unlinks the spellings for good.
+ */
+function MergeReview({ merge, disabled, onDecide }: { merge: Merge; disabled: boolean; onDecide: (decision: 'merge' | 'separate', name?: string) => void }) {
+  const names = [...new Set([merge.entry?.name, ...merge.aliases.map(alias => alias.name), ...merge.duplicates.flatMap(entry => [entry.name, ...(entry.aliases ?? []).map(alias => alias.name)])].filter((name): name is string => !!name))];
+  const [name, setName] = useState(merge.entry?.name ?? '');
+  if (!merge.entry) return <Hint>The directory class was removed, so there is nothing left to merge. Mark this resolved.</Hint>;
+  return <Panel className="grid gap-3 bg-card">
+    <ul className="grid gap-1.5 text-sm">
+      <li><strong className="font-bold">{merge.entry.name}</strong> <Hint className="inline">{[describeClass(merge.entry), pluralize(merge.entry.linked, 'linked class', 'linked classes')].filter(Boolean).join(' · ')}</Hint></li>
+      {merge.aliases.map(alias => <li key={`${alias.name}|${alias.teacher ?? ''}|${alias.room ?? ''}`} className="flex items-baseline gap-1.5"><Icon name="users" size={13} className="shrink-0 text-muted-foreground" /><span>Linked as “{alias.name}”</span>{describeClass(alias) && <Hint className="inline">{describeClass(alias)}</Hint>}</li>)}
+      {merge.duplicates.map(entry => <li key={entry.id} className="flex items-baseline gap-1.5"><Icon name="copy" size={13} className="shrink-0 text-muted-foreground" /><span>Duplicate entry “{entry.name}”</span><Hint className="inline">{[describeClass(entry), pluralize(entry.linked, 'linked class', 'linked classes')].filter(Boolean).join(' · ')}</Hint></li>)}
+    </ul>
+    <div className="flex flex-wrap items-end gap-2">
+      {names.length > 1 && <Field label="Name to keep" htmlFor={`merge-name-${merge.entry.id}`} className="min-w-[220px] flex-1"><Select id={`merge-name-${merge.entry.id}`} small value={name} onChange={event => setName(event.target.value)}>{names.map(option => <option key={option} value={option}>{option}</option>)}</Select></Field>}
+      <Button size="sm" variant="primary" icon="check" disabled={disabled} onClick={() => onDecide('merge', name || undefined)}>Merge</Button>
+      <Button size="sm" disabled={disabled} onClick={() => onDecide('separate')}>Keep separate</Button>
+    </div>
+  </Panel>;
 }
