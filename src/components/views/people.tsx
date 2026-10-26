@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import { sameClass, type ClassLike } from '@/domain/class-match';
+import { maybeSameClass, sameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
@@ -293,6 +293,24 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   };
   /** True when we sit in this class of theirs in at least one shared period. */
   const sharedClass = (cls: ClassLike & { id: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls));
+  /**
+   * My class in this period when it is not a match but maybeSameClass: same teacher and room, a slightly different
+   * name. Shown as a suggestion only.
+   */
+  const similarIn = (periodId: string, theirs: ClassLike) => {
+    if (!profile?.sameSchool) return null;
+    const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
+    return own && maybeSameClass(own, theirs) ? own : null;
+  };
+  /** My class that this class of theirs might be, from the first shared period where it could be. */
+  const similarClass = (cls: ClassLike & { id: string }) => {
+    if (sharedClass(cls)) return null;
+    for (const [periodId, classId] of Object.entries(profile?.shared?.personal.assignments ?? {})) {
+      const own = classId === cls.id ? similarIn(periodId, cls) : null;
+      if (own) return own;
+    }
+    return null;
+  };
   const name = profile?.displayName ?? 'Member';
   const dayLabel = relativeDate(date, state.today, { weekday: 'long' });
   const result = <>
@@ -322,10 +340,13 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
       const color = classColor(cls.id, 'class', cls.color);
       const together = sharedClass(cls);
+      const similar = together ? null : similarClass(cls);
       return <li key={cls.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
         <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
-        <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint></span>
+        <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint>
+          {similar && <Hint>Same teacher and room as your {similar.name}. Might be the same class.</Hint>}</span>
         {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
+        {similar && <Chip tone="outline" icon="users" className="shrink-0">Same class?</Chip>}
       </li>;
     })}</ul>}
   </Section>;
@@ -351,7 +372,10 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
             <IconButton label="Previous day" icon="chevronLeft" size="sm" disabled={date <= state.today} onClick={() => setPickedDate(addDays(date, -1))} />
             <IconButton label="Next day" icon="chevronRight" size="sm" onClick={() => setPickedDate(addDays(date, 1))} />
           </div> : undefined}>
-          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => period.class && togetherIn(period.periodId, period.class) ? 'Together' : null} />}
+          {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => !period.class ? null
+            : togetherIn(period.periodId, period.class) ? 'Together'
+            : similarIn(period.periodId, period.class) ? <Chip tone="outline" icon="users">Same class?</Chip>
+            : null} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
         {classesLast && classesSection}
