@@ -27,8 +27,10 @@ const signature = (accountId: string, cls: StudentClass) => JSON.stringify([acco
  * lock prompt. Each class is sent once per spelling per session; failures stay quiet and retry after the next change.
  * Returns `link`, which applies links from elsewhere (a confirmed "same class") to the latest saved schedule.
  */
-export function useDirectoryLinks({ accountId, schoolId, personal, readable, online, save }: {
+export function useDirectoryLinks({ accountId, schoolId, personal, readable, online, enabled, save }: {
   accountId: string; schoolId: string | undefined; personal: PersonalSchedule; readable: boolean; online: boolean;
+  /** The class-links beta; without it nothing is published. */
+  enabled: boolean;
   save: (next: PersonalSchedule) => Promise<void>;
 }) {
   const latest = useRef({ personal, save });
@@ -39,7 +41,7 @@ export function useDirectoryLinks({ accountId, schoolId, personal, readable, onl
   }, []);
   const sent = useRef(new Set<string>());
   useEffect(() => {
-    if (!online || !readable || !schoolId) return;
+    if (!enabled || !online || !readable || !schoolId) return;
     const pending = personal.classes.filter(cls => !cls.directoryId && cls.name.trim() && (cls.teacher?.trim() || cls.room?.trim()) && !sent.current.has(signature(accountId, cls)));
     if (!pending.length) return;
     // A short wait lets a burst of edits (an import, a sync) settle into one request.
@@ -51,6 +53,6 @@ export function useDirectoryLinks({ accountId, schoolId, personal, readable, onl
         .catch(() => { for (const key of keys) sent.current.delete(key); });
     }, 1500);
     return () => clearTimeout(timer);
-  }, [accountId, schoolId, personal, readable, online, link]);
+  }, [accountId, schoolId, personal, readable, online, enabled, link]);
   return link;
 }
