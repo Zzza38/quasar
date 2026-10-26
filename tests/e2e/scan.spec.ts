@@ -27,6 +27,8 @@ test.beforeAll(async () => {
         { className: 'Algebra II', periodIds: ['A', 'C'], directoryId, days: ['Day 1', 'Day 3'] },
         { className: 'World History', teacher: 'Mr. Adeyemi', room: '118', periodLabel: 'B' },
         { className: 'Study Hall', periodLabel: 'Flex' },
+        // A free block printed as "Unassigned" is a free period, not a class.
+        { className: 'Unassigned', periodIds: ['D'] },
       ];
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }));
@@ -36,7 +38,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await new Promise<void>(resolve => mock.close(() => resolve())); });
 
-function seed() {
+function seed(assignments: Record<string, string> = {}, classes: Array<{ id: string; name: string }> = []) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const id = randomUUID();
@@ -47,7 +49,7 @@ function seed() {
     service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
     const base = service.entity(id, 'personal')!;
     service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base,
-      data: { ...base.data, scheduleLocked: false } });
+      data: { ...base.data, scheduleLocked: false, classes, assignments } });
     directoryId = new DirectoryService(service).save(id, { schoolId: school.id, details: { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', grades: ['9'] } }).id;
     return { id, school };
   } finally { db.close(); }
@@ -107,11 +109,17 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(rows.nth(0).getByText('From the school directory')).toBeVisible();
   await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B']);
   await expect(rows.nth(2).getByText('Could not match “Flex” to a period')).toBeVisible();
+  const free = dialog.getByRole('group', { name: 'Free periods' }).getByRole('button');
+  await expect(free).toHaveText(['D']);
+  await expect(free).toHaveAttribute('aria-pressed', 'true');
   // Drop Algebra from C, and place History on D as well.
   await periods(0).filter({ hasText: /^C$/ }).click();
   await periods(1).filter({ hasText: /^D$/ }).click();
   await expect(periods(0).and(page.locator('[aria-pressed="true"]'))).toHaveText(['A']);
   await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B', 'D']);
+  // A class picked for D outranks the free period.
+  await expect(free).toBeDisabled();
+  await expect(free).toHaveAttribute('aria-pressed', 'false');
   await page.screenshot({ path: testInfo.outputPath('scan-review.png'), fullPage: true });
 
   // Fix a misread room and leave study hall out.
@@ -128,6 +136,32 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(cards.filter({ hasText: 'World History' }).getByText('D', { exact: true })).toBeVisible();
   await expect(cards.filter({ hasText: 'Algebra II' }).getByText('C', { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('scan-placed.png'), fullPage: true });
+});
+
+test('leaves a period printed as Unassigned free, clearing the class saved there', async ({ page, context }, testInfo) => {
+  const fixture = seed({ D: 'art' }, [{ id: 'art', name: 'Art' }]); await authenticate(context, fixture.id);
+  await page.goto('/classes');
+  const PNG = await page.screenshot({ type: 'png' });
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'timetable.png', mimeType: 'image/png', buffer: PNG });
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  const rows = dialog.getByRole('list', { name: 'Classes read from the photo' }).getByRole('listitem');
+  await expect(rows).toHaveCount(3);
+  for (const [index, name] of ['Algebra II', 'World History', 'Study Hall'].entries()) await expect(rows.nth(index).getByLabel('Class')).toHaveValue(name);
+  await expect(dialog.getByRole('group', { name: 'Free periods' }).getByRole('button')).toHaveText(['D']);
+  await expect(dialog.getByText('Clears Art from D.')).toBeVisible();
+  await dialog.getByText('Clears Art from D.').scrollIntoViewIfNeeded();
+  await dialog.screenshot({ path: testInfo.outputPath('scan-free-period.png') });
+  await rows.nth(2).getByLabel('Include').uncheck();
+  await dialog.getByRole('button', { name: 'Add 2 classes' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ }).first()).toBeVisible();
+  const cards = page.getByRole('list', { name: 'Your classes' }).getByRole('listitem');
+  await expect(cards.filter({ hasText: 'Art' })).toBeVisible();
+  await expect(cards.filter({ hasText: 'Art' }).getByText('D', { exact: true })).toHaveCount(0);
+  await expect(cards.filter({ hasText: 'Unassigned' })).toHaveCount(0);
 });
 
 test('reads a schedule PDF without newer browser APIs: renders its pages and sends its text for exact names', async ({ page, context }) => {
