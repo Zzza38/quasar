@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { classSchema, gradeSchema, gradesSchema, GRADES } from '@/domain/schedule';
 import { classKey, couldBeClass, directoryCandidates, directoryForms, isFreePeriodName, maybeSameClass, resolveDirectoryEntry, sameClass, similarClassName, type DirectoryDetails } from '@/domain/class-match';
+import { BetaService } from './betas';
 import { readEntity, writeEntity } from './entities';
 import type { Db } from './db';
 import type { Service } from './service';
@@ -19,6 +20,11 @@ type Spelling = z.infer<typeof spellingSchema>;
 const mergeDetailSchema = z.object({ entryId: z.uuid(), aliases: z.array(spellingSchema), duplicateIds: z.array(z.uuid()) });
 export type MergeDetail = z.infer<typeof mergeDetailSchema>;
 export const MERGE_KIND = 'directory:merge';
+/**
+ * The beta behind linking classes: publishing, "Same class" confirmations and adding classes to a locked directory.
+ * Everyone else keeps the earlier rules (no additions once the directory locks).
+ */
+export const CLASS_LINKS_BETA = 'class-links';
 export const directoryMergeSchema = z.object({ requestId: z.uuid(), decision: z.enum(['merge', 'separate']), name: z.string().trim().max(120).optional() });
 const ownClassSchema = spellingSchema.extend({ directoryId: z.uuid().optional() });
 /** A student's own classes, sent so each can be linked to its directory entry. */
@@ -39,28 +45,38 @@ export type DirectoryClass = z.infer<typeof storedSchema> & { id: string; versio
 
 export class DirectoryService {
   constructor(private readonly service: Service) {}
-  private access(accountId: string, schoolId: string, write = false) {
+  /** `canAdd`: may add a new class. `canEdit`: may also change or remove existing ones. */
+  private access(accountId: string, schoolId: string, need: 'read' | 'add' | 'edit' = 'read') {
     const user = this.service.ready(accountId);
     const admin = this.service.isAdmin(accountId);
     if (user.schoolId !== schoolId && !admin) throw new TRPCError({ code: 'FORBIDDEN', message: 'Only school members can access this class directory.' });
     const school = this.service.school(schoolId);
     const canEdit = admin || (!school.memberLocked && !school.supportLocked && school.memberCount < 10);
-    if (write && !canEdit) throw new TRPCError({ code: 'FORBIDDEN', message: 'The school directory is locked. Edit your personal copy or request a correction from support.' });
-    return canEdit;
+    const canAdd = canEdit || this.inBeta(accountId);
+    if ((need === 'edit' && !canEdit) || (need === 'add' && !canAdd)) throw new TRPCError({ code: 'FORBIDDEN', message: 'The school directory is locked. Edit your personal copy or request a correction from support.' });
+    return { canEdit, canAdd };
+  }
+  private inBeta(accountId: string) {
+    return new BetaService(this.service).joined(accountId).some(beta => beta.key === CLASS_LINKS_BETA);
+  }
+  private requireBeta(accountId: string, schoolId: string) {
+    this.access(accountId, schoolId);
+    if (!this.inBeta(accountId)) throw new TRPCError({ code: 'FORBIDDEN', message: 'Linking classes is in a beta you have not joined.' });
   }
   list(accountId: string, schoolId: string) {
-    const canEdit = this.access(accountId, schoolId);
+    const { canEdit, canAdd } = this.access(accountId, schoolId);
     const rows = this.service.db.prepare('SELECT * FROM school_classes WHERE school_id=? AND deleted=0 ORDER BY json_extract(data, \'$.name\') COLLATE NOCASE, id').all(schoolId) as Row[];
-    return { accountId, canEdit, classes: rows.map(row => ({ ...storedSchema.parse(JSON.parse(row.data)), id: row.id, version: row.version } satisfies DirectoryClass)) };
+    return { accountId, canEdit, canAdd, classes: rows.map(row => ({ ...storedSchema.parse(JSON.parse(row.data)), id: row.id, version: row.version } satisfies DirectoryClass)) };
   }
   /**
-   * Any member may add a class: a missing class costs every classmate their matches, while an added one changes no
-   * one's data. Edits stay behind the lock, since they change what other students already picked.
+   * Members in the class-links beta may add a class to a locked directory: a missing class costs every classmate
+   * their matches, while an added one changes no one's data. Edits stay behind the lock, since they change what other
+   * students already picked.
    */
   save(accountId: string, raw: z.infer<typeof directorySaveSchema>) {
     const input = directorySaveSchema.parse(raw);
     return this.service.db.transaction(() => {
-      this.access(accountId, input.schoolId, !!input.id);
+      this.access(accountId, input.schoolId, input.id ? 'edit' : 'add');
       const existing = input.id ? this.service.db.prepare('SELECT * FROM school_classes WHERE id=? AND school_id=? AND deleted=0').get(input.id, input.schoolId) as Row | undefined : undefined;
       if (input.id && !existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'This directory class was removed. Reload the directory.' });
       if (existing && existing.version !== input.expectedVersion) throw new TRPCError({ code: 'CONFLICT', message: 'This directory class changed. Reload and review it before saving.' });
@@ -106,6 +122,7 @@ export class DirectoryService {
    */
   publish(accountId: string, raw: z.input<typeof directoryPublishSchema>) {
     const input = directoryPublishSchema.parse(raw);
+    this.requireBeta(accountId, input.schoolId);
     return this.service.db.transaction(() => {
       const all = this.list(accountId, input.schoolId).classes;
       const known = new Set(all.map(entry => entry.id));
@@ -134,6 +151,7 @@ export class DirectoryService {
    */
   confirmSame(accountId: string, raw: z.input<typeof directoryConfirmSchema>) {
     const input = directoryConfirmSchema.parse(raw);
+    this.requireBeta(accountId, input.schoolId);
     const { directoryId: mineId, ...mine } = input.mine;
     const { directoryId: theirsId, ...theirs } = input.theirs;
     if (!maybeSameClass(mine, theirs) && !sameClass(mine, theirs)) throw new TRPCError({ code: 'BAD_REQUEST', message: 'These classes have different teachers, rooms or names, so they cannot be linked.' });
@@ -203,7 +221,7 @@ export class DirectoryService {
       return { classesChanged: moved };
     }).immediate();
   }
-  /** Reconcile reviewed scan rows in one transaction. Retries reuse entries; new classes are added even when the directory is locked, and only confirmed spelling corrections edit entries. */
+  /** Reconcile reviewed scan rows in one transaction. Retries reuse entries; new classes are added when the member may add (see save), and only confirmed spelling corrections edit entries. */
   importClasses(accountId: string, raw: z.input<typeof directoryImportSchema>) {
     const input = directoryImportSchema.parse(raw);
     return this.service.db.transaction(() => {
@@ -232,10 +250,10 @@ export class DirectoryService {
             } else skipped++;
           }
         }
-        if (!entry) {
+        if (!entry && directory.canAdd) {
           entry = this.add(accountId, input.schoolId, row, input.grade);
           entries.push(entry);
-        }
+        } else if (!entry) skipped++;
         return {
           name: row.correctName ? row.name : entry?.name ?? row.name,
           teacher: row.teacher ?? entry?.teacher, room: row.room ?? entry?.room,
@@ -248,7 +266,7 @@ export class DirectoryService {
   remove(accountId: string, raw: z.infer<typeof directoryRemoveSchema>) {
     const input = directoryRemoveSchema.parse(raw);
     this.service.db.transaction(() => {
-      this.access(accountId, input.schoolId, true);
+      this.access(accountId, input.schoolId, 'edit');
       const result = this.service.db.prepare('UPDATE school_classes SET deleted=1,version=version+1,updated_at=? WHERE id=? AND school_id=? AND version=? AND deleted=0')
         .run(new Date().toISOString(), input.id, input.schoolId, input.expectedVersion);
       if (!result.changes) throw new TRPCError({ code: 'CONFLICT', message: 'This directory class changed or was removed. Reload the directory.' });

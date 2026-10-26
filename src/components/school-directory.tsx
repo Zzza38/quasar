@@ -61,8 +61,8 @@ export function SchoolDirectory({ schoolId, online, personal, onAdd, onClose }: 
         <Button size="sm" disabled={!online || pending} onClick={() => void run(refresh)}>Reload directory</Button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Hint className="flex-1">{directory.canEdit ? 'Members can edit shared classes until the school reaches ten members or support locks editing.' : 'Editing shared classes is locked. You can still add a missing class, change your own copy, or ask support for a correction.'}</Hint>
-        <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => setEditing('new')}>Add directory class</Button>
+        <Hint className="flex-1">{directory.canEdit ? 'Members can edit shared classes until the school reaches ten members or support locks editing.' : directory.canAdd ? 'Editing shared classes is locked. You can still add a missing class, change your own copy, or ask support for a correction.' : 'Shared editing is locked. You can change your own copy or ask support for a correction.'}</Hint>
+        {directory.canAdd && <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => setEditing('new')}>Add directory class</Button>}
       </div>
       {editing && <DirectoryEditor key={editing === 'new' ? 'new' : `${editing.id}:${editing.version}`} initial={editing === 'new' ? { name: '', teacher: '', room: '', grades: personal?.grade ? [personal.grade] : [...GRADES] } : editing}
         pending={pending || !online} onCancel={() => setEditing(null)} onSave={details => run(async () => {

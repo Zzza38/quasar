@@ -309,7 +309,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
     return own && !match(own, theirs) && maybeSameClass(own, theirs) && !notSame.includes(notSameKey(own, theirs)) ? own : null;
   };
-  const prompt = (own: StudentClass, theirs: ClassLike) => <SameClassPrompt own={own} theirs={theirs} name={name} disabled={!state.online || !state.personalValid}
+  const prompt = (own: StudentClass, theirs: ClassLike) => !classLinks ? <Chip tone="outline" icon="users">Same class?</Chip> : <SameClassPrompt own={own} theirs={theirs} name={name} disabled={!state.online || !state.personalValid}
     onConfirm={async () => {
       const result = await api.directory.confirmSame.mutate({ accountId, schoolId: profile!.school.id, grade: mine.grade,
         mine: { name: own.name, teacher: own.teacher, room: own.room, directoryId: own.directoryId }, theirs: { name: theirs.name, teacher: theirs.teacher, room: theirs.room, directoryId: theirs.directoryId ?? undefined } });
@@ -350,6 +350,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const cancelReport = () => { setReporting(false); setReason(''); setIncludeChat(true); };
   /** Their classes. The people-redesign beta shows them after the day, the regular sheet before it. */
   const classesLast = useBeta('people-redesign');
+  const classLinks = useBeta('class-links');
   const classesSection = profile?.shared && <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? [pluralize(profile.shared.classes.length, 'class', 'classes'), profile.sameSchool ? `${profile.shared.classes.filter(sharedClass).length} in common with you` : null].filter(Boolean).join(' · ') : undefined}>
     {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
     {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {

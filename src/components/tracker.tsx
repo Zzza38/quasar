@@ -151,7 +151,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   const saveUnlocked = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
   const scheduleLock = useScheduleLock(userId, personal, saveUnlocked);
-  const linkClasses = useDirectoryLinks({ accountId: userId ?? '', schoolId: context?.school?.id, personal, readable: parsedPersonal.success && !!personalEntity, online: session.online, save: saveUnlocked });
+  const linkClasses = useDirectoryLinks({ accountId: userId ?? '', schoolId: context?.school?.id, personal, readable: parsedPersonal.success && !!personalEntity, online: session.online,
+    enabled: !!context?.betas?.some(beta => beta.key === 'class-links'), save: saveUnlocked });
   const chatUnread = useChatUnread(userId, context?.community);
   // Unsent chat messages and drafts live only in memory; a finished sign-out or a lost session forgets them.
   // Not when sign-out starts: it can still fail and leave the student signed in, with their unsent text kept.
