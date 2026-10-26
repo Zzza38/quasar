@@ -1,39 +1,28 @@
-# Quasar landing page mockups
+# Classmates popup mockups
 
-Five self-contained landing page directions, plus a chooser shell.
-(The earlier ten rounds live in git history before this commit.)
+Five directions for what opens when you tap the "With Hunter, Liam and 1 more" chip on a Today timeline row.
+(The landing page mockups that used to live here are in git history.)
 
 | File | Direction |
 | ---- | --------- |
-| `1-countdown.html` | The home screen is the pitch. A huge live timer and a period rail; the demo day runs at 200×. Almost no copy. |
-| `2-spec.html`      | Brutalist, monospace spec sheet. The eleven behaviours as numbered requirements with SHIPPED stamps. |
-| `3-airplane.html`  | Interactive offline demo. Flip the Wi‑Fi off, add a task, flip it back; click through a conflict. |
-| `4-notebook.html`  | Student voice on ruled notebook paper. Marker highlights, sticky-note features, a syllabus checklist. |
-| `5-split.html`     | Full-bleed before/after hero with a draggable divider, then paired "their app / Quasar" rows. |
+| `1-popover.html` | Small popover anchored under the chip. Avatar, name and classes in common per row; "Open People" at the bottom. |
+| `2-sheet.html`   | Bottom sheet on phones, side sheet from 768px. Class facts on top, each friend with where they go next plus Message and See day buttons. |
+| `3-inline.html`  | No overlay. The chip gets a caret and unfolds a tray of name pills inside the row. |
+| `4-roster.html`  | Centered dialog with a grid of large avatar tiles, search past five friends, and a group chat button. |
+| `5-next.html`    | The chip becomes a face stack. The popover shows faces, then groups friends by their next class. |
 
 `index.html` is the chooser: side rail, iframe preview, viewport width presets,
 and `1`–`5` / `←` `→` keyboard shortcuts.
 
-## Product copy note
-
-Schedule sharing with chosen friends is a planned feature, so no page claims
-schedules are never shared. "No ads, no trackers, nothing sold about you"
-stays. Pages frame sharing positively as "share with the people you choose".
-
-Each page is one HTML file with inline CSS and no build step or network
-dependency. The only shared asset is the logo.
+All five load `assets/today.css` (the app's dark tokens) and `assets/today.js` (fake timetable and
+friends, the timeline renderer, and the same "With …" wording as `src/lib/classmates.ts`). Each page
+opens its popup on the Digital Design row at load. English 10 has seven friends to show a longer list.
 
 ## Serving
 
 ```sh
-./serve.sh   # python3 http.server on 127.0.0.1:3005 + tailscale serve
+./serve.sh   # python3 http.server on 127.0.0.1:3005, loopback only
 ```
 
-Live at https://home-server.tail210f05.ts.net:3005/ (tailnet only).
-To take it down: `tailscale serve --https=3005 off` and `pkill -f "http.server 3005"`.
-
-## Swapping the logo
-
-All pages reference `assets/logo-mark.svg` (the glyph alone, inherits
-`color`) and `index.html` uses `assets/logo.svg` as the favicon. Replace
-those two files and every page picks it up on reload.
+Review happens through screenshots taken against the local server, not a shared link.
+Stop it with `fuser -k 3005/tcp`.
