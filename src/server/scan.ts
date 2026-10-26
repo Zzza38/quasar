@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import sharp from 'sharp';
 import { z } from 'zod';
 import { effectiveSchedule, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
-import { classKey, directoryCandidates } from '@/domain/class-match';
+import { classKey, directoryCandidates, isFreePeriodName } from '@/domain/class-match';
 import { DirectoryService, type DirectoryClass } from './directory';
 import type { Service } from './service';
 
@@ -99,12 +99,6 @@ const rowSchema = z.object({
  * `unreadable` is the model's one-sentence reason when the photos are too unclear to read.
  */
 const responseSchema = z.object({ rows: z.array(z.unknown()).max(100), freePeriodIds: z.array(z.unknown()).max(50).nullish(), unreadable: z.string().nullish() });
-/**
- * Cells a timetable prints instead of a class when the student has none ("Unassigned", "Free", "Free period").
- * A row the model returns under one of these names is a free period, never a class for the timetable or the directory.
- */
-const FREE_NAMES = new Set(['unassigned', 'unassigned period', 'unassigned block', 'free', 'free period', 'free block', 'open', 'open period', 'open block', 'no class', 'unscheduled']);
-const isFreePeriodName = (name: string) => FREE_NAMES.has(normalize(name));
 
 export type ScanRow = {
   name: string; teacher?: string; room?: string;

@@ -4,7 +4,7 @@ import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from 
 import { Service, type ClientOptions, namesSchema, createSchoolSchema, schoolUpdateSchema, adminUpdateSchema, joinSchema, mutationSchema, avatarUploadSchema, appealSchema } from './service';
 import { CalendarService, listSubscriptions, subscribeSchema } from './calendar';
 import { ScheduleFeedService, connectScheduleFeedSchema, previewScheduleFeedSchema } from './schedule-feed';
-import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema } from './directory';
+import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema, directoryPublishSchema, directoryConfirmSchema, directoryMergeSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
@@ -129,6 +129,8 @@ export const appRouter = t.router({
     save: accountScoped.input(directorySaveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).save(ctx.userId, input)),
     importClasses: accountScoped.input(directoryImportSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).importClasses(ctx.userId, input)),
     remove: accountScoped.input(directoryRemoveSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).remove(ctx.userId, input)),
+    publish: accountScoped.input(directoryPublishSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).publish(ctx.userId, input)),
+    confirmSame: accountScoped.input(directoryConfirmSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).confirmSame(ctx.userId, input)),
   }),
   community: t.router({
     verification: authenticated.query(({ ctx }) => new CommunityService(ctx.service).verification(ctx.userId)),
@@ -256,6 +258,7 @@ export const appRouter = t.router({
     update: admin.input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
     requests: admin.query(({ctx}) => ctx.service.requests(ctx.userId)),
     resolveRequest: adminScoped.input(z.object({id:z.string().uuid()})).mutation(({ctx,input}) => ctx.service.resolveRequest(ctx.userId,input.id)),
+    resolveMerge: adminScoped.input(directoryMergeSchema).mutation(({ ctx, input }) => new DirectoryService(ctx.service).resolveMerge(ctx.userId, input)),
     verificationRequests: admin.query(({ ctx }) => new CommunityService(ctx.service).verificationRequests(ctx.userId)),
     decideVerification: admin.input(z.object({ id: z.uuid(), approve: z.boolean() })).mutation(({ ctx, input }) => new CommunityService(ctx.service).decideVerification(ctx.userId, input.id, input.approve)),
     reports: admin.query(({ ctx }) => new CommunityService(ctx.service).reports(ctx.userId)),

@@ -4,6 +4,7 @@ import { personalScheduleSchema, type PersonalSchedule, type Schedule } from '@/
 import type { Entity } from '@/domain/sync';
 import { repairTaskDates, taskSchema, type Task } from '@/domain/task';
 import { instantParts } from '@/lib/format';
+import type { DirectoryLink } from './directory-links';
 
 export type WorkspaceContext = Omit<Workspace, 'entities'>;
 export type WorkspaceClassmates = WorkspaceContext['community']['classmates'];
@@ -153,6 +154,8 @@ export interface AppState {
   online: boolean;
   saveTask: (id: string, task: Task | null) => Promise<void>;
   savePersonal: (personal: PersonalSchedule) => Promise<void>;
+  /** Points classes at school directory entries without the schedule lock prompt (see directory-links.ts). */
+  linkClasses: (links: DirectoryLink[]) => Promise<void>;
   /** Reloads the workspace from the server; resolves false when that failed (the error is shown by the shell). */
   refresh: () => Promise<boolean>;
   /** `replace` swaps the current history entry (for stripping one-shot params) and keeps the scroll position. */

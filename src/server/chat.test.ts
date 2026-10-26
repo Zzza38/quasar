@@ -518,7 +518,7 @@ describe('9. reports', () => {
 describe('10. what the owner can see', () => {
   it('pins the admin procedure list', () => {
     expect(Object.keys(appRouter._def.procedures).filter(key => key.startsWith('admin.')).sort()).toEqual([
-      'schools', 'update', 'requests', 'resolveRequest', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
+      'schools', 'update', 'requests', 'resolveRequest', 'resolveMerge', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
       'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses', 'bans', 'liftBan',
       'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
