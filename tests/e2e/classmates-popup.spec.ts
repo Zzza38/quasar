@@ -13,7 +13,8 @@ import type { StudentClass } from '../../src/domain/schedule';
 
 /**
  * A student with three friends in their period A class. Evan and Maya have Biology in STU 2 next; Ian has nothing
- * in period B, so it is his free period. The browser clock is fixed to Tuesday 2026-09-08 before school.
+ * in period B, so it is his free period. Ian alone also shares period C, the last of the day. The browser clock is
+ * fixed to Tuesday 2026-09-08 before school.
  */
 function seed() {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -30,7 +31,7 @@ function seed() {
     const art: StudentClass = { id: 'art', name: 'Digital Design', room: 'STU 4' };
     const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>) =>
       service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
-    setClasses(me, [art], { A: 'art' });
+    setClasses(me, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
     setClasses(evan, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
     setClasses(maya, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
     setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
@@ -84,6 +85,16 @@ test('classmates popup beta: the chip shows faces and opens every friend in the 
     await expect(after.getByRole('listitem').nth(1)).toContainText('Free');
     await expect(after.getByRole('listitem').nth(1)).toContainText('Ian');
     await page.screenshot({ path: testInfo.outputPath('classmates-popup-phone.png') });
+
+    // One friend gets a single row: face, name and where they go next.
+    await page.keyboard.press('Escape');
+    const single = page.getByRole('button', { name: 'In this class with Ian', exact: true });
+    await expect(single).toContainText('With Ian');
+    await single.click();
+    await expect(popup.getByRole('button', { name: 'Ian' })).toContainText('Done for today');
+    await expect(popup.getByRole('region', { name: 'After class' })).toHaveCount(0);
+    await expect(popup.getByRole('button', { name: 'Open People' })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('classmates-popup-single.png') });
 
     // Escape closes it; a face opens that friend on People.
     await page.keyboard.press('Escape');
