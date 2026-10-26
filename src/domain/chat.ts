@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { censorSlurs } from './chat-filter';
+import { censorSlurs, joinsIntoSlur } from './chat-filter';
 
 /**
  * Phase-4 chat rules shared by the client and the server (docs/CHAT.md §3.3, §3.6, §5).
@@ -85,11 +85,27 @@ export function linkParts(text: string): Array<{ text: string; href?: string }> 
 /**
  * The stored form of a message (§11): slurs censored to asterisks everywhere except inside the https links that
  * linkParts finds, which are kept whole so their address still works. A slur-shaped path segment or host label
- * ("…/wiki/Coon_Rapids") is only hidden where the link is shown, by censoredLinkParts.
+ * ("…/wiki/Coon_Rapids") is only hidden where the link is shown, by censoredLinkParts. A second pass reads the text
+ * without its markdown markers, the way the bubble shows it, so a slur split by styling ("n**igg**er",
+ * "ni~~gg~~er", "nig`g`er") is censored too. A run of lines holding one word each is read as one word down the
+ * bubble, so "nig\nger" is caught while "got wet\nback home" is not, and so is a word broken across a line inside
+ * a sentence ("hey ni\ngga dude"; see joinsIntoSlur).
  */
 export function censorBody(text: string): string {
-  return linkParts(text).map(part => (part.href ? part.text : censorSlurs(part.text))).join('');
+  return linkParts(text).map((part) => {
+    if (part.href) return part.text;
+    return censorSlurs(censorSlurs(part.text), { ignore: MARKDOWN_MARKER })
+      .replace(STACKED_WORDS, lines => censorSlurs(lines, { ignore: STACKED_GAP }))
+      .replace(BROKEN_WORD, (pair, before: string, after: string) => (joinsIntoSlur(before.replace(MARKDOWN_MARKERS, ''), after.replace(MARKDOWN_MARKERS, '')) ? censorSlurs(pair, { ignore: STACKED_GAP }) : pair));
+  }).join('');
 }
+const MARKDOWN_MARKER = /[*_~`]/;
+/** Two or more lines in a row that hold one word each. */
+const STACKED_WORDS = /(?<![^\n])[^\S\n]*\S+[^\S\n]*(?:\n[^\S\n]*\S+[^\S\n]*)+(?![^\n])/g;
+const STACKED_GAP = /[\s*_~`]/;
+const MARKDOWN_MARKERS = /[*_~`]/g;
+/** The last word of a line and the first word of the next. */
+const BROKEN_WORD = /(?<!\S)(\S+)[^\S\n]*\n[^\S\n]*(\S+)(?!\S)/g;
 
 /**
  * linkParts for display: every run's visible text is censored, a link's too, but a link's href keeps the real
