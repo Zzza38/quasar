@@ -5,6 +5,7 @@ import { clampDate, dateSchema, describeDayIssues, FIRST_DATE, LAST_DATE, resolv
 import { addDays, formatDate, formatRange, monthGrid, monthOf, relativeDate, sameMonth, weekdayOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState } from '../app-state';
+import { useBeta } from '../betas';
 import { Icon } from '../icon';
 import { editSchedule, ScheduleLockButton } from '../schedule-lock';
 import { DateAdjustmentSheet, effectiveSchedule } from '../overrides';
@@ -19,6 +20,7 @@ const WEEKDAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function ScheduleView({ state }: { state: AppState }) {
   const { schedule: school, personal, now, today } = state;
+  const calmDays = useBeta('month-days');
   const schedule = effectiveSchedule(school, personal);
   const requested = state.params.get('date');
   // Only an explicit pick is stored, so the default follows state.today when the app resumes on a later day.
@@ -91,13 +93,21 @@ export function ScheduleView({ state }: { state: AppState }) {
             const label = `${formatDate(entry, { weekday: 'long' })}: ${!day ? 'outside the supported dates' : day.closed ? 'no school' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`}${dueCount ? `, ${dueCount} due` : ''}${adjusted.has(entry) ? ', adjusted by you' : ''}`;
             return <button key={entry} type="button" aria-pressed={active} aria-label={label} onClick={() => pickDate(entry)}
               className={cn('relative grid min-h-[3rem] content-center justify-items-center gap-px rounded-lg px-0.5 pt-1 pb-2 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[3.5rem]',
-                active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/60' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
-              {/* Today is the one filled number; the selected day is the tinted cell. Together they still read as one shape. */}
-              <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums', isToday && 'bg-primary text-primary-foreground')}>{Number(entry.slice(8))}</span>
+                calmDays
+                  ? cn(isToday && (active ? 'bg-foreground/[0.09]' : 'bg-foreground/[0.06]'), active ? 'inset-ring-[1.5px] inset-ring-control-border' : !isToday && 'hover:bg-muted')
+                  : active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/60' : 'hover:bg-muted',
+                !inMonth && 'opacity-40', inMonth && closed && !active && !(calmDays && isToday) && 'text-muted-foreground')}>
+              {/* Today is the one filled number; the selected day is the tinted cell. Together they still read as one shape.
+                  In the month-days beta, today is a grey tile with a short underline and the selected day a grey outline. */}
+              <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums',
+                isToday && (calmDays ? 'relative font-extrabold after:absolute after:-bottom-px after:left-1/2 after:h-0.5 after:w-3.5 after:-translate-x-1/2 after:rounded-full after:bg-primary' : 'bg-primary text-primary-foreground'))}>{Number(entry.slice(8))}</span>
               {/* Phones drop the word so "Day 10" fits in a 48px column; "A"/"B" style labels show unchanged. */}
               <small className={cn('h-[15px] max-w-full truncate text-[10.5px] font-semibold leading-[15px]', !active && 'text-muted-foreground')}><span className="max-sm:hidden">{caption}</span><span className="sm:hidden">{caption.replace(/^Day\s+/i, '')}</span></small>
-              {dueCount ? <span aria-hidden="true" className="absolute bottom-1 size-1.5 rounded-full bg-primary" /> : null}
-              {adjusted.has(entry) && <Icon name="edit" size={9} aria-hidden="true" className="absolute top-1 right-1 text-muted-foreground" />}
+              {/* Beta: a bracket in the top-right corner, concentric with the cell's 14px radius (3px in, 11px radius), with round caps. */}
+              {dueCount ? calmDays
+                ? <span aria-hidden="true" className="absolute top-[3px] right-[3px] size-3.5 rounded-tr-[11px] border-t-2 border-r-2 border-primary before:absolute before:-top-0.5 before:-left-px before:size-0.5 before:rounded-full before:bg-primary after:absolute after:-right-0.5 after:-bottom-px after:size-0.5 after:rounded-full after:bg-primary" />
+                : <span aria-hidden="true" className="absolute bottom-1 size-1.5 rounded-full bg-primary" /> : null}
+              {adjusted.has(entry) && <Icon name="edit" size={9} aria-hidden="true" className={cn('absolute top-1 text-muted-foreground', calmDays ? 'left-1' : 'right-1')} />}
             </button>;
           })}
         </div>
