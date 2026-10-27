@@ -19,7 +19,7 @@ export function applyDirectoryLinks(personal: PersonalSchedule, links: Directory
   return changed ? { ...personal, classes } : null;
 }
 
-const signature = (accountId: string, cls: StudentClass) => JSON.stringify([accountId, cls.id, cls.name, cls.teacher ?? '', cls.room ?? '']);
+const signature = (accountId: string, cls: StudentClass) => JSON.stringify([accountId, cls.id, cls.name, cls.teacher ?? '', cls.room ?? '', cls.directoryId ?? '']);
 
 /**
  * Publishes the student's unlinked classes to the school directory while online and links each to its entry, so
@@ -42,13 +42,14 @@ export function useDirectoryLinks({ accountId, schoolId, personal, readable, onl
   const sent = useRef(new Set<string>());
   useEffect(() => {
     if (!enabled || !online || !readable || !schoolId) return;
-    const pending = personal.classes.filter(cls => !cls.directoryId && cls.name.trim() && (cls.teacher?.trim() || cls.room?.trim()) && !sent.current.has(signature(accountId, cls)));
+    // Linked classes go too, once per session: the server skips live links and relinks ones to a removed entry.
+    const pending = personal.classes.filter(cls => cls.name.trim() && (cls.teacher?.trim() || cls.room?.trim()) && !sent.current.has(signature(accountId, cls)));
     if (!pending.length) return;
     // A short wait lets a burst of edits (an import, a sync) settle into one request.
     const timer = setTimeout(() => {
       const keys = pending.map(cls => signature(accountId, cls));
       for (const key of keys) sent.current.add(key);
-      api.directory.publish.mutate({ accountId, schoolId, grade: personal.grade, classes: pending.map(({ id, name, teacher, room }) => ({ id, name, teacher, room })) })
+      api.directory.publish.mutate({ accountId, schoolId, grade: personal.grade, classes: pending.map(({ id, name, teacher, room, directoryId }) => ({ id, name, teacher, room, directoryId })) })
         .then(({ links }) => link(links.map(entry => ({ ...entry, name: pending.find(cls => cls.id === entry.id)?.name }))))
         .catch(() => { for (const key of keys) sent.current.delete(key); });
     }, 1500);

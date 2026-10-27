@@ -282,6 +282,16 @@ describe('merge requests for support', () => {
     expect(f.classes(f.student)[0].directoryId).toBe(theirs.id);
   });
 
+  it('publishing relinks a class whose entry was removed', () => {
+    const f = school();
+    const spanish = { name: 'Honors Spanish 2', teacher: 'Rut Lloves', room: '303' };
+    const old = f.directory.save(f.owner, { schoolId: f.school.id, details: { ...spanish, name: 'Spanish 2H', grades: ['9'] } });
+    f.directory.remove(f.owner, { schoolId: f.school.id, id: old.id, expectedVersion: old.version });
+    const live = f.directory.save(f.owner, { schoolId: f.school.id, details: { ...spanish, grades: ['9'] } });
+    const links = f.directory.publish(f.friend, { schoolId: f.school.id, grade: '9', classes: [{ id: 'spanish', ...spanish, directoryId: old.id }, { id: 'live', ...spanish, directoryId: live.id }] }).links;
+    expect(links).toEqual([{ id: 'spanish', directoryId: live.id }]);
+  });
+
   it('keeping them separate drops the spelling, unlinks only its classes and refuses the same link again', () => {
     const f = school();
     const entry = f.directory.publish(f.student, { schoolId: f.school.id, grade: '9', classes: [{ id: 'lit', ...lit }] }).links[0];

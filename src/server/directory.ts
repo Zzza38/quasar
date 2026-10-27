@@ -129,6 +129,7 @@ export class DirectoryService {
       const entries = all.filter(entry => !input.grade || entry.grades.includes(input.grade));
       const links: Array<{ id: string; directoryId: string }> = [];
       for (const cls of input.classes) {
+        // A link to a removed entry counts as none, so the class is linked again.
         if (cls.directoryId && known.has(cls.directoryId)) continue;
         // Without a teacher or room an entry would match every section of the course, so those classes keep matching by name.
         if (!cls.name.trim() || isFreePeriodName(cls.name) || (!cls.teacher?.trim() && !cls.room?.trim())) continue;
@@ -270,6 +271,7 @@ export class DirectoryService {
       const result = this.service.db.prepare('UPDATE school_classes SET deleted=1,version=version+1,updated_at=? WHERE id=? AND school_id=? AND version=? AND deleted=0')
         .run(new Date().toISOString(), input.id, input.schoolId, input.expectedVersion);
       if (!result.changes) throw new TRPCError({ code: 'CONFLICT', message: 'This directory class changed or was removed. Reload the directory.' });
+      // Students' classes keep the link (no one's saved schedule changes); matching treats a link to a removed entry as none.
       this.audit(accountId, input.schoolId, 'directory.remove', { id: input.id, version: input.expectedVersion + 1 });
     }).immediate();
   }

@@ -286,8 +286,12 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const mine = state.personal;
   const { directory, reload: reloadDirectory } = useClassDirectory(profile?.sameSchool ? profile.school.id : '', state.online);
   const [notSame, setNotSame] = useState(() => readNotSame(accountId));
-  /** A class without a directory link still belongs to the entry it resolves to (its name or a confirmed alias). */
-  const linked = (cls: ClassLike): ClassLike => cls.directoryId || !directory ? cls : { ...cls, directoryId: resolveDirectoryEntry(cls, directory.classes)?.id };
+  /**
+   * The entry a class belongs to. A class without a link, or linked to an entry support removed, belongs to the entry
+   * its name, teacher and room resolve to (a confirmed alias counts), or to none, and then matches by name.
+   */
+  const linked = (cls: ClassLike): ClassLike => !directory || (cls.directoryId && directory.classes.some(entry => entry.id === cls.directoryId)) ? cls
+    : { ...cls, directoryId: resolveDirectoryEntry(cls, directory.classes)?.id };
   const match = (own: ClassLike, theirs: ClassLike) => sameClass(own, theirs) || sameClass(linked(own), linked(theirs));
   /**
    * True when I have the same class in this period (same directory entry, or the same words in any order). Only at
