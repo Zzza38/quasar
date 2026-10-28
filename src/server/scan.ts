@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { effectiveSchedule, personalScheduleSchema, emptyPersonalSchedule, type Schedule } from '@/domain/schedule';
 import { classKey, directoryCandidates } from '@/domain/class-match';
 import { DirectoryService, type DirectoryClass } from './directory';
+import type { ScanCloseUp, ScanReporter } from './scan-progress';
 import type { Service } from './service';
 
 /**
@@ -66,6 +67,8 @@ export const MAX_SCAN_TEXT = 12_000;
 const scanImagesSchema = z.object({
   images: z.array(scanImageSchema).min(1, 'Add a photo of your timetable.').max(MAX_SCAN_IMAGES, 'You can add up to three photos.'),
   text: z.string().max(MAX_SCAN_TEXT, 'The PDF has too much text to be a schedule.').optional(),
+  /** The browser's ID for polling scan.progress while this scan runs. */
+  progressId: z.uuid().optional(),
 });
 /**
  * Accepts { images: [...] } and the legacy single-photo shape { mediaType, image },
@@ -180,7 +183,8 @@ export class ScanService {
   constructor(private readonly service: Service, private readonly config: ScanConfig | null = scanConfig(), private readonly fetcher: ScanFetch = fetch) {}
   enabled(): boolean { return this.config !== null; }
 
-  async scan(accountId: string, raw: ScanInput): Promise<ScanResult> {
+  /** `report` hears each step (see scan-progress.ts), so the browser can show the scan moving. */
+  async scan(accountId: string, raw: ScanInput, report: ScanReporter = () => {}): Promise<ScanResult> {
     if (!this.config) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Schedule scanning is not set up on this server.' });
     const input = scanInputSchema.parse(raw);
     const user = this.service.ready(accountId);
@@ -192,7 +196,8 @@ export class ScanService {
     const directory = new DirectoryService(this.service).list(accountId, school.id).classes.filter(entry => !personal.grade || entry.grades.includes(personal.grade));
 
     this.reserve(accountId, school.id, input.images.length);
-    const body = await this.request(input, schedule, directory);
+    const body = await this.request(input, schedule, directory, report);
+    report({ stage: 'checking', round: 0, closeUps: [] });
     return this.interpret(body, schedule, directory, input.images.length);
   }
 
@@ -210,7 +215,7 @@ export class ScanService {
    * Asks the model, letting it request close-ups for up to MAX_ZOOM_ROUNDS rounds, and returns its final answer.
    * Close-ups go back as a user message after the tool results, because chat-completions tool results are text only.
    */
-  private async request(input: ScanRequest, schedule: Schedule, directory: DirectoryClass[]): Promise<string> {
+  private async request(input: ScanRequest, schedule: Schedule, directory: DirectoryClass[], report: ScanReporter): Promise<string> {
     const config = this.config!;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), SCAN_DEADLINE_MS);
@@ -223,9 +228,11 @@ export class ScanService {
       ] },
     ];
     let closeUps = 0;
+    const regions: ScanCloseUp[] = [];
     try {
       for (let round = 0; ; round++) {
         const zoom = config.zoom !== false && round < MAX_ZOOM_ROUNDS && closeUps < MAX_CLOSE_UPS;
+        report({ stage: 'reading', round, closeUps: [...regions] });
         const message = await this.complete(messages, controller.signal, zoom);
         const calls = zoom ? (message.tool_calls ?? []).slice(0, MAX_CLOSE_UPS - closeUps) : [];
         if (calls.length === 0) {
@@ -236,6 +243,7 @@ export class ScanService {
         }
         // Every requested call needs a tool result, including any past the close-up limit.
         messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : null, tool_calls: message.tool_calls });
+        report({ stage: 'zooming', round, closeUps: [...regions] });
         const images: unknown[] = [];
         for (const call of message.tool_calls ?? []) {
           let result = 'No more close-ups are available. Answer with what you can read.';
@@ -247,6 +255,7 @@ export class ScanService {
               if (!photo) throw new Error('no such photo');
               const image = await closeUp(photo, region);
               closeUps += 1;
+              regions.push({ photo: region.photo, left: region.left, top: region.top, width: region.width, height: region.height, ...(region.enhance ? { enhance: true } : {}), ...(region.rotate ? { rotate: region.rotate } : {}) });
               images.push({ type: 'text', text: `Close-up ${closeUps}: photo ${region.photo}, left ${region.left}, top ${region.top}, width ${region.width}, height ${region.height}${region.enhance ? ', enhanced' : ''}${region.rotate ? `, rotated ${region.rotate}°` : ''}.` },
                 { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}`, detail: 'high' } });
               result = `Close-up ${closeUps} is attached in the next message.`;
