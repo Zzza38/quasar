@@ -1,3 +1,4 @@
+import { chatImageSchema } from '@/domain/chat';
 import { notifyChat } from './chat-events';
 import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
@@ -56,7 +57,7 @@ export type GroupSummary = {
 
 type GroupRow = { id: string; name: string; creator_id: string; revision: number; last_message_at: string | null; created_at: string };
 type MemberRow = { group_id: string; user_id: string; role: GroupRole; joined_at: string; left_at: string | null; last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
-type MessageRow = { reply_to_seq: number | null; seq: number; id: string; group_id: string; sender_id: string; body: string; created_at: string; deleted_at: string | null; deleted_by: GroupDeletedBy; revision: number;
+type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; group_id: string; sender_id: string; body: string; created_at: string; deleted_at: string | null; deleted_by: GroupDeletedBy; revision: number;
   display_name: string; verified: number; google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type PersonRow = AvatarRow & { display_name: string; school_id: string | null; verified: number };
 
@@ -72,7 +73,7 @@ export const groupThreadSchema = groupIdSchema.extend({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const groupSendSchema = groupIdSchema.extend({ clientId: z.uuid(), body: rawBodySchema, replyTo: replySchema });
+export const groupSendSchema = groupIdSchema.extend({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
 export const groupReactSchema = groupIdSchema.extend(reactionSchema.shape);
 export const groupDeleteSchema = groupIdSchema.extend({ messageId: z.uuid() });
 export const groupReadSchema = groupIdSchema.extend({ seq: z.number().int().min(0) });
@@ -288,7 +289,7 @@ export class GroupChatService {
         return {
           id: group.id, name: group.name, memberCount: members.length, role: group.role,
           members: members.filter(member => member.id !== viewerId).slice(0, 4).map(member => ({ id: member.id, displayName: member.displayName, avatar: member.avatar })),
-          lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
+          lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
           lastAt: last?.created_at ?? group.created_at,
           unread: (unread.get(viewerId, group.id, group.last_read_seq, viewerId) as { n: number }).n,
           muted: !!group.muted,
@@ -332,9 +333,9 @@ export class GroupChatService {
 
   /* ---------- Writing ---------- */
 
-  send(viewerId: string, groupId: string, clientId: string, raw: string, replyTo?: number): { message: GroupMessage } {
+  send(viewerId: string, groupId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GroupMessage } {
     const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
-    const problem = bodyError(body);
+    const problem = bodyError(body, !!image);
     if (problem) fail('BAD_REQUEST', problem);
     let recipients: string[] = [];
     const result = this.db.transaction(() => {
@@ -342,7 +343,7 @@ export class GroupChatService {
       recipients = (this.db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=? AND left_at IS NULL').all(groupId) as { user_id: string }[]).map(row => row.user_id);
       const existing = this.db.prepare(`${MESSAGE_SQL} WHERE c.id=?`).get(clientId) as MessageRow | undefined;
       if (existing) {
-        if (existing.sender_id !== viewerId || existing.group_id !== group.id || existing.body !== body || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if (existing.sender_id !== viewerId || existing.group_id !== group.id || existing.body !== body || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
@@ -353,6 +354,7 @@ export class GroupChatService {
       const revision = this.bumpRevision(group.id);
       const createdAt = this.iso();
       const { seq } = this.db.prepare('INSERT INTO chat_group_messages(id,group_id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?) RETURNING seq').get(clientId, group.id, viewerId, body, createdAt, revision, replyTo ?? null) as { seq: number };
+      if (image) this.db.prepare('UPDATE chat_group_messages SET image=? WHERE id=?').run(image, clientId);
       this.db.prepare('UPDATE chat_groups SET last_message_at=? WHERE id=?').run(createdAt, group.id);
       this.db.prepare('UPDATE chat_group_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), typing_until=NULL WHERE group_id=? AND user_id=?').run(seq, seq, group.id, viewerId);
       return { message: this.message(viewerId, this.find(group.id, clientId)!) };
@@ -443,10 +445,10 @@ export class GroupChatService {
       const anchor = this.db.prepare('SELECT * FROM chat_group_messages WHERE group_id=? AND seq=?').get(group.id, input.seq) as MessageRow | undefined;
       if (!anchor) return fail('NOT_FOUND', MISSING);
       if (anchor.sender_id === viewerId) fail('BAD_REQUEST', 'You cannot report your own message.');
-      if (!anchor.body) fail('BAD_REQUEST', NOTHING_TO_REPORT);
-      const item = (row: MessageRow, isAnchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === anchor.sender_id, senderId: row.sender_id, body: row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? (row.deleted_by === 'support' ? 'support' : 'sender') : null, anchor: isAnchor });
-      const before = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq<? AND body<>'' ORDER BY seq DESC LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceBefore) as MessageRow[];
-      const after = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq>? AND body<>'' ORDER BY seq LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceAfter) as MessageRow[];
+      if (!anchor.body && !anchor.image) fail('BAD_REQUEST', NOTHING_TO_REPORT);
+      const item = (row: MessageRow, isAnchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === anchor.sender_id, senderId: row.sender_id, body: row.body, image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? (row.deleted_by === 'support' ? 'support' : 'sender') : null, anchor: isAnchor });
+      const before = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq<? AND (body<>'' OR image IS NOT NULL) ORDER BY seq DESC LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceBefore) as MessageRow[];
+      const after = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq>? AND (body<>'' OR image IS NOT NULL) ORDER BY seq LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceAfter) as MessageRow[];
       const items = [...before.reverse().map(row => item(row)), item(anchor, true), ...after.map(row => item(row))];
       if (this.db.prepare('SELECT 1 FROM reports WHERE reporter_id=? AND group_id=? AND resolved_at IS NULL').get(viewerId, group.id)) fail('CONFLICT', 'You already reported this chat. Support will review it.');
       const open = this.db.prepare('SELECT count(*) n FROM reports WHERE reporter_id=? AND resolved_at IS NULL').get(viewerId) as { n: number };
@@ -466,7 +468,7 @@ export function pruneGroupChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM chat_group_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE chat_group_messages SET body='' WHERE deleted_at IS NOT NULL AND deleted_at < ? AND body <> ''").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE chat_group_messages SET body='', image=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL)").run(ago(CHAT.deletedTextDays));
     db.prepare('DELETE FROM chat_groups WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
   }).immediate();
 }

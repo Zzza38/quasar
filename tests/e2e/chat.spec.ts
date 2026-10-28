@@ -807,3 +807,38 @@ test('reporting a message with block closes the chat identically for both', asyn
   await expect(evidence.getByRole('listitem').filter({ hasText: 'Nobody wants you at lunch' })).toContainText('Reported message');
   await expect(evidence.getByRole('listitem').filter({ hasText: 'You are so annoying' })).not.toContainText('Reported message');
 });
+
+test('image messages preview, send without captions, open full size and stay private', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']] });
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto('/messages');
+  await alice.getByRole('button', { name: 'Open chat with Bob' }).click();
+  const { default: sharp } = await import('sharp');
+  const photo = await sharp({ create: { width: 2000, height: 1200, channels: 3, background: '#3478ab' } }).png().toBuffer();
+  await alice.getByLabel('Choose message image').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: photo });
+  await expect(alice.getByAltText('Image to send')).toBeVisible();
+  await alice.getByRole('button', { name: 'Remove image', exact: true }).click();
+  await expect(alice.getByAltText('Image to send')).toHaveCount(0);
+  await expect(alice.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await alice.getByLabel('Choose message image').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: photo });
+  await expect(alice.getByAltText('Image to send')).toBeVisible();
+  await alice.getByRole('button', { name: 'Send', exact: true }).click();
+  const log = alice.getByRole('log', { name: 'Messages with Bob' });
+  const image = log.getByAltText('Message attachment', { exact: true });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1600);
+  const url = await image.getAttribute('src');
+  await log.getByRole('button', { name: 'View image' }).click();
+  await expect(alice.getByAltText('Message attachment, full size')).toBeVisible();
+  await alice.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  const bob = await phone(browser, f.bob);
+  await bob.goto('/messages');
+  await bob.getByRole('button', { name: 'Open chat with Alice' }).click();
+  await expect(bob.getByRole('log').getByAltText('Message attachment', { exact: true })).toBeVisible();
+  expect((await bob.request.get(url!)).status()).toBe(200);
+  const cara = await signedIn(browser, f.cara);
+  expect((await cara.request.get(url!)).status()).toBe(404);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { new CommunityService(new Service(db, OWNER_EMAIL)).block(f.bob, f.alice, true); } finally { db.close(); }
+  expect((await bob.request.get(url!)).status()).toBe(404);
+});

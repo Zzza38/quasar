@@ -21,8 +21,8 @@ export function reactionLabel(reaction: MessageReaction): string {
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */
-export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; sender?: { displayName: string } }, peerName: string): MessageReply {
-  const preview = message.body === null ? null : censorSlurs(plainText(message.body)).replace(/\s+/g, ' ').trim().slice(0, 140);
+export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; image?: string | null; sender?: { displayName: string } }, peerName: string): MessageReply {
+  const preview = message.body === null ? null : censorSlurs(plainText(message.body)).replace(/\s+/g, ' ').trim().slice(0, 140) || (message.image ? 'Photo' : '');
   return { seq: message.seq, fromMe: message.fromMe, senderName: message.sender?.displayName ?? peerName, preview };
 }
 
@@ -31,7 +31,7 @@ export function quoteName(reply: MessageReply): string {
   return reply.fromMe ? 'You' : reply.senderName || 'Someone';
 }
 
-type QuotableRow = { seq: number; fromMe: boolean; body: string | null; deletedBy: string | null; sender?: { displayName: string } };
+type QuotableRow = { seq: number; fromMe: boolean; body: string | null; deletedBy: string | null; image?: string | null; sender?: { displayName: string } };
 
 /**
  * The quote the composer's strip and a pending bubble show for a reply target right now. `reply` is the snapshot
