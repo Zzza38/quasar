@@ -105,15 +105,39 @@ export function classSearchScore(query: string, name: string): number | null {
 }
 
 export type DirectoryDetails = { name: string; teacher?: string; room?: string };
+/** A directory entry may also list other spellings students confirmed as the same class. */
+export type DirectoryEntryDetails = DirectoryDetails & { aliases?: DirectoryDetails[] };
 
-/** Printed teacher/room conflicts keep separate sections from being automatically linked. */
-export function directoryCandidates<T extends DirectoryDetails>(printed: DirectoryDetails, entries: T[]): { matches: T[]; similar: T[] } {
-  const compatible = entries.filter(entry => (['teacher', 'room'] as const).every(field => !printed[field]?.trim() || !entry[field]?.trim() || classKey(printed[field]!) === classKey(entry[field]!)));
-  return {
-    matches: compatible.filter(entry => couldBeClass(printed.name, entry.name)),
-    similar: compatible.filter(entry => !couldBeClass(printed.name, entry.name) && similarClassName(printed.name, entry.name)),
-  };
+/** The entry's own details first, then each alias, which inherits the teacher and room it leaves out. */
+export function directoryForms(entry: DirectoryEntryDetails): DirectoryDetails[] {
+  return [entry, ...(entry.aliases ?? []).map(alias => ({ name: alias.name, teacher: alias.teacher ?? entry.teacher, room: alias.room ?? entry.room }))];
 }
+
+/** Printed teacher/room conflicts keep separate sections from being automatically linked. Aliases match like names. */
+export function directoryCandidates<T extends DirectoryEntryDetails>(printed: DirectoryDetails, entries: T[]): { matches: T[]; similar: T[] } {
+  const compatible = (form: DirectoryDetails) => (['teacher', 'room'] as const).every(field => !printed[field]?.trim() || !form[field]?.trim() || classKey(printed[field]!) === classKey(form[field]!));
+  const fits = (entry: T, test: (name: string) => boolean) => directoryForms(entry).some(form => compatible(form) && test(form.name));
+  const matches = entries.filter(entry => fits(entry, name => couldBeClass(printed.name, name)));
+  return { matches, similar: entries.filter(entry => !matches.includes(entry) && fits(entry, name => similarClassName(printed.name, name))) };
+}
+
+/**
+ * The one directory entry a class belongs to: a single match, or, among several, the only one with the same words
+ * (in its name or an alias). Typos and ambiguous sections resolve to nothing.
+ */
+export function resolveDirectoryEntry<T extends DirectoryEntryDetails>(printed: DirectoryDetails, entries: T[]): T | undefined {
+  const { matches } = directoryCandidates(printed, entries);
+  if (matches.length <= 1) return matches[0];
+  const exact = matches.filter(entry => directoryForms(entry).some(form => classKey(form.name) === classKey(printed.name)));
+  return exact.length === 1 ? exact[0] : undefined;
+}
+
+/**
+ * Cells a timetable prints instead of a class when the student has none ("Unassigned", "Free", "Free period").
+ * These are free periods, never classes for the timetable or the directory.
+ */
+const FREE_NAMES = new Set(['unassigned', 'unassigned period', 'unassigned block', 'free', 'free period', 'free block', 'open', 'open period', 'open block', 'no class', 'unscheduled']);
+export const isFreePeriodName = (name: string) => FREE_NAMES.has(name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, ' ').trim());
 
 const TITLES = new Set(['mr', 'mrs', 'ms', 'mx', 'miss', 'dr', 'prof', 'sr', 'sra', 'srta', 'mme', 'mlle']);
 
@@ -151,6 +175,20 @@ export function sameClass(left: ClassLike, right: ClassLike): boolean {
   if (left.directoryId && right.directoryId) return left.directoryId === right.directoryId;
   const key = classKey(left.name);
   return key !== '' && key === classKey(right.name) && sameSection(left, right);
+}
+
+/**
+ * sameClass that also follows the school directory. A class without a link, or linked to an entry support removed,
+ * belongs to the entry its name, teacher and room resolve to (a confirmed alias counts), so "Foundations in
+ * Literature: Inquiry and Analysis E" meets the entry it was confirmed as. Two classes the plain rule matches still
+ * match, so a link never hides a name match.
+ */
+export function classMatcher(entries: ReadonlyArray<DirectoryEntryDetails & { id: string }> | null | undefined): (left: ClassLike, right: ClassLike) => boolean {
+  if (!entries?.length) return sameClass;
+  const live = new Set(entries.map(entry => entry.id));
+  const linked = (cls: ClassLike): ClassLike => cls.directoryId && live.has(cls.directoryId) ? cls
+    : { ...cls, directoryId: resolveDirectoryEntry(cls, [...entries])?.id };
+  return (left, right) => sameClass(left, right) || sameClass(linked(left), linked(right));
 }
 
 /**

@@ -111,7 +111,7 @@ export class BetaService {
     const user = this.service.user(userId);
     const input = betaFeedbackSchema.parse(raw);
     if (!this.beta(input.key) || !this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(input.key, userId)) fail('BAD_REQUEST', 'You’re not in that beta any more.');
-    const open = this.db.prepare('SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL').get(userId) as { n: number };
+    const open = this.db.prepare("SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL AND kind<>'directory:merge'").get(userId) as { n: number };
     if (open.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     const detail: StoredBetaDiagnostics = { ...input.diagnostics, build: currentBuild() };
     this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind,detail) VALUES(?,?,?,?,?,?,?)')

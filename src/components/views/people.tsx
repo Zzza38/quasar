@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
-import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import { maybeSameClass, sameClass, type ClassLike } from '@/domain/class-match';
+import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import { classKey, classMatcher, maybeSameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
@@ -12,8 +12,10 @@ import { useBeta } from '../betas';
 import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
+import { useClassDirectory } from '../class-name-input';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Skeleton } from '../ui/skeleton';
 import { Timeline } from './today';
 
@@ -282,6 +284,10 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     try { return resolveDay(theirSchedule, date, profile.shared.personal); } catch { return null; }
   }, [theirSchedule, profile, date]);
   const mine = state.personal;
+  const { directory, reload: reloadDirectory } = useClassDirectory(profile?.sameSchool ? profile.school.id : '', state.online);
+  const [notSame, setNotSame] = useState(() => readNotSame(accountId));
+  // The directory fetched here is fresh after a "Same class" confirmation; offline, the copy the workspace holds.
+  const match = classMatcher(directory?.classes ?? (profile?.sameSchool ? state.context.community?.classDirectory : null));
   /**
    * True when I have the same class in this period (same directory entry, or the same words in any order). Only at
    * the same school: a friend who moved keeps the friendship, but their period ids belong to another timetable.
@@ -289,7 +295,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const togetherIn = (periodId: string, theirs: ClassLike) => {
     if (!profile?.sameSchool) return false;
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
-    return !!own && sameClass(own, theirs);
+    return !!own && match(own, theirs);
   };
   /** True when we sit in this class of theirs in at least one shared period. */
   const sharedClass = (cls: ClassLike & { id: string }) => Object.entries(profile?.shared?.personal.assignments ?? {}).some(([periodId, classId]) => classId === cls.id && togetherIn(periodId, cls));
@@ -300,8 +306,16 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const similarIn = (periodId: string, theirs: ClassLike) => {
     if (!profile?.sameSchool) return null;
     const own = mine.classes.find(cls => cls.id === mine.assignments[periodId]);
-    return own && maybeSameClass(own, theirs) ? own : null;
+    return own && !match(own, theirs) && maybeSameClass(own, theirs) && !notSame.includes(notSameKey(own, theirs)) ? own : null;
   };
+  const prompt = (own: StudentClass, theirs: ClassLike) => <SameClassPrompt own={own} theirs={theirs} name={name} disabled={!state.online || !state.personalValid}
+    onConfirm={async () => {
+      const result = await api.directory.confirmSame.mutate({ accountId, schoolId: profile!.school.id, grade: mine.grade,
+        mine: { name: own.name, teacher: own.teacher, room: own.room, directoryId: own.directoryId }, theirs: { name: theirs.name, teacher: theirs.teacher, room: theirs.room, directoryId: theirs.directoryId ?? undefined } });
+      await state.linkClasses([{ id: own.id, directoryId: result.directoryId, name: own.name }]);
+      reloadDirectory();
+    }}
+    onReject={() => setNotSame(rememberNotSame(accountId, notSameKey(own, theirs)))} />;
   /** My class that this class of theirs might be, from the first shared period where it could be. */
   const similarClass = (cls: ClassLike & { id: string }) => {
     if (sharedClass(cls)) return null;
@@ -346,7 +360,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
         <span className="min-w-0 flex-1"><strong className="line-clamp-2 text-sm font-bold leading-snug" title={cls.name}>{cls.name}</strong><Hint className="truncate">{[cls.room && formatRoom(cls.room), cls.teacher].filter(Boolean).join(' · ')}</Hint>
           {similar && <Hint>Same teacher and room as your {similar.name}. Might be the same class.</Hint>}</span>
         {together && <Chip tone="accent" icon="check" className="shrink-0">Together</Chip>}
-        {similar && <Chip tone="outline" icon="users" className="shrink-0">Same class?</Chip>}
+        {similar && <span className="shrink-0">{prompt(similar, cls)}</span>}
       </li>;
     })}</ul>}
   </Section>;
@@ -374,8 +388,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
           </div> : undefined}>
           {day && !day.closed && day.periods.length > 0 && <Timeline periods={day.periods} now={state.now} compact timeZone={profile.school.schedule.timeZone} tag={(period) => !period.class ? null
             : togetherIn(period.periodId, period.class) ? 'Together'
-            : similarIn(period.periodId, period.class) ? <Chip tone="outline" icon="users">Same class?</Chip>
-            : null} />}
+            : (() => { const own = similarIn(period.periodId, period.class); return own ? prompt(own, period.class) : null; })()} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
         {classesLast && classesSection}
@@ -408,4 +421,48 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </div>
     </>}
   </Modal>;
+}
+
+/** "Not the same" answers stay on this device, keyed by my class and the other spelling. Only class names are stored. */
+const notSameKey = (own: StudentClass, theirs: ClassLike) => `${own.id}|${classKey(theirs.name)}`;
+const notSameStorage = (accountId: string) => `quasar.notSameClass.${accountId}`;
+function readNotSame(accountId: string): string[] {
+  try { const value: unknown = JSON.parse(localStorage.getItem(notSameStorage(accountId)) ?? '[]'); return Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []; } catch { return []; }
+}
+function rememberNotSame(accountId: string, key: string): string[] {
+  const next = [...readNotSame(accountId).filter(entry => entry !== key), key].slice(-200);
+  try { localStorage.setItem(notSameStorage(accountId), JSON.stringify(next)); } catch { /* private mode: the question returns next time */ }
+  return next;
+}
+
+/**
+ * The "Same class?" chip opens this question. Same teacher, room and period make it nearly certain, so "Same class"
+ * leads: it links both spellings to one directory entry, and the chip turns into Together for every classmate.
+ */
+function SameClassPrompt({ own, theirs, name, disabled, onConfirm, onReject }: { own: StudentClass; theirs: ClassLike; name: string; disabled: boolean; onConfirm: () => Promise<void>; onReject: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const confirm = async () => {
+    setPending(true); setError('');
+    try { await onConfirm(); setOpen(false); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+  };
+  return <Popover open={open} onOpenChange={next => { if (!pending) { setOpen(next); setError(''); } }}>
+    <PopoverTrigger asChild>
+      <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" aria-label={`Same class as your ${own.name}?`}>
+        <Chip tone="outline" icon="users" className="cursor-pointer hover:bg-muted">Same class?</Chip>
+      </button>
+    </PopoverTrigger>
+    <PopoverContent side="bottom" align="start" collisionPadding={12} className="grid w-[19rem] gap-3 rounded-2xl">
+      <div className="grid gap-1">
+        <strong className="text-sm font-bold">Is this your {own.name}?</strong>
+        <Hint>{name} has “{theirs.name}” with the same teacher and room. Linking them shows you as together and helps classmates who spelled it differently.</Hint>
+      </div>
+      {error && <Hint tone="danger" role="alert">{error}</Hint>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="primary" icon="check" busy={pending} disabled={disabled} title={disabled ? 'Connect to link classes.' : undefined} onClick={() => void confirm()}>Same class</Button>
+        <Button size="sm" variant="ghost" disabled={pending} onClick={() => { onReject(); setOpen(false); }}>Not the same</Button>
+      </div>
+    </PopoverContent>
+  </Popover>;
 }
