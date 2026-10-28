@@ -178,6 +178,20 @@ export function sameClass(left: ClassLike, right: ClassLike): boolean {
 }
 
 /**
+ * sameClass that also follows the school directory. A class without a link, or linked to an entry support removed,
+ * belongs to the entry its name, teacher and room resolve to (a confirmed alias counts), so "Foundations in
+ * Literature: Inquiry and Analysis E" meets the entry it was confirmed as. Two classes the plain rule matches still
+ * match, so a link never hides a name match.
+ */
+export function classMatcher(entries: ReadonlyArray<DirectoryEntryDetails & { id: string }> | null | undefined): (left: ClassLike, right: ClassLike) => boolean {
+  if (!entries?.length) return sameClass;
+  const live = new Set(entries.map(entry => entry.id));
+  const linked = (cls: ClassLike): ClassLike => cls.directoryId && live.has(cls.directoryId) ? cls
+    : { ...cls, directoryId: resolveDirectoryEntry(cls, [...entries])?.id };
+  return (left, right) => sameClass(left, right) || sameClass(linked(left), linked(right));
+}
+
+/**
  * Could two classes that sameClass keeps apart still be one class? Only when both list a teacher and a room, both
  * agree, and the names are close: one abbreviates, reorders or adds words to the other, or has a small typo, at
  * compatible levels ("Foundations in Literature" / "Foundations in Literature: Inquiry and Analysis E"). Two

@@ -43,6 +43,18 @@ export const directoryImportSchema = z.object({
 type Row = { id: string; school_id: string; data: string; version: number; deleted: number };
 export type DirectoryClass = z.infer<typeof storedSchema> & { id: string; version: number };
 
+/**
+ * The school's directory as classMatcher reads it (names, teachers, rooms and confirmed aliases), sent with the
+ * workspace so friends' classes match through the directory on Today and People, offline too.
+ */
+export function directoryForMatching(db: Db, schoolId: string): Array<{ id: string; name: string; teacher?: string; room?: string; aliases?: Spelling[] }> {
+  const rows = db.prepare('SELECT id, data FROM school_classes WHERE school_id=? AND deleted=0 ORDER BY id').all(schoolId) as Array<Pick<Row, 'id' | 'data'>>;
+  return rows.map(row => {
+    const { name, teacher, room, aliases } = storedSchema.parse(JSON.parse(row.data));
+    return { id: row.id, name, teacher, room, ...(aliases?.length ? { aliases } : {}) };
+  });
+}
+
 export class DirectoryService {
   constructor(private readonly service: Service) {}
   /** `canAdd`: may add a new class. `canEdit`: may also change or remove existing ones. */

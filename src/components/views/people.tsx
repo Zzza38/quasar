@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
-import { classKey, maybeSameClass, resolveDirectoryEntry, sameClass, type ClassLike } from '@/domain/class-match';
+import { classKey, classMatcher, maybeSameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
@@ -286,13 +286,8 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
   const mine = state.personal;
   const { directory, reload: reloadDirectory } = useClassDirectory(profile?.sameSchool ? profile.school.id : '', state.online);
   const [notSame, setNotSame] = useState(() => readNotSame(accountId));
-  /**
-   * The entry a class belongs to. A class without a link, or linked to an entry support removed, belongs to the entry
-   * its name, teacher and room resolve to (a confirmed alias counts), or to none, and then matches by name.
-   */
-  const linked = (cls: ClassLike): ClassLike => !directory || (cls.directoryId && directory.classes.some(entry => entry.id === cls.directoryId)) ? cls
-    : { ...cls, directoryId: resolveDirectoryEntry(cls, directory.classes)?.id };
-  const match = (own: ClassLike, theirs: ClassLike) => sameClass(own, theirs) || sameClass(linked(own), linked(theirs));
+  // The directory fetched here is fresh after a "Same class" confirmation; offline, the copy the workspace holds.
+  const match = classMatcher(directory?.classes ?? (profile?.sameSchool ? state.context.community?.classDirectory : null));
   /**
    * True when I have the same class in this period (same directory entry, or the same words in any order). Only at
    * the same school: a friend who moved keeps the friendship, but their period ids belong to another timetable.

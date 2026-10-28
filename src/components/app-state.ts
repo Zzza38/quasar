@@ -26,8 +26,9 @@ export function persistedContext(workspace: Workspace | WorkspaceContext): Works
  * the context without a version; that copy is read as version 2 when it has `user.suggestedNames` (see cachedContext).
  * 3 adds `user.avatar` and the picture source (docs/CHAT.md §13) and `sanctions` (§14). 4 adds `scheduleFeed`, the
  * connected class schedule (src/server/schedule-feed.ts). 5 adds `betas`, the betas the account joined (src/server/betas.ts).
+ * 6 adds `community.classDirectory`, the school directory classmates are matched through (classMatcher).
  */
-export const CONTEXT_VERSION = 5;
+export const CONTEXT_VERSION = 6;
 
 /** The record written to the device store: persistedContext stamped with CONTEXT_VERSION. */
 export function storedContext(workspace: Workspace | WorkspaceContext): Record<string, unknown> {

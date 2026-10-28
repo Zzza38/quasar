@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classKey, couldBeClass, maybeSameClass, sameClass, sameTeacher, similarClassName, classSearchScore, directoryCandidates, isFreePeriodName, resolveDirectoryEntry } from './class-match';
+import { classKey, classMatcher, couldBeClass, maybeSameClass, sameClass, sameTeacher, similarClassName, classSearchScore, directoryCandidates, isFreePeriodName, resolveDirectoryEntry } from './class-match';
 
 describe('directory name suggestions', () => {
   it('suggests small typos and incomplete names without making them automatic matches', () => {
@@ -42,6 +42,19 @@ describe('directory aliases', () => {
     expect(resolveDirectoryEntry({ name: 'Foundations of Literature' }, [lit, short])).toBe(short);
     expect(resolveDirectoryEntry({ name: 'Foundations of Literature' }, [short, { ...short, id: 'other', teacher: 'Erin Nolan' }])).toBeUndefined();
     expect(resolveDirectoryEntry({ name: 'Physics' }, [lit, short])).toBeUndefined();
+  });
+
+  it('matches a linked class and an unlinked confirmed spelling through the directory', () => {
+    const mine = { name: 'Foundations in Literature', teacher: 'Polly Duke', room: '406', directoryId: 'lit' };
+    const theirs = { name: 'Foundations of Literature: Inquiry and Analysis E', teacher: 'Polly Duke', room: '406' };
+    expect(sameClass(mine, theirs)).toBe(false);
+    expect(classMatcher([lit, short])(mine, theirs)).toBe(true);
+    expect(classMatcher([lit, short])({ ...mine, directoryId: 'removed' }, theirs)).toBe(true);
+    expect(classMatcher([lit, short])(mine, { ...theirs, teacher: 'Erin Nolan' })).toBe(false);
+    // Without a directory it is sameClass, and a name match still counts when links disagree.
+    expect(classMatcher(null)(mine, theirs)).toBe(false);
+    expect(classMatcher([lit, short])({ name: 'Biology', directoryId: 'lit' }, { name: 'Biology', directoryId: 'short' })).toBe(false);
+    expect(classMatcher([lit, short])({ name: 'Biology', teacher: 'Jeff Burt' }, { name: 'Biology', teacher: 'Jeff Burt', directoryId: 'gone' })).toBe(true);
   });
 
   it('knows free periods are not classes', () => {
