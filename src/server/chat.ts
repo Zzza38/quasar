@@ -1,3 +1,4 @@
+import { chatImageSchema } from '@/domain/chat';
 import { notifyChat } from './chat-events';
 import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
@@ -52,16 +53,16 @@ export type InboxRow =
       /** How the viewer can reopen it: lift their own block (then re-friend), send a friend request, or not at all (other school). */
       reopen: 'unblock' | 'friend' | null };
 export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
-export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; createdAt: string;
+export type EvidenceItem = { seq: number; senderName: string; fromReported: boolean; body: string; image?: string; createdAt: string;
   deletedBy: 'sender' | 'support' | null; anchor: boolean };
 /**
  * Stored snapshot item. It holds no names; showEvidence derives them when the owner views it: for a one-to-one chat from
  * `fromReported`, for a group (§12) from `senderId`, since a group snapshot holds other members' messages too.
  */
-export type StoredItem = { seq: number; fromReported: boolean; body: string; createdAt: string; deletedBy: 'sender' | 'support' | null; anchor: boolean; senderId?: string };
+export type StoredItem = { seq: number; fromReported: boolean; body: string; image?: string; createdAt: string; deletedBy: 'sender' | 'support' | null; anchor: boolean; senderId?: string };
 
 type ThreadRow = { id: string; user_low: string; user_high: string; revision: number; last_message_at: string | null; created_at: string };
-type MessageRow = { reply_to_seq: number | null; seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
+type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
   deleted_at: string | null; deleted_by: 'sender' | 'support' | null; revision: number };
 type PeerRow = AvatarRow & { display_name: string; full_name: string; school_id: string | null };
 type MemberRow = { last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
@@ -71,7 +72,7 @@ export const chatThreadSchema = chatUserSchema.extend({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: rawBodySchema, replyTo: replySchema });
+export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
 export const chatReactSchema = chatUserSchema.extend(reactionSchema.shape);
 export const chatDeleteSchema = chatUserSchema.extend({ messageId: z.uuid() });
 export const chatReadSchema = chatUserSchema.extend({ seq: z.number().int().min(0) });
@@ -90,9 +91,9 @@ export const pauseChatSchema = z.object({
 });
 
 /** Server side: normalizeBody, then slurs censored to asterisks outside https links (censorBody, §11), then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
-export function parseBody(raw: string): string {
+export function parseBody(raw: string, hasImage = false): string {
   const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
-  const problem = bodyError(body);
+  const problem = bodyError(body, hasImage);
   if (problem) fail('BAD_REQUEST', problem);
   return body;
 }
@@ -260,7 +261,7 @@ export class ChatService {
         if (last.sender_id !== viewerId && last.seq > (friend.delivered_seq ?? 0)) delivered.push({ threadId: friend.thread_id, seq: last.seq });
         open.push({ at: friend.last_message_at, row: {
           state: 'open', peer, muted,
-          lastMessage: { fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null },
+          lastMessage: { fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null },
           unread: (unread.get(friend.thread_id, friend.last_read_seq ?? 0, viewerId) as { n: number }).n,
         } });
       }
@@ -342,15 +343,15 @@ export class ChatService {
     return result;
   }
 
-  send(viewerId: string, otherId: string, clientId: string, raw: string, replyTo?: number): { message: ChatMessage } {
+  send(viewerId: string, otherId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: ChatMessage } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
-    const body = parseBody(raw);
+    const body = parseBody(raw, !!image);
     const result = this.db.transaction(() => {
       this.access(viewerId, otherId);
       const existing = this.db.prepare('SELECT * FROM chat_messages WHERE sender_id=? AND id=?').get(viewerId, clientId) as MessageRow | undefined;
       if (existing) {
         const thread = this.findThread(viewerId, otherId);
-        if (!thread || existing.thread_id !== thread.id || existing.body !== body || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if (!thread || existing.thread_id !== thread.id || existing.body !== body || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
@@ -368,9 +369,10 @@ export class ChatService {
       const revision = this.bumpRevision(thread.id);
       const createdAt = this.iso();
       const row = this.db.prepare('INSERT INTO chat_messages(id,thread_id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?) RETURNING *').get(clientId, thread.id, viewerId, body, createdAt, revision, replyTo ?? null) as MessageRow;
+      if (image) this.db.prepare('UPDATE chat_messages SET image=? WHERE seq=?').run(image, row.seq);
       this.db.prepare('UPDATE chat_threads SET last_message_at=? WHERE id=?').run(createdAt, thread.id);
       this.db.prepare('UPDATE chat_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), first_sent_at=coalesce(first_sent_at, ?), typing_until=NULL WHERE thread_id=? AND user_id=?').run(row.seq, row.seq, createdAt, thread.id, viewerId);
-      return { message: this.message(viewerId, row) };
+      return { message: this.message(viewerId, { ...row, image: image ?? null }) };
     }).immediate();
     notifyChat([otherId], { kind: 'peer', key: viewerId });
     return result;
@@ -445,17 +447,17 @@ export class ChatService {
     return this.db.transaction(() => {
       const thread = this.member(viewerId, otherId);
       let items: StoredItem[];
-      const item = (row: MessageRow, anchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === otherId, body: row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null, anchor });
+      const item = (row: MessageRow, anchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === otherId, body: row.body, image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null, anchor });
       if (input.seq !== undefined) {
         const anchor = this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? AND seq=?').get(thread.id, input.seq) as MessageRow | undefined;
         if (!anchor) return fail('NOT_FOUND', CLOSED);
         if (anchor.sender_id === viewerId) fail('BAD_REQUEST', 'You cannot report your own message.');
-        if (!anchor.body) fail('BAD_REQUEST', NOTHING_TO_REPORT);
-        const before = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND seq<? AND body<>'' ORDER BY seq DESC LIMIT ?").all(thread.id, anchor.seq, CHAT.evidenceBefore) as MessageRow[];
-        const after = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND seq>? AND body<>'' ORDER BY seq LIMIT ?").all(thread.id, anchor.seq, CHAT.evidenceAfter) as MessageRow[];
+        if (!anchor.body && !anchor.image) fail('BAD_REQUEST', NOTHING_TO_REPORT);
+        const before = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND seq<? AND (body<>'' OR image IS NOT NULL) ORDER BY seq DESC LIMIT ?").all(thread.id, anchor.seq, CHAT.evidenceBefore) as MessageRow[];
+        const after = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND seq>? AND (body<>'' OR image IS NOT NULL) ORDER BY seq LIMIT ?").all(thread.id, anchor.seq, CHAT.evidenceAfter) as MessageRow[];
         items = [...before.reverse().map(row => item(row)), item(anchor, true), ...after.map(row => item(row))];
       } else {
-        const latest = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND body<>'' ORDER BY seq DESC LIMIT ?").all(thread.id, CHAT.evidence) as MessageRow[];
+        const latest = this.db.prepare("SELECT * FROM chat_messages WHERE thread_id=? AND (body<>'' OR image IS NOT NULL) ORDER BY seq DESC LIMIT ?").all(thread.id, CHAT.evidence) as MessageRow[];
         items = latest.reverse().map(row => item(row));
       }
       if (!items.length) fail('BAD_REQUEST', NOTHING_TO_REPORT);
@@ -581,7 +583,7 @@ export function pruneChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM chat_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE chat_messages SET body='' WHERE deleted_at IS NOT NULL AND deleted_at < ? AND body <> ''").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE chat_messages SET body='', image=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL)").run(ago(CHAT.deletedTextDays));
     db.prepare('UPDATE reports SET evidence=NULL WHERE evidence IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at < ?').run(ago(CHAT.evidenceDays));
     db.prepare('DELETE FROM chat_threads WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
     db.prepare("DELETE FROM notification_deliveries WHERE entity_id='chat:messages' AND updated_at < ?").run(ago(2));

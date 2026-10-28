@@ -66,6 +66,7 @@ const SEND_RETRY_MS = 2_000;
 export type Outgoing = {
   clientId: string;
   body: string;
+  image?: string;
   /** The quoted message (docs/CHAT.md §15), kept so the pending bubble shows the quote before the server confirms it. */
   reply: MessageReply | null;
   status: 'pending' | 'failed';
@@ -176,10 +177,10 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
       const options = { signal: timeoutSignal(SEND_TIMEOUT_MS) };
       const replyTo = item.reply?.seq;
       const result = entry.target.kind === 'peer'
-        ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body, replyTo }, options)
+        ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
         : entry.target.kind === 'group'
-          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, replyTo }, options)
-          : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, replyTo }, options);
+          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
+          : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -243,15 +244,15 @@ export function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
 }
 
 /** Queues a new message behind any unsent ones and starts sending when nothing ahead of it failed. */
-export function enqueue(entry: ThreadMemory, body: string, reply: MessageReply | null = null) {
+export function enqueue(entry: ThreadMemory, body: string, reply: MessageReply | null = null, image?: string) {
   // Only Retry (or reconnecting, for network failures) resends a failed message, so a new message never
   // sends one the student left at "Not sent.". To keep the order, the new message waits behind them as
   // failed too, and Retry sends them all in order. It joins the automatic reconnect retry only when
   // everything ahead of it failed for network reasons, so it can never overtake a rate-limited message.
   const blocking = entry.outgoing.filter((item) => item.status === 'failed' && item.retryable);
   const item: Outgoing = blocking.length
-    ? { clientId: crypto.randomUUID(), body, reply, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
-    : { clientId: crypto.randomUUID(), body, reply, status: 'pending', retryable: true, network: false };
+    ? { clientId: crypto.randomUUID(), body, image, reply, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
+    : { clientId: crypto.randomUUID(), body, image, reply, status: 'pending', retryable: true, network: false };
   setOutgoing(entry, [...entry.outgoing, item]);
   if (item.status === 'pending') void pump(entry);
 }
@@ -731,7 +732,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const setReply = useCallback((reply: MessageReply | null) => { entry.reply = reply; emit(entry); }, [entry]);
 
   // A send clears the signal on the server too, so the flag only needs resetting here. It also consumes the reply target.
-  const send = useCallback((body: string) => { typingOn.current = false; const reply = entry.reply; entry.reply = null; enqueue(entry, body, reply); }, [entry]);
+  const send = useCallback((body: string, image?: string) => { typingOn.current = false; const reply = entry.reply; entry.reply = null; enqueue(entry, body, reply, image); }, [entry]);
   const retry = useCallback(() => { if (requeue(entry, false)) void pump(entry); }, [entry]);
   const discard = useCallback((clientId: string) => setOutgoing(entry, entry.outgoing.filter((item) => item.clientId !== clientId)), [entry]);
   const saveDraft = useCallback((text: string) => { entry.draft = text; }, [entry]);

@@ -7,6 +7,7 @@ import { censorSlurs, joinsIntoSlur } from './chat-filter';
  * values (see the message helpers below), so editing CHAT is enough to change a limit.
  */
 export const CHAT = {
+  imageMaxBytes: 1_000_000, imageMaxDimension: 1600,
   maxLength: 1000, reactionsPerMinute: 60, perMinute: 20, perDay: 500, newChatsPerDay: 20,
   page: 50, maxChanges: 200, evidence: 30, evidenceBefore: 15, evidenceAfter: 14,
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
@@ -50,8 +51,8 @@ export const COMPOSER_MAX_LENGTH = CHAT.maxLength + 100;
 /** Kept a fixed-shape union (the constant's annotation stops it widening to string) so no caller can return echoed input. */
 export type BodyError = 'Write a message first.' | typeof TOO_LONG_MESSAGE;
 /** Fixed-string problem for a normalized body, or null. Used by the composer (disable Send) and by ChatService. */
-export function bodyError(normalized: string): BodyError | null {
-  if (!normalized.replace(ZERO_WIDTH, '').trim()) return 'Write a message first.';
+export function bodyError(normalized: string, hasImage = false): BodyError | null {
+  if (!hasImage && !normalized.replace(ZERO_WIDTH, '').trim()) return 'Write a message first.';
   if (normalized.length > CHAT.maxLength) return TOO_LONG_MESSAGE;
   return null;
 }
@@ -139,4 +140,5 @@ export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'] as 
 export type Reaction = typeof REACTIONS[number];
 export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
 export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
-export type MessageExtras = { replyTo: MessageReply | null; reactions: MessageReaction[] };
+export const chatImageSchema = z.string().max(Math.ceil(CHAT.imageMaxBytes * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
+export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[] };

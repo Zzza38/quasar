@@ -386,3 +386,19 @@ it('cascades groups containing quotes and tapbacks', () => {
   expect(f.db.prepare('SELECT * FROM chat_group_reactions').all()).toEqual([]);
   expect(f.db.pragma('foreign_key_check')).toEqual([]);
 });
+
+it('image access follows group membership and image-only reports keep evidence', async () => {
+  const { prepareChatImage, readChatImage } = await import('./chat-images');
+  const { default: sharp } = await import('sharp');
+  const f = fixture();
+  const image = await prepareChatImage((await sharp({ create: { width: 16, height: 16, channels: 3, background: '#c45' } }).png().toBuffer()).toString('base64'));
+  const group = f.groups.create(f.alice, { name: 'Photos', memberIds: [f.bob] });
+  const sent = f.groups.send(f.alice, group.id, randomUUID(), '', undefined, image).message;
+  expect(readChatImage(f.service, f.bob, 'group', sent.seq)).not.toBeNull();
+  expect(readChatImage(f.service, f.cara, 'group', sent.seq)).toBeNull();
+  f.groups.report(f.bob, group.id, { category: 'other', note: '', block: false, seq: sent.seq });
+  const report = f.db.prepare('SELECT id FROM reports WHERE group_id=?').get(group.id) as { id: string };
+  expect(f.chat.showEvidence(f.owner, report.id).items.find(item => item.seq === sent.seq)?.image).toBe(`data:image/webp;base64,${image}`);
+  f.groups.leave(f.bob, group.id);
+  expect(readChatImage(f.service, f.bob, 'group', sent.seq)).toBeNull();
+});

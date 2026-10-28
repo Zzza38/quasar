@@ -1266,3 +1266,11 @@ CREATE INDEX chat_reaction_changes_user_time ON chat_reaction_changes(user_id, c
 
 
 SSE session and capacity handling: the server captures the signed session at connection, then revalidates its expiry, sign-in age, account suspension and session epoch before every event and every 25-second heartbeat. Invalid sessions receive a final `event: bye`, then the stream closes and leaves the bus. The client closes its EventSource and retries after a randomized 5 to 10 seconds. When the eight-stream account cap evicts the oldest stream, it sends `event: capacity` with `retry: 3600000` before closing. The client treats capacity as terminal, reports disconnected, and opens no replacement until the page has been hidden and becomes visible again, or the connection is manually recreated. Polling continues while SSE is disconnected.
+
+## Image messages
+
+Direct chats, friend groups and global chat accept one JPEG, PNG, WebP or GIF per message, with an optional text caption. GIFs become still images. The composer accepts files up to 20 MB, resizes them to at most 1,600 pixels per side and compresses them before upload. The server limits decoded uploads and stored images to 1 MB, re-encodes them as WebP and removes metadata. Caption limits and message rate limits still apply.
+
+Images are stored beside message text in SQLite and included in database backups. `/api/chat/images/<kind>/<seq>` requires a signed-in account and checks current message visibility on every request. Responses are private and not cached. Removing a friendship, blocking, leaving a group, or deleting a message revokes the corresponding image access. Group images follow the same join-time rule as message history.
+
+Reports freeze images with the surrounding message text. Support can see them only through the audited report view. Deleted images are purged with deleted text after 30 days; message retention and report evidence retention apply to images as well. Pending sends keep images only in memory and retry with the same client ID.

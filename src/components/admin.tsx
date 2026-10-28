@@ -296,6 +296,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
                 </div>
                 {/* Plain text only: no links, no markup. */}
                 <p className="whitespace-pre-wrap break-words text-sm">{item.body}</p>
+                {item.image && <img src={item.image} alt="Reported attachment" className="max-h-80 max-w-full rounded-lg object-contain" />}
                 {item.deletedBy !== 'support' && <div><Button size="sm" variant="ghost" busy={hiding === key} disabled={hiding !== null && hiding !== key} onClick={() => void hideMessage(report.id, item.seq)}>Hide message</Button></div>}
               </li>;
             })}</ol>}

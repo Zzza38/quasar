@@ -40,19 +40,21 @@ export function reactionsFor(db: Db, kind: Kind, viewer: string, seq: number): M
 /** Resolve quotes from a self-join at read time, never from a frozen copy of the target's text. */
 export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): MessageExtras {
   const [messages, , key] = tables[kind];
-  const row = db.prepare(`SELECT c.reply_to_seq, r.seq target_seq, r.sender_id, r.body, r.deleted_at, u.display_name,
+  const row = db.prepare(`SELECT c.reply_to_seq, r.seq target_seq, r.sender_id, r.body, r.image, r.deleted_at, u.display_name,
       ${key ? `c.${key}` : 'NULL'} scope
     FROM ${messages} c LEFT JOIN ${messages} r ON r.seq=c.reply_to_seq ${key ? `AND r.${key}=c.${key}` : ''}
     LEFT JOIN users u ON u.id=r.sender_id WHERE c.seq=?`).get(seq) as {
-      reply_to_seq: number | null; target_seq: number | null; sender_id: string | null; body: string | null;
+      reply_to_seq: number | null; target_seq: number | null; sender_id: string | null; body: string | null; image: string | null;
       deleted_at: string | null; display_name: string | null; scope: string | null;
     };
-  const visible = row.reply_to_seq !== null && row.target_seq !== null && !row.deleted_at && !!row.body
+  const visible = row.reply_to_seq !== null && row.target_seq !== null && !row.deleted_at && (!!row.body || !!row.image)
     && targetExists(db, kind, viewer, row.reply_to_seq, row.scope ?? undefined);
+  const attachment = db.prepare(`SELECT id, image, deleted_at FROM ${messages} WHERE seq=?`).get(seq) as { id: string; image: string | null; deleted_at: string | null };
   return {
+    image: attachment.image && !attachment.deleted_at ? `/api/chat/images/${kind}/${seq}` : null,
     replyTo: row.reply_to_seq === null ? null : {
       seq: row.reply_to_seq, fromMe: visible && row.sender_id === viewer, senderName: visible ? row.display_name ?? '' : '',
-      preview: visible ? censorSlurs(plainText(row.body!)).replace(/\s+/g, ' ').trim().slice(0, 140) : null,
+      preview: visible ? censorSlurs(plainText(row.body!)).replace(/\s+/g, ' ').trim().slice(0, 140) || (row.image ? 'Photo' : '') : null,
     },
     reactions: reactionsFor(db, kind, viewer, seq),
   };
