@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { GRADES, gradeLabel, resolveDay, type Grade, type PersonalSchedule, type ResolvedDay, type ResolvedPeriod, type Schedule, type StudentClass } from '@/domain/schedule';
-import { sameClass } from '@/domain/class-match';
+import { classMatcher, type ClassLike } from '@/domain/class-match';
 import { classColor, formatRoom, formatTime, pluralize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
@@ -35,12 +35,14 @@ type Props = { state: AppState; people: People; days: Map<string, FriendDay> };
 /** Where a friend is in their school day today, and the classes they share with the viewer. */
 type FriendDay = { kind: 'now' | 'next' | 'done' | 'off'; period: ResolvedPeriod | null; together: boolean; shared: StudentClass[] };
 
+type ClassMatch = (left: ClassLike, right: ClassLike) => boolean;
+
 function dayOf(schedule: Schedule, date: string, personal: PersonalSchedule): ResolvedDay | null {
   try { return resolveDay(schedule, date, personal); } catch { return null; }
 }
 
 /** My classes that a friend takes in the same period (the profile sheet's "in common" rule). */
-function sharedClasses(mine: PersonalSchedule, theirs: PersonalSchedule): StudentClass[] {
+function sharedClasses(mine: PersonalSchedule, theirs: PersonalSchedule, sameClass: ClassMatch): StudentClass[] {
   const shared = new Map<string, StudentClass>();
   for (const [periodId, classId] of Object.entries(mine.assignments)) {
     const own = mine.classes.find(cls => cls.id === classId);
@@ -57,13 +59,15 @@ function sharedClasses(mine: PersonalSchedule, theirs: PersonalSchedule): Studen
 function useFriendDays(state: AppState): Map<string, FriendDay> {
   const { context, schedule, personal, today, now } = state;
   const classmates = context.community?.classmates;
+  const classDirectory = context.community?.classDirectory;
   const schoolSchedule = context.school.schedule;
   return useMemo(() => {
+    const sameClass = classMatcher(classDirectory);
     const nowMs = now.getTime();
     const mine = dayOf(schedule, today, personal);
     const days = new Map<string, FriendDay>();
     for (const friend of classmates ?? []) {
-      const shared = sharedClasses(personal, friend.personal);
+      const shared = sharedClasses(personal, friend.personal, sameClass);
       const day = dayOf(schoolSchedule, today, friend.personal);
       if (!day || day.closed || !day.periods.length) { days.set(friend.id, { kind: 'off', period: null, together: false, shared }); continue; }
       const current = day.periods.find(period => new Date(period.startAt).getTime() <= nowMs && nowMs < new Date(period.endAt).getTime());
@@ -73,7 +77,7 @@ function useFriendDays(state: AppState): Map<string, FriendDay> {
       days.set(friend.id, { kind: current ? 'now' : next ? 'next' : 'done', period, together, shared });
     }
     return days;
-  }, [classmates, schoolSchedule, schedule, personal, today, now]);
+  }, [classmates, classDirectory, schoolSchedule, schedule, personal, today, now]);
 }
 
 const periodName = (period: ResolvedPeriod) => period.class?.name || period.label;
@@ -208,14 +212,14 @@ function NoFriends() {
 type ClassGroup = { kind: 'now' | 'next'; period: ResolvedPeriod; room: string | null; together: boolean; friends: Member[] };
 type IdleGroup = { kind: 'done' | 'off' | 'away'; friends: Member[] };
 
-/** The same class by directory entry or name (sameClass); a period with no class matches by its label. */
-function sameActivity(a: ResolvedPeriod, b: ResolvedPeriod): boolean {
+/** The same class by directory entry or name (classMatcher); a period with no class matches by its label. */
+function sameActivity(a: ResolvedPeriod, b: ResolvedPeriod, sameClass: ClassMatch): boolean {
   if (a.class && b.class) return sameClass(a.class, b.class);
   return !a.class && !b.class && a.kind === b.kind && a.label === b.label;
 }
 
 /** Groups friends by their current or next period. Classes running now come first, the viewer's own class first among them. */
-function groupByClass(friends: Member[], days: Map<string, FriendDay>): { classes: ClassGroup[]; idle: IdleGroup[] } {
+function groupByClass(friends: Member[], days: Map<string, FriendDay>, sameClass: ClassMatch): { classes: ClassGroup[]; idle: IdleGroup[] } {
   const classes: ClassGroup[] = [];
   const idle: Record<IdleGroup['kind'], Member[]> = { done: [], off: [], away: [] };
   for (const friend of [...friends].sort((a, b) => a.displayName.localeCompare(b.displayName))) {
@@ -223,7 +227,7 @@ function groupByClass(friends: Member[], days: Map<string, FriendDay>): { classe
     if (!day) { idle.away.push(friend); continue; }
     if ((day.kind === 'now' || day.kind === 'next') && day.period) {
       const period = day.period;
-      const group = classes.find(entry => entry.kind === day.kind && entry.period.startAt === period.startAt && sameActivity(entry.period, period));
+      const group = classes.find(entry => entry.kind === day.kind && entry.period.startAt === period.startAt && sameActivity(entry.period, period, sameClass));
       // Friends type rooms by hand, so the first one who entered a room names it for the card.
       if (group) { group.friends.push(friend); group.together ||= day.together; group.room ||= period.class?.room || null; }
       else classes.push({ kind: day.kind, period, room: period.class?.room || null, together: day.together, friends: [friend] });
@@ -281,7 +285,8 @@ const LIVE_LIST = 'divide-y divide-border overflow-hidden rounded-2xl bg-card sh
 function LiveDesign({ state, people, days }: Props) {
   const incoming = people.friends?.incoming ?? [];
   const friends = people.friends?.friends ?? [];
-  const { classes, idle } = useMemo(() => groupByClass(friends, days), [friends, days]);
+  const classDirectory = state.context.community?.classDirectory;
+  const { classes, idle } = useMemo(() => groupByClass(friends, days, classMatcher(classDirectory)), [friends, days, classDirectory]);
   const blocks = useMemo(() => byBlock(classes), [classes]);
   return <>
     {incoming.length > 0 && <section aria-labelledby="live-requests" className="grid gap-2.5">

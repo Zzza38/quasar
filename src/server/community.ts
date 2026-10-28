@@ -6,6 +6,7 @@ import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import { leaveAllGroups } from './group-chat';
 import { avatarUrl, type AvatarRow } from './avatars';
+import { directoryForMatching } from './directory';
 import type { Service, User } from './service';
 
 /**
@@ -353,18 +354,20 @@ export class CommunityService {
   isBanned(userId: string, schoolId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM school_bans WHERE school_id=? AND user_id=?').get(schoolId, userId);
   }
-  /** Summary counts for the workspace payload. */
-  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; unreadChats: number; unreadAt: string; chatPush: boolean } {
+  /** Summary counts for the workspace payload, with the school directory that classmates are matched through. */
+  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; classDirectory: ReturnType<typeof directoryForMatching>; unreadChats: number; unreadAt: string; chatPush: boolean } {
     const verification = this.verification(userId);
     const incoming = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='pending' AND requester_id<>? AND (user_low=? OR user_high=?)").get(userId, userId, userId) as { n: number };
     const friends = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='accepted' AND (user_low=? OR user_high=?)").get(userId, userId) as { n: number };
     const classmates = this.classmates(userId);
+    const schoolId = (this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined)?.school_id;
+    const classDirectory = schoolId ? directoryForMatching(this.db, schoolId) : [];
     // Same SQL as chat.inbox. It does not call ready(), so students still onboarding get 0. unreadAt is the
     // server's clock when the count was computed, so the client keeps whichever count is newest.
     const unreadChats = countUnreadChats(this.db, userId);
     const unreadAt = new Date().toISOString();
     const chatPush = (this.db.prepare('SELECT chat_push FROM users WHERE id=?').get(userId) as { chat_push: number } | undefined)?.chat_push !== 0;
-    return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, unreadChats, unreadAt, chatPush };
+    return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, classDirectory, unreadChats, unreadAt, chatPush };
   }
   /**
    * Each accepted friend at the viewer's current school with their personal timetable, so the viewer's own timetable
