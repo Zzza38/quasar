@@ -1,9 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { EMPTY_BETA_REGISTRY, createBeta, writeBetaRegistry } from './beta-registry';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { DirectoryService } from './directory';
@@ -13,18 +9,7 @@ import { exampleSchedule } from '@/domain/example';
 import { emptyPersonalSchedule } from '@/domain/schedule';
 
 const databases: Db[] = [];
-// Each test gets its own beta list holding the class-links beta, read the way the server reads it (BETAS_PATH).
-let betaDirectory = '', previousBetas: string | undefined;
-beforeEach(() => {
-  betaDirectory = mkdtempSync(join(tmpdir(), 'quasar-directory-betas-')); previousBetas = process.env.BETAS_PATH;
-  process.env.BETAS_PATH = join(betaDirectory, 'betas.json');
-  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: 'class-links', name: 'Class matching', code: 'LINK-2026' }));
-});
-afterEach(() => {
-  for (const db of databases.splice(0)) db.close();
-  if (previousBetas === undefined) delete process.env.BETAS_PATH; else process.env.BETAS_PATH = previousBetas;
-  rmSync(betaDirectory, { recursive: true, force: true });
-});
+afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
@@ -36,8 +21,7 @@ function fixture() {
   const student = user(), owner = user('owner@example.com'), outsider = user();
   const school = service.createSchool(student, { name: 'Directory High', location: 'Boston, MA', schedule: exampleSchedule });
   service.join(student, { schoolId: school.id, choice: 'community', grade: '9' });
-  const joinBeta = (id: string) => db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run('class-links', id, new Date().toISOString());
-  return { db, service, directory: new DirectoryService(service), user, student, owner, outsider, school, joinBeta };
+  return { db, service, directory: new DirectoryService(service), user, student, owner, outsider, school };
 }
 const details = { name: 'Algebra', teacher: 'Teacher', room: '101', grades: ['9' as const] };
 
@@ -77,22 +61,8 @@ describe('adding reviewed scans to the directory', () => {
     expect(result.rows[0].directoryId).toBeTruthy();
     expect(f.directory.list(f.student, f.school.id).classes).toHaveLength(2);
   });
-  it('checks current locks and leaves new classes and confirmed corrections personal when locked', () => {
+  it('adds new classes even when locked but keeps confirmed corrections personal', () => {
     const f = fixture();
-    const entry = f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Algebar' } });
-    f.db.prepare('UPDATE schools SET support_locked=1 WHERE id=?').run(f.school.id);
-    const result = f.directory.importClasses(f.student, { schoolId: f.school.id, grade: '9', rows: [
-      { name: 'Algebra', directoryId: entry.id, correctName: true, expectedVersion: entry.version }, { name: 'Biology' },
-    ] });
-    expect(result).toMatchObject({ canEdit: false, skipped: 2, rows: [{ name: 'Algebra', directoryId: entry.id }, { name: 'Biology' }] });
-    expect(result.rows[1].directoryId).toBeUndefined();
-    expect(f.directory.list(f.student, f.school.id).classes).toEqual([entry]);
-    f.db.prepare('UPDATE schools SET support_locked=0,member_locked=1 WHERE id=?').run(f.school.id);
-    expect(f.directory.importClasses(f.student, { schoolId: f.school.id, rows: [{ name: 'Biology' }] }).skipped).toBe(1);
-  });
-  it('adds new classes for class-links beta members but keeps confirmed corrections personal when locked', () => {
-    const f = fixture();
-    f.joinBeta(f.student);
     const entry = f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Algebar' } });
     f.db.prepare('UPDATE schools SET support_locked=1 WHERE id=?').run(f.school.id);
     const result = f.directory.importClasses(f.student, { schoolId: f.school.id, grade: '9', rows: [
@@ -136,10 +106,7 @@ describe('school class directory', () => {
     expect(() => f.directory.save(f.student, { schoolId: f.school.id, id: entry.id, expectedVersion: 1, details })).toThrow('locked');
     expect(() => f.directory.remove(f.student, { schoolId: f.school.id, id: entry.id, expectedVersion: 1 })).toThrow('locked');
     f.db.prepare('UPDATE users SET school_id=NULL WHERE id<>?').run(f.student);
-    expect(() => f.directory.save(f.student, { schoolId: f.school.id, details })).toThrow('locked');
-    expect(f.directory.list(f.student, f.school.id)).toMatchObject({ canEdit: false, canAdd: false });
-    f.joinBeta(f.student);
-    expect(f.directory.list(f.student, f.school.id)).toMatchObject({ canEdit: false, canAdd: true });
+    expect(f.directory.list(f.student, f.school.id).canEdit).toBe(false);
     expect(() => f.directory.save(f.student, { schoolId: f.school.id, id: entry.id, expectedVersion: 1, details })).toThrow('locked');
     expect(f.directory.save(f.student, { schoolId: f.school.id, details: { ...details, name: 'Biology' } }).version).toBe(1);
     expect(f.directory.save(f.owner, { schoolId: f.school.id, id: entry.id, expectedVersion: 1, details: { ...details, room: '202' } }).version).toBe(2);
@@ -154,7 +121,7 @@ describe('school class directory', () => {
     const another = f.service.createSchool(f.owner, { name: 'Another school', location: 'Boston', schedule: exampleSchedule });
     expect(() => f.directory.save(f.owner, { schoolId: another.id, id: entry.id, expectedVersion: 2, details })).toThrow('removed');
     f.db.prepare('UPDATE schools SET support_locked=1 WHERE id=?').run(f.school.id);
-    expect(() => f.directory.save(f.student, { schoolId: f.school.id, details })).toThrow('locked');
+    expect(() => f.directory.save(f.student, { schoolId: f.school.id, id: next.id, expectedVersion: next.version, details })).toThrow('locked');
     f.directory.remove(f.owner, { schoolId: f.school.id, id: next.id, expectedVersion: next.version });
     expect(f.directory.list(f.student, f.school.id).classes).toEqual([]);
     expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action LIKE 'directory.%'").get()).toEqual({ n: 3 });
@@ -184,14 +151,13 @@ describe('publishing personal classes', () => {
     f.db.prepare('UPDATE schools SET member_locked=1,support_locked=1 WHERE id=?').run(f.school.id);
     const friend = f.user();
     f.service.join(friend, { schoolId: f.school.id, choice: 'community', grade: '9' });
-    f.joinBeta(f.student); f.joinBeta(friend);
     return { ...f, friend };
   }
 
-  it('is only for class-links beta members', () => {
+  it('is only for school members', () => {
     const f = fixture();
-    expect(() => f.directory.publish(f.student, { schoolId: f.school.id, classes: [{ id: 'bio', name: 'Biology', room: '210' }] })).toThrow('beta');
-    expect(() => f.directory.confirmSame(f.student, { schoolId: f.school.id, mine: lit, theirs: litE })).toThrow('beta');
+    expect(() => f.directory.publish(f.outsider, { schoolId: f.school.id, classes: [{ id: 'bio', name: 'Biology', room: '210' }] })).toThrow('Only school members');
+    expect(() => f.directory.confirmSame(f.outsider, { schoolId: f.school.id, mine: lit, theirs: litE })).toThrow('Only school members');
     expect(f.directory.list(f.student, f.school.id).classes).toEqual([]);
   });
 
@@ -243,7 +209,6 @@ describe('merge requests for support', () => {
     const f = fixture();
     const friend = f.user();
     f.service.join(friend, { schoolId: f.school.id, choice: 'community', grade: '9' });
-    f.joinBeta(f.student); f.joinBeta(friend);
     const save = (id: string, classes: object[]) => f.service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: f.service.entity(id, 'personal'), data: { ...emptyPersonalSchedule(), grade: '9', classes } } as never);
     const classes = (id: string) => (readEntity(f.db, id, 'personal')!.data as { classes: { id: string; directoryId?: string }[] }).classes;
     const open = () => f.service.requests(f.owner).filter(request => request.kind === 'directory:merge');
