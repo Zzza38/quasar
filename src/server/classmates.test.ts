@@ -54,6 +54,28 @@ describe('classmates on the timetable', () => {
     expect(mates(community.summary(me), period('A', cs))).toEqual([{ id: evan, displayName: 'Evan', avatar: null }]);
     expect(mates(community.summary(me), period('B', cs))).toEqual([{ id: maya, displayName: 'Maya', avatar: null }]);
   });
+  it('tags a friend whose spelling is a confirmed alias of my linked directory class', () => {
+    const db = openDatabase(':memory:'); databases.push(db);
+    const service = new Service(db, 'owner@example.com');
+    const add = (name: string) => { const id = randomUUID(); db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${id}@example.com`, name, `${name} P`, new Date().toISOString()); return id; };
+    const me = add('Me'), sami = add('Sami');
+    const school = service.createSchool(me, { name: 'Example High', location: 'Boston, MA', schedule: exampleSchedule });
+    for (const id of [me, sami]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
+    const entryId = randomUUID();
+    db.prepare('INSERT INTO school_classes(id,school_id,data,version,deleted,updated_at) VALUES(?,?,?,1,0,?)').run(entryId, school.id, JSON.stringify({
+      name: 'Foundations in Literature: Inquiry and Analysis', teacher: 'Polly Duke', room: '406', grades: ['9'],
+      aliases: [{ name: 'Foundations in Literature: Inquiry and Analysis E', teacher: 'Polly Duke', room: '406' }],
+    }), new Date().toISOString());
+    const classes = [{ id: 'c0', name: 'Foundations in Literature: Inquiry and Analysis E', teacher: 'Polly Duke', room: '406' }];
+    service.sync(sami, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(sami, 'personal'), data: { grade: '9', classes, assignments: { A: 'c0' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const community = new CommunityService(service);
+    community.request(me, sami); community.respond(sami, me, true);
+    const summary = community.summary(me);
+    expect(summary.classDirectory).toEqual([expect.objectContaining({ id: entryId, aliases: [expect.objectContaining({ name: 'Foundations in Literature: Inquiry and Analysis E' })] })]);
+    const lit = { id: 'x', name: 'Foundations in Literature: Inquiry and Analysis', teacher: 'Polly Duke', room: '406', directoryId: entryId };
+    expect(mates(summary, period('A', lit))).toEqual([{ id: sami, displayName: 'Sami', avatar: null }]);
+    expect(mates({ ...summary, classDirectory: [] }, period('A', lit))).toEqual([]);
+  });
   it('never tags a friend who has moved to another school, even when the period ids collide', () => {
     const db = openDatabase(':memory:'); databases.push(db);
     const service = new Service(db, 'owner@example.com');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classKey, couldBeClass, maybeSameClass, sameClass, sameTeacher, similarClassName, classSearchScore, directoryCandidates } from './class-match';
+import { classKey, classMatcher, couldBeClass, maybeSameClass, sameClass, sameTeacher, similarClassName, classSearchScore, directoryCandidates, isFreePeriodName, resolveDirectoryEntry } from './class-match';
 
 describe('directory name suggestions', () => {
   it('suggests small typos and incomplete names without making them automatic matches', () => {
@@ -24,6 +24,42 @@ describe('directory name suggestions', () => {
     expect(directoryCandidates({ name: 'Algebar II' }, entries)).toEqual({ matches: [], similar: entries });
     expect(directoryCandidates({ name: 'Algebra II', teacher: 'Mr. Lee' }, entries)).toEqual({ matches: [], similar: [] });
     expect(directoryCandidates({ name: 'Algebra II', room: '301' }, entries)).toEqual({ matches: [], similar: [] });
+  });
+});
+
+describe('directory aliases', () => {
+  const lit = { id: 'lit', name: 'Foundations in Literature', teacher: 'Polly Duke', room: '406', aliases: [{ name: 'Foundations of Literature: Inquiry and Analysis E' }, { name: 'English 9', room: '410' }] };
+  const short = { id: 'short', name: 'Foundations of Literature', teacher: 'Amy Delaney', room: '307' };
+
+  it('matches a confirmed spelling with the entry teacher and room, and the alias room when it has one', () => {
+    expect(directoryCandidates({ name: 'Foundations of Literature: Inquiry and Analysis E', teacher: 'Polly Duke' }, [lit]).matches).toEqual([lit]);
+    expect(directoryCandidates({ name: 'Foundations of Literature: Inquiry and Analysis E', teacher: 'Erin Nolan' }, [lit]).matches).toEqual([]);
+    expect(directoryCandidates({ name: 'English 9', room: '410' }, [lit]).matches).toEqual([lit]);
+    expect(directoryCandidates({ name: 'English 9', room: '406' }, [lit]).matches).toEqual([]);
+  });
+
+  it('resolves to one entry, preferring the same words when several could match', () => {
+    expect(resolveDirectoryEntry({ name: 'Foundations of Literature' }, [lit, short])).toBe(short);
+    expect(resolveDirectoryEntry({ name: 'Foundations of Literature' }, [short, { ...short, id: 'other', teacher: 'Erin Nolan' }])).toBeUndefined();
+    expect(resolveDirectoryEntry({ name: 'Physics' }, [lit, short])).toBeUndefined();
+  });
+
+  it('matches a linked class and an unlinked confirmed spelling through the directory', () => {
+    const mine = { name: 'Foundations in Literature', teacher: 'Polly Duke', room: '406', directoryId: 'lit' };
+    const theirs = { name: 'Foundations of Literature: Inquiry and Analysis E', teacher: 'Polly Duke', room: '406' };
+    expect(sameClass(mine, theirs)).toBe(false);
+    expect(classMatcher([lit, short])(mine, theirs)).toBe(true);
+    expect(classMatcher([lit, short])({ ...mine, directoryId: 'removed' }, theirs)).toBe(true);
+    expect(classMatcher([lit, short])(mine, { ...theirs, teacher: 'Erin Nolan' })).toBe(false);
+    // Without a directory it is sameClass, and a name match still counts when links disagree.
+    expect(classMatcher(null)(mine, theirs)).toBe(false);
+    expect(classMatcher([lit, short])({ name: 'Biology', directoryId: 'lit' }, { name: 'Biology', directoryId: 'short' })).toBe(false);
+    expect(classMatcher([lit, short])({ name: 'Biology', teacher: 'Jeff Burt' }, { name: 'Biology', teacher: 'Jeff Burt', directoryId: 'gone' })).toBe(true);
+  });
+
+  it('knows free periods are not classes', () => {
+    expect(['Free Period', 'free', 'Unassigned block'].every(isFreePeriodName)).toBe(true);
+    expect(isFreePeriodName('Free Speech Seminar')).toBe(false);
   });
 });
 

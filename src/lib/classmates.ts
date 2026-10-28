@@ -1,13 +1,14 @@
 import type { WorkspaceContext } from '@/components/app-state';
 import { resolveDay, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
-import { sameClass } from '@/domain/class-match';
+import { classMatcher } from '@/domain/class-match';
 
 export type Classmate = { id: string; displayName: string; avatar: string | null };
 
-/** Friends whose resolved timetable has this same class at this same time on this date. */
+/** Friends whose resolved timetable has this same class (classMatcher, through the school directory) at this same time on this date. */
 export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, schedule: Schedule, date: string, period: Pick<ResolvedPeriod, 'periodId' | 'startAt' | 'endAt' | 'class'>): Classmate[] {
   const own = period.class;
   if (!own?.name) return [];
+  const sameClass = classMatcher(context.community?.classDirectory);
   return (context.community?.classmates ?? [])
     .filter((friend) => {
       try {
