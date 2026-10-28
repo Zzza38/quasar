@@ -10,6 +10,8 @@ import { mergeMutation, type Entity, type Mutation, type SyncResult } from '@/do
 import { CalendarService, listSubscriptions, listImportConflicts } from './calendar';
 import { scheduleFeedStatus } from './schedule-feed';
 import { CommunityService, emailDomainsSchema, parseEmailDomains } from './community';
+import { FeedGuideService, parseFeedPlatforms } from './feed-guides';
+import type { FeedPlatform } from '@/domain/feed-guides';
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
 import { BetaService } from './betas';
@@ -23,9 +25,9 @@ export type User = { id: string; email: string; displayName: string; fullName: s
 /** A support sanction the student can see and appeal (§14). */
 export type Ban = { schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean };
 export type Sanctions = { bans: Ban[]; pause: { until: string | null; reason: string; appealed: boolean } | null };
-export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[] };
+export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[]; feedPlatforms: FeedPlatform[] };
 /** What a school search returns: enough to pick a school, without its schedule (fetch that with `school(id)`). */
-export type SchoolSummary = Omit<School, 'schedule' | 'emailDomains'>;
+export type SchoolSummary = Omit<School, 'schedule' | 'emailDomains' | 'feedPlatforms'>;
 type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null };
 /** Uploaded pictures are small: the client resizes to 256 px and encodes as JPEG or WebP before sending (§13). */
@@ -33,7 +35,7 @@ export const AVATAR_MAX_BYTES = 200_000;
 export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const avatarUploadSchema = z.object({ mime: z.enum(AVATAR_MIMES), data: z.string().max(Math.ceil(AVATAR_MAX_BYTES * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Choose an image file.') });
 export const appealSchema = z.object({ kind: z.enum(['pause', 'ban']), schoolId: z.uuid().optional(), message: z.string().trim().min(10).max(2000) });
-type SchoolRow = { id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string };
+type SchoolRow = { id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string; feed_platforms: string };
 const fail = (code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'BAD_REQUEST' | 'TOO_MANY_REQUESTS', message: string): never => { throw new TRPCError({ code, message }); };
 const now = () => new Date().toISOString();
 /** A school schedule is shared with every member and every searcher, so its stored size is capped (sync caps personal data at 1 MB). */
@@ -283,13 +285,13 @@ export class Service {
   schoolSummaries(query = '', limit = 100): SchoolSummary[] {
     const rows = this.db.prepare(`SELECT s.id, s.name, s.location, s.version, s.approved, s.member_locked, s.support_locked,
         (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count
-      FROM schools s WHERE instr(lower(s.name || ' ' || s.location), lower(?)) > 0 ORDER BY s.name LIMIT ?`).all(query, limit) as Omit<SchoolRow, 'schedule' | 'email_domains'>[];
+      FROM schools s WHERE instr(lower(s.name || ' ' || s.location), lower(?)) > 0 ORDER BY s.name LIMIT ?`).all(query, limit) as Omit<SchoolRow, 'schedule' | 'email_domains' | 'feed_platforms'>[];
     return rows.map(row => ({ id: row.id, name: row.name, location: row.location, version: row.version,
       approved: !!row.approved, memberLocked: !!row.member_locked, supportLocked: !!row.support_locked, memberCount: row.member_count }));
   }
   private schoolFromRow(row: SchoolRow): School {
     return { id: row.id, name: row.name, location: row.location, schedule: JSON.parse(row.schedule), version: row.version,
-      approved: !!row.approved, memberLocked: !!row.member_locked, supportLocked: !!row.support_locked, memberCount: row.member_count, emailDomains: parseEmailDomains(row.email_domains ?? '') };
+      approved: !!row.approved, memberLocked: !!row.member_locked, supportLocked: !!row.support_locked, memberCount: row.member_count, emailDomains: parseEmailDomains(row.email_domains ?? ''), feedPlatforms: parseFeedPlatforms(row.feed_platforms ?? '') };
   }
   school(id: string): School {
     const row = this.db.prepare(`SELECT s.*, (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count FROM schools s WHERE s.id=?`).get(id) as SchoolRow | undefined;
@@ -401,7 +403,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), feedGuides: new FeedGuideService(this).resolved(school?.id ?? null), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
