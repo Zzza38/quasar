@@ -10,6 +10,7 @@ import { Button, Hint, IconButton, Panel } from './primitives';
 import { Card, CardContent, CardDescription, CardHeader } from './ui/card';
 import { checklist, isInstalled, isIos } from './setup-state';
 import { FeedGuide } from './feed-guide';
+import { platformNames } from '@/domain/feed-guides';
 
 type Item = { id: string; icon: IconName; title: string; detail: string; done: boolean; action?: ReactNode; manual?: boolean; skipped?: boolean };
 
@@ -76,7 +77,7 @@ export function SetupChecklist({ state }: { state: AppState }) {
     { id: 'classes', icon: 'book', title: 'Add your classes', detail: 'Type them in, pick from schoolmates, or scan a photo.', done: personal.classes.length > 0, action: <Button size="sm" onClick={() => state.navigate('classes')}>Open Classes</Button> },
     { id: 'place', icon: 'layers', title: 'Put each class on its period', detail: 'Drag a class onto its block, or tap the class and then the block, so the countdown knows what is next.', done: placed, action: <Button size="sm" onClick={() => state.navigate('classes')}>Open the timetable</Button> },
     ...(context.school.approved ? [] : [{ id: 'verify', icon: 'calendar' as IconName, title: 'Check the bell times', detail: 'A student entered this schedule. Compare it with the school’s published one and fix anything wrong, so everyone benefits.', ...tickedStep(false, checklist.ticked('verify', userId), false), action: <><Button size="sm" onClick={() => state.navigate('school', { fix: 'times' })}>Open the schedule</Button><Button size="sm" variant="link" onClick={() => tick('verify')}>It matches{about('Check the bell times')}</Button></> }]),
-    { id: 'calendar', icon: 'calendar', title: 'Connect your homework calendar', detail: 'Paste the iCal link from Schoology, Google Classroom or Canvas and assignments become tasks by themselves.', ...tickedStep((context.subscriptions ?? []).length > 0, checklist.ticked('calendar', userId), true), action: <><Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ACCOUNT_EVENT, { detail: { feed: 'add' } }))}>Add calendar</Button><Button size="sm" variant="ghost" onClick={() => setFeedOpen((open) => !open)} aria-expanded={feedOpen}>Where is the link?</Button><Button size="sm" variant="link" onClick={() => tick('calendar')}>Not now{about('Connect your homework calendar')}</Button></> },
+    { id: 'calendar', icon: 'calendar', title: 'Connect your homework calendar', detail: `Paste the calendar link from ${platformNames(context.feedGuides) || 'your school portal'} and your assignments turn into tasks on their own.`, ...tickedStep((context.subscriptions ?? []).length > 0, checklist.ticked('calendar', userId), true), action: <><Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ACCOUNT_EVENT, { detail: { feed: 'add' } }))}>Add calendar</Button><Button size="sm" variant="ghost" onClick={() => setFeedOpen((open) => !open)} aria-expanded={feedOpen}>Where is the link?</Button><Button size="sm" variant="link" onClick={() => tick('calendar')}>Not now{about('Connect your homework calendar')}</Button></> },
     { id: 'reminders', icon: 'bell', title: 'Turn on reminders', detail: 'Get a nudge before a task is due, on this device.', ...tickedStep(reminders, checklist.ticked('reminders', userId), true), action: <><Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ACCOUNT_EVENT))}>Open Account</Button><Button size="sm" variant="link" onClick={() => tick('reminders')}>Not now{about('Turn on reminders')}</Button></> },
     { id: 'install', icon: 'home', title: 'Add Quasar to your home screen', detail: 'Opens like an app, works offline, no store needed.', ...tickedStep(installed, checklist.ticked('install', userId), false), action: <><Button size="sm" onClick={() => setInstallOpen((open) => !open)} aria-expanded={installOpen}>How?</Button><Button size="sm" variant="link" onClick={() => tick('install')}>Already added{about('Add Quasar to your home screen')}</Button></> },
   ];
@@ -127,7 +128,7 @@ export function SetupChecklist({ state }: { state: AppState }) {
           </div>
           <div role="group" aria-labelledby={`setup-${item.id}`} className="flex flex-wrap items-center gap-2 sm:pl-9">{item.action}</div>
           {item.id === 'install' && installOpen && <div className="sm:pl-9"><InstallHelp /></div>}
-          {item.id === 'calendar' && feedOpen && <div className="sm:pl-9"><Panel className="p-3"><FeedGuide compact /></Panel></div>}
+          {item.id === 'calendar' && feedOpen && <div className="sm:pl-9"><Panel className="p-3"><FeedGuide guides={context.feedGuides} compact /></Panel></div>}
         </li>;
       })}
     </ol>

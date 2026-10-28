@@ -653,6 +653,24 @@ function migrate(db: Db): void {
     }
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(26, datetime('now'))");
+
+  // Migration 27: calendar-link guides (src/server/feed-guides.ts). `feed_platforms` is the school's comma-separated
+  // platforms, '' when support has not picked any. A feed_guides row with school_id '' rewrites a platform's guide for
+  // every school; one with a school id rewrites it for that school only. Screenshots live in feed_guide_images.
+  if (!(db.pragma('table_info(schools)') as { name: string }[]).some(column => column.name === 'feed_platforms')) {
+    db.exec("ALTER TABLE schools ADD COLUMN feed_platforms TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feed_guides (
+      school_id TEXT NOT NULL, platform TEXT NOT NULL, guide TEXT NOT NULL,
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY(school_id, platform)
+    );
+    CREATE TABLE IF NOT EXISTS feed_guide_images (
+      id TEXT PRIMARY KEY, image BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(27, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
