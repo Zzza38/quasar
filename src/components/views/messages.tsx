@@ -1,5 +1,7 @@
 'use client';
 
+import { chatImage } from '@/client/chat-image';
+
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
@@ -1320,6 +1322,7 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
                 className={cn(BUBBLE, 'chat-bubble min-w-0 touch-pan-y', mine ? MINE : THEIRS, runCorners(mine, startsRun, endsRun), swipe === 0 && 'transition-transform duration-150', open && 'ring-2 ring-ring ring-offset-2 ring-offset-background', highlighted && 'chat-highlight')}>
                 {label && <span className="sr-only">{label}</span>}
                 {message.replyTo && <QuoteCard reply={message.replyTo} mine={mine} onClick={quoteTap} />}
+                {message.image && <MessageImage src={message.image} />}
                 <MessageText text={message.body ?? ''} mine={mine} />
                 {endsRun && <Tail mine={mine} />}
                 {swipe > 0 && <span aria-hidden="true" style={{ opacity: swipeProgress(swipe) }} className="absolute top-1/2 -left-9 grid size-7 -translate-y-1/2 place-items-center rounded-full bg-muted text-muted-foreground ring-1 ring-foreground/[0.06]"><Icon name="reply" size={15} /></span>}
@@ -1373,6 +1376,7 @@ function PendingBubble({ item, reply, online, onRetry, onDiscard }: { item: Outg
   return <li className="chat-bubble-in mt-2.5 flex flex-col items-end">
     <div className={cn(BUBBLE, MINE, 'max-w-[80%] lg:max-w-[75%]', !failed && 'opacity-60', failed && 'ring-2 ring-destructive ring-offset-2 ring-offset-background')}>
       {reply && <QuoteCard reply={reply} mine />}
+      {item.image && <MessageImage src={`data:image/jpeg;base64,${item.image}`} />}
       <MessageText text={item.body} mine /><Tail mine />
     </div>
     {failed
@@ -1409,8 +1413,34 @@ export function wrapSelection(value: string, start: number, end: number, marker:
 }
 
 /** `filtered` shows the slur notice (every chat has the filter): the draft still sends, and the server stores it with the slur censored. */
+function MessageImage({ src }: { src: string }) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" aria-label="View image" className="block max-w-full rounded-lg focus-visible:ring-2 focus-visible:ring-ring" onClick={(event) => { event.stopPropagation(); setOpen(true); }} onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()}>
+      <img src={src} alt="Message attachment" loading="lazy" className="max-h-72 max-w-full rounded-lg object-contain" />
+    </button>
+    <Modal open={open} onClose={() => setOpen(false)} title="Image">
+      {open && <img src={src} alt="Message attachment, full size" className="max-h-[75dvh] w-full object-contain" />}
+    </Modal>
+  </>;
+}
+
 function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; name: string; online: boolean; filtered?: boolean }) {
   const [draft, setDraft] = useState(chat.initialDraft);
+  const [image, setImage] = useState<string>();
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const picker = useRef<HTMLInputElement>(null);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const pickImage = async (file: File) => {
+    setImageBusy(true); setImageError('');
+    try {
+      const prepared = await chatImage(file);
+      if (mounted.current) setImage(prepared);
+    } catch (error) { if (mounted.current) setImageError(error instanceof Error ? error.message : 'This image could not be opened.'); }
+    finally { if (mounted.current) setImageBusy(false); }
+  };
   /** The "Aa" button pins the formatting toolbar open for keyboard and touch users who cannot select text first. */
   const [tools, setTools] = useState(false);
   /** Where the field's selected text is, for the floating toolbar; null without a selection. */
@@ -1426,9 +1456,9 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
   const fine = useFinePointer();
   const normalized = normalizeBody(draft);
   const notice = filtered ? slurNotice(normalized) : null;
-  const problem = bodyError(normalized);
+  const problem = bodyError(normalized, !!image);
   const left = CHAT.maxLength - normalized.length;
-  const canSend = online && problem === null;
+  const canSend = online && !imageBusy && problem === null;
 
   // Grows with the text up to five lines (max-h-[7.5rem]). The box is border-box, so the borders are added to the
   // content height, or the text would overflow by 2 px and show a scrollbar; the bar only appears past five lines.
@@ -1486,7 +1516,8 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
   const submit = () => {
     if (!canSend) return;
     // Censored locally too, so the pending bubble never shows the slur while the send is out. Links stay whole, as the server stores them.
-    chat.send(censorBody(normalized));
+    chat.send(censorBody(normalized), image);
+    setImage(undefined);
     update('');
     field.current?.focus({ preventScroll: true });
   };
@@ -1534,7 +1565,14 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
       </span>
       <IconButton label="Cancel reply" icon="x" size="sm" className="rounded-full" onClick={() => chat.setReply(null)} />
     </div>}
+    {image && <div className="relative ml-11 w-fit">
+      <img src={`data:image/jpeg;base64,${image}`} alt="Image to send" className="max-h-40 max-w-full rounded-xl object-contain" />
+      <IconButton label="Remove image" icon="x" size="sm" className="absolute top-1 right-1 rounded-full bg-card" onClick={() => setImage(undefined)} />
+    </div>}
+    {imageError && <Hint tone="danger" role="alert">{imageError}</Hint>}
+    <input ref={picker} type="file" className="sr-only" aria-label="Choose message image" accept="image/jpeg,image/png,image/webp,image/gif" disabled={!online || imageBusy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void pickImage(file); }} />
     <div className="flex items-end gap-2">
+      <Button variant="ghost" className="mb-0.5 size-9 shrink-0 rounded-full px-0" aria-label="Attach image" disabled={!online || imageBusy} onClick={() => picker.current?.click()}>{imageBusy ? <Spinner /> : <span aria-hidden="true">+</span>}</Button>
       <Button variant="ghost" aria-label="Formatting" title="Formatting" aria-pressed={tools} aria-expanded={toolbarOpen} disabled={!online} className="mb-0.5 size-9 shrink-0 rounded-full px-0 text-[13px] font-bold tracking-tight text-muted-foreground aria-pressed:bg-primary-soft aria-pressed:text-primary-soft-foreground" onClick={() => setTools((current) => !current)}>Aa</Button>
       <div className="grid min-w-0 flex-1 gap-1">
         {/* The pill: one line of 16 px text at 40 px tall, the Send circle tucked into its right end. */}
@@ -1590,7 +1628,7 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const normalized = censorBody(normalizeBody(draft));
-  const problem = bodyError(normalized);
+  const problem = bodyError(normalized, !!message.image);
   const notice = slurNotice(normalizeBody(draft));
   const changed = normalized !== (message.body ?? '') || reason.trim() !== (moderation(message).reason ?? '');
   const save = async () => {

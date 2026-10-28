@@ -401,3 +401,14 @@ it('resends Global quotes after owner edits and hides blocked targets', () => {
   fails(() => f.room.react(f.bob, target.seq, '👍'), 'NOT_FOUND');
   fails(() => f.room.send(f.bob, randomUUID(), 'reply', target.seq), 'BAD_REQUEST');
 });
+
+it('allows optional image captions and revokes image reads for blocked senders', async () => {
+  const { readChatImage } = await import('./chat-images');
+  const f = fixture();
+  const room = new GlobalChatService(f.service);
+  const sent = room.send(f.alice, randomUUID(), 'Caption', undefined, 'YWJj').message;
+  expect(readChatImage(f.service, f.bob, 'global', sent.seq)?.toString()).toBe('abc');
+  expect(room.edit(f.owner, sent.id, '', 'Caption removed').message).toMatchObject({ body: '', image: sent.image });
+  new CommunityService(f.service).block(f.bob, f.alice, true);
+  expect(readChatImage(f.service, f.bob, 'global', sent.seq)).toBeNull();
+});

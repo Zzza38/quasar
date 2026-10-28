@@ -646,6 +646,13 @@ function migrate(db: Db): void {
     `);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(25, datetime('now'))");
+  // Check the columns too: an earlier deployment may have recorded this version already.
+  for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
+    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(column => column.name === 'image')) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN image TEXT`);
+    }
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(26, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

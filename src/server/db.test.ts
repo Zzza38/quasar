@@ -37,7 +37,7 @@ describe('openDatabase migrations', () => {
     const db = openDatabase(path);
     try {
       const versions = (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map(row => row.version);
-      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]);
       for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
         expect((db.pragma(`table_info(${table})`) as { name: string; notnull: number }[]).find(column => column.name === 'reply_to_seq')).toMatchObject({ notnull: 0 });
       }
@@ -171,4 +171,20 @@ describe('openDatabase migrations', () => {
       expect(push).toContain('push_subscriptions_owner');
     } finally { db.close(); }
   });
+});
+
+it('adds image columns even when an older deployment already recorded migration 26', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'quasar-image-migration-'));
+  const path = join(folder, 'database.sqlite');
+  try {
+    const before = openDatabase(path);
+    for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) before.exec(`ALTER TABLE ${table} DROP COLUMN image`);
+    before.close();
+    const after = openDatabase(path);
+    try {
+      for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
+        expect((after.pragma(`table_info(${table})`) as { name: string }[]).some(column => column.name === 'image')).toBe(true);
+      }
+    } finally { after.close(); }
+  } finally { rmSync(folder, { recursive: true, force: true }); }
 });
