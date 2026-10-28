@@ -8,7 +8,8 @@ export type ScanCloseUp = { photo: number; left: number; top: number; width: num
  * `reading`: the model is reading the photos (round 0) or its close-ups (round 1 and later). `zooming`: the server is
  * cutting the close-ups the model asked for. `checking`: the answer is being matched to the school's periods and directory.
  */
-export type ScanProgress = { stage: 'reading' | 'zooming' | 'checking'; round: number; closeUps: ScanCloseUp[] };
+/** `thought` is the model's latest summary of its own thinking, when the provider sends one. */
+export type ScanProgress = { stage: 'reading' | 'zooming' | 'checking'; round: number; closeUps: ScanCloseUp[]; thought?: string };
 export type ScanReporter = (progress: ScanProgress) => void;
 
 /** A scan gives up after 110 s; anything older than this was left behind by a crashed request. */

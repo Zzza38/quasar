@@ -30,7 +30,7 @@ test.beforeAll(async () => {
       const followUp = body.messages.length > 2;
       if (slowZoom && !followUp) {
         const call = { id: 'zoom-1', type: 'function', function: { name: 'look_closer', arguments: JSON.stringify({ photo: 2, left: 0, top: 0, width: 0.4, height: 0.4, enhance: true }) } };
-        setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [call] } }] })); }, ZOOM_DELAY_MS);
+        setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: null, reasoning: '**Checking the second picture**\n\nThe top-left block names are small, so I will zoom in before reading them.', tool_calls: [call] } }] })); }, ZOOM_DELAY_MS);
       }
       // Record every photo part so the test can check a multi-photo scan arrives as one request.
       if (!followUp) requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
@@ -132,6 +132,9 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(dialog.getByText('A scan can take up to two minutes.')).toBeVisible();
   await expect(steps.filter({ hasText: 'Looking closer at hard-to-read parts' })).toContainText('1 close-up so far');
   await expect(dialog.getByRole('list', { name: 'Close-ups the scanner took' })).toHaveText('Picture 2, top left, sharpened');
+  // The model's own summary of its thinking, flattened to one line.
+  await expect(dialog.getByText('What the scanner is thinking')).toBeVisible();
+  await expect(dialog.getByText('Checking the second picture The top-left block names are small, so I will zoom in before reading them.', { exact: true })).toBeVisible();
   await dialog.screenshot({ path: testInfo.outputPath('scan-progress.png') });
 
   await expect(dialog.getByText('3 classes were found.')).toBeVisible();

@@ -82,7 +82,10 @@ export function visibleRegion(region: Region, image?: { width: number; height: n
 
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
-/** What a running scan is doing: the steps, how long it has taken, and each close-up the model asked for. */
+/**
+ * What a running scan is doing: the steps, how long it has taken, each close-up the model asked for, and the model's own
+ * summary of its thinking when the provider sends one.
+ */
 function ScanProgressPanel({ progress, elapsed, pictures }: { progress: ScanProgress | null; elapsed: number; pictures: number }) {
   const steps = scanSteps(progress, pictures);
   const current = steps.find(step => step.state === 'active');
@@ -105,7 +108,11 @@ function ScanProgressPanel({ progress, elapsed, pictures }: { progress: ScanProg
     {progress && progress.closeUps.length > 0 && <ul className="flex flex-wrap gap-1.5" aria-label="Close-ups the scanner took">
       {progress.closeUps.map((closeUp, index) => <li key={index}><Chip tone="neutral" icon="search">{describeCloseUp(closeUp, pictures)}</Chip></li>)}
     </ul>}
-    <span className="sr-only" role="status">{current ? `${current.label}${current.detail ? `. ${current.detail}` : ''}` : ''}</span>
+    {progress?.thought && <figure className="grid gap-1">
+      <figcaption className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"><Icon name="sparkle" size={12} />What the scanner is thinking</figcaption>
+      <blockquote className="text-sm leading-snug text-foreground/80">{progress.thought}</blockquote>
+    </figure>}
+    <span className="sr-only" role="status">{current ? `${current.label}${current.detail ? `. ${current.detail}` : ''}${progress?.thought ? `. ${progress.thought}` : ''}` : ''}</span>
     <Hint>A scan can take up to two minutes. Most of that is the model reading.</Hint>
   </div>;
 }
