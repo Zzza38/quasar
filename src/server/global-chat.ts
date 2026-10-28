@@ -1,3 +1,4 @@
+import { chatImageSchema } from '@/domain/chat';
 import { notifyChat } from './chat-events';
 import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
@@ -37,7 +38,7 @@ export type GlobalSummary = {
   unread: number; muted: boolean;
 };
 
-type MessageRow = { reply_to_seq: number | null; seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
+type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
   deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type MemberRow = { last_read_seq: number; muted: number };
@@ -46,7 +47,7 @@ export const globalThreadSchema = z.object({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema, replyTo: replySchema });
+export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
 export const globalMessageSchema = z.object({ messageId: z.uuid() });
 /** The owner's reason, shown to everyone. Ignored when a sender deletes their own message. */
 export const reasonSchema = z.string().trim().max(200).default('');
@@ -57,9 +58,9 @@ export const globalReadSchema = z.object({ seq: z.number().int().min(0) });
 export const globalMuteSchema = z.object({ muted: z.boolean() });
 
 /** normalizeBody, slurs censored to asterisks outside https links (censorBody), then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
-export function parseGlobalBody(raw: string): string {
+export function parseGlobalBody(raw: string, hasImage = false): string {
   const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
-  const problem = bodyError(body);
+  const problem = bodyError(body, hasImage);
   if (problem) fail('BAD_REQUEST', problem);
   return body;
 }
@@ -171,7 +172,7 @@ export class GlobalChatService {
     const last = this.db.prepare(`${MESSAGE_SQL} WHERE ${NOT_BLOCKED_SENDER_SQL('?')} ORDER BY c.seq DESC LIMIT 1`).get(viewerId) as MessageRow | undefined;
     const deleted = !!last?.deleted_at;
     return {
-      lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
+      lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
       unread: countUnreadGlobal(this.db, viewerId),
       muted: !!member.muted,
     };
@@ -198,13 +199,13 @@ export class GlobalChatService {
     })();
   }
 
-  send(viewerId: string, clientId: string, raw: string, replyTo?: number): { message: GlobalMessage } {
-    const body = parseGlobalBody(raw);
+  send(viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GlobalMessage } {
+    const body = parseGlobalBody(raw, !!image);
     const result = this.db.transaction(() => {
       this.service.ready(viewerId);
       const existing = this.db.prepare(`${MESSAGE_SQL} WHERE c.sender_id=? AND c.id=?`).get(viewerId, clientId) as MessageRow | undefined;
       if (existing) {
-        if ((existing.body !== body && !existing.edited_at) || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if ((existing.body !== body && !existing.edited_at) || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       // IDs are unique across the room (owner Remove and Edit address messages by ID), so another member's ID is refused.
@@ -217,6 +218,7 @@ export class GlobalChatService {
       const revision = this.bumpRevision();
       const createdAt = this.iso();
       const { seq } = this.db.prepare('INSERT INTO global_messages(id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, createdAt, revision, replyTo ?? null) as { seq: number };
+      if (image) this.db.prepare('UPDATE global_messages SET image=? WHERE id=?').run(image, clientId);
       this.db.prepare('UPDATE global_chat SET last_message_at=? WHERE id=1').run(createdAt);
       this.ensureMember(viewerId);
       this.db.prepare('UPDATE global_members SET last_read_seq=max(last_read_seq, ?) WHERE user_id=?').run(seq, viewerId);
@@ -262,11 +264,11 @@ export class GlobalChatService {
   /** Owner only: replaces the text of any message, with a reason everyone can see. The filter applies to the new text; the edit is audited. */
   edit(adminId: string, messageId: string, raw: string, rawReason = ''): { message: GlobalMessage } {
     this.service.admin(adminId);
-    const body = parseGlobalBody(raw);
     const reason = reasonSchema.parse(rawReason);
     const result = this.db.transaction(() => {
       const row = this.find(messageId);
       if (!row || row.deleted_at) return fail('NOT_FOUND', MISSING);
+      const body = parseGlobalBody(raw, !!row.image);
       if (row.body !== body || (row.reason ?? '') !== reason) {
         this.db.prepare('UPDATE global_messages SET body=?, edited_at=?, reason=?, revision=? WHERE seq=?').run(body, this.iso(), reason, this.bumpRevision(), row.seq);
         this.audit(adminId, 'global.edit', { seq: row.seq, senderId: row.sender_id, reason });
@@ -303,6 +305,6 @@ export function pruneGlobalChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM global_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE global_messages SET body='' WHERE deleted_at IS NOT NULL AND deleted_at < ? AND body <> ''").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE global_messages SET body='', image=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL)").run(ago(CHAT.deletedTextDays));
   }).immediate();
 }

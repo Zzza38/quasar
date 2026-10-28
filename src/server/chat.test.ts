@@ -856,3 +856,50 @@ it('cascades a thread with quotes and reactions, and resends quotes hidden by su
   expect(f.db.prepare('SELECT * FROM chat_reactions').all()).toEqual([]);
   expect(f.db.pragma('foreign_key_check')).toEqual([]);
 });
+
+describe('image attachments', () => {
+  it('sends image-only messages through RPC, retries once, freezes reports and revokes reads', async () => {
+    const { default: sharp } = await import('sharp');
+    const { readChatImage } = await import('./chat-images');
+    const f = fixture(); f.befriend(f.alice, f.bob);
+    const image = (await sharp({ create: { width: 32, height: 24, channels: 3, background: '#3478ab' } }).png().toBuffer()).toString('base64');
+    const input = { accountId: f.alice, userId: f.bob, clientId: randomUUID(), body: '', image };
+    const sent = (await f.caller(f.alice).chat.send(input)).message;
+    expect(sent.image).toBe(`/api/chat/images/peer/${sent.seq}`);
+    expect((await f.caller(f.alice).chat.send(input)).message.seq).toBe(sent.seq);
+    expect(f.chat.inbox(f.bob).rows.find(row => row.state === 'open' && row.peer.id === f.alice)).toMatchObject({ lastMessage: { preview: 'Photo' } });
+    const bytes = readChatImage(f.service, f.bob, 'peer', sent.seq)!;
+    expect((await sharp(bytes).metadata()).format).toBe('webp');
+    expect(readChatImage(f.service, f.outsider, 'peer', sent.seq)).toBeNull();
+    expect(f.chat.send(f.bob, f.alice, randomUUID(), 'Nice', sent.seq).message.replyTo?.preview).toBe('Photo');
+    f.chat.report(f.bob, f.alice, { category: 'other', note: '', block: false, seq: sent.seq });
+    const report = f.db.prepare('SELECT id FROM reports WHERE reported_id=?').get(f.alice) as { id: string };
+    f.chat.delete(f.alice, f.bob, sent.id);
+    expect(readChatImage(f.service, f.bob, 'peer', sent.seq)).toBeNull();
+    expect(f.chat.showEvidence(f.owner, report.id).items.find(item => item.seq === sent.seq)?.image).toBe(`data:image/webp;base64,${bytes.toString('base64')}`);
+    f.tick(31 * DAY); pruneChat(f.db, f.clock.now);
+    expect(f.db.prepare('SELECT image FROM chat_messages WHERE id=?').get(sent.id)).toEqual({ image: null });
+    const second = f.chat.send(f.alice, f.bob, randomUUID(), 'caption', undefined, bytes.toString('base64')).message;
+    f.community.block(f.bob, f.alice, true);
+    expect(() => readChatImage(f.service, f.alice, 'peer', second.seq)).toThrow(CLOSED);
+  });
+
+  it('rejects fake images, oversized payloads and captions past the text limit', async () => {
+    const { prepareChatImage } = await import('./chat-images');
+    await expect(prepareChatImage(Buffer.from('<svg/>').toString('base64'))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(prepareChatImage(Buffer.alloc(1_000_001).toString('base64'))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const f = fixture(); f.befriend(f.alice, f.bob);
+    expect(() => f.chat.send(f.alice, f.bob, randomUUID(), 'x'.repeat(1001), undefined, 'a')).toThrow('Messages can be up to');
+  });
+});
+
+it('keeps peer images separate when senders reuse a client ID', async () => {
+  const { readChatImage } = await import('./chat-images');
+  const f = fixture(); f.befriend(f.alice, f.bob);
+  const id = randomUUID();
+  const a = f.chat.send(f.alice, f.bob, id, '', undefined, 'YWJj').message;
+  const b = f.chat.send(f.bob, f.alice, id, '', undefined, 'ZGVm').message;
+  expect(a.image).not.toBe(b.image);
+  expect(readChatImage(f.service, f.alice, 'peer', a.seq)?.toString()).toBe('abc');
+  expect(readChatImage(f.service, f.alice, 'peer', b.seq)?.toString()).toBe('def');
+});

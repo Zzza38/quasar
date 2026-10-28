@@ -1,3 +1,4 @@
+import { prepareChatImage } from './chat-images';
 import { initTRPC, StandardSchemaV1Error, TRPCError } from '@trpc/server';
 import { z, ZodError } from 'zod';
 import { NotificationService, pushSubscriptionSchema, pushEndpointSchema } from './notifications';
@@ -147,7 +148,7 @@ export const appRouter = t.router({
     // The list carries the global room's row too (§11), so the Messages view polls one endpoint.
     inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), groups: groups(ctx.service).list(ctx.userId), global: room(ctx.service).summary(ctx.userId) })),
     thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(chatSendSchema).mutation(({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo)),
+    send: accountScoped.input(chatSendSchema).mutation(async ({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
     react: accountScoped.input(chatReactSchema).mutation(({ ctx, input }) => chat(ctx.service).react(ctx.userId, input.userId, input.seq, input.emoji)),
     delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
     read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
@@ -165,7 +166,7 @@ export const appRouter = t.router({
     removeMember: accountScoped.input(groupMemberSchema).mutation(({ ctx, input }) => groups(ctx.service).removeMember(ctx.userId, input.groupId, input.userId)),
     leave: accountScoped.input(groupIdSchema).mutation(({ ctx, input }) => groups(ctx.service).leave(ctx.userId, input.groupId)),
     thread: accountScoped.input(groupThreadSchema).query(({ ctx, input }) => groups(ctx.service).thread(ctx.userId, input.groupId, { after: input.after, before: input.before })),
-    send: accountScoped.input(groupSendSchema).mutation(({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo)),
+    send: accountScoped.input(groupSendSchema).mutation(async ({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
     react: accountScoped.input(groupReactSchema).mutation(({ ctx, input }) => groups(ctx.service).react(ctx.userId, input.groupId, input.seq, input.emoji)),
     delete: accountScoped.input(groupDeleteSchema).mutation(({ ctx, input }) => groups(ctx.service).delete(ctx.userId, input.groupId, input.messageId)),
     read: accountScoped.input(groupReadSchema).mutation(({ ctx, input }) => groups(ctx.service).read(ctx.userId, input.groupId, input.seq)),
@@ -176,7 +177,7 @@ export const appRouter = t.router({
   // The global chat room (docs/CHAT.md §11). Public to every member with names, so the owner moderates it directly.
   global: t.router({
     thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(globalSendSchema).mutation(({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo)),
+    send: accountScoped.input(globalSendSchema).mutation(async ({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
     react: accountScoped.input(globalReactSchema).mutation(({ ctx, input }) => room(ctx.service).react(ctx.userId, input.seq, input.emoji)),
     delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
     edit: ownerScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
