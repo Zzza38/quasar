@@ -6,6 +6,8 @@ import { classSchema, personalScheduleSchema, type PersonalSchedule, type Schedu
 import { directoryCandidates, similarClassName } from '@/domain/class-match';
 import { slugId } from '@/lib/format';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Spacer } from './primitives';
+import { useBeta } from './betas';
+import { Icon, Spinner } from './icon';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Toggle } from './ui/toggle';
@@ -14,6 +16,9 @@ import { isPdf, readPdf, MAX_PDF_TEXT } from './pdf-pages';
 import { ScheduleSourceGuide } from './schedule-sources';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
+type ScanProgress = NonNullable<RouterOutput['scan']['progress']>;
+type CloseUp = ScanProgress['closeUps'][number];
+type Region = Pick<CloseUp, 'left' | 'top' | 'width' | 'height'>;
 /** `scanned` remembers the directory class the scanner guessed, so the link holds only while the name is the one it read. */
 type Draft = ScanRow & { include: boolean; scanned?: { name: string; directoryId: string }; correctName?: boolean; expectedVersion?: number; separate?: boolean };
 /**
@@ -24,6 +29,86 @@ type Photo = { image: string; mediaType: 'image/jpeg'; preview: string; pdf?: { 
 const MAX_EDGE = 1600;
 /** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
 const MAX_PHOTOS = 3;
+/** Members of this beta see a running scan's steps and close-ups instead of a bare busy button. */
+export const SCAN_PROGRESS_BETA = 'scan-progress';
+/** How often a running scan asks the server what it is doing. */
+const PROGRESS_POLL_MS = 1000;
+/** The thumbnail box (aspect-[3/4], object-cover) photos sit in when there are several. */
+const THUMB_ASPECT = 3 / 4;
+
+export type ScanStep = { label: string; detail?: string; state: 'done' | 'active' | 'todo' };
+/**
+ * The steps shown while a scan runs. `progress` is null until the server reports, which is while the pictures upload.
+ * The close-up step only appears once the model asks for one.
+ */
+export function scanSteps(progress: ScanProgress | null, pictures: number): ScanStep[] {
+  const closeUps = progress?.closeUps.length ?? 0;
+  const zooming = !!progress && (progress.stage === 'zooming' || (progress.stage === 'reading' && progress.round > 0));
+  const at = !progress ? 0 : progress.stage === 'checking' ? 3 : zooming ? 2 : 1;
+  const state = (step: number): ScanStep['state'] => step < at ? 'done' : step === at ? 'active' : 'todo';
+  return [
+    { label: pictures === 1 ? 'Sending your picture' : `Sending ${pictures} pictures`, state: state(0) },
+    { label: 'Reading the timetable', state: state(1) },
+    ...(zooming || closeUps > 0 ? [{ label: 'Looking closer at hard-to-read parts', state: state(2),
+      detail: progress?.stage === 'zooming' ? 'Cropping close-ups' : `${closeUps} ${closeUps === 1 ? 'close-up' : 'close-ups'} so far` }] : []),
+    { label: "Matching classes to your school's periods", state: state(3) },
+  ];
+}
+
+/** Where a close-up sits, in words: "Picture 2, top left, sharpened". */
+export function describeCloseUp(closeUp: CloseUp, pictures: number): string {
+  const across = closeUp.width >= 0.6 ? '' : ['left', 'middle', 'right'][Math.min(2, Math.floor((closeUp.left + closeUp.width / 2) * 3))];
+  const down = closeUp.height >= 0.6 ? '' : ['top', 'middle', 'bottom'][Math.min(2, Math.floor((closeUp.top + closeUp.height / 2) * 3))];
+  const where = across === 'middle' && down === 'middle' ? 'center' : [down, across].filter(Boolean).join(' ') || 'most of it';
+  const extras = [closeUp.enhance ? 'sharpened' : '', closeUp.rotate ? 'turned' : ''].filter(Boolean);
+  return [pictures > 1 ? `Picture ${closeUp.photo}` : 'Close-up', where, ...extras].join(', ');
+}
+
+/**
+ * A close-up's region (fractions of the full picture) as fractions of a thumbnail that shows `image` with object-cover
+ * in a box of aspect `box`, which trims the longer side evenly. Without `box` the thumbnail shows the whole picture.
+ * Null when the region falls outside what the thumbnail shows.
+ */
+export function visibleRegion(region: Region, image?: { width: number; height: number }, box?: number): Region | null {
+  if (!box) return region;
+  if (!image || !image.width || !image.height) return null;
+  const ratio = image.width / image.height;
+  const shownX = ratio > box ? box / ratio : 1, shownY = ratio > box ? 1 : ratio / box;
+  const left = (region.left - (1 - shownX) / 2) / shownX, top = (region.top - (1 - shownY) / 2) / shownY;
+  const right = Math.min(1, left + region.width / shownX), bottom = Math.min(1, top + region.height / shownY);
+  const shownLeft = Math.max(0, left), shownTop = Math.max(0, top);
+  return right > shownLeft && bottom > shownTop ? { left: shownLeft, top: shownTop, width: right - shownLeft, height: bottom - shownTop } : null;
+}
+
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
+/** What a running scan is doing: the steps, how long it has taken, and each close-up the model asked for. */
+function ScanProgressPanel({ progress, elapsed, pictures }: { progress: ScanProgress | null; elapsed: number; pictures: number }) {
+  const steps = scanSteps(progress, pictures);
+  const current = steps.find(step => step.state === 'active');
+  return <div className="grid gap-3 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-semibold">Reading your schedule</span><Spacer />
+      <span className="text-sm tabular-nums text-muted-foreground" aria-label={`${elapsed} seconds so far`}>{clock(elapsed)}</span>
+    </div>
+    <ol className="grid gap-2" aria-label="Scan progress">
+      {steps.map(step => <li key={step.label} className={step.state === 'todo' ? 'flex items-start gap-2 text-sm text-muted-foreground' : 'flex items-start gap-2 text-sm'}>
+        <span className="mt-0.5 grid size-4 place-items-center">
+          {step.state === 'done' ? <Icon name="check" size={16} className="text-primary" /> : step.state === 'active' ? <Spinner size={16} className="text-primary" /> : <span className="size-1.5 rounded-full bg-muted-foreground/50" />}
+        </span>
+        <span className="grid gap-0.5">
+          <span className={step.state === 'active' ? 'font-semibold' : undefined}>{step.label}</span>
+          {step.detail && step.state !== 'todo' && <span className="text-xs text-muted-foreground">{step.detail}</span>}
+        </span>
+      </li>)}
+    </ol>
+    {progress && progress.closeUps.length > 0 && <ul className="flex flex-wrap gap-1.5" aria-label="Close-ups the scanner took">
+      {progress.closeUps.map((closeUp, index) => <li key={index}><Chip tone="neutral" icon="search">{describeCloseUp(closeUp, pictures)}</Chip></li>)}
+    </ul>}
+    <span className="sr-only" role="status">{current ? `${current.label}${current.detail ? `. ${current.detail}` : ''}` : ''}</span>
+    <Hint>A scan can take up to two minutes. Most of that is the model reading.</Hint>
+  </div>;
+}
 
 /** Downscales the photo in the browser so uploads stay small and the model gets a clean JPEG. */
 export async function prepareImage(file: File): Promise<Photo> {
@@ -194,10 +279,15 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const [free, setFree] = useState<string[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
+  const showProgress = useBeta(SCAN_PROGRESS_BETA);
+  /** Set while a scan runs: `id` is the progress ID it reports under, so a late poll from an earlier scan is ignored. */
+  const [scanning, setScanning] = useState<{ id: string; started: number; elapsed: number; progress: ScanProgress | null } | null>(null);
+  /** Each picture's pixel size, by preview, to place close-up boxes on a cropped thumbnail. */
+  const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [error, setError] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
   const clearResult = () => { setRows(null); setFreeFound([]); setFree([]); setNotes([]); };
-  useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setLimited(false); clearResult(); setError(''); setSavedNotice(''); } }, [open]);
+  useEffect(() => { if (!open) { setPhotos([]); setPdfTexts({}); setSizes({}); setLimited(false); clearResult(); setError(''); setSavedNotice(''); } }, [open]);
   const run = async (action: () => Promise<void>) => { setPending(true); setError(''); try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); } };
   const choose = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -245,7 +335,26 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const scan = () => run(async () => {
     if (photos.length === 0) return;
     const text = Object.values(pdfTexts).join('\n\n').slice(0, MAX_PDF_TEXT);
-    const result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}) });
+    const progressId = showProgress ? crypto.randomUUID() : undefined;
+    const started = Date.now();
+    if (progressId) setScanning({ id: progressId, started, elapsed: 0, progress: null });
+    // The scan is one long request; this asks the server what it is doing meanwhile. A failed poll just waits for the next.
+    let asking = false;
+    const poll = progressId && setInterval(() => {
+      setScanning(current => current?.id === progressId ? { ...current, elapsed: Math.floor((Date.now() - started) / 1000) } : current);
+      if (asking) return;
+      asking = true;
+      api.scan.progress.query({ progressId })
+        .then(progress => { if (progress) setScanning(current => current?.id === progressId ? { ...current, progress } : current); }, () => {})
+        .finally(() => { asking = false; });
+    }, PROGRESS_POLL_MS);
+    let result: RouterOutput['scan']['schedule'];
+    try {
+      result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}), ...(progressId ? { progressId } : {}) });
+    } finally {
+      if (poll) clearInterval(poll);
+      setScanning(null);
+    }
     setRows(result.rows.map(draftRow));
     setFreeFound(result.freePeriodIds);
     setFree(result.freePeriodIds);
@@ -320,8 +429,15 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
       <div className="grid content-start gap-2">
         <ul className={photos.length === 1 ? 'grid gap-2' : 'grid grid-cols-2 gap-2'} aria-label="Timetable photos">
           {photos.map((photo, index) => <li key={index} className="relative">
-              <img src={photo.preview} alt={photo.pdf ? `Page ${photos.slice(0, index + 1).filter(entry => entry.pdf?.id === photo.pdf!.id).length} of ${photo.pdf.name}` : index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
+              <img src={photo.preview} onLoad={event => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; setSizes(current => current[photo.preview] ? current : { ...current, [photo.preview]: { width, height } }); }} alt={photo.pdf ? `Page ${photos.slice(0, index + 1).filter(entry => entry.pdf?.id === photo.pdf!.id).length} of ${photo.pdf.name}` : index === 0 ? 'Your timetable photo' : `Your timetable photo ${index + 1}`}
                 className={photos.length === 1 ? 'w-full rounded-2xl bg-muted object-contain ring-1 ring-foreground/[0.06]' : 'aspect-[3/4] w-full rounded-xl bg-muted object-cover ring-1 ring-foreground/[0.06]'} />
+              {scanning?.progress?.closeUps.map((closeUp, number) => {
+                if (closeUp.photo !== index + 1) return null;
+                const shown = visibleRegion(closeUp, sizes[photo.preview], photos.length === 1 ? undefined : THUMB_ASPECT);
+                const latest = number === scanning.progress!.closeUps.length - 1;
+                return shown && <span key={number} aria-hidden="true" className={latest ? 'pointer-events-none absolute rounded-sm bg-primary/10 ring-2 ring-primary' : 'pointer-events-none absolute rounded-sm ring-1 ring-primary/60'}
+                  style={{ left: `${shown.left * 100}%`, top: `${shown.top * 100}%`, width: `${shown.width * 100}%`, height: `${shown.height * 100}%` }} />;
+              })}
               <IconButton label={photo.pdf ? `Remove page ${index + 1}` : `Remove photo ${index + 1}`} icon="x" size="sm" variant="secondary" disabled={pending} className="absolute right-1.5 top-1.5 rounded-full" onClick={() => remove(index)} />
             </li>)}
         </ul>
@@ -331,7 +447,8 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
         <Hint>Files are sent to the scanning service for this scan only and are not stored.</Hint>
       </div>
       <div className="grid content-start gap-3">
-        {!rows && <Hint>Ready. Tap Read schedule.</Hint>}
+        {scanning ? <ScanProgressPanel progress={scanning.progress} elapsed={scanning.elapsed} pictures={photos.length} />
+          : !rows && <Hint>Ready. Tap Read schedule.</Hint>}
         {notes.map(note => <Callout key={note} tone="info" icon="info">{note}</Callout>)}
         {rows && rows.length > 0 && <>
           <Hint>{rows.length} {rows.length === 1 ? 'class was' : 'classes were'} found. Fix anything that was misread, pick every period each class meets in, and untick what you do not take.</Hint>

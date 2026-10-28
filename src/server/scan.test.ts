@@ -433,6 +433,22 @@ describe('close-ups and unclear photos', () => {
     expect(parts.find(part => part.image_url)?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
   });
 
+  it('reports each step, with the close-ups it made, so the browser can show the scan moving', async () => {
+    const fetcher = vi.fn<ScanFetch>()
+      .mockResolvedValueOnce(reply({ content: null, tool_calls: [look('a', { photo: 1, left: 0.5, top: 0, width: 0.5, height: 0.5, enhance: true }), look('b', { photo: 2, left: 0, top: 0, width: 1, height: 1 })] }))
+      .mockResolvedValueOnce(answer([{ className: 'Art', periodIds: [firstPeriod.id] }]));
+    const f = fixture(fetcher);
+    const report = vi.fn();
+    await f.scan.scan(f.student, { images: [await picture()] }, report);
+    expect(report.mock.calls.map(([progress]) => progress)).toEqual([
+      { stage: 'reading', round: 0, closeUps: [] },
+      { stage: 'zooming', round: 0, closeUps: [] },
+      // The call naming a missing photo made no close-up, so it is not reported.
+      { stage: 'reading', round: 1, closeUps: [{ photo: 1, left: 0.5, top: 0, width: 0.5, height: 0.5, enhance: true }] },
+      { stage: 'checking', round: 0, closeUps: [] },
+    ]);
+  });
+
   it('stops offering close-ups after the round and close-up limits', async () => {
     const photo = await picture();
     const many = Array.from({ length: 4 }, (_, i) => look(`c${i}`, { photo: 1, left: 0, top: 0, width: 1, height: 1 }));

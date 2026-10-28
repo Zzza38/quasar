@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyScan, clearedClasses, draftRow, freedPeriods, keptDetails, periodClashes, photoError, renameRow, replacedClasses } from './scan-schedule';
+import { applyScan, clearedClasses, describeCloseUp, draftRow, freedPeriods, keptDetails, periodClashes, photoError, renameRow, replacedClasses, scanSteps, visibleRegion } from './scan-schedule';
 import { emptyPersonalSchedule } from '@/domain/schedule';
 
 const DIR = '3f6e4a2b-1c5d-4e8f-9a0b-2c3d4e5f6a7b';
@@ -166,5 +166,46 @@ describe('photo errors', () => {
     expect(photoError(2, [{ name: 'bad.heic', message: unreadable }], 1)).toBe(`bad.heic: ${unreadable} The other photo was added.`);
     expect(photoError(3, [{ name: 'a.heic', message: unreadable }, { name: 'b.heic', message: unreadable }], 1)).toBe(`a.heic: ${unreadable} b.heic: ${unreadable} The other photo was added.`);
     expect(photoError(2, [{ name: '', message: canvas }, { name: 'b.png', message: unreadable }], 0)).toBe(`A file: ${canvas} b.png: ${unreadable}`);
+  });
+});
+
+describe('scan progress', () => {
+  const states = (steps: ReturnType<typeof scanSteps>) => steps.map(step => `${step.state} ${step.label}`);
+  it('walks through sending, reading, close-ups and matching', () => {
+    expect(states(scanSteps(null, 2))).toEqual(['active Sending 2 pictures', 'todo Reading the timetable', "todo Matching classes to your school's periods"]);
+    expect(states(scanSteps({ stage: 'reading', round: 0, closeUps: [] }, 1))).toEqual(['done Sending your picture', 'active Reading the timetable', "todo Matching classes to your school's periods"]);
+    const zooming = scanSteps({ stage: 'zooming', round: 0, closeUps: [] }, 1);
+    expect(states(zooming)).toEqual(['done Sending your picture', 'done Reading the timetable', 'active Looking closer at hard-to-read parts', "todo Matching classes to your school's periods"]);
+    expect(zooming[2].detail).toBe('Cropping close-ups');
+    const closeUp = { photo: 1, left: 0, top: 0, width: 0.5, height: 0.5 };
+    expect(scanSteps({ stage: 'reading', round: 1, closeUps: [closeUp, closeUp] }, 1)[2].detail).toBe('2 close-ups so far');
+    // A scan that zoomed keeps the close-up step, done, while it matches.
+    expect(states(scanSteps({ stage: 'checking', round: 0, closeUps: [closeUp] }, 1))).toEqual(['done Sending your picture', 'done Reading the timetable', 'done Looking closer at hard-to-read parts', "active Matching classes to your school's periods"]);
+  });
+
+  it('says where each close-up is', () => {
+    expect(describeCloseUp({ photo: 2, left: 0, top: 0, width: 0.3, height: 0.3, enhance: true }, 2)).toBe('Picture 2, top left, sharpened');
+    expect(describeCloseUp({ photo: 1, left: 0.4, top: 0.4, width: 0.2, height: 0.2 }, 1)).toBe('Close-up, center');
+    expect(describeCloseUp({ photo: 1, left: 0, top: 0.7, width: 1, height: 0.3, rotate: 90 }, 1)).toBe('Close-up, bottom, turned');
+    expect(describeCloseUp({ photo: 1, left: 0, top: 0, width: 1, height: 1 }, 1)).toBe('Close-up, most of it');
+  });
+
+  it('places a close-up box on a cropped thumbnail', () => {
+    const region = { left: 0.5, top: 0, width: 0.5, height: 1 };
+    // A whole-picture thumbnail shows the region as it is.
+    expect(visibleRegion(region)).toEqual(region);
+    // A wide 1600 × 600 picture in a 3:4 box shows its middle 28%, so the right half starts past the centre and runs off the edge.
+    const wide = visibleRegion(region, { width: 1600, height: 600 }, 3 / 4)!;
+    expect(wide.left).toBeCloseTo(0.5);
+    expect(wide.width).toBeCloseTo(0.5);
+    expect(wide.top).toBe(0);
+    expect(wide.height).toBe(1);
+    expect(visibleRegion({ left: 0, top: 0, width: 0.1, height: 1 }, { width: 1600, height: 600 }, 3 / 4)).toBeNull();
+    // A tall 600 × 1600 picture shows its middle half, trimmed top and bottom instead.
+    const tall = visibleRegion({ left: 0, top: 0.3, width: 1, height: 0.2 }, { width: 600, height: 1600 }, 3 / 4)!;
+    expect(tall.left).toBe(0);
+    expect(tall.top).toBeCloseTo(0.1);
+    expect(tall.height).toBeCloseTo(0.4);
+    expect(visibleRegion(region, undefined, 3 / 4)).toBeNull();
   });
 });
