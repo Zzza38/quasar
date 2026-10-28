@@ -286,7 +286,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
       setRows(linked);
     }
     await onSave(applyScan(personal, linked, free));
-    if (skipped) setSavedNotice(directory.canAdd ? 'Classes added to your timetable. The school directory is locked, so spelling corrections were saved in your personal copy only.' : 'Classes added to your timetable. The school directory is locked, so new classes and spelling corrections were saved in your personal copy only.');
+    if (skipped) setSavedNotice('Classes added to your timetable. The school directory is locked, so spelling corrections were saved in your personal copy only.');
     else onClose();
   });
   const label = (periodId: string) => schedule.periods.find(period => period.id === periodId)?.label ?? periodId;
@@ -305,7 +305,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true" aria-label="Take a timetable photo" onChange={choose} />
     {error && <Callout tone="danger" icon="alert" role="alert" actions={rows ? <Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory matches</Button> : undefined}>{error}</Callout>}
     {directoryError && <Callout tone="warning" role="alert" actions={<Button size="sm" disabled={pending || !online} onClick={reviewDirectory}>Reload directory</Button>}>{directoryError}</Callout>}
-    {rows && directory && <Hint>{directory.canEdit ? 'Existing directory classes are reused. New included classes are also added to the school directory when you add them to your timetable.' : directory.canAdd ? 'Existing directory classes are reused, and new classes are added to the school directory. Editing shared classes is locked, so spelling corrections stay in your personal copy.' : 'The school directory is locked. You can reuse its classes; new classes and spelling corrections will stay in your personal copy.'}</Hint>}
+    {rows && directory && <Hint>{directory.canEdit ? 'Existing directory classes are reused. New included classes are also added to the school directory when you add them to your timetable.' : 'Existing directory classes are reused, and new classes are added to the school directory. Editing shared classes is locked, so spelling corrections stay in your personal copy.'}</Hint>}
     {unresolved && <Hint tone="danger">Confirm the possible directory matches below before adding your classes.</Hint>}
     {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
     {photos.length === 0 && !rows ? <div className="grid gap-4">
