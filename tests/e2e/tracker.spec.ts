@@ -75,45 +75,51 @@ async function touchDrag(page: Page, from: Point, to: Point, { hold = 400, befor
   } finally { await cdp.detach().catch(() => {}); }
 }
 
+/** The opacity of a countdown form's first character: "1" once it has cascaded in, "0" once it has cascaded out. */
+const shown = (form: Locator) => form.locator('span').first().evaluate((char) => getComputedStyle(char).opacity);
+
 test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
   await page.goto('/');
   const countdown = page.getByRole('button', { name: /^Ends in/ });
-  const tails = countdown.locator(':scope > span').filter({ has: page.locator('span') });
-  await expect(countdown).toBeVisible();
+  const minutesForm = countdown.locator('[data-shown]').first();
+  const secondsForm = countdown.locator('[data-shown]').last();
   await expect(countdown).toHaveAccessibleName('Ends in 9 min');
-  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+  await expect.poll(() => shown(secondsForm)).toBe('0');
   await countdown.hover();
   await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
-  await expect.poll(async () => (await tails.first().boundingBox())?.width).toBe(0);
-  await expect.poll(async () => (await tails.last().boundingBox())?.width ?? 0).toBeGreaterThan(10);
+  await expect.poll(() => shown(minutesForm)).toBe('0');
+  await expect.poll(() => shown(secondsForm)).toBe('1');
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:38Z'));
   await expect(countdown).toHaveAccessibleName('Ends in 8:22 (minutes and seconds)');
   await page.mouse.move(0, 0);
-  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+  await expect.poll(() => shown(secondsForm)).toBe('0');
   await page.keyboard.press('Tab');
   await countdown.focus();
   await expect(countdown).toHaveAccessibleName('Ends in 8:22 (minutes and seconds)');
   await page.keyboard.press('Tab');
-  await expect.poll(async () => (await tails.last().boundingBox())?.width).toBe(0);
+  await expect.poll(() => shown(secondsForm)).toBe('0');
 });
 
-test('countdown stays revealed while hovered near its left edge', async ({ page, context }) => {
+test('countdown stays revealed and keeps its width while hovered at the number\'s edge', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
   await page.goto('/');
   const countdown = page.getByRole('button', { name: /^Ends in/ });
   await expect(countdown).toHaveAccessibleName('Ends in 9 min');
-  // "8:23" is narrower than "9 min", so the right-aligned button used to shrink out from under this point and flicker.
   const box = (await countdown.boundingBox())!;
-  await countdown.hover({ position: { x: 4, y: box.height / 2 } });
+  const number = (await countdown.locator('[data-shown]').first().boundingBox())!;
+  // Where "9 min" starts: "8:23" is narrower, so a button that resized shrank out from under this point and flickered.
+  await countdown.hover({ position: { x: number.x - box.x + 2, y: box.height / 2 } });
   await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
   // The flicker cycles every few frames, so sample often for a full second rather than once.
   for (let check = 0; check < 20; check++) {
     await page.waitForTimeout(50);
     expect(await countdown.getAttribute('aria-label')).toBe('Ends in 8:23 (minutes and seconds)');
   }
+  // Both forms share one grid cell, so revealing the seconds never resizes the button.
+  expect((await countdown.boundingBox())!.width).toBe(box.width);
   await page.mouse.move(0, 0);
   await expect(countdown).toHaveAccessibleName('Ends in 9 min');
 });
@@ -131,7 +137,7 @@ test.describe('touch countdown', () => {
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
     await expect(countdown).toHaveAttribute('aria-pressed', 'true');
-    await expect(countdown.locator(':scope > span').last()).toHaveCSS('transition-duration', '0s');
+    await expect(countdown.locator('[data-shown] > span').first()).toHaveCSS('transition-duration', '0s');
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 9 min');
     await expect(countdown).toHaveAttribute('aria-pressed', 'false');
