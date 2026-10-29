@@ -654,7 +654,7 @@ function migrate(db: Db): void {
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(26, datetime('now'))");
 
-  // Migration 27: calendar-link guides (src/server/feed-guides.ts). `feed_platforms` is the school's comma-separated
+  // Migration 27: calendar-link guides (src/server/setup-guides.ts). `feed_platforms` is the school's comma-separated
   // platforms, '' when support has not picked any. A feed_guides row with school_id '' rewrites a platform's guide for
   // every school; one with a school id rewrites it for that school only. Screenshots live in feed_guide_images.
   if (!(db.pragma('table_info(schools)') as { name: string }[]).some(column => column.name === 'feed_platforms')) {
