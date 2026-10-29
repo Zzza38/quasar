@@ -523,7 +523,7 @@ describe('10. what the owner can see', () => {
       'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
       'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
-      'betas.list', 'betas.removeMember', 'feedGuides', 'saveFeedGuide', 'setFeedPlatforms', 'uploadGuideImage',
+      'betas.list', 'betas.removeMember', 'guides', 'saveGuide', 'setGuidePlatforms', 'uploadGuideImage',
     ].map(name => `admin.${name}`).sort());
   });
   it('shows chat text only through an audited report snapshot', async () => {

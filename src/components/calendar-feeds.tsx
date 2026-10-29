@@ -6,8 +6,8 @@ import { formatTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
 import { Button, Callout, Chip, ErrorText, Eyebrow, Hint, Modal, Panel } from './primitives';
-import { FeedGuide, FeedSubscribeForm } from './feed-guide';
-import { platformNames } from '@/domain/feed-guides';
+import { FeedGuide, FeedSubscribeForm } from './setup-guide';
+import { platformNames } from '@/domain/setup-guides';
 
 /**
  * The Connected calendars block of the Account sheet. `openAdd` counts requests to open the Add dialog (the setup
@@ -56,7 +56,7 @@ export function CalendarFeeds({ state, openAdd = 0 }: { state: AppState; openAdd
       </Callout>;
     })}
     {subscriptions.length === 0 && <Panel className="grid gap-2 text-sm text-muted-foreground">
-      <span>No calendars yet. {platformNames(state.context.feedGuides) || 'Most school portals'} can give you a calendar link that brings your assignments in as tasks.</span>
+      <span>No calendars yet. {platformNames('calendar', state.context.feedGuides) || 'Most school portals'} can give you a calendar link that brings your assignments in as tasks.</span>
       <button type="button" className="w-fit text-left font-semibold text-primary hover:underline" aria-expanded={guideOpen} onClick={() => setGuideOpen((open) => !open)}>{guideOpen ? 'Hide instructions' : 'Show me where to find it'}</button>
       {guideOpen && <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/[0.06]"><FeedGuide guides={state.context.feedGuides} compact /></div>}
     </Panel>}

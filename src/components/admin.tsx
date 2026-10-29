@@ -21,7 +21,7 @@ import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type Mem
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
 import { GuideAdmin, SchoolGuideSheet } from './admin-guides';
-import { FEED_PLATFORM_NAMES } from '@/domain/feed-guides';
+import { guideName } from '@/domain/setup-guides';
 import { BetaProvider, type JoinedBeta } from './betas';
 
 type Request = RouterOutput['admin']['requests'][number];
@@ -229,7 +229,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
         <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
         <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
-        <TabsTrigger value="guides" className={TAB_CLASS}>Setup guide</TabsTrigger>
+        <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>
         <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>
         <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
       </TabsList></div>
@@ -241,7 +241,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           <TableBody>{visible.map((entry) => <TableRow key={entry.id}>
             <TableCell className="whitespace-normal"><strong className="text-sm font-bold">{entry.name}</strong><Hint>{entry.location}</Hint></TableCell>
             <TableCell className="tabular-nums">{entry.memberCount}</TableCell>
-            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}{entry.feedPlatforms.map((platform) => <Chip key={platform} tone="outline" icon="calendar">{FEED_PLATFORM_NAMES[platform]}</Chip>)}</div></TableCell>
+            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}{entry.feedPlatforms.map((platform) => <Chip key={`calendar-${platform}`} tone="outline" icon="calendar">{guideName('calendar', platform, undefined)}</Chip>)}{entry.schedulePlatforms.map((platform) => <Chip key={`schedule-${platform}`} tone="outline" icon="clock">{guideName('schedule', platform, undefined)}</Chip>)}</div></TableCell>
             <TableCell className="tabular-nums">{entry.version}</TableCell>
             <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" onClick={() => setGuideSchool(entry.id)} aria-label={`Setup guide for ${entry.name}`}>Setup</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
           </TableRow>)}</TableBody>

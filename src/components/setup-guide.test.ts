@@ -1,8 +1,11 @@
 import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DEFAULT_FEED_GUIDES, FEED_PLATFORMS, platformNames, type FeedGuides } from '@/domain/feed-guides';
-import { FeedGuide } from './feed-guide';
+import { DEFAULT_GUIDE_SETS, FEED_PLATFORMS, platformNames, SCHEDULE_PLATFORMS, type GuideSet } from '@/domain/setup-guides';
+import { ScheduleSourceGuide } from './schedule-sources';
+import { FeedGuide } from './setup-guide';
+
+const DEFAULT_FEED_GUIDES = DEFAULT_GUIDE_SETS.calendar.guides;
 
 const render = (props: Parameters<typeof FeedGuide>[0]) => renderToStaticMarkup(createElement(FeedGuide, props));
 
@@ -30,7 +33,7 @@ describe('FeedGuide', () => {
   });
 
   it('shows only the school’s platform, without tabs, plus a way to the others', () => {
-    const guides: FeedGuides = { platforms: ['schoology'], guides: { ...DEFAULT_FEED_GUIDES, schoology: { steps: [{ text: 'Click **Export**', image: '0b5e8f9c-3f0e-4d7a-9a51-7c1f3f2b6d10' }], note: 'Ask your teacher.' } } };
+    const guides: GuideSet = { platforms: ['schoology'], guides: { ...DEFAULT_FEED_GUIDES, schoology: { steps: [{ text: 'Click **Export**', image: '0b5e8f9c-3f0e-4d7a-9a51-7c1f3f2b6d10' }], note: 'Ask your teacher.' } } };
     const html = render({ guides, initial: 'canvas' });
     expect(html).not.toContain('role="tab"');
     expect(html).toContain('In Schoology');
@@ -42,11 +45,34 @@ describe('FeedGuide', () => {
   });
 
   it('offers just the school’s platforms as tabs, under their own names', () => {
-    const guides: FeedGuides = { platforms: ['classroom', 'other'], guides: { ...DEFAULT_FEED_GUIDES, other: { ...DEFAULT_FEED_GUIDES.other, name: 'Blackbaud' } } };
+    const guides: GuideSet = { platforms: ['classroom', 'other'], guides: { ...DEFAULT_FEED_GUIDES, other: { ...DEFAULT_FEED_GUIDES.other, name: 'Blackbaud' } } };
     const tabs = render({ guides }).match(/<button[^>]*role="tab"[^>]*>[^<]*/g) ?? [];
     expect(tabs.map((tab) => tab.replace(/^.*>/, ''))).toEqual(['Google Classroom', 'Blackbaud']);
-    expect(platformNames(guides)).toBe('Google Classroom or Blackbaud');
-    expect(platformNames({ ...guides, platforms: ['schoology', 'canvas', 'other'], guides: DEFAULT_FEED_GUIDES })).toBe('Schoology or Canvas');
-    expect(platformNames(undefined)).toBe('');
+    expect(platformNames('calendar', guides)).toBe('Google Classroom or Blackbaud');
+    expect(platformNames('calendar', { ...guides, platforms: ['schoology', 'canvas', 'other'], guides: DEFAULT_FEED_GUIDES })).toBe('Schoology or Canvas');
+    expect(platformNames('calendar', undefined)).toBe('');
+  });
+});
+
+describe('ScheduleSourceGuide', () => {
+  const html = (props: Parameters<typeof ScheduleSourceGuide>[0]) => renderToStaticMarkup(createElement(ScheduleSourceGuide, props));
+
+  it('offers every portal until support picks the school’s, and the Veracross sync only when asked', () => {
+    const all = html({});
+    expect(all.match(/role="tab"/g)).toHaveLength(SCHEDULE_PLATFORMS.length);
+    expect(all).toMatch(/aria-label="Where is your schedule\?"/);
+    expect(all).not.toContain('Connect a calendar subscription');
+    expect(html({ onConnectFeed: () => {} })).toContain('Connect a calendar subscription');
+  });
+
+  it('shows only the school’s portal, with support’s wording', () => {
+    const guides: GuideSet = { platforms: ['blackbaud'], guides: { ...DEFAULT_GUIDE_SETS.schedule.guides, blackbaud: { steps: [{ text: 'Open **Resources**' }], note: '' } } };
+    const shown = html({ guides, onConnectFeed: () => {} });
+    expect(shown).not.toContain('role="tab"');
+    expect(shown).toContain('In Blackbaud');
+    expect(shown).toContain('Open <b class="font-bold text-foreground">Resources</b>');
+    expect(shown).not.toContain('Connect a calendar subscription');
+    expect(shown).toContain('My school uses something else');
+    expect(platformNames('schedule', guides)).toBe('Blackbaud');
   });
 });
