@@ -13,6 +13,9 @@ const MOCK_PORT = Number(new URL(process.env.SCAN_API_URL ?? 'http://127.0.0.1:3
 let mock: Server;
 const requests: Array<{ model: string; images: string[]; prompt: string }> = [];
 let directoryId = '';
+/** When set, the mock model first asks for a close-up and takes its time on each answer, like a real reasoning model. */
+let slowZoom = false;
+const ZOOM_DELAY_MS = 2_500;
 
 test.beforeAll(async () => {
   mock = createServer((req, res) => {
@@ -21,8 +24,13 @@ test.beforeAll(async () => {
     req.on('end', () => {
       const body = JSON.parse(raw);
       const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+      const followUp = body.messages.length > 2;
+      if (slowZoom && !followUp) {
+        const call = { id: 'zoom-1', type: 'function', function: { name: 'look_closer', arguments: JSON.stringify({ photo: 2, left: 0, top: 0, width: 0.4, height: 0.4, enhance: true }) } };
+        setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: null, reasoning: '**Checking the second picture**\n\nThe top-left block names are small, so I will zoom in before reading them.', tool_calls: [call] } }] })); }, ZOOM_DELAY_MS);
+      }
       // Record every photo part so the test can check a multi-photo scan arrives as one request.
-      requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
+      if (!followUp) requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
       const rows = [
         { className: 'Algebra II', periodIds: ['A', 'C'], directoryId, days: ['Day 1', 'Day 3'] },
         { className: 'World History', teacher: 'Mr. Adeyemi', room: '118', periodLabel: 'B' },
@@ -30,8 +38,11 @@ test.beforeAll(async () => {
         // A free block printed as "Unassigned" is a free period, not a class.
         { className: 'Unassigned', periodIds: ['D'] },
       ];
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }));
+      if (slowZoom && !followUp) return;
+      setTimeout(() => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }));
+      }, slowZoom ? ZOOM_DELAY_MS : 0);
     });
   });
   await new Promise<void>(resolve => mock.listen(MOCK_PORT, '127.0.0.1', resolve));
@@ -91,9 +102,23 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(dialog.getByText('Up to three pages or photos are read. Keep the pages that show your classes.')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Remove photo 1' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Remove photo 2' })).toBeVisible();
+  slowZoom = true;
   await dialog.getByRole('button', { name: 'Read schedule' }).click();
 
+  // While the model reads, the sheet shows what the scan is doing instead of a bare spinner.
+  const steps = dialog.getByRole('list', { name: 'Scan progress' }).getByRole('listitem');
+  await expect(steps.filter({ hasText: 'Reading the timetable' })).toBeVisible();
+  await expect(dialog.getByText('A scan can take up to two minutes.')).toBeVisible();
+  await expect(steps.filter({ hasText: 'Looking closer at hard-to-read parts' })).toContainText('1 close-up so far');
+  await expect(dialog.getByRole('list', { name: 'Close-ups the scanner took' })).toHaveText('Picture 2, top left, sharpened');
+  // The model's own summary of its thinking, flattened to one line.
+  await expect(dialog.getByText('What the scanner is thinking')).toBeVisible();
+  await expect(dialog.getByText('Checking the second picture The top-left block names are small, so I will zoom in before reading them.', { exact: true })).toBeVisible();
+  await dialog.screenshot({ path: testInfo.outputPath('scan-progress.png') });
+
   await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  slowZoom = false;
+  await expect(dialog.getByRole('list', { name: 'Scan progress' })).toHaveCount(0);
   expect(requests).toHaveLength(1);
   expect(requests[0].model).toBe('mock-vision');
   expect(requests[0].images).toHaveLength(2);

@@ -7,6 +7,7 @@ import { CalendarService, listSubscriptions, subscribeSchema } from './calendar'
 import { ScheduleFeedService, connectScheduleFeedSchema, previewScheduleFeedSchema } from './schedule-feed';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema, directoryPublishSchema, directoryConfirmSchema, directoryMergeSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
+import { scanProgress, withScanProgress } from './scan-progress';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ScheduleSignalsService } from './schedule-signals';
@@ -194,7 +195,9 @@ export const appRouter = t.router({
   }),
   scan: t.router({
     status: authenticated.query(({ ctx }) => ({ enabled: new ScanService(ctx.service).enabled() })),
-    schedule: accountScoped.input(scanInputSchema).mutation(({ ctx, input }) => new ScanService(ctx.service).scan(ctx.userId, input)),
+    schedule: accountScoped.input(scanInputSchema).mutation(({ ctx, input }) => withScanProgress(ctx.userId, input.progressId, report => new ScanService(ctx.service).scan(ctx.userId, input, report))),
+    /** Polled by the browser while its scan runs; null before the scan starts reading and after it ends. */
+    progress: authenticated.input(z.object({ progressId: z.uuid() })).query(({ ctx, input }) => scanProgress(ctx.userId, input.progressId)),
   }),
   calendar: t.router({
     list: authenticated.query(({ ctx }) => listSubscriptions(ctx.service.db, ctx.userId)),
