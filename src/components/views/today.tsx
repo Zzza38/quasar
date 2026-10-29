@@ -168,9 +168,7 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
         </div>
         <div className="grid justify-items-start gap-1 sm:justify-items-end">
           {countdown
-            ? <Beta id="countdown-cascade" fallback={<Countdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} minutes={until} />}>
-              <CascadeCountdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} minutes={until} />
-            </Beta>
+            ? <Countdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} minutes={until} />
             : <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{when}</span>}
         </div>
       </div>
@@ -188,57 +186,12 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
 
 /**
  * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
- * tapped. Minutes round up in both modes (see minutesLeft). The shared leading text
- * stays put; the differing tails slide open/closed. While hovered the button keeps at
- * least its width from when the pointer entered: the seconds form is usually narrower,
- * and the right-aligned button would otherwise shrink out from under a pointer near
- * its left edge, end the hover, grow back and flicker.
- */
-function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
-  const [hoverWidth, setHoverWidth] = useState<number | null>(null);
-  const [focus, setFocus] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const [tick, setTick] = useState(() => Date.now());
-  const hover = hoverWidth !== null;
-  const precise = hover || focus || pinned;
-  useEffect(() => {
-    if (!precise) return;
-    const timer = setInterval(() => setTick(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [precise]);
-  const seconds = precise ? Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000)) : minutes * 60;
-  const compact = formatMinutes(precise ? Math.ceil(seconds / 60) : minutes);
-  const exact = formatSeconds(seconds);
-  let shared = 0;
-  while (shared < compact.length && shared < exact.length && compact[shared] === exact[shared]) shared += 1;
-  // Refresh the clock in the same event as the state change so the first precise frame is current.
-  const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };
-  return <button type="button" className="display-number inline-flex cursor-pointer items-baseline whitespace-pre rounded-xl text-[30px] font-extrabold leading-none text-white outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:text-[38px]"
-    style={hoverWidth === null ? undefined : { minWidth: hoverWidth }}
-    aria-label={precise ? `${label} ${exact} (${seconds >= 3600 ? 'hours, minutes and seconds' : 'minutes and seconds'})` : `${label} ${compact}`} aria-pressed={pinned} title={pinned ? 'Hide seconds' : 'Show seconds'}
-    onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHoverWidth(event.currentTarget.getBoundingClientRect().width); }} onPointerLeave={() => setHoverWidth(null)}
-    onFocus={(event) => show(setFocus, event.currentTarget.matches(':focus-visible'))()} onBlur={show(setFocus, false)} onClick={show(setPinned, !pinned)}>
-    <small aria-hidden="true" className="mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white">{label}</small>
-    <span aria-hidden="true">{compact.slice(0, shared)}</span>
-    <Reveal open={!precise}>{compact.slice(shared)}</Reveal>
-    <Reveal open={precise}>{exact.slice(shared)}</Reveal>
-  </button>;
-}
-
-/** Animates its text between zero and natural width. */
-function Reveal({ open, children }: { open: boolean; children: ReactNode }) {
-  return <span aria-hidden="true" className={cn('inline-grid transition-[grid-template-columns] duration-300 ease-out', open ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]')}>
-    <span className="min-w-0 overflow-hidden whitespace-pre">{children}</span>
-  </span>;
-}
-
-/**
- * Countdown for the countdown-cascade beta. Both forms share one grid cell, so the
- * button is always as wide as the wider form and nothing under the pointer changes
- * size; the hover can't end and restart itself. The characters cascade between the
+ * tapped. Minutes round up in both modes (see minutesLeft). Both forms share one grid
+ * cell, so the button is always as wide as the wider form and nothing under the pointer
+ * changes size; the hover can't end and restart itself. The characters cascade between the
  * forms, and each changed digit rolls in as the seconds tick.
  */
-function CascadeCountdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
+function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
   const [pinned, setPinned] = useState(false);
