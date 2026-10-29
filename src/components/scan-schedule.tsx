@@ -6,7 +6,6 @@ import { classSchema, personalScheduleSchema, type PersonalSchedule, type Schedu
 import { directoryCandidates, similarClassName } from '@/domain/class-match';
 import { slugId } from '@/lib/format';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Spacer } from './primitives';
-import { useBeta } from './betas';
 import { Icon, Spinner } from './icon';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
@@ -29,8 +28,6 @@ type Photo = { image: string; mediaType: 'image/jpeg'; preview: string; pdf?: { 
 const MAX_EDGE = 1600;
 /** Matches MAX_SCAN_IMAGES on the server; one scan may carry this many photos. */
 const MAX_PHOTOS = 3;
-/** Members of this beta see a running scan's steps and close-ups instead of a bare busy button. */
-export const SCAN_PROGRESS_BETA = 'scan-progress';
 /** How often a running scan asks the server what it is doing. */
 const PROGRESS_POLL_MS = 1000;
 /** The thumbnail box (aspect-[3/4], object-cover) photos sit in when there are several. */
@@ -286,7 +283,6 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const [free, setFree] = useState<string[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
-  const showProgress = useBeta(SCAN_PROGRESS_BETA);
   /** Set while a scan runs: `id` is the progress ID it reports under, so a late poll from an earlier scan is ignored. */
   const [scanning, setScanning] = useState<{ id: string; started: number; elapsed: number; progress: ScanProgress | null } | null>(null);
   /** Each picture's pixel size, by preview, to place close-up boxes on a cropped thumbnail. */
@@ -342,12 +338,12 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
   const scan = () => run(async () => {
     if (photos.length === 0) return;
     const text = Object.values(pdfTexts).join('\n\n').slice(0, MAX_PDF_TEXT);
-    const progressId = showProgress ? crypto.randomUUID() : undefined;
+    const progressId = crypto.randomUUID();
     const started = Date.now();
-    if (progressId) setScanning({ id: progressId, started, elapsed: 0, progress: null });
+    setScanning({ id: progressId, started, elapsed: 0, progress: null });
     // The scan is one long request; this asks the server what it is doing meanwhile. A failed poll just waits for the next.
     let asking = false;
-    const poll = progressId && setInterval(() => {
+    const poll = setInterval(() => {
       setScanning(current => current?.id === progressId ? { ...current, elapsed: Math.floor((Date.now() - started) / 1000) } : current);
       if (asking) return;
       asking = true;
@@ -357,9 +353,9 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     }, PROGRESS_POLL_MS);
     let result: RouterOutput['scan']['schedule'];
     try {
-      result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}), ...(progressId ? { progressId } : {}) });
+      result = await api.scan.schedule.mutate({ accountId, images: photos.map(({ image, mediaType }) => ({ image, mediaType })), ...(text ? { text } : {}), progressId });
     } finally {
-      if (poll) clearInterval(poll);
+      clearInterval(poll);
       setScanning(null);
     }
     setRows(result.rows.map(draftRow));
