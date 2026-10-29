@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Countdown hover</title>
+<style>
+  @font-face { font-family: Manrope; src: url(assets/manrope.woff2) format('woff2'); font-weight: 200 800; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0f17; font-family: Manrope, system-ui, sans-serif; color: #fff; padding: 24px; }
+  .tag { position: fixed; top: 14px; left: 18px; font-size: 13px; font-weight: 700; color: #9aa3b2; letter-spacing: .02em; }
+  .tag b { color: #fff; }
+
+  /* The Now card, matching NowCard in today.tsx */
+  .hero { position: relative; isolation: isolate; overflow: hidden; width: min(760px, 100%); border-radius: 24px; padding: 22px 28px; display: grid; gap: 20px;
+    background: linear-gradient(120deg, #1d5fa8 0%, color-mix(in srgb, #1d5fa8 78%, #0b1020) 100%); box-shadow: 0 20px 50px -20px rgb(0 0 0 / .6); }
+  .hero::before { content: ''; position: absolute; inset: 0; z-index: -1; background: radial-gradient(520px 260px at 100% 0%, rgb(255 255 255 / .22), transparent 70%), radial-gradient(420px 260px at 0% 100%, rgb(0 0 0 / .18), transparent 70%); }
+  .hero::after { content: ''; position: absolute; inset: 0; z-index: -1; opacity: .28; background-image: radial-gradient(rgb(255 255 255 / .55) 1px, transparent 1.2px); background-size: 18px 18px; mask-image: linear-gradient(120deg, transparent 45%, #000 100%); }
+  .top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px 24px; }
+  .eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .14em; }
+  h2 { margin: 8px 0; font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -.03em; }
+  .meta { font-size: 14px; font-weight: 500; display: flex; gap: 10px; align-items: center; }
+  .meta i { width: 4px; height: 4px; border-radius: 9px; background: rgb(255 255 255 / .5); }
+  .bar { height: 8px; border-radius: 9px; background: rgb(255 255 255 / .2); overflow: hidden; }
+  .bar > div { height: 100%; width: 68%; background: #fff; border-radius: inherit; }
+  .then { font-size: 13.5px; font-weight: 500; }
+  .then b { font-weight: 700; }
+
+  /* The countdown. The hit area is the whole button and never changes size: both forms
+     sit in one grid cell, so the cell is always as wide as the wider form. */
+  .cd { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; border-radius: 12px; white-space: pre; font-size: 38px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+  .cd:focus-visible { outline: 2px solid rgb(255 255 255 / .6); outline-offset: 4px; }
+  .cd small { margin-right: 8px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; }
+  .val { display: inline-grid; justify-items: end; }
+  .val > span { grid-area: 1 / 1; }
+  .ch { display: inline-block; }
+
+  /* 1 Fade: a blur dissolve in place */
+  .v1 .val > span { transition: opacity .22s ease, filter .22s ease, transform .22s ease; }
+  .v1 .exact { opacity: 0; filter: blur(6px); transform: scale(.96); }
+  .v1.precise .compact { opacity: 0; filter: blur(6px); transform: scale(1.04); }
+  .v1.precise .exact { opacity: 1; filter: none; transform: none; }
+
+  /* 2 Roll: the value rolls up like a ticker, and each second rolls in */
+  .v2 .val { overflow: hidden; padding: 4px 0; margin: -4px 0; }
+  .v2 .val > span { transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .32s ease; }
+  .v2 .exact { transform: translateY(100%); opacity: 0; }
+  .v2.precise .compact { transform: translateY(-100%); opacity: 0; }
+  .v2.precise .exact { transform: none; opacity: 1; }
+  .v2 .ch.tick { animation: roll .3s cubic-bezier(.2,.8,.2,1); }
+  @keyframes roll { from { transform: translateY(70%); opacity: 0; } }
+
+  /* 3 Flip: a split-flap turn on the X axis */
+  .v3 .val { perspective: 400px; }
+  .v3 .val > span { backface-visibility: hidden; transform-origin: 50% 55%; transition: transform .2s ease-in, opacity .2s ease-in; }
+  .v3 .exact { transform: rotateX(-90deg); opacity: 0; }
+  .v3.precise .compact { transform: rotateX(90deg); opacity: 0; }
+  .v3.precise .exact { transform: none; opacity: 1; transition: transform .24s .18s cubic-bezier(.2,.9,.3,1.3), opacity .1s .18s; }
+  .v3:not(.precise) .compact { transition: transform .24s .18s cubic-bezier(.2,.9,.3,1.3), opacity .1s .18s; }
+
+  /* 4 Cascade: characters drop out and rise in one after another */
+  .v4 .ch { transition: transform .26s cubic-bezier(.2,.8,.2,1), opacity .2s ease; transition-delay: calc(var(--i) * 28ms); }
+  .v4 .exact .ch { transform: translateY(.35em); opacity: 0; }
+  .v4.precise .compact .ch { transform: translateY(-.35em); opacity: 0; }
+  .v4.precise .exact .ch { transform: none; opacity: 1; }
+  .v4 .ch.tick { animation: roll .3s cubic-bezier(.2,.8,.2,1); }
+
+  /* 5 Subline: the big number stays put; the exact time fades in under it in a row that is always reserved */
+  .v5 { flex-direction: column; align-items: flex-end; gap: 6px; }
+  .v5 .row { display: inline-flex; align-items: baseline; }
+  .v5 .sub { font-size: 14px; font-weight: 700; letter-spacing: .02em; padding: 3px 9px; border-radius: 99px; background: rgb(255 255 255 / .14); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .2);
+    opacity: 0; transform: translateY(-4px); transition: opacity .2s ease, transform .2s ease; }
+  .v5.precise .sub { opacity: 1; transform: none; }
+  .v5 .sub .ch.tick { animation: roll .3s cubic-bezier(.2,.8,.2,1); }
+
+  @media (prefers-reduced-motion: reduce) { .cd *, .cd .ch { transition: none !important; animation: none !important; } }
+
+  #cursor { position: fixed; left: 0; top: 0; width: 18px; height: 18px; pointer-events: none; z-index: 99; transform: translate(-100px, -100px); }
+</style>
+</head>
+<body>
+<div class="tag" id="tag"></div>
+<div class="hero" role="region" aria-label="Next class">
+  <div class="top">
+    <div>
+      <span class="eyebrow">Right now</span>
+      <h2>Chemistry</h2>
+      <div class="meta"><span>10:05 – 10:50 AM</span><i></i><span>Room 214</span><i></i><span>Ms. Park</span></div>
+    </div>
+    <div id="slot"></div>
+  </div>
+  <div class="bar"><div></div></div>
+  <div class="then">→ Then <b>English 10</b> at 10:55 AM</div>
+</div>
+<svg id="cursor" viewBox="0 0 18 18"><path d="M2 1 L2 15 L6 11.5 L8.6 17 L11 16 L8.4 10.6 L13.5 10.6 Z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+<script>
+  const NAMES = { 1: 'Fade', 2: 'Roll', 3: 'Flip', 4: 'Cascade', 5: 'Subline' };
+  const v = Number(new URLSearchParams(location.search).get('v')) || 1;
+  document.getElementById('tag').innerHTML = `Option ${v} · <b>${NAMES[v]}</b>`;
+  // 13:42 left when the page opens, so the compact form reads "14 min".
+  const target = Date.now() + (13 * 60 + 42) * 1000 + 400;
+  const formatMinutes = (m) => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+  const formatSeconds = (s) => { const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`; };
+  const chars = (text) => [...text].map((c, i) => `<span class="ch" style="--i:${i}">${c}</span>`).join('');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `cd v${v}`;
+  const label = '<small aria-hidden="true">Ends in</small>';
+  button.innerHTML = v === 5
+    ? `<span class="row">${label}<span class="val"><span class="compact"></span></span></span><span class="sub" aria-hidden="true"></span>`
+    : `${label}<span class="val" aria-hidden="true"><span class="compact"></span><span class="exact"></span></span>`;
+  document.getElementById('slot').append(button);
+  const compactEl = button.querySelector('.compact');
+  const exactEl = button.querySelector('.exact') || button.querySelector('.sub');
+
+  let hover = false, pinned = false, last = '', lastCompact = '';
+  function render() {
+    const seconds = Math.max(0, Math.round((target - Date.now()) / 1000));
+    const compact = formatMinutes(Math.ceil(seconds / 60));
+    const exact = v === 5 ? `${formatSeconds(seconds)} exactly` : formatSeconds(seconds);
+    // Only rebuild on a change: fresh nodes would skip the transition.
+    if (compact !== lastCompact) { compactEl.innerHTML = v === 4 ? chars(compact) : compact; lastCompact = compact; }
+    // Rebuild the exact form char by char so only the digits that changed roll in.
+    if (exact !== last) {
+      const before = last;
+      exactEl.innerHTML = chars(exact);
+      if (before.length === exact.length && button.classList.contains('precise'))
+        [...exact].forEach((c, i) => { if (c !== before[i]) exactEl.children[i].classList.add('tick'); });
+      last = exact;
+    }
+    const precise = hover || pinned || button.matches(':focus-visible');
+    button.classList.toggle('precise', precise);
+    button.setAttribute('aria-label', `Ends in ${precise ? formatSeconds(seconds) : compact}`);
+    button.setAttribute('aria-pressed', pinned);
+  }
+  // Hover lives on the button, whose box never changes size, so no spot can flicker.
+  button.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { hover = true; render(); } });
+  button.addEventListener('pointerleave', () => { hover = false; render(); });
+  button.addEventListener('click', () => { pinned = !pinned; render(); });
+  button.addEventListener('focus', render); button.addEventListener('blur', render);
+  render();
+  setInterval(render, 250);
+
+  const cursor = document.getElementById('cursor');
+  addEventListener('mousemove', (e) => { cursor.style.transform = `translate(${e.clientX - 2}px, ${e.clientY - 1}px)`; });
+</script>
+</body>
+</html>
