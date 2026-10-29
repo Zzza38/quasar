@@ -1,8 +1,8 @@
 'use client';
 
 import type { FeedSubscription } from '@/server/calendar';
-import { platformNames, type FeedGuides } from '@/domain/feed-guides';
-import { FeedGuide, FeedSubscribeForm } from './feed-guide';
+import { platformNames, type GuideSet } from '@/domain/setup-guides';
+import { FeedGuide, FeedSubscribeForm } from './setup-guide';
 import { Frame, STEP_FEED } from './onboarding';
 import { Icon } from './icon';
 import { Button, Chip, Hint, Panel, Spacer } from './primitives';
@@ -12,10 +12,10 @@ import { Button, Chip, Hint, Panel, Spacer } from './primitives';
  * guide shows the platforms support set for the school, or all of them.
  */
 export function FeedStep({ userId, online, timeZone, subscriptions, guides, onSubscribed, onDone, footer, notice }: {
-  userId: string; online: boolean; timeZone: string; subscriptions: FeedSubscription[]; guides?: FeedGuides; onSubscribed: () => Promise<unknown>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
+  userId: string; online: boolean; timeZone: string; subscriptions: FeedSubscription[]; guides?: GuideSet; onSubscribed: () => Promise<unknown>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
 }) {
   const connected = subscriptions.length > 0;
-  const names = platformNames(guides);
+  const names = platformNames('calendar', guides);
   return <Frame step={STEP_FEED} wide title="Get homework in automatically" description={`Connect ${names || 'your school’s calendar'} once and your assignments show up as tasks on their own. It takes about two minutes.`} notice={notice} footer={footer}>
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Panel className="grid gap-3">

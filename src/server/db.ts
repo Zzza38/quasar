@@ -671,6 +671,20 @@ function migrate(db: Db): void {
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(27, datetime('now'));
   `);
+
+  // Migration 28: class-schedule guides (src/server/setup-guides.ts), stored like migration 27's calendar guides and
+  // sharing its screenshots. Only adds, so a build from before it still runs on a database that has it.
+  if (!(db.pragma('table_info(schools)') as { name: string }[]).some(column => column.name === 'schedule_platforms')) {
+    db.exec("ALTER TABLE schools ADD COLUMN schedule_platforms TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_guides (
+      school_id TEXT NOT NULL, platform TEXT NOT NULL, guide TEXT NOT NULL,
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY(school_id, platform)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(28, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

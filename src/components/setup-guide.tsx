@@ -3,7 +3,7 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { formatTimeZone } from '@/lib/format';
-import { DEFAULT_FEED_GUIDES_STATE, FEED_PLATFORMS, guideImageUrl, guideName, type FeedGuide, type FeedGuides, type FeedPlatform } from '@/domain/feed-guides';
+import { DEFAULT_GUIDE_SETS, GUIDES, guideImageUrl, guideName, type GuideKind, type GuideSet, type SetupGuide } from '@/domain/setup-guides';
 import { parseInline, type Inline } from '@/domain/markdown';
 import { cn } from '@/lib/utils';
 import { Icon } from './icon';
@@ -25,7 +25,7 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
 }
 
 /** One guide's numbered steps, each with its screenshot, and its note. Also the live preview in the support editor. */
-export function GuideSteps({ guide, compact }: { guide: FeedGuide; compact?: boolean }) {
+export function GuideSteps({ guide, compact }: { guide: SetupGuide; compact?: boolean }) {
   return <div className="grid gap-3">
     <ol className={cn('grid list-decimal gap-2 pl-5 text-muted-foreground marker:font-bold marker:text-foreground/60', compact ? 'text-[13px]' : 'text-sm')}>
       {guide.steps.map((step, index) => <li key={index} className="pl-1">
@@ -41,32 +41,42 @@ export function GuideSteps({ guide, compact }: { guide: FeedGuide; compact?: boo
 }
 
 /**
- * How to get an iCal link from the school's platform. When support has said which platforms the school uses, only
- * those are offered, and a link shows the rest for a student whose classes are elsewhere. Several platforms are Radix
- * Tabs: one Tab stop with arrow, Home and End keys, each step list named after its pill. One platform needs no tabs.
+ * One kind of setup guide, one platform at a time. When support has said which platforms the school uses, only those
+ * are offered, and a link shows the rest for a student whose school is elsewhere. Several platforms are Radix Tabs:
+ * one Tab stop with arrow, Home and End keys, each step list named after its pill. One platform needs no tabs.
+ * `extra` adds a platform's own content under its steps.
  */
-export function FeedGuide({ guides = DEFAULT_FEED_GUIDES_STATE, initial, compact }: { guides?: FeedGuides; initial?: FeedPlatform; compact?: boolean }) {
+export function PlatformGuide({ kind, guides = DEFAULT_GUIDE_SETS[kind], label, initial, compact, extra }: {
+  kind: GuideKind; guides?: GuideSet; label: string; initial?: string; compact?: boolean; extra?: (platform: string) => ReactNode;
+}) {
   const [showAll, setShowAll] = useState(false);
   const limited = guides.platforms.length > 0 && !showAll;
-  const shown = limited ? guides.platforms : FEED_PLATFORMS;
-  const [chosen, setChosen] = useState<FeedPlatform | undefined>(initial);
+  const shown = limited ? guides.platforms : GUIDES[kind].platforms;
+  const [chosen, setChosen] = useState<string | undefined>(initial);
   const platform = chosen && shown.includes(chosen) ? chosen : shown[0];
   const more = limited && <button type="button" className="w-fit text-left text-[13px] font-semibold text-primary hover:underline" onClick={() => setShowAll(true)}>My school uses something else</button>;
   if (shown.length === 1) return <div className="grid gap-3">
-    <strong className="text-sm font-bold">In {guideName(platform, guides.guides[platform])}</strong>
+    <strong className="text-sm font-bold">In {guideName(kind, platform, guides.guides[platform])}</strong>
     <GuideSteps guide={guides.guides[platform]} compact={compact} />
+    {extra?.(platform)}
     {more}
   </div>;
-  return <Tabs value={platform} onValueChange={(value) => setChosen(value as FeedPlatform)} className="grid gap-3">
-    <TabsList variant="line" aria-label="Where is your homework?" className="h-auto w-auto flex-wrap justify-start gap-1.5 rounded-none p-0 group-data-horizontal/tabs:h-auto">
+  return <Tabs value={platform} onValueChange={setChosen} className="grid gap-3">
+    <TabsList variant="line" aria-label={label} className="h-auto w-auto flex-wrap justify-start gap-1.5 rounded-none p-0 group-data-horizontal/tabs:h-auto">
       {shown.map((entry) => <TabsTrigger key={entry} value={entry}
-        className="h-auto flex-none rounded-full border-0 bg-card px-3 py-1.5 font-semibold text-muted-foreground ring-1 ring-inset ring-foreground/[0.08] transition-colors after:hidden hover:bg-muted hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:ring-primary data-[state=active]:hover:bg-primary data-[state=active]:hover:text-primary-foreground">{guideName(entry, guides.guides[entry])}</TabsTrigger>)}
+        className="h-auto flex-none rounded-full border-0 bg-card px-3 py-1.5 font-semibold text-muted-foreground ring-1 ring-inset ring-foreground/[0.08] transition-colors after:hidden hover:bg-muted hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:ring-primary data-[state=active]:hover:bg-primary data-[state=active]:hover:text-primary-foreground">{guideName(kind, entry, guides.guides[entry])}</TabsTrigger>)}
     </TabsList>
-    {shown.map((entry) => <TabsContent key={entry} value={entry} className="rounded-md focus-visible:ring-2 focus-visible:ring-ring">
+    {shown.map((entry) => <TabsContent key={entry} value={entry} className="grid gap-3 rounded-md focus-visible:ring-2 focus-visible:ring-ring">
       <GuideSteps guide={guides.guides[entry]} compact={compact} />
+      {extra?.(entry)}
     </TabsContent>)}
     {more}
   </Tabs>;
+}
+
+/** How to get an iCal link from the school's platform. */
+export function FeedGuide(props: { guides?: GuideSet; initial?: string; compact?: boolean }) {
+  return <PlatformGuide kind="calendar" label="Where is your homework?" {...props} />;
 }
 
 /**
