@@ -1,22 +1,20 @@
-# Classmates popup mockups
+# Countdown hover mockups
 
-Five directions for what opens when you tap the "With Hunter, Liam and 1 more" chip on a Today timeline row.
-(The landing page mockups that used to live here are in git history.)
+Five ways for the Now card's "Ends in 14 min" to show the exact time ("13:42") on hover, focus or tap.
+(The classmates popup mockups that used to live here are in git history.)
 
-| File | Direction |
-| ---- | --------- |
-| `1-popover.html` | Small popover anchored under the chip. Avatar, name and classes in common per row; "Open People" at the bottom. |
-| `2-sheet.html`   | Bottom sheet on phones, side sheet from 768px. Class facts on top, each friend with where they go next plus Message and See day buttons. |
-| `3-inline.html`  | No overlay. The chip gets a caret and unfolds a tray of name pills inside the row. |
-| `4-roster.html`  | Centered dialog with a grid of large avatar tiles, search past five friends, and a group chat button. |
-| `5-next.html`    | The chip becomes a face stack. The popover shows faces, then groups friends by their next class. |
+Open `countdown.html?v=1` through `?v=5`:
 
-`index.html` is the chooser: side rail, iframe preview, viewport width presets,
-and `1`–`5` / `←` `→` keyboard shortcuts.
+| `v` | Direction |
+| --- | --------- |
+| 1 | Fade: the minutes blur out and the seconds blur in, in the same spot. |
+| 2 | Roll: the value rolls up like a ticker, and each changed digit rolls in every second. |
+| 3 | Flip: a split-flap turn on the X axis. |
+| 4 | Cascade: characters drop out and rise in one after another. |
+| 5 | Subline: "14 min" stays; "13:42 exactly" fades in on a reserved row under it. |
 
-All five load `assets/today.css` (the app's dark tokens) and `assets/today.js` (fake timetable and
-friends, the timeline renderer, and the same "With …" wording as `src/lib/classmates.ts`). Each page
-opens its popup on the Digital Design row at load. English 10 has seven friends to show a longer list.
+All five fix the hover flicker the same way. Both forms sit in one grid cell, so the button is always
+as wide as the wider form and nothing under the pointer changes size.
 
 ## Serving
 
@@ -24,5 +22,5 @@ opens its popup on the Digital Design row at load. English 10 has seven friends 
 ./serve.sh   # python3 http.server on 127.0.0.1:3005, loopback only
 ```
 
-Review happens through screenshots taken against the local server, not a shared link.
+Review happens through recordings taken against the local server, not a shared link.
 Stop it with `fuser -k 3005/tcp`.

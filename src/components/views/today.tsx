@@ -186,47 +186,47 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
 
 /**
  * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
- * tapped. Minutes round up in both modes (see minutesLeft). The shared leading text
- * stays put; the differing tails slide open/closed. While hovered the button keeps at
- * least its width from when the pointer entered: the seconds form is usually narrower,
- * and the right-aligned button would otherwise shrink out from under a pointer near
- * its left edge, end the hover, grow back and flicker.
+ * tapped. Minutes round up in both modes (see minutesLeft). Both forms share one grid
+ * cell, so the button is always as wide as the wider form and nothing under the pointer
+ * changes size; the hover can't end and restart itself. The characters cascade between the
+ * forms, and each changed digit rolls in as the seconds tick.
  */
 function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
-  const [hoverWidth, setHoverWidth] = useState<number | null>(null);
+  const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [tick, setTick] = useState(() => Date.now());
-  const hover = hoverWidth !== null;
   const precise = hover || focus || pinned;
+  // The hidden seconds form keeps time too, so revealing it moves only the characters it already shows.
   useEffect(() => {
-    if (!precise) return;
     const timer = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [precise]);
-  const seconds = precise ? Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000)) : minutes * 60;
+  }, []);
+  const seconds = Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000));
   const compact = formatMinutes(precise ? Math.ceil(seconds / 60) : minutes);
   const exact = formatSeconds(seconds);
-  let shared = 0;
-  while (shared < compact.length && shared < exact.length && compact[shared] === exact[shared]) shared += 1;
   // Refresh the clock in the same event as the state change so the first precise frame is current.
   const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };
   return <button type="button" className="display-number inline-flex cursor-pointer items-baseline whitespace-pre rounded-xl text-[30px] font-extrabold leading-none text-white outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:text-[38px]"
-    style={hoverWidth === null ? undefined : { minWidth: hoverWidth }}
     aria-label={precise ? `${label} ${exact} (${seconds >= 3600 ? 'hours, minutes and seconds' : 'minutes and seconds'})` : `${label} ${compact}`} aria-pressed={pinned} title={pinned ? 'Hide seconds' : 'Show seconds'}
-    onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHoverWidth(event.currentTarget.getBoundingClientRect().width); }} onPointerLeave={() => setHoverWidth(null)}
+    onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHover(true); }} onPointerLeave={() => setHover(false)}
     onFocus={(event) => show(setFocus, event.currentTarget.matches(':focus-visible'))()} onBlur={show(setFocus, false)} onClick={show(setPinned, !pinned)}>
     <small aria-hidden="true" className="mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white">{label}</small>
-    <span aria-hidden="true">{compact.slice(0, shared)}</span>
-    <Reveal open={!precise}>{compact.slice(shared)}</Reveal>
-    <Reveal open={precise}>{exact.slice(shared)}</Reveal>
+    <span aria-hidden="true" className="inline-grid justify-items-end">
+      <Cascade text={compact} shown={!precise} away="-translate-y-[0.35em]" />
+      <Cascade text={exact} shown={precise} away="translate-y-[0.35em]" roll />
+    </span>
   </button>;
 }
 
-/** Animates its text between zero and natural width. */
-function Reveal({ open, children }: { open: boolean; children: ReactNode }) {
-  return <span aria-hidden="true" className={cn('inline-grid transition-[grid-template-columns] duration-300 ease-out', open ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]')}>
-    <span className="min-w-0 overflow-hidden whitespace-pre">{children}</span>
+/**
+ * One form of the countdown, a character per span so they can move one after another.
+ * With `roll`, a character remounts when it changes, which plays countdown-tick on just that digit.
+ */
+function Cascade({ text, shown, away, roll }: { text: string; shown: boolean; away: string; roll?: boolean }) {
+  return <span className="col-start-1 row-start-1" data-shown={shown}>
+    {[...text].map((char, index) => <span key={roll ? `${index}${char}` : index} style={{ transitionDelay: `${index * 28}ms` }}
+      className={cn('inline-block transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', roll && 'countdown-tick', !shown && `${away} opacity-0`)}>{char}</span>)}
   </span>;
 }
 
