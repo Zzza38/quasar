@@ -13,6 +13,7 @@ import { Toggle } from './ui/toggle';
 import { ClassNameInput, useClassDirectory, type DirectoryEntry } from './class-name-input';
 import { isPdf, readPdf, MAX_PDF_TEXT } from './pdf-pages';
 import { ScheduleSourceGuide } from './schedule-sources';
+import { platformNames, type GuideSet } from '@/domain/setup-guides';
 
 type ScanRow = RouterOutput['scan']['schedule']['rows'][number];
 type ScanProgress = NonNullable<RouterOutput['scan']['progress']>;
@@ -266,8 +267,8 @@ export function applyScan(personal: PersonalSchedule, rows: Draft[], free: strin
  * Import a schedule from a PDF the school portal gives out, a screenshot, or photos of a printed copy. Platform tabs
  * say where each portal keeps its schedule. `onConnectFeed` offers the Veracross calendar subscription as well.
  */
-export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, schedule, personal, disabled, onSave, onConnectFeed }: {
-  open: boolean; onClose: () => void; accountId: string; schoolId: string; online: boolean; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>; onConnectFeed?: () => void;
+export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, schedule, personal, disabled, onSave, onConnectFeed, guides }: {
+  open: boolean; onClose: () => void; accountId: string; schoolId: string; online: boolean; schedule: Schedule; personal: PersonalSchedule; disabled?: boolean; onSave: (next: PersonalSchedule) => Promise<void>; onConnectFeed?: () => void; guides?: GuideSet;
 }) {
   const { directory, error: directoryError, reload } = useClassDirectory(schoolId, open && online);
   const entries = (directory?.classes ?? []).filter(entry => !personal.grade || entry.grades.includes(personal.grade));
@@ -409,7 +410,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
 
   if (savedNotice) return <Modal open={open} onClose={onClose} title="Classes added" footer={<Button variant="primary" onClick={onClose}>Done</Button>}><Callout tone="success" role="status">{savedNotice}</Callout></Modal>;
 
-  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Import your schedule" description="Upload the schedule PDF from your school portal, a screenshot, or photos of a printed copy. Check what was read, then add the classes to your timetable."
+  return <Modal open={open} onClose={onClose} dirty={rows !== null} busy={pending} wide title="Import your schedule" description={`Upload the schedule PDF from ${platformNames('schedule', guides) || 'your school portal'}, a screenshot, or photos of a printed copy. Check what was read, then add the classes to your timetable.`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Spacer />
       {rows ? <Button variant="primary" icon="plus" busy={pending} disabled={disabled || !online || !directory || unresolved || (ready.length === 0 && freeing.length === 0)} onClick={() => void save()}>{ready.length === 0 && freeing.length > 0 ? `Save ${freeing.length} free ${freeing.length === 1 ? 'period' : 'periods'}` : `Add ${ready.length} ${ready.length === 1 ? 'class' : 'classes'}`}</Button>
         : <Button variant="primary" icon="sparkle" busy={pending} disabled={!online || photos.length === 0} onClick={() => void scan()}>Read schedule</Button>}</>}>
@@ -422,7 +423,7 @@ export function ScanScheduleSheet({ open, onClose, accountId, schoolId, online, 
     {disabled && <Callout tone="warning" icon="alert">Retry sync before changing your saved classes.</Callout>}
     {photos.length === 0 && !rows ? <div className="grid gap-4">
       {/* Nothing picked yet: where to get the schedule comes first, then the pickers, so phones see the steps. */}
-      <ScheduleSourceGuide onConnectFeed={onConnectFeed} />
+      <ScheduleSourceGuide guides={guides} onConnectFeed={onConnectFeed} />
       <div className="flex flex-wrap gap-2">
         <Button icon="plus" disabled={pending} onClick={() => fileRef.current?.click()}>Upload PDF or image</Button>
         <Button icon="camera" disabled={pending} onClick={() => cameraRef.current?.click()}>Take a photo</Button>

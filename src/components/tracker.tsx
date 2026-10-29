@@ -220,12 +220,12 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   const setupFeed = hydrated && feedStep.pending(accountId);
   if (setupClasses) {
     return <Fragment key={accountKey}><ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
-      onSave={savePersonal} notice={sessionNotice}
+      onSave={savePersonal} guides={context.scheduleGuides} notice={sessionNotice}
       onDone={() => { classesStep.finish(accountId); feedStep.begin(accountId); rereadSetup((version) => version + 1); }}
       footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}{scheduleLock.dialog}</Fragment>;
   }
   if (setupFeed) {
-    return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
+    return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} guides={context.feedGuides} onSubscribed={session.initialize}
       onDone={() => { feedStep.finish(accountId); rereadSetup((version) => version + 1); }} notice={sessionNotice}
       footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
   }

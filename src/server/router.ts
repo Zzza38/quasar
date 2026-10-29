@@ -18,6 +18,7 @@ import { TASK_CLIENT_VERSION } from '@/domain/task';
 import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
 
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
+import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, SetupGuideService } from './setup-guides';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
@@ -99,6 +100,7 @@ const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
 const betas = (service: Service) => new BetaService(service);
+const guides = (service: Service) => new SetupGuideService(service);
 export const appRouter = t.router({
   scheduleSignals: t.router({ list: authenticated.query(({ ctx }) => new ScheduleSignalsService(ctx.service).list(ctx.userId)) }),
   mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
@@ -286,6 +288,11 @@ export const appRouter = t.router({
     }),
     // When this support session ends (the owner signs in again then), and whether the owner is pinned by Google ID.
     security: admin.query(({ ctx }) => ({ ...support(ctx.service).security(ctx.userId), until: process.env.NODE_ENV === 'development' ? null : (ctx.authAt ?? 0) + ADMIN_SIGN_IN_MAX_AGE_MS })),
+    // Setup guides (src/server/setup-guides.ts): schoolId null is the guide every school on the platform shares.
+    guides: admin.input(z.object({ schoolId: z.uuid().nullable() })).query(({ ctx, input }) => guides(ctx.service).adminView(ctx.userId, input.schoolId)),
+    saveGuide: adminScoped.input(saveGuideSchema).mutation(({ ctx, input }) => { guides(ctx.service).save(ctx.userId, input); }),
+    setGuidePlatforms: adminScoped.input(guidePlatformsUpdateSchema).mutation(({ ctx, input }) => guides(ctx.service).setPlatforms(ctx.userId, input)),
+    uploadGuideImage: adminScoped.input(guideImageUploadSchema).mutation(({ ctx, input }) => guides(ctx.service).uploadImage(ctx.userId, input)),
     renameSchool: adminScoped.input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),
     // Whole-log view; each member's own rows come with admin.users.view.
     auditLog: admin.input(auditQuerySchema).query(({ ctx, input }) => support(ctx.service).auditLog(ctx.userId, input)),

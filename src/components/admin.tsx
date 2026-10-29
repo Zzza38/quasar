@@ -20,6 +20,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
+import { GuideAdmin, SchoolGuideSheet } from './admin-guides';
+import { guideName } from '@/domain/setup-guides';
 import { BetaProvider, type JoinedBeta } from './betas';
 
 type Request = RouterOutput['admin']['requests'][number];
@@ -105,12 +107,13 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [directorySchool, setDirectorySchool] = useState<string | null>(null);
+  const [guideSchool, setGuideSchool] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
     // Losing owner access drops everything support loaded, including student proofs and report snapshots.
     const revoke = () => {
       setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setBans([]); setEvidence({});
-      setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); reasons.current.clear();
+      setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); setGuideSchool(null); reasons.current.clear();
     };
     setLoading(true); setError(''); setFailed(false);
     try {
@@ -228,6 +231,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
         <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
         <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
+        <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>
         <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>
         <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
       </TabsList></div>
@@ -239,9 +243,9 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           <TableBody>{visible.map((entry) => <TableRow key={entry.id}>
             <TableCell className="whitespace-normal"><strong className="text-sm font-bold">{entry.name}</strong><Hint>{entry.location}</Hint></TableCell>
             <TableCell className="tabular-nums">{entry.memberCount}</TableCell>
-            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}</div></TableCell>
+            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}{entry.feedPlatforms.map((platform) => <Chip key={`calendar-${platform}`} tone="outline" icon="calendar">{guideName('calendar', platform, undefined)}</Chip>)}{entry.schedulePlatforms.map((platform) => <Chip key={`schedule-${platform}`} tone="outline" icon="clock">{guideName('schedule', platform, undefined)}</Chip>)}</div></TableCell>
             <TableCell className="tabular-nums">{entry.version}</TableCell>
-            <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
+            <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" onClick={() => setGuideSchool(entry.id)} aria-label={`Setup guide for ${entry.name}`}>Setup</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
           </TableRow>)}</TableBody>
         </Table></div>}
       </Section>
@@ -343,11 +347,13 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </Section>
       </TabsContent>
       <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} onOpen={openMember} /></TabsContent>
+      <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>
       <TabsContent value="betas" className="grid gap-5">{tab === 'betas' && <BetaAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>
       <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>
       </Tabs>
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
+    {guideSchool && accountId && schools.some((entry) => entry.id === guideSchool) && <SchoolGuideSheet key={guideSchool} school={schools.find((entry) => entry.id === guideSchool)!} accountId={accountId} onClose={() => setGuideSchool(null)} onSaved={refresh} />}
     {school && <ReviewSheet key={school.id} school={school} onClose={() => setSelected(null)} onSaved={refresh} />}
     {openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
       onOpen={(reason) => { reasons.current.set(openingMember.userId, reason); setMember({ ...openingMember, reason }); setOpeningMember(null); }} />}
