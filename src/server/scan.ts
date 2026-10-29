@@ -201,8 +201,8 @@ export class ScanService {
   enabled(): boolean { return this.config !== null; }
 
   /**
-   * `report` hears each step (see scan-progress.ts), so the browser can show the scan moving. It is only passed for
-   * scan-progress beta members, and only their scans ask the model for a summary of its thinking.
+   * `report` hears each step (see scan-progress.ts), so the browser can show the scan moving. It is passed when the
+   * browser asked to follow the scan, and only those scans ask the model for a summary of its thinking.
    */
   async scan(accountId: string, raw: ScanInput, report?: ScanReporter): Promise<ScanResult> {
     if (!this.config) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Schedule scanning is not set up on this server.' });

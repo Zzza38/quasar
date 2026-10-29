@@ -3,12 +3,9 @@ import { type BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { exampleSchedule } from '../../src/domain/example';
 
 /** Stands in for any OpenAI-compatible vision provider; the config points SCAN_API_URL here. */
@@ -69,23 +66,6 @@ function seed(assignments: Record<string, string> = {}, classes: Array<{ id: str
   } finally { db.close(); }
 }
 
-/** What `npm run beta -- create scan-progress` writes, then the student joins with the code. */
-function joinScanProgressBeta(id: string) {
-  const key = 'scan-progress';
-  const code = `SCAN-${id.slice(0, 6)}`;
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter(beta => beta.key !== key) }, { key, name: 'Scan progress', code }), listPath);
-  // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-  const previous = process.env.DATABASE_PATH;
-  process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try { new BetaService(new Service(db, 'browser-owner@example.com')).join(id, { code }); } finally {
-    db.close();
-    if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous;
-  }
-}
-
 async function authenticate(context: BrowserContext, id: string) {
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id, authAt: Date.now() }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
@@ -94,7 +74,6 @@ async function authenticate(context: BrowserContext, id: string) {
 
 test('scans a two-photo timetable, lets the student review it, and places the classes', async ({ page, context }, testInfo) => {
   const fixture = seed(); await authenticate(context, fixture.id);
-  joinScanProgressBeta(fixture.id);
   await page.goto('/classes');
   // A real PNG for the browser's image decoder: a screenshot of the page itself.
   const PNG = await page.screenshot({ type: 'png' });
@@ -191,16 +170,8 @@ test('leaves a period printed as Unassigned free, clearing the class saved there
   await page.getByRole('button', { name: 'Import schedule' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'timetable.png', mimeType: 'image/png', buffer: PNG });
-  // Outside the scan-progress beta a slow scan keeps the old busy button, with no progress panel.
-  slowZoom = true;
-  const before = requests.length;
   await dialog.getByRole('button', { name: 'Read schedule' }).click();
-  await expect.poll(() => requests.length).toBe(before + 1);
-  await page.waitForTimeout(1_500);
-  await expect(dialog.getByRole('list', { name: 'Scan progress' })).toHaveCount(0);
-  await expect(dialog.getByText('Ready. Tap Read schedule.')).toBeVisible();
   await expect(dialog.getByText('3 classes were found.')).toBeVisible();
-  slowZoom = false;
   const rows = dialog.getByRole('list', { name: 'Classes read from the photo' }).getByRole('listitem');
   await expect(rows).toHaveCount(3);
   for (const [index, name] of ['Algebra II', 'World History', 'Study Hall'].entries()) await expect(rows.nth(index).getByLabel('Class')).toHaveValue(name);
