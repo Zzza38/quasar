@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { scheduledPeriodIds } from '@/domain/period-status';
 import { classSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import type { GuideSet } from '@/domain/setup-guides';
 import { classColor, formatRoom, slugId } from '@/lib/format';
 import { Frame, STEP_CLASSES } from './onboarding';
 import { Icon } from './icon';
@@ -18,8 +19,8 @@ import { ClassNameInput, useClassDirectory } from './class-name-input';
  * meets in, so Today is populated before they ever see it. Everything here saves to the same
  * personal schedule the Classes view edits, so nothing is lost by skipping.
  */
-export function ClassesStep({ userId, schoolId, schedule, personal, online, disabled, onSave, onDone, footer, notice }: {
-  userId: string; schoolId: string; schedule: Schedule; personal: PersonalSchedule; online: boolean; disabled?: boolean;
+export function ClassesStep({ userId, schoolId, schedule, personal, online, disabled, onSave, onDone, footer, notice, guides }: {
+  userId: string; schoolId: string; schedule: Schedule; personal: PersonalSchedule; online: boolean; disabled?: boolean; guides?: GuideSet;
   onSave: (next: PersonalSchedule) => Promise<void>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
 }) {
   const [name, setName] = useState('');
@@ -122,6 +123,6 @@ export function ClassesStep({ userId, schoolId, schedule, personal, online, disa
       const added = classes.filter((cls) => !personal.classes.some((existing) => existing.id === cls.id || existing.directoryId === cls.directoryId));
       await onSave({ ...personal, classes: [...personal.classes, ...added] });
     }} />}
-    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={userId} schoolId={schoolId} online={online} schedule={schedule} personal={personal} disabled={disabled} onSave={onSave} />
+    <ScanScheduleSheet open={scanOpen} onClose={() => setScanOpen(false)} accountId={userId} schoolId={schoolId} online={online} schedule={schedule} personal={personal} disabled={disabled} onSave={onSave} guides={guides} />
   </Frame>;
 }

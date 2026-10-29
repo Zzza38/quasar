@@ -1,23 +1,16 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { effectiveSchedule } from '@/domain/schedule';
 import type { ImportSummary } from '@/domain/schedule-import';
+import { DEFAULT_GUIDE_SETS } from '@/domain/setup-guides';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
 import { Button, Callout, Chip, ErrorText, Field, Hint, Input, Modal, Panel, Spacer } from './primitives';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
-
-/** Where a student finds their Veracross class schedule link. Schools rename the menus a little, so each step names the alternatives. */
-export const VERACROSS_STEPS: ReactNode[] = [
-  <>Open your school’s <b>Veracross portal</b> in a web browser on a laptop, not the app. Sign in the way your school does.</>,
-  <>Click <b>Calendar</b> in the top menu, then <b>Calendar Subscriptions</b>. Some schools call it <b>My Calendar Subscriptions</b> or put a <b>Subscribe</b> button on the calendar page.</>,
-  <>If <b>Subscribe using Google Calendar</b> is ticked, untick it.</>,
-  <>Find your <b>Class Schedule</b>, not Class Assignments. Right-click its <b>Subscribe</b> button and choose <b>Copy Link</b>. On a phone, press and hold it instead.</>,
-  <>Paste the link below. It starts with <code>webcal://</code> or <code>https://</code>.</>,
-];
+import { GuideSteps } from './setup-guide';
 
 /** One line about what a sync did, such as "6 classes in 7 blocks. Added Biology and US History." */
 export function describeImport(summary: ImportSummary): string {
@@ -97,10 +90,8 @@ export function ConnectScheduleFeedSheet({ open, onClose, state }: { open: boole
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Panel className="grid gap-2">
         <strong className="text-sm font-bold">Where to find the link</strong>
-        <ol className="grid list-decimal gap-1.5 pl-5 text-[13px] text-muted-foreground marker:font-bold marker:text-foreground/60">
-          {VERACROSS_STEPS.map((step, index) => <li key={index} className="pl-1">{step}</li>)}
-        </ol>
-        <Hint><Icon name="info" size={12} className="mr-1 inline" />If you don’t see Calendar Subscriptions, your school may have turned it off. Ask the tech office.</Hint>
+        {/* Support can reword these (/admin → Setup guides → Class schedule → Veracross sync). */}
+        <GuideSteps guide={(state.context.scheduleGuides ?? DEFAULT_GUIDE_SETS.schedule).guides['veracross-sync']} compact />
       </Panel>
       <form id="schedule-feed-form" className="grid content-start gap-4" onSubmit={(event) => { event.preventDefault(); void check(); }}>
         <Field label="Class Schedule link" htmlFor="schedule-feed-url" hint="It is private, is stored encrypted, and is never shown again after saving.">

@@ -90,9 +90,10 @@ const config: NextConfig = {
       { source: "/", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/(today|schedule|tasks|classes|school|people|messages)", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/admin", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
-      // Every API response but a profile picture: /api/avatars sets its own headers (a year for a found picture, since
-      // the URL carries its version; no-store for a miss or a signed-out request), which a rule here would override.
-      { source: "/api/:path((?!avatars/).*)", headers: [{ key: "Cache-Control", value: "no-store" }] },
+      // Every API response but a profile picture or guide screenshot: /api/avatars and /api/guide-images set their own
+      // headers (a year for a found image, since its URL never points at another; no-store for a miss or a signed-out
+      // request), which a rule here would override.
+      { source: "/api/:path((?!avatars/|guide-images/).*)", headers: [{ key: "Cache-Control", value: "no-store" }] },
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] },
       ...(domainMoved() ? [{ source: movedPages, has: oldHost, headers: [{ key: 'Cache-Control', value: 'private, no-store' }, { key: 'X-Robots-Tag', value: 'noindex, follow' }] }] : []),
     ];

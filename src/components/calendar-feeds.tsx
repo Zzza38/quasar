@@ -6,7 +6,8 @@ import { formatTimeZone } from '@/lib/format';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
 import { Button, Callout, Chip, ErrorText, Eyebrow, Hint, Modal, Panel } from './primitives';
-import { FeedGuide, FeedSubscribeForm } from './feed-guide';
+import { FeedGuide, FeedSubscribeForm } from './setup-guide';
+import { platformNames } from '@/domain/setup-guides';
 
 /**
  * The Connected calendars block of the Account sheet. `openAdd` counts requests to open the Add dialog (the setup
@@ -55,9 +56,9 @@ export function CalendarFeeds({ state, openAdd = 0 }: { state: AppState; openAdd
       </Callout>;
     })}
     {subscriptions.length === 0 && <Panel className="grid gap-2 text-sm text-muted-foreground">
-      <span>No calendars yet. Schoology, Google Classroom, Canvas and most school portals offer an iCal link under their calendar settings.</span>
+      <span>No calendars yet. {platformNames('calendar', state.context.feedGuides) || 'Most school portals'} can give you a calendar link that brings your assignments in as tasks.</span>
       <button type="button" className="w-fit text-left font-semibold text-primary hover:underline" aria-expanded={guideOpen} onClick={() => setGuideOpen((open) => !open)}>{guideOpen ? 'Hide instructions' : 'Show me where to find it'}</button>
-      {guideOpen && <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/[0.06]"><FeedGuide compact /></div>}
+      {guideOpen && <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/[0.06]"><FeedGuide guides={state.context.feedGuides} compact /></div>}
     </Panel>}
     {subscriptions.length > 0 && <ul className="grid gap-2">{subscriptions.map((feed) => <li key={feed.id} className="grid gap-2 rounded-2xl bg-muted/70 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -86,7 +87,7 @@ export function CalendarFeeds({ state, openAdd = 0 }: { state: AppState; openAdd
     <Modal open={adding} wide busy={pending !== null} onClose={() => setAdding(false)} title="Add calendar" description="Copy the iCal link from your school portal, then paste it here."
       footer={<><Button variant="ghost" disabled={pending !== null} onClick={() => setAdding(false)}>Cancel</Button></>}>
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <Panel className="grid gap-2"><strong className="text-sm font-bold">Where to find the link</strong><FeedGuide compact /></Panel>
+        <Panel className="grid gap-2"><strong className="text-sm font-bold">Where to find the link</strong><FeedGuide guides={state.context.feedGuides} compact /></Panel>
         <FeedSubscribeForm accountId={state.context.user.id} online={state.online} schoolTimeZone={state.timeZone} autoFocus onSubscribed={async () => { await state.refresh(); setAdding(false); }} />
       </div>
     </Modal>
