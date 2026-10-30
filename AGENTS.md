@@ -20,7 +20,15 @@ Production snapshots contain private account data. Bind preview servers to loopb
 
 # Betas are created with `npm run beta`
 
-To put a change in beta, wrap it in `<Beta id="key">` or `useBeta('key')` from `src/components/betas.tsx`, then create the beta with `npm run beta -- create <key> --name "Name" [--description "…"] [--max N] [--code "…"]` (see README "Running a beta" and `npm run beta -- --help`). Without `--code` a code is generated. Never create or change betas any other way: not from `/admin`, not by writing `betas.json` by hand, not in a migration.
+To put a change in beta, wrap it in `<Beta id="key">` or `useBeta('key')` from `src/components/betas.tsx`, then create the beta with `npm run beta -- create <key> --name "Name" [--description "…"] [--max N] [--code "…" | --public]` (see README "Running a beta" and `npm run beta -- --help`). Never create or change betas any other way: not from `/admin`, not by writing `betas.json` by hand, not in a migration.
+
+Betas are private unless the owner asks for a public one. A private beta is joined with its code; without `--code` a code is generated. A public beta (`--public`) has no code: members see it in Account → Betas and join with a tap. `npm run beta -- public <key>` and `npm run beta -- private <key>` switch an existing beta; members stay in.
+
+## The beta workflow
+
+1. **Every change ships as a beta.** After you make a user-facing change, gate it and create a beta for it, unless the owner says it goes to everyone. A fix to something already in a beta stays in that beta. Docs, tests and build changes have nothing to gate.
+2. **Every beta goes on production.** Creating a beta means deploying the gated code to the live site and running `npm run beta -- create` in the production checkout. A beta that exists only on a preview server is not a beta. Deploy first, then create the beta, so its code never points at a build that lacks it.
+3. **Merging a beta's PR ends the beta.** Before you merge a PR whose change sits behind a beta, drop the `<Beta>`/`useBeta` gate in that PR so the change is on for everyone. After the merged code is live, run `npm run beta -- remove <key>` in the production checkout. Keep the gate and the beta only when the owner asks you to.
 
 The beta list (`betas.json` beside the database, or `BETAS_PATH`) holds the join codes, so it is gitignored. Never commit it or copy its codes into the repository, a PR or CI. A beta for the live site is created by running the command in the production checkout, `/srv/NAS/Private/GitHub/quasar`, and it takes effect immediately; a preview server's list sits beside its database snapshot in the dev checkout. Report the code the command prints to the owner, who can also read it on `/admin` → Betas.
 

@@ -9,8 +9,9 @@ import type { Service } from './service';
 
 /**
  * Betas (README "Running a beta"). Which betas exist, and their codes, come from the beta list beside the database
- * (src/server/beta-registry.ts), written by `npm run beta`. A member who types a beta's code in Account joins it, and
- * the code paths behind useBeta()/<Beta> turn on for them on every device. Leaving is one tap and needs no code.
+ * (src/server/beta-registry.ts), written by `npm run beta`. A member who types a private beta's code in Account, or
+ * taps Join on a public one, joins it, and the code paths behind useBeta()/<Beta> turn on for them on every device.
+ * Leaving is one tap and needs no code.
  * Feedback about a beta lands in the support inbox as kind 'beta:<key>' with diagnostics.
  */
 
@@ -25,11 +26,15 @@ export const WRONG_CODE_MESSAGE = 'That code doesn’t match an open beta. Check
 
 export const betaJoinSchema = z.object({ code: betaCodeSchema });
 export const betaLeaveSchema = z.object({ key: betaKeySchema });
+export const betaEnrollSchema = z.object({ key: betaKeySchema });
 export const betaFeedbackSchema = z.object({ key: betaKeySchema, message: z.string().trim().min(10).max(5000), diagnostics: betaDiagnosticsSchema });
 export const betaMemberSchema = z.object({ key: betaKeySchema, userId: z.uuid() });
 
-/** What a member sees of a beta they are in. */
-export type JoinedBeta = { key: string; name: string; description: string; joinedAt: string };
+/** What a member sees of a beta they are in. `public`: they can rejoin without a code. */
+export type JoinedBeta = { key: string; name: string; description: string; joinedAt: string; public: boolean };
+/** A public beta the member can join with one tap. `full`: it reached its member limit. */
+export type PublicBeta = { key: string; name: string; description: string; full: boolean };
+export const NOT_PUBLIC_MESSAGE = 'That beta isn’t open to everyone. Ask for its code instead.';
 
 /** The build that is serving requests (`.next/BUILD_ID`), stamped on beta reports so a report names the code it was about. */
 let buildId: string | undefined;
@@ -52,7 +57,29 @@ export class BetaService {
    */
   joined(userId: string): JoinedBeta[] {
     const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
-    return rows.flatMap(row => { const beta = this.beta(row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt }] : []; });
+    return rows.flatMap(row => { const beta = this.beta(row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt, public: beta.public === true }] : []; });
+  }
+
+  /** Public betas taking testers that the member hasn't joined, for Account → Betas. */
+  available(userId: string): PublicBeta[] {
+    this.service.user(userId);
+    const joined = new Set(this.db.prepare('SELECT beta_key FROM beta_members WHERE user_id=?').pluck().all(userId) as string[]);
+    return this.registry().betas.filter(beta => beta.public && beta.open && !joined.has(beta.key))
+      .map(beta => ({ key: beta.key, name: beta.name, description: beta.description, full: this.full(beta) }));
+  }
+
+  private full(beta: BetaDefinition): boolean {
+    if (beta.maxMembers === null) return false;
+    return (this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(beta.key) as { n: number }).n >= beta.maxMembers;
+  }
+
+  /** Adds the member to a beta they found by code or on the public list. Already in: a no-op. Paused or full: refused. */
+  private admit(userId: string, beta: BetaDefinition): void {
+    if (this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(beta.key, userId)) return;
+    if (!beta.open) fail('CONFLICT', `${beta.name} isn’t taking new testers right now.`);
+    if (this.full(beta)) fail('CONFLICT', `${beta.name} is full.`);
+    this.db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(beta.key, userId, now());
+    this.service.audit(userId, 'beta.join', null, beta.public ? { key: beta.key, public: true } : { key: beta.key });
   }
 
   /**
@@ -72,16 +99,23 @@ export class BetaService {
         this.service.audit(userId, 'beta.wrongCode', null, {});
         return { error: WRONG_CODE_MESSAGE };
       }
-      if (this.db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(beta.key, userId)) return { joined: this.joined(userId) };
-      if (!beta.open) fail('CONFLICT', `${beta.name} isn’t taking new testers right now.`);
-      const members = this.db.prepare('SELECT count(*) n FROM beta_members WHERE beta_key=?').get(beta.key) as { n: number };
-      if (beta.maxMembers !== null && members.n >= beta.maxMembers) fail('CONFLICT', `${beta.name} is full.`);
-      this.db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(beta.key, userId, now());
-      this.service.audit(userId, 'beta.join', null, { key: beta.key });
+      this.admit(userId, beta);
       return { joined: this.joined(userId) };
     }).immediate();
     if ('error' in result) return fail('BAD_REQUEST', result.error);
     return result.joined;
+  }
+
+  /** Joins a public beta with one tap. No code, so no guess limit. */
+  enroll(userId: string, raw: z.infer<typeof betaEnrollSchema>): JoinedBeta[] {
+    this.service.user(userId);
+    const { key } = betaEnrollSchema.parse(raw);
+    return this.db.transaction(() => {
+      const beta = this.beta(key);
+      if (!beta?.public) fail('NOT_FOUND', NOT_PUBLIC_MESSAGE);
+      this.admit(userId, beta!);
+      return this.joined(userId);
+    }).immediate();
   }
 
   /** Leaves one beta. No code: a member stuck in a broken beta must always be able to get out. */

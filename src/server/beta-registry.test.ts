@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EMPTY_BETA_REGISTRY, betaForCode, betaRegistryPath, createBeta, currentBetaRegistry, editBeta, newBetaCode, readBetaRegistry, removeBeta, setBetaOpen, writeBetaRegistry } from './beta-registry';
+import { EMPTY_BETA_REGISTRY, betaForCode, betaRegistryPath, betaRegistrySchema, createBeta, currentBetaRegistry, editBeta, makeBetaPrivate, makeBetaPublic, newBetaCode, readBetaRegistry, removeBeta, setBetaOpen, writeBetaRegistry } from './beta-registry';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks(); });
@@ -22,7 +22,7 @@ describe('beta list', () => {
     expect(grid).toMatchObject({ key: 'month-grid', open: true, maxMembers: 20 });
     expect(grid.code).toMatch(/^[A-HJKMNP-Z2-9]{5}-[A-HJKMNP-Z2-9]{5}$/);
     expect(quick.code).toBe('Fun Times-26');
-    expect(betaForCode(registry, grid.code.toLowerCase().replace('-', ' '))?.key).toBe('month-grid');
+    expect(betaForCode(registry, grid.code!.toLowerCase().replace('-', ' '))?.key).toBe('month-grid');
     expect(betaForCode(registry, 'funtimes26')?.key).toBe('quick-add');
     expect(betaForCode(registry, 'nope')).toBeUndefined();
   });
@@ -52,6 +52,29 @@ describe('beta list', () => {
     expect(newBetaCode(registry, 'month-grid', 'grid 2026').betas[0].code).toBe('grid 2026');
     expect(generated.betas[1]).toEqual(registry.betas[1]);
     expect(() => setBetaOpen(registry, 'missing', true)).toThrow('There is no beta "missing"');
+  });
+
+  it('creates public betas without a code, and switches a beta between public and private', () => {
+    let registry = createBeta(EMPTY_BETA_REGISTRY, { key: 'month-grid', name: 'Month grid', code: 'GRID-2026' });
+    registry = createBeta(registry, { key: 'quick-add', name: 'Quick add', public: true });
+    expect(registry.betas[1]).toEqual({ key: 'quick-add', name: 'Quick add', description: '', open: true, maxMembers: null, public: true });
+    // A private beta's entry has no `public` field, so the file reads the same as before public betas existed.
+    expect('public' in registry.betas[0]).toBe(false);
+    expect(() => createBeta(registry, { key: 'x-beta', name: 'X beta', code: 'XBETA-26', public: true })).toThrow('Public betas have no code');
+    expect(() => newBetaCode(registry, 'quick-add')).toThrow('Public betas have no code');
+    const flipped = makeBetaPublic(registry, 'month-grid');
+    expect(flipped.betas[0]).toEqual({ key: 'month-grid', name: 'Month grid', description: '', open: true, maxMembers: null, public: true });
+    expect(betaForCode(flipped, 'GRID-2026')).toBeUndefined();
+    const back = makeBetaPrivate(flipped, 'month-grid', 'GRID-2027');
+    expect(back.betas[0]).toEqual({ key: 'month-grid', name: 'Month grid', description: '', open: true, maxMembers: null, code: 'GRID-2027' });
+    expect(makeBetaPrivate(registry, 'quick-add').betas[1].code).toMatch(/^[A-HJKMNP-Z2-9]{5}-[A-HJKMNP-Z2-9]{5}$/);
+    expect(() => makeBetaPrivate(registry, 'month-grid')).toThrow('already private');
+    expect(() => makeBetaPrivate(flipped, 'month-grid', 'grid 2026')).not.toThrow();
+    // A hand-edited file must still pair private with a code and public without one.
+    const entry = { key: 'a-b', name: 'A beta', description: '', open: true, maxMembers: null };
+    expect(betaRegistrySchema.safeParse({ betas: [entry], retired: [] }).success).toBe(false);
+    expect(betaRegistrySchema.safeParse({ betas: [{ ...entry, public: true, code: 'ABCD' }], retired: [] }).success).toBe(false);
+    expect(betaRegistrySchema.safeParse({ betas: [{ ...entry, public: true }], retired: [] }).success).toBe(true);
   });
 
   it('reads nothing from a missing file, rejects a malformed one, and writes it owner-only', () => {
