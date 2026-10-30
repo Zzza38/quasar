@@ -94,7 +94,7 @@ const adminScoped = accountScoped.use(({ ctx, path, next }) => {
 /** The owner moderating the public Global chat from the Messages view: an owner check without the recent sign-in. */
 const ownerScoped = accountScoped.use(({ ctx, next }) => { ctx.service.admin(ctx.userId); return next({ ctx }); });
 const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional(), personalVersion: z.number().int().positive().optional() });
-const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
+const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < 2, legacyFreePeriods: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 const groups = (service: Service) => new GroupChatService(service);

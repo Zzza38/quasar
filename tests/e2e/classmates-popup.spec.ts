@@ -2,10 +2,7 @@ import { test, expect } from './fixtures';
 import type { BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { CommunityService } from '../../src/server/community';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
@@ -13,7 +10,7 @@ import type { StudentClass } from '../../src/domain/schedule';
 
 /**
  * A student with three friends in their period A class. Evan and Maya have Biology in STU 2 next; Ian has nothing
- * in period B, so it is his free period. Ian alone also shares period C, the last of the day. The browser clock is
+ * in period B and marked it free. Ian alone also shares period C, the last of the day. The browser clock is
  * fixed to Tuesday 2026-09-08 before school.
  */
 function seed() {
@@ -29,12 +26,12 @@ function seed() {
     const school = service.createSchool(me, { name: `Friends High ${me.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
     for (const id of [me, evan, maya, ian]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
     const art: StudentClass = { id: 'art', name: 'Digital Design', room: 'STU 4' };
-    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>) =>
-      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>, freePeriods?: string[]) =>
+      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, ...(freePeriods ? { freePeriods } : {}), cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
     setClasses(me, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
     setClasses(evan, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
     setClasses(maya, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
-    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
+    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' }, ['B']);
     const community = new CommunityService(service);
     for (const id of [evan, maya, ian]) { community.request(me, id); community.respond(id, me, true); }
     return { me, evan, service, db };
@@ -46,29 +43,14 @@ async function authenticate(context: BrowserContext, id: string) {
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
 
-test('classmates popup beta: the chip shows faces and opens every friend in the class with where they go next', async ({ page, context }, testInfo) => {
+test('classmates popup: the chip shows faces and opens every friend in the class with where they go next', async ({ page, context }, testInfo) => {
   const fixture = seed();
   try {
     await authenticate(context, fixture.me);
     await page.clock.setFixedTime(new Date('2026-09-08T11:30:00Z'));
     await page.setViewportSize({ width: 390, height: 844 });
 
-    // Outside the beta the chip still names friends and links to People.
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /With Evan, Ian and 1 more/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'In this class with Evan, Ian and Maya' })).toHaveCount(0);
-
-    // What `npm run beta -- create` writes, then the student joins with the code.
-    const key = 'classmates-popup';
-    const code = `FACES-${fixture.me.slice(0, 4)}`;
-    const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-    const registry = readBetaRegistry(listPath);
-    writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((beta) => beta.key !== key) }, { key, name: 'Classmates popup', description: 'See who is in each class with you.', code }), listPath);
-    // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-    const previous = process.env.DATABASE_PATH;
-    process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-    try { new BetaService(fixture.service).join(fixture.me, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-    await page.reload();
 
     const chip = page.getByRole('button', { name: 'In this class with Evan, Ian and Maya' });
     await expect(chip).toContainText('3 friends');

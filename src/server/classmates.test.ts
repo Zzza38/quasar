@@ -5,7 +5,7 @@ import { Service } from './service';
 import { CommunityService } from './community';
 import { exampleSchedule } from '@/domain/example';
 import { resolveDay, type Schedule, type StudentClass } from '@/domain/schedule';
-import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, withLabel } from '@/lib/classmates';
+import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, NO_CLASS_SET, nextStops } from '@/lib/classmates';
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
@@ -128,13 +128,13 @@ describe('classmates on the timetable', () => {
     const me = add('Me'), evan = add('Evan'), maya = add('Maya'), ian = add('Ian');
     const school = service.createSchool(me, { name: 'Example High', location: 'Boston, MA', schedule: exampleSchedule });
     for (const id of [me, evan, maya, ian]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
-    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>) =>
-      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>, freePeriods?: string[]) =>
+      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, ...(freePeriods ? { freePeriods } : {}), cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
     const art = { id: 'art', name: 'Digital Design' };
     setClasses(evan, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
-    // Same next class and room in other casing joins Evan's group; Ian has nothing in B, so B is a free period for him.
+    // Same next class and room in other casing joins Evan's group; Ian marked B free.
     setClasses(maya, [art, { id: 'b', name: 'biology', room: 'stu 2 ' }], { A: 'art', B: 'b' });
-    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
+    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' }, ['B']);
     db.prepare('UPDATE users SET avatar_version=3 WHERE id=?').run(maya);
     const community = new CommunityService(service);
     for (const id of [evan, maya, ian]) { community.request(me, id); community.respond(id, me, true); }
@@ -148,15 +148,11 @@ describe('classmates on the timetable', () => {
       ['Biology', 'STU 2', ['Evan', 'Maya']],
       [FREE_PERIOD, null, ['Ian']],
     ]);
+    // Without the mark, Ian's empty B is just not filled in.
+    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
+    expect(nextStops({ community: community.summary(me) }, exampleSchedule, date, first, found).map((stop) => stop.title)).toEqual(['Biology', NO_CLASS_SET]);
     // After the last period of the day everyone is done.
     const last = period('C', { id: 'mine', name: 'Chemistry' });
     expect(nextStops({ community: summary }, exampleSchedule, date, last, found).map((stop) => [stop.title, stop.classmates.length])).toEqual([[DONE_FOR_TODAY, 3]]);
-  });
-  it('phrases the label naturally', () => {
-    expect(withLabel([])).toBeNull();
-    expect(withLabel(['Evan'])).toBe('With Evan');
-    expect(withLabel(['Evan', 'Maya'])).toBe('With Evan and Maya');
-    expect(withLabel(['Evan', 'Maya', 'Sam', 'Lee'])).toBe('With Evan, Maya and 2 more');
-    expect(withLabel([{ displayName: 'Evan' }, { displayName: 'Maya' }])).toBe('With Evan and Maya');
   });
 });

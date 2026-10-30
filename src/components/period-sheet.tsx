@@ -7,9 +7,12 @@ import { formatDate, formatRange } from '@/lib/format';
 import { openBellTimes, type AppState } from './app-state';
 import { Button, Field, Hint, Modal, Select } from './primitives';
 
+/** The picker's value for a period marked free; class IDs never start with an underscore. */
+const FREE = '_free';
+
 /**
- * Opened from a Timeline row on Today or Schedule: pick which class sits in this period, or jump to a
- * one-day adjustment. Assignments are keyed by period, so the choice applies on every rotation day
+ * Opened from a Timeline row on Today or Schedule: pick which class sits in this period, mark it a free period, or
+ * jump to a one-day adjustment. Assignments are keyed by period, so the choice applies on every rotation day
  * that has the period; the hint says which days those are.
  */
 export function PeriodSheet({ state, period, date, onClose, onAdjustDay }: { state: AppState; period: ResolvedPeriod | null; date: string; onClose: () => void; onAdjustDay: () => void }) {
@@ -25,7 +28,8 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
   const whenIdle = (action: () => void) => () => { if (!pendingRef.current) action(); };
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  const assigned = personal.assignments[period.periodId] ?? '';
+  const free = !personal.assignments[period.periodId] && !!personal.freePeriods?.includes(period.periodId);
+  const assigned = personal.assignments[period.periodId] ?? (free ? FREE : '');
   const current = personal.classes.find((cls) => cls.id === assigned);
   // Rotation days as this student has them: their cycle-day adjustments move a period on or off a day.
   const days = cycleDaysWithPeriod(effectiveSchedule(state.schedule, personal), personal, period.periodId);
@@ -34,25 +38,27 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
   const assign = async (classId: string) => {
     if (classId === assigned || pendingRef.current) return;
     const assignments = { ...personal.assignments };
-    if (classId) assignments[period.periodId] = classId;
+    if (classId && classId !== FREE) assignments[period.periodId] = classId;
     else delete assignments[period.periodId];
+    const others = (personal.freePeriods ?? []).filter(id => id !== period.periodId);
+    const freePeriods = classId === FREE ? [...others, period.periodId] : others;
     pendingRef.current = true; setPending(true); setError(''); setSaved(false);
-    try { await state.savePersonal({ ...personal, assignments }); setSaved(true); } catch (err) { setError(errorMessage(err)); } finally { pendingRef.current = false; setPending(false); }
+    try { await state.savePersonal({ ...personal, assignments, freePeriods }); setSaved(true); } catch (err) { setError(errorMessage(err)); } finally { pendingRef.current = false; setPending(false); }
   };
 
-  return <Modal open onClose={onClose} busy={pending} title={current?.name ?? period.label}
+  return <Modal open onClose={onClose} busy={pending} title={current?.name ?? (free ? `${period.label} · Free` : period.label)}
     description={`${period.label} · ${formatRange(period.start, period.end)} · ${formatDate(date, { weekday: 'long' })}`}
     footer={<Button variant="primary" onClick={whenIdle(onClose)}>Done</Button>}>
     {/* The error is a failed save, not a bad choice: the picker still shows the valid saved class. */}
     <Field label={`Class in ${period.label}`} htmlFor="period-class" hint={scope} error={error} invalid={false}>
-      {personal.classes.length > 0
-        ? <Select id="period-class" value={assigned} onChange={(event) => void assign(event.target.value)}>
-          <option value="">No class</option>
-          {personal.classes.map((cls) => <option key={cls.id} value={cls.id}>{cls.name}</option>)}
-        </Select>
-        : <div className="flex flex-wrap items-center gap-2"><Hint>You have not added any classes yet.</Hint><Button size="sm" onClick={() => { onClose(); state.navigate('classes'); }}>Add a class</Button></div>}
+      <Select id="period-class" value={assigned} onChange={(event) => void assign(event.target.value)}>
+        <option value="">Not set</option>
+        <option value={FREE}>Free period</option>
+        {personal.classes.map((cls) => <option key={cls.id} value={cls.id}>{cls.name}</option>)}
+      </Select>
     </Field>
-    {saved && <Hint role="status">Class updated.</Hint>}
+    {personal.classes.length === 0 && <div className="flex flex-wrap items-center gap-2"><Hint>You have not added any classes yet.</Hint><Button size="sm" onClick={() => { onClose(); state.navigate('classes'); }}>Add a class</Button></div>}
+    {saved && <Hint role="status">{assigned === FREE ? 'Marked as a free period.' : 'Class updated.'}</Hint>}
     <div className="grid gap-1.5">
       <div><Button icon="calendar" onClick={whenIdle(onAdjustDay)}>Adjust this day</Button></div>
       <Hint>Close, reopen or move periods on {formatDate(date, { weekday: 'long' })} only.</Hint>
