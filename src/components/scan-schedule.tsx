@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
-import { classSchema, personalScheduleSchema, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
+import { classSchema, personalScheduleSchema, withoutAssignedFreePeriods, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
 import { directoryCandidates, similarClassName } from '@/domain/class-match';
 import { slugId } from '@/lib/format';
 import { Button, Callout, Chip, Field, Hint, IconButton, Input, Modal, Spacer } from './primitives';
@@ -255,12 +255,14 @@ export function clearedClasses(personal: PersonalSchedule, rows: Draft[], free: 
 
 /**
  * Turns confirmed rows into saved classes and period assignments, reusing classes the student already has.
- * `free` holds the periods the timetable marks unassigned; they are left empty.
+ * `free` holds the periods the timetable marks unassigned; they are left empty and saved as free periods.
  */
 export function applyScan(personal: PersonalSchedule, rows: Draft[], free: string[] = []): PersonalSchedule {
   const { classes, assignments } = resolveScan(personal, rows);
-  for (const periodId of freedPeriods(rows, free)) delete assignments[periodId];
-  return { ...personal, classes, assignments };
+  const freed = freedPeriods(rows, free);
+  for (const periodId of freed) delete assignments[periodId];
+  const freePeriods = [...new Set([...(personal.freePeriods ?? []), ...freed])];
+  return withoutAssignedFreePeriods({ ...personal, classes, assignments, ...(freePeriods.length ? { freePeriods } : {}) });
 }
 
 /**
