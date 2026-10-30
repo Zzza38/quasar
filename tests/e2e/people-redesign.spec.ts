@@ -13,7 +13,7 @@ import type { StudentClass } from '../../src/domain/schedule';
 
 /**
  * A student with four friends. During period A (the first class on Tuesday 2026-09-08), Evan and Maya are in the
- * student's Digital Design class, Nora is in Spanish, and Ian has period A free.
+ * student's Digital Design class, Nora is in Spanish, Ian marked period A free, and Theo left it empty.
  */
 function seed() {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -24,19 +24,20 @@ function seed() {
       db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, `${randomUUID()}@example.com`, name, `${name} Tester`, new Date().toISOString());
       return id;
     };
-    const me = user('Zed'), evan = user('Evan'), maya = user('Maya'), ian = user('Ian'), nora = user('Nora');
+    const me = user('Zed'), evan = user('Evan'), maya = user('Maya'), ian = user('Ian'), nora = user('Nora'), theo = user('Theo');
     const school = service.createSchool(me, { name: `People High ${me.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
-    for (const id of [me, evan, maya, ian, nora]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
+    for (const id of [me, evan, maya, ian, nora, theo]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
     const art: StudentClass = { id: 'art', name: 'Digital Design', room: 'STU 4', teacher: 'Ms. Park' };
-    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>) =>
-      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>, freePeriods?: string[]) =>
+      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, ...(freePeriods ? { freePeriods } : {}), cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
     setClasses(me, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
     setClasses(evan, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
     setClasses(maya, [art], { A: 'art' });
-    setClasses(ian, [{ id: 'chem', name: 'Chemistry' }], { C: 'chem' });
+    setClasses(ian, [{ id: 'chem', name: 'Chemistry' }], { C: 'chem' }, ['A']);
+    setClasses(theo, [{ id: 'chem', name: 'Chemistry' }], { C: 'chem' });
     setClasses(nora, [{ id: 'span', name: 'Spanish 2', room: 'LANG 1' }], { A: 'span' });
     const community = new CommunityService(service);
-    for (const id of [evan, maya, ian, nora]) { community.request(me, id); community.respond(id, me, true); }
+    for (const id of [evan, maya, ian, nora, theo]) { community.request(me, id); community.respond(id, me, true); }
     return { me, service, db };
   } catch (error) { db.close(); throw error; }
 }
@@ -77,6 +78,7 @@ test('people redesign beta: friends are grouped by the class they are in right n
     for (const [index, name] of ['Evan', 'Maya'].entries()) await expect(mates.nth(index)).toHaveAccessibleName(`Open ${name}’s profile`);
     await expect(now.getByRole('list', { name: 'Friends in Spanish 2' })).toContainText('Nora');
     await expect(now.getByRole('list', { name: 'Friends in Free' })).toContainText('Ian');
+    await expect(now.getByRole('list', { name: 'Friends in No class set' })).toContainText('Theo');
     await expect(page.getByText('Beta layout')).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('people-redesign-phone.png'), fullPage: true });
 

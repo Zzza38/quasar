@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { resolveDay, type PersonalSchedule, type ResolvedDay, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
 import { classMatcher, type ClassLike } from '@/domain/class-match';
-import { FREE_PERIOD } from '@/lib/classmates';
+import { FREE_PERIOD, NO_CLASS_SET } from '@/lib/classmates';
 import { classColor, formatRoom, formatTime, pluralize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
@@ -58,8 +58,8 @@ function useFriendDays(state: AppState): Map<string, FriendDay> {
   }, [classmates, classDirectory, schoolSchedule, schedule, personal, today, now]);
 }
 
-/** A class period nobody is assigned to is a free period, named like the classmates popup names it. */
-const periodName = (period: ResolvedPeriod) => period.kind === 'class' && !period.class ? FREE_PERIOD : period.class?.name || period.label;
+/** A period the friend marked free reads "Free", a class period they left empty "No class set", like the classmates popup. */
+const periodName = (period: ResolvedPeriod) => period.free ? FREE_PERIOD : period.kind === 'class' && !period.class ? NO_CLASS_SET : period.class?.name || period.label;
 
 /* ---------- Shared pieces ---------- */
 
@@ -160,10 +160,10 @@ function NoFriends() {
 type ClassGroup = { kind: 'now' | 'next'; period: ResolvedPeriod; room: string | null; together: boolean; friends: Member[] };
 type IdleGroup = { kind: 'done' | 'off' | 'away'; friends: Member[] };
 
-/** The same class by directory entry or name (classMatcher); a period with no class matches by its label. */
+/** The same class by directory entry or name (classMatcher); a period with no class matches by its label, free with free. */
 function sameActivity(a: ResolvedPeriod, b: ResolvedPeriod, sameClass: ClassMatch): boolean {
   if (a.class && b.class) return sameClass(a.class, b.class);
-  return !a.class && !b.class && a.kind === b.kind && a.label === b.label;
+  return !a.class && !b.class && a.kind === b.kind && a.label === b.label && !!a.free === !!b.free;
 }
 
 /** Groups friends by their current or next period. Classes running now come first, the viewer's own class first among them. */
