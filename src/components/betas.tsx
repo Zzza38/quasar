@@ -1,17 +1,19 @@
 'use client';
 
-import { Component, createContext, useContext, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, createContext, useCallback, useContext, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
 import { collectBetaDiagnostics, installBetaErrorBuffer, recordBetaError } from '@/client/beta-diagnostics';
 import type { BetaDiagnostics } from '@/domain/betas';
 import { browserTimeZone, formatDate, instantParts } from '@/lib/format';
 import type { WorkspaceContext } from './app-state';
-import { Button, Callout, Field, Hint, Input, Modal, Spacer, Textarea } from './primitives';
+import type { PublicBeta } from '@/server/betas';
+import { Icon } from './icon';
+import { Button, Callout, Eyebrow, Field, Hint, Input, Modal, Spacer, Textarea } from './primitives';
 
 /**
  * Betas on the client (README "Running a beta"). Wrap new UI in <Beta id="key" fallback={<Old />}> or branch on
- * useBeta('key'): both are on only for members who joined that beta with its code. Members join, leave and send
- * feedback from Account (BetaSettings); leaving never needs the code.
+ * useBeta('key'): both are on only for members who joined that beta, with its code or, for a public beta, with a tap.
+ * Members join, leave and send feedback from Account (BetaSettings, or the BetasButton popup); leaving never needs a code.
  */
 
 export type JoinedBeta = WorkspaceContext['betas'][number];
@@ -75,7 +77,7 @@ function BetaCrashNotice({ id, state }: { id: string; state: BetaState }) {
       <Button size="sm" busy={pending} disabled={!state.online} onClick={() => void leave()}>Leave beta</Button>
       <Button size="sm" variant="ghost" disabled={!state.online} onClick={() => setReporting(true)}>Report it</Button>
     </>}>
-    The regular version is showing instead. Leaving the beta keeps it that way; you can rejoin later with the code.
+    The regular version is showing instead. Leaving the beta keeps it that way; you can rejoin later{beta?.public ? ' from Account → Betas' : ' with the code'}.
     {error && <span className="mt-1 block font-semibold">{error}</span>}
     {reporting && beta && <BetaFeedbackModal accountId={state.accountId} beta={beta} betas={state.betas} onClose={() => setReporting(false)} />}
   </Callout>;
@@ -83,14 +85,37 @@ function BetaCrashNotice({ id, state }: { id: string; state: BetaState }) {
 
 const formatJoined = (iso: string) => formatDate(instantParts(iso, browserTimeZone()).date, { year: true });
 
-/** The Betas block in Account: the betas the member is in (feedback, leave) and the code field to join one. */
-export function BetaSettings({ accountId, betas, online, onChanged }: { accountId: string; betas: JoinedBeta[]; online: boolean; onChanged: () => Promise<unknown> }) {
+type BetaListProps = { accountId: string; betas: JoinedBeta[]; online: boolean; onChanged: () => Promise<unknown> };
+
+/** The betas the member is in, each with Send feedback and Leave beta. Renders nothing when they are in none. */
+function JoinedBetaList({ accountId, betas, online, onChanged, onError }: BetaListProps & { onError: (message: string) => void }) {
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const [reporting, setReporting] = useState<JoinedBeta | null>(null);
+  const leave = async (beta: JoinedBeta) => {
+    setLeaving(beta.key); onError('');
+    try { await api.beta.leave.mutate({ accountId, key: beta.key }); await onChanged(); }
+    catch (err) { onError(errorMessage(err)); }
+    finally { setLeaving(null); }
+  };
+  if (!betas.length) return null;
+  return <>
+    <ul className="grid gap-2" aria-label="Your betas">{betas.map((beta) => <li key={beta.key} className="grid gap-2 rounded-2xl bg-muted/80 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
+      <div className="grid gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}<Hint>Joined {formatJoined(beta.joinedAt)}</Hint></div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" icon="message" disabled={!online} onClick={() => setReporting(beta)}>Send feedback</Button>
+        <Button size="sm" variant="ghost" busy={leaving === beta.key} disabled={!online || leaving !== null} onClick={() => void leave(beta)} aria-label={`Leave ${beta.name}`}>Leave beta</Button>
+      </div>
+    </li>)}</ul>
+    {reporting && <BetaFeedbackModal accountId={accountId} beta={reporting} betas={betas} onClose={() => setReporting(null)} />}
+  </>;
+}
+
+/** The code field that joins a private beta. */
+function BetaCodeForm({ accountId, betas, online, onChanged, hint }: BetaListProps & { hint: ReactNode }) {
   const [code, setCode] = useState('');
   const [joining, setJoining] = useState(false);
-  const [leaving, setLeaving] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [joined, setJoined] = useState('');
-  const [reporting, setReporting] = useState<JoinedBeta | null>(null);
   const join = async () => {
     setJoining(true); setError(''); setJoined('');
     try {
@@ -102,33 +127,91 @@ export function BetaSettings({ accountId, betas, online, onChanged }: { accountI
     } catch (err) { setError(errorMessage(err)); }
     finally { setJoining(false); }
   };
-  const leave = async (beta: JoinedBeta) => {
-    setLeaving(beta.key); setError(''); setJoined('');
-    try { await api.beta.leave.mutate({ accountId, key: beta.key }); await onChanged(); }
-    catch (err) { setError(errorMessage(err)); }
-    finally { setLeaving(null); }
-  };
-  return <div className="grid gap-3">
-    {betas.length > 0 && <ul className="grid gap-2" aria-label="Your betas">{betas.map((beta) => <li key={beta.key} className="grid gap-2 rounded-2xl bg-muted/80 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
-      <div className="grid gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}<Hint>Joined {formatJoined(beta.joinedAt)}</Hint></div>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" icon="message" disabled={!online} onClick={() => setReporting(beta)}>Send feedback</Button>
-        <Button size="sm" variant="ghost" busy={leaving === beta.key} disabled={!online || leaving !== null} onClick={() => void leave(beta)} aria-label={`Leave ${beta.name}`}>Leave beta</Button>
+  return <form className="grid gap-2" onSubmit={(event) => { event.preventDefault(); if (code.trim()) void join(); }}>
+    <Field label="Beta code" htmlFor="beta-code" hint={hint}>
+      <div className="flex gap-2">
+        <Input id="beta-code" autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={64} value={code} disabled={joining} onChange={(event) => { setCode(event.target.value); setError(''); }} />
+        <Button type="submit" variant="primary" busy={joining} disabled={!online || code.trim().length < 4}>Join</Button>
       </div>
-    </li>)}</ul>}
-    <form className="grid gap-2" onSubmit={(event) => { event.preventDefault(); if (code.trim()) void join(); }}>
-      <Field label="Beta code" htmlFor="beta-code" hint={betas.length ? 'Have a code for another beta? Enter it here.' : 'Got a code from the person who runs Quasar? Enter it to try something early. You can leave any time.'}>
-        <div className="flex gap-2">
-          <Input id="beta-code" autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={64} value={code} disabled={joining} onChange={(event) => { setCode(event.target.value); setError(''); }} />
-          <Button type="submit" variant="primary" busy={joining} disabled={!online || code.trim().length < 4}>Join</Button>
-        </div>
-      </Field>
-      {error && <Hint tone="danger" role="alert">{error}</Hint>}
-      {joined && <Hint role="status">{joined}</Hint>}
-      {!online && <Hint>Connect to the internet to join or leave a beta.</Hint>}
-    </form>
-    {reporting && <BetaFeedbackModal accountId={accountId} beta={reporting} betas={betas} onClose={() => setReporting(null)} />}
+    </Field>
+    {error && <Hint tone="danger" role="alert">{error}</Hint>}
+    {joined && <Hint role="status">{joined}</Hint>}
+  </form>;
+}
+
+/** The Betas block in Account: the betas the member is in (feedback, leave) and the code field to join one. */
+export function BetaSettings(props: BetaListProps) {
+  const [error, setError] = useState('');
+  return <div className="grid gap-3">
+    <JoinedBetaList {...props} onError={setError} />
+    <BetaCodeForm {...props} hint={props.betas.length ? 'Have a code for another beta? Enter it here.' : 'Got a code from the person who runs Quasar? Enter it to try something early. You can leave any time.'} />
+    {error && <Hint tone="danger" role="alert">{error}</Hint>}
+    {!props.online && <Hint>Connect to the internet to join or leave a beta.</Hint>}
   </div>;
+}
+
+/**
+ * Betas as its own popup (the betas-screen beta): the Account sheet shows one row that opens it. Inside are the betas
+ * the member is in, the public betas anyone can join with a tap, and the code field for private ones.
+ */
+export function BetasButton(props: BetaListProps) {
+  const [open, setOpen] = useState(false);
+  const count = props.betas.length;
+  return <>
+    <button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)}
+      className="flex w-full items-center justify-between gap-3 rounded-2xl bg-muted/80 px-4 py-3 text-left ring-1 ring-inset ring-foreground/[0.04] outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+      <span className="grid min-w-0 gap-0.5">
+        <strong className="text-sm font-semibold">Betas</strong>
+        <Hint className="truncate">{count ? `You’re in ${count === 1 ? props.betas[0].name : `${count} betas`}` : 'Try new things before everyone else'}</Hint>
+      </span>
+      <Icon name="chevronRight" size={18} className="shrink-0 text-muted-foreground" />
+    </button>
+    {open && <BetasModal {...props} onClose={() => setOpen(false)} />}
+  </>;
+}
+
+function BetasModal({ onClose, ...props }: BetaListProps & { onClose: () => void }) {
+  const { accountId, online, onChanged } = props;
+  const [available, setAvailable] = useState<PublicBeta[] | null>(null);
+  const [enrolling, setEnrolling] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [joined, setJoined] = useState('');
+  const load = useCallback(async () => {
+    try { setAvailable(await api.beta.available.query()); }
+    catch (err) { setError(errorMessage(err)); setAvailable([]); }
+  }, []);
+  // Joining or leaving changes which public betas are on offer.
+  const joinedKeys = props.betas.map((beta) => beta.key).join(',');
+  useEffect(() => { if (online) void load(); }, [load, online, joinedKeys]);
+  const enroll = async (beta: PublicBeta) => {
+    setEnrolling(beta.key); setError(''); setJoined('');
+    try { await api.beta.enroll.mutate({ accountId, key: beta.key }); setJoined(`You’re in ${beta.name}.`); await onChanged(); }
+    catch (err) { setError(errorMessage(err)); }
+    finally { setEnrolling(null); }
+  };
+  return <Modal open onClose={onClose} title="Betas" description="Try new things before everyone else. Leave any time, and the regular version comes back."
+    footer={<><Spacer /><Button variant="primary" onClick={onClose}>Done</Button></>}>
+    <div className="grid gap-5">
+      {props.betas.length > 0 && <section className="grid gap-2" aria-labelledby="betas-yours"><Eyebrow><span id="betas-yours">Yours</span></Eyebrow><JoinedBetaList {...props} onError={setError} /></section>}
+      <section className="grid gap-2" aria-labelledby="betas-public">
+        <Eyebrow><span id="betas-public">Open to everyone</span></Eyebrow>
+        {!online ? <Hint>Connect to the internet to see betas you can join.</Hint>
+          : available === null ? <Hint>Looking for betas…</Hint>
+          : available.length === 0 ? <Hint>No open betas right now. New ones show up here.</Hint>
+          : <ul className="grid gap-2" aria-label="Betas you can join">{available.map((beta) => <li key={beta.key} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-muted/80 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
+            <div className="grid min-w-0 flex-1 gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}</div>
+            {beta.full ? <Hint>Full</Hint> : <Button size="sm" variant="primary" busy={enrolling === beta.key} disabled={enrolling !== null} onClick={() => void enroll(beta)} aria-label={`Join ${beta.name}`}>Join</Button>}
+          </li>)}</ul>}
+        {joined && <Hint role="status">{joined}</Hint>}
+      </section>
+      <section className="grid gap-2" aria-labelledby="betas-code">
+        <Eyebrow><span id="betas-code">Have a code?</span></Eyebrow>
+        <BetaCodeForm {...props} hint="Some betas are invite-only. Enter the code you were given." />
+      </section>
+      {error && <Hint tone="danger" role="alert">{error}</Hint>}
+      {!online && <Hint>Connect to the internet to join or leave a beta.</Hint>}
+    </div>
+  </Modal>;
 }
 
 /** Feedback about one beta. The member sees every diagnostic that goes with it before pressing Send. */

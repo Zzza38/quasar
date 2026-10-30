@@ -7,6 +7,9 @@ export const SCHEDULE_FOLLOWING_BETA = 'schedule-following';
  * Betas (src/server/betas.ts, README "Running a beta"). A beta key names the code path in the app: useBeta('key') and
  * <Beta id="key"> turn on only for members who joined that beta with its code.
  */
+/** The beta that moves Betas out of the Account sheet into its own popup, with public betas to join. */
+export const BETAS_SCREEN_BETA = 'betas-screen';
+
 export const BETA_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const betaKeySchema = z.string().min(2).max(40).regex(BETA_KEY_PATTERN, 'Use lowercase letters, numbers and dashes for the key, like month-grid.');
 /** Codes are typed by hand, so case, spaces and dashes don't matter: "Month Grid-26" and "monthgrid26" are the same code. */
