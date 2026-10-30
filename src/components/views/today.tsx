@@ -6,12 +6,11 @@ import { errorMessage } from '@/client/api';
 import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
 import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { heroBase } from '@/lib/color';
-import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, withLabel, type Classmate, type NextStop } from '@/lib/classmates';
+import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
-import { Beta } from '../betas';
 import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
 import { LunchDay } from '../lunch-menu';
@@ -281,27 +280,16 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
 }
 
 /**
- * "With Bob" on a timeline row; opens that friend's profile, or People when there are several. In the
- * `classmates-popup` beta it opens ClassmatesPopup instead.
+ * Friends' faces on a timeline row; opens ClassmatesPopup with every friend in the class and where each goes next.
  * A plain function, not a component, so rows without classmates get null and no empty wrapper.
  */
 export function classmatesTag(state: AppState, date: string, period: ResolvedPeriod): ReactNode {
   const mates = classmatesFor(state.context, state.schedule, date, period);
   if (!mates.length) return null;
-  return <ClassmatesTag state={state} date={date} period={period} mates={mates} />;
+  return <ClassmatesPopup state={state} date={date} period={period} mates={mates} />;
 }
 
 const TAG_BUTTON = 'rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
-
-function ClassmatesTag({ state, date, period, mates }: { state: AppState; date: string; period: ResolvedPeriod; mates: Classmate[] }) {
-  const only = mates.length === 1 ? mates[0] : null;
-  const action = only ? `See ${only.displayName}’s day` : 'See your friends';
-  const chip = <button type="button" className={TAG_BUTTON} title={action} onClick={() => state.navigate('people', only ? { member: only.id } : undefined)}>
-    <Chip tone="accent" icon="users" className="transition-colors hover:bg-primary/20">{withLabel(mates)}</Chip>
-    <span className="sr-only">. {action}</span>
-  </button>;
-  return <Beta id="classmates-popup" fallback={chip}><ClassmatesPopup state={state} date={date} period={period} mates={mates} /></Beta>;
-}
 
 /** Up to three overlapping faces, ringed in the colour behind them. */
 function FaceStack({ mates, className, ring = 'ring-background' }: { mates: Classmate[]; className?: string; ring?: string }) {
@@ -321,7 +309,7 @@ const firstName = (mate: Classmate) => mate.displayName.split(/\s+/)[0];
 const POPUP_ROW = 'rounded-xl outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring';
 
 /**
- * Beta `classmates-popup`: the chip shows friends' faces and opens a popover with every friend in the class, then
+ * The chip shows friends' faces and opens a popover with every friend in the class, then
  * where each of them goes next ("Chemistry · Liam, Sofia · STU 2") so you can walk over together. With one friend
  * it is a single row: their face, name and next stop.
  */

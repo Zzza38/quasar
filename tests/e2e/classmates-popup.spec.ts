@@ -2,10 +2,7 @@ import { test, expect } from './fixtures';
 import type { BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { CommunityService } from '../../src/server/community';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
@@ -46,29 +43,14 @@ async function authenticate(context: BrowserContext, id: string) {
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
 
-test('classmates popup beta: the chip shows faces and opens every friend in the class with where they go next', async ({ page, context }, testInfo) => {
+test('classmates popup: the chip shows faces and opens every friend in the class with where they go next', async ({ page, context }, testInfo) => {
   const fixture = seed();
   try {
     await authenticate(context, fixture.me);
     await page.clock.setFixedTime(new Date('2026-09-08T11:30:00Z'));
     await page.setViewportSize({ width: 390, height: 844 });
 
-    // Outside the beta the chip still names friends and links to People.
     await page.goto('/');
-    await expect(page.getByRole('button', { name: /With Evan, Ian and 1 more/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'In this class with Evan, Ian and Maya' })).toHaveCount(0);
-
-    // What `npm run beta -- create` writes, then the student joins with the code.
-    const key = 'classmates-popup';
-    const code = `FACES-${fixture.me.slice(0, 4)}`;
-    const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-    const registry = readBetaRegistry(listPath);
-    writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((beta) => beta.key !== key) }, { key, name: 'Classmates popup', description: 'See who is in each class with you.', code }), listPath);
-    // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-    const previous = process.env.DATABASE_PATH;
-    process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-    try { new BetaService(fixture.service).join(fixture.me, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-    await page.reload();
 
     const chip = page.getByRole('button', { name: 'In this class with Evan, Ian and Maya' });
     await expect(chip).toContainText('3 friends');
