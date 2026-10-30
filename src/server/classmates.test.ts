@@ -5,7 +5,7 @@ import { Service } from './service';
 import { CommunityService } from './community';
 import { exampleSchedule } from '@/domain/example';
 import { resolveDay, type Schedule, type StudentClass } from '@/domain/schedule';
-import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, withLabel } from '@/lib/classmates';
+import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops } from '@/lib/classmates';
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
@@ -151,12 +151,5 @@ describe('classmates on the timetable', () => {
     // After the last period of the day everyone is done.
     const last = period('C', { id: 'mine', name: 'Chemistry' });
     expect(nextStops({ community: summary }, exampleSchedule, date, last, found).map((stop) => [stop.title, stop.classmates.length])).toEqual([[DONE_FOR_TODAY, 3]]);
-  });
-  it('phrases the label naturally', () => {
-    expect(withLabel([])).toBeNull();
-    expect(withLabel(['Evan'])).toBe('With Evan');
-    expect(withLabel(['Evan', 'Maya'])).toBe('With Evan and Maya');
-    expect(withLabel(['Evan', 'Maya', 'Sam', 'Lee'])).toBe('With Evan, Maya and 2 more');
-    expect(withLabel([{ displayName: 'Evan' }, { displayName: 'Maya' }])).toBe('With Evan and Maya');
   });
 });

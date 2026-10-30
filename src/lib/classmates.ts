@@ -51,12 +51,3 @@ export function nextStops(context: Pick<WorkspaceContext, 'community'>, schedule
   }
   return [...groups.values()].sort((a, b) => (a.startAt ?? '￿').localeCompare(b.startAt ?? '￿'));
 }
-
-/** "With Evan", "With Evan and Maya", "With Evan, Maya and 2 more". Accepts names or classmates. */
-export function withLabel(people: Array<string | Pick<Classmate, 'displayName'>>): string | null {
-  const names = people.map((person) => typeof person === 'string' ? person : person.displayName);
-  if (names.length === 0) return null;
-  if (names.length === 1) return `With ${names[0]}`;
-  if (names.length === 2) return `With ${names[0]} and ${names[1]}`;
-  return `With ${names[0]}, ${names[1]} and ${names.length - 2} more`;
-}
