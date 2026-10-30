@@ -58,9 +58,14 @@ describe('free periods from a scan', () => {
     expect(clearedClasses(personal, rows, ['P3', 'P4', 'P6'])).toEqual([{ periodId: 'P3', name: 'Art' }, { periodId: 'P6', name: 'Art' }]);
     const next = applyScan(personal, rows, ['P3', 'P4', 'P6']);
     expect(next.assignments).toEqual({ P4: 'Chemistry' });
+    expect(next.freePeriods).toEqual(['P3', 'P6']);
     // The class itself stays saved; only its periods are freed.
     expect(next.classes.map(cls => cls.id)).toEqual(['art', 'gym', 'Chemistry']);
     expect(applyScan(personal, rows).assignments).toEqual({ P3: 'art', P4: 'Chemistry', P6: 'art' });
+  });
+  it('keeps earlier free periods and unmarks one a scanned class now fills', () => {
+    const personal = { ...emptyPersonalSchedule(), freePeriods: ['P2', 'P4'] };
+    expect(applyScan(personal, [row('Chemistry', { periodIds: ['P4'] })], ['P5']).freePeriods).toEqual(['P2', 'P5']);
   });
 });
 

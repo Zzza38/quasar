@@ -270,7 +270,7 @@ export function Timeline({ periods, now, compact, timeZone, tag, onPeriodSelect 
                 {tagged !== null && tagged !== undefined && tagged !== false && tagged !== '' && (typeof tagged === 'string' ? <Chip tone="accent" icon="users">{tagged}</Chip> : <span className="relative z-10 inline-flex">{tagged}</span>)}
                 {period.kind === 'lunch' && !period.class && <Icon name="coffee" size={14} className="text-muted-foreground" />}
               </div>
-              <Hint className={cn(!detail && period.kind === 'class' && !period.class && 'italic')}>{detail || (period.kind === 'class' && !period.class ? 'No class assigned' : ' ')}</Hint>
+              <Hint className={cn(!detail && period.kind === 'class' && !period.class && !period.free && 'italic')}>{detail || (period.free ? 'Free period' : period.kind === 'class' && !period.class ? 'No class assigned' : ' ')}</Hint>
             </div>
           </div>
         </div>
