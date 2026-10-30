@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { resolveDay, type PersonalSchedule, type ResolvedDay, type ResolvedPeriod, type Schedule, type StudentClass } from '@/domain/schedule';
+import { resolveDay, type PersonalSchedule, type ResolvedDay, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
 import { classMatcher, type ClassLike } from '@/domain/class-match';
 import { FREE_PERIOD } from '@/lib/classmates';
 import { classColor, formatRoom, formatTime, pluralize } from '@/lib/format';
@@ -22,24 +22,13 @@ type Props = { state: AppState; people: People; days: Map<string, FriendDay> };
 
 /* ---------- Friends' timetables ---------- */
 
-/** Where a friend is in their school day today, and the classes they share with the viewer. */
-type FriendDay = { kind: 'now' | 'next' | 'done' | 'off'; period: ResolvedPeriod | null; together: boolean; shared: StudentClass[] };
+/** Where a friend is in their school day today, and whether the viewer is in that class too. */
+type FriendDay = { kind: 'now' | 'next' | 'done' | 'off'; period: ResolvedPeriod | null; together: boolean };
 
 type ClassMatch = (left: ClassLike, right: ClassLike) => boolean;
 
 function dayOf(schedule: Schedule, date: string, personal: PersonalSchedule): ResolvedDay | null {
   try { return resolveDay(schedule, date, personal); } catch { return null; }
-}
-
-/** My classes that a friend takes in the same period (the profile sheet's "in common" rule). */
-function sharedClasses(mine: PersonalSchedule, theirs: PersonalSchedule, sameClass: ClassMatch): StudentClass[] {
-  const shared = new Map<string, StudentClass>();
-  for (const [periodId, classId] of Object.entries(mine.assignments)) {
-    const own = mine.classes.find(cls => cls.id === classId);
-    const other = theirs.classes.find(cls => cls.id === theirs.assignments[periodId]);
-    if (own && other && sameClass(own, other)) shared.set(own.id, own);
-  }
-  return [...shared.values()];
 }
 
 /**
@@ -57,14 +46,13 @@ function useFriendDays(state: AppState): Map<string, FriendDay> {
     const mine = dayOf(schedule, today, personal);
     const days = new Map<string, FriendDay>();
     for (const friend of classmates ?? []) {
-      const shared = sharedClasses(personal, friend.personal, sameClass);
       const day = dayOf(schoolSchedule, today, friend.personal);
-      if (!day || day.closed || !day.periods.length) { days.set(friend.id, { kind: 'off', period: null, together: false, shared }); continue; }
+      if (!day || day.closed || !day.periods.length) { days.set(friend.id, { kind: 'off', period: null, together: false }); continue; }
       const current = day.periods.find(period => new Date(period.startAt).getTime() <= nowMs && nowMs < new Date(period.endAt).getTime());
       const next = day.periods.find(period => new Date(period.startAt).getTime() > nowMs);
       const period = current ?? next ?? null;
       const together = !!period?.class && !!mine?.periods.some(own => own.periodId === period.periodId && own.startAt === period.startAt && own.endAt === period.endAt && !!own.class && sameClass(own.class, period.class!));
-      days.set(friend.id, { kind: current ? 'now' : next ? 'next' : 'done', period, together, shared });
+      days.set(friend.id, { kind: current ? 'now' : next ? 'next' : 'done', period, together });
     }
     return days;
   }, [classmates, classDirectory, schoolSchedule, schedule, personal, today, now]);
@@ -247,7 +235,6 @@ function NowDesign({ state, people, days }: Props) {
   const classDirectory = state.context.community?.classDirectory;
   const { classes, idle } = useMemo(() => groupByClass(friends, days, classMatcher(classDirectory)), [friends, days, classDirectory]);
   const blocks = useMemo(() => byBlock(classes), [classes]);
-  const sharedCount = (friend: Member) => days.get(friend.id)?.shared.length ?? 0;
   return <>
     {incoming.length > 0 && <Section id="classes-requests" title="Wants to be friends" icon="userPlus">
       <ul className="grid gap-2 sm:grid-cols-2" aria-label="Incoming friend requests">{incoming.map(member => <MemberRow key={member.id} member={member} onOpen={people.openProfile}><AcceptDecline state={state} people={people} member={member} /></MemberRow>)}</ul>
@@ -275,8 +262,7 @@ function NowDesign({ state, people, days }: Props) {
     <Section id="classes-friends" title="Friends" icon="star" description={people.friends ? pluralize(friends.length, 'friend') : undefined}>
       {people.friendsLoading && <LoadingRows />}
       {people.friends && friends.length === 0 && <NoFriends />}
-      {friends.length > 0 && <ul className="grid gap-2 md:grid-cols-2" aria-label="Friends">{[...friends].sort((a, b) => sharedCount(b) - sharedCount(a) || a.displayName.localeCompare(b.displayName)).map(friend => <MemberRow key={friend.id} member={friend} onOpen={people.openProfile}>
-        {sharedCount(friend) > 0 && <Chip tone="accent" className="max-sm:hidden">{pluralize(sharedCount(friend), 'class', 'classes')}</Chip>}
+      {friends.length > 0 && <ul className="grid gap-2 md:grid-cols-2" aria-label="Friends">{[...friends].sort((a, b) => a.displayName.localeCompare(b.displayName)).map(friend => <MemberRow key={friend.id} member={friend} onOpen={people.openProfile}>
         <MessageButton state={state} member={friend} compact />
       </MemberRow>)}</ul>}
     </Section>
