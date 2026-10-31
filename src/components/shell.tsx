@@ -13,8 +13,7 @@ import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
-import { BETAS_SCREEN_BETA } from '@/domain/betas';
-import { Beta, BetaSettings, BetasButton } from './betas';
+import { BetasButton } from './betas';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
@@ -361,10 +360,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
-          {/* The betas-screen beta moves Betas into its own popup with public betas; everyone else keeps the inline block. */}
-          <Beta id={BETAS_SCREEN_BETA} fallback={<div className="grid gap-3"><Eyebrow>Betas</Eyebrow><BetaSettings accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} /></div>}>
-            <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
-          </Beta>
+          <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
             {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}

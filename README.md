@@ -91,7 +91,7 @@ Schedule following is available to everyone and does not depend on beta enrollme
 
 A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
 
-A beta is private or public. A **private** beta is joined by typing its code, so only people you give the code to get in. A **public** beta has no code: it is listed in Account → Betas and anyone can join it with a tap. Betas are private unless you ask for public. (While the `betas-screen` beta runs, Betas is a popup in Account that lists the public betas, and only its members see that list.)
+A beta is private or public. A **private** beta is joined by typing its code, so only people you give the code to get in. A **public** beta has no code: it is listed in Account → Betas and anyone can join it with a tap. Betas are private unless you ask for public.
 
 Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
 
