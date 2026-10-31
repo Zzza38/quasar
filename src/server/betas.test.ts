@@ -7,7 +7,7 @@ import type { BetaDiagnostics } from '@/domain/betas';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { appRouter } from './router';
-import { BETA_GUESS_LIMIT, WRONG_CODE_MESSAGE } from './betas';
+import { BETA_GUESS_LIMIT, NOT_PUBLIC_MESSAGE, WRONG_CODE_MESSAGE } from './betas';
 import { EMPTY_BETA_REGISTRY, createBeta, removeBeta, setBetaOpen, writeBetaRegistry, type BetaRegistry } from './beta-registry';
 
 const databases: Db[] = [];
@@ -71,6 +71,30 @@ describe('betas', () => {
     expect(f.keys(f.member)).toEqual([]);
     await expect(f.join(f.other, 'GRID-2026')).rejects.toThrow(WRONG_CODE_MESSAGE);
     await expect(f.caller(f.member).beta.feedback({ accountId: f.member, key: 'month-grid', message: 'After it ended', diagnostics })).rejects.toThrow('not in that beta');
+  });
+
+  it('lists open public betas and joins one with a tap, but never a private one', async () => {
+    const f = fixture();
+    f.save(createBeta(f.registry(), { key: 'quick-add', name: 'Quick add', description: 'Add tasks faster.', public: true, maxMembers: 1 }));
+    f.save(setBetaOpen(createBeta(f.registry(), { key: 'paused-one', name: 'Paused one', public: true }), 'paused-one', false));
+    const available = (userId: string) => f.caller(userId).beta.available();
+    const enroll = (userId: string, key: string) => f.caller(userId).beta.enroll({ accountId: userId, key });
+    // Private and paused betas are not on offer.
+    expect(await available(f.member)).toEqual([{ key: 'quick-add', name: 'Quick add', description: 'Add tasks faster.', full: false }]);
+    expect((await enroll(f.member, 'quick-add')).map(beta => ({ key: beta.key, public: beta.public }))).toEqual([{ key: 'quick-add', public: true }]);
+    expect(f.keys(f.member)).toEqual(['quick-add']);
+    // Joined betas drop off the list; a full one stays on it for others, marked full, and refuses them.
+    expect(await available(f.member)).toEqual([]);
+    expect(await available(f.other)).toEqual([expect.objectContaining({ key: 'quick-add', full: true })]);
+    await expect(enroll(f.other, 'quick-add')).rejects.toThrow('Quick add is full.');
+    // Joining again is a no-op; private betas, paused ones and unknown keys need the code or are refused.
+    expect((await enroll(f.member, 'quick-add')).length).toBe(1);
+    await expect(enroll(f.other, 'month-grid')).rejects.toThrow(NOT_PUBLIC_MESSAGE);
+    await expect(enroll(f.other, 'no-such-beta')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(enroll(f.other, 'paused-one')).rejects.toThrow('isn’t taking new testers');
+    await expect(f.caller(f.member).beta.enroll({ accountId: f.other, key: 'quick-add' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    // No code was typed, so nothing counts toward the wrong-code limit.
+    expect(f.db.prepare("SELECT count(*) n FROM audit_log WHERE action='beta.wrongCode'").get()).toEqual({ n: 0 });
   });
 
   it('leaves without a code, one beta or all of them', async () => {

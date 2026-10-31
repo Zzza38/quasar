@@ -22,7 +22,7 @@ import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, Se
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
-import { BetaService, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
+import { BetaService, betaEnrollSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -121,9 +121,12 @@ export const appRouter = t.router({
   support: t.router({
     appeal: accountScoped.input(appealSchema).mutation(({ ctx, input }) => { ctx.service.appeal(ctx.userId, input); }),
   }),
-  // Betas (src/server/betas.ts): a code joins one, leaving needs none, and feedback lands in the support inbox.
+  // Betas (src/server/betas.ts): a code joins a private one, a tap joins a public one, leaving needs neither, and
+  // feedback lands in the support inbox.
   beta: t.router({
+    available: authenticated.query(({ ctx }) => betas(ctx.service).available(ctx.userId)),
     join: accountScoped.input(betaJoinSchema).mutation(({ ctx, input }) => betas(ctx.service).join(ctx.userId, input)),
+    enroll: accountScoped.input(betaEnrollSchema).mutation(({ ctx, input }) => betas(ctx.service).enroll(ctx.userId, input)),
     leave: accountScoped.input(betaLeaveSchema).mutation(({ ctx, input }) => betas(ctx.service).leave(ctx.userId, input.key)),
     leaveAll: accountScoped.mutation(({ ctx }) => betas(ctx.service).leaveAll(ctx.userId)),
     feedback: accountScoped.input(betaFeedbackSchema).mutation(({ ctx, input }) => { betas(ctx.service).feedback(ctx.userId, input); }),

@@ -89,7 +89,9 @@ Schedule following is available to everyone and does not depend on beta enrollme
 
 ## Running a beta
 
-A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins by typing the beta's code in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+
+A beta is private or public. A **private** beta is joined by typing its code, so only people you give the code to get in. A **public** beta has no code: it is listed in Account → Betas and anyone can join it with a tap. Betas are private unless you ask for public.
 
 Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
 
@@ -121,13 +123,13 @@ Run the command in the checkout whose server should have the beta. For the live 
 npm run beta -- create month-grid --name "Month grid" --description "Try the month view in Schedule." --max 30
 ```
 
-`--name` and `--description` are what members see in Account. `--max` caps how many people can join, so a leaked code can't pull in the whole school. Leave out `--code` and the command generates one that is easy to read out, like `TQJKH-VMQWP`. Pass `--code "GRID-2026"` to choose your own: 4 to 64 letters and numbers, where case, spaces and dashes don't matter (`GRID-2026` and `grid 2026` are the same code). The command warns about codes under 8 characters, since those are easy to guess.
+`--name` and `--description` are what members see in Account. `--max` caps how many people can join, so a leaked code (or a popular public beta) can't pull in the whole school. Add `--public` to list the beta in Account → Betas with no code; everything below about codes is for private betas. Leave out `--code` and the command generates one that is easy to read out, like `TQJKH-VMQWP`. Pass `--code "GRID-2026"` to choose your own: 4 to 64 letters and numbers, where case, spaces and dashes don't matter (`GRID-2026` and `grid 2026` are the same code). The command warns about codes under 8 characters, since those are easy to guess.
 
-The command prints the code. `/admin` → **Betas** also shows every beta's code with a Copy button, so you can look it up any time.
+The command prints the code. `/admin` → **Betas** also shows every private beta's code with a Copy button, so you can look it up any time.
 
 ### 3. Testers join, leave and send feedback
 
-- **Join.** Account → Betas → type the code → Join. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
+- **Join.** Account → Betas → type the code → Join, or tap Join next to a public beta. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
 - **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://getquasarapp.com/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
 - **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
 
@@ -141,6 +143,8 @@ npm run beta -- pause month-grid                       # the code stops working;
 npm run beta -- open month-grid                        # the code works again
 npm run beta -- new-code month-grid                    # a fresh generated code; members stay in
 npm run beta -- new-code month-grid --code "GRID-2027" # or one you choose
+npm run beta -- public month-grid                      # listed in Account → Betas, no code; members stay in
+npm run beta -- private month-grid                     # back to a (new) code; members stay in
 npm run beta -- edit month-grid --name "Month view" --max none
 npm run beta -- remove month-grid                      # ends the beta: it switches off for everyone in it
 ```
@@ -151,7 +155,7 @@ npm run beta -- remove month-grid                      # ends the beta: it switc
 
 ### 5. Ship it to everyone
 
-When the beta is done, delete the `<Beta>`/`useBeta` branch, keep the new code path, and deploy. Then run `npm run beta -- remove <key>`. To abandon a beta instead, delete the new code path and remove it the same way.
+A beta is done when its PR merges, unless you decide to keep testing it. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
 
 ## Continuous integration
 

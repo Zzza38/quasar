@@ -35,7 +35,7 @@ export function BetaAdmin({ accountId, onAccessLost }: { accountId: string | nul
     catch { setError('Couldn’t copy. Select the code and copy it instead.'); }
   };
   return <Section id="betas-title" title="Betas" icon="sparkle"
-    description="Members join a beta by typing its code in Account, and code wrapped in <Beta> or useBeta() turns on for them. They can leave any time without the code. Feedback arrives in the inbox."
+    description="Members join a private beta by typing its code in Account, or a public one with a tap, and code wrapped in <Beta> or useBeta() turns on for them. They can leave any time without the code. Feedback arrives in the inbox."
     action={<Button size="sm" variant="ghost" icon="refresh" onClick={() => void load()}>Refresh</Button>}>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     <Hint>Create and change betas from the checkout with <code className="font-mono">npm run beta</code>. The list{list ? <> lives in <code className="break-all font-mono">{list.path}</code> and</> : ''} is never committed. Changes show up here right away.</Hint>
@@ -47,16 +47,17 @@ export function BetaAdmin({ accountId, onAccessLost }: { accountId: string | nul
           {beta.description && <Hint>{beta.description}</Hint>}
         </div>
         <div className="flex flex-wrap gap-1">
+          {beta.public ? <Chip icon="users">Public</Chip> : <Chip icon="lock">Private</Chip>}
           {beta.open ? <Chip tone="success" icon="unlock">Taking testers</Chip> : <Chip tone="warning" icon="lock">Joining paused</Chip>}
           <Chip icon="users">{beta.maxMembers === null ? pluralize(beta.members.length, 'member') : `${beta.members.length} of ${beta.maxMembers}`}</Chip>
           {beta.openFeedback > 0 && <Chip tone="accent" icon="inbox">{pluralize(beta.openFeedback, 'open report')}</Chip>}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      {beta.code === undefined ? <Hint>Anyone can join from Account → Betas. There is no code.</Hint> : <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-semibold text-muted-foreground">Code</span>
         <code className="rounded-lg bg-card px-2.5 py-1 font-mono text-[15px] font-bold tracking-wider ring-1 ring-foreground/[0.06]">{beta.code}</code>
-        <Button size="sm" icon={copied === beta.key ? 'check' : 'copy'} onClick={() => void copy(beta.key, beta.code)} aria-label={`Copy the code for ${beta.name}`}>{copied === beta.key ? 'Copied' : 'Copy'}</Button>
-      </div>
+        <Button size="sm" icon={copied === beta.key ? 'check' : 'copy'} onClick={() => void copy(beta.key, beta.code!)} aria-label={`Copy the code for ${beta.name}`}>{copied === beta.key ? 'Copied' : 'Copy'}</Button>
+      </div>}
       {beta.members.length > 0 && <details className="rounded-xl bg-card px-3 py-2 text-sm ring-1 ring-foreground/[0.06]">
         <summary className="cursor-pointer font-semibold">Members</summary>
         <ul className="mt-2 grid gap-1.5">{beta.members.map((member) => <li key={member.userId} className="flex flex-wrap items-center justify-between gap-2">
