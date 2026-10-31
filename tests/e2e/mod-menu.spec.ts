@@ -553,8 +553,8 @@ test('manually placed videos use existing blank space without changing layout', 
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     if (name === 'People') {
-      await expect(page.getByText('No requests waiting.', { exact: true })).toBeVisible();
-      await expect(page.getByRole('heading', { name: 'No friends yet', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Where your friends are', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'No friends yet', exact: true }).first()).toBeVisible();
       await expect(page.getByText('Nobody else has joined yet. Invite your schoolmates.', { exact: true })).toBeVisible();
     }
     const layout = () => page.evaluate(() => ({
