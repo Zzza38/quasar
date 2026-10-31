@@ -10,7 +10,7 @@ import type { StudentClass } from '../../src/domain/schedule';
 
 /**
  * A student with three friends in their period A class. Evan and Maya have Biology in STU 2 next; Ian has nothing
- * in period B, so it is his free period. Ian alone also shares period C, the last of the day. The browser clock is
+ * in period B and marked it free. Ian alone also shares period C, the last of the day. The browser clock is
  * fixed to Tuesday 2026-09-08 before school.
  */
 function seed() {
@@ -26,12 +26,12 @@ function seed() {
     const school = service.createSchool(me, { name: `Friends High ${me.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
     for (const id of [me, evan, maya, ian]) service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
     const art: StudentClass = { id: 'art', name: 'Digital Design', room: 'STU 4' };
-    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>) =>
-      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
+    const setClasses = (id: string, classes: StudentClass[], assignments: Record<string, string>, freePeriods?: string[]) =>
+      service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: { grade: '9', classes, assignments, ...(freePeriods ? { freePeriods } : {}), cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
     setClasses(me, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
     setClasses(evan, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
     setClasses(maya, [art, { id: 'bio', name: 'Biology', room: 'STU 2' }], { A: 'art', B: 'bio' });
-    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' });
+    setClasses(ian, [art, { id: 'chem', name: 'Chemistry' }], { A: 'art', C: 'chem' }, ['B']);
     const community = new CommunityService(service);
     for (const id of [evan, maya, ian]) { community.request(me, id); community.respond(id, me, true); }
     return { me, evan, service, db };

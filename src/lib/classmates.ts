@@ -25,10 +25,12 @@ export type NextStop = { title: string; room: string | null; startAt: string | n
 
 export const DONE_FOR_TODAY = 'Done for today';
 export const FREE_PERIOD = 'Free';
+/** A class period the friend has not filled in, so it is not known to be free. */
+export const NO_CLASS_SET = 'No class set';
 
 /**
  * Groups `mates` by the period each one has next after `period` ends on `date`: "Chemistry" in STU 2, "Lunch",
- * "Free" for a class period with nothing assigned, or "Done for today". Groups come in start order, the
+ * "Free" for a period they marked free, "No class set" for a class period they left empty, or "Done for today". Groups come in start order, the
  * done-for-today group last; friends in a group keep the order of `mates`.
  */
 export function nextStops(context: Pick<WorkspaceContext, 'community'>, schedule: Schedule, date: string, period: Pick<ResolvedPeriod, 'endAt'>, mates: Classmate[]): NextStop[] {
@@ -41,7 +43,7 @@ export function nextStops(context: Pick<WorkspaceContext, 'community'>, schedule
       const day = personal ? resolveDay(schedule, date, personal) : null;
       next = day && !day.closed ? day.periods.find((theirs) => theirs.startAt >= period.endAt) : undefined;
     } catch { next = undefined; }
-    const title = !next ? DONE_FOR_TODAY : next.kind === 'class' && !next.class ? FREE_PERIOD : next.class?.name || next.label;
+    const title = !next ? DONE_FOR_TODAY : next.free ? FREE_PERIOD : next.kind === 'class' && !next.class ? NO_CLASS_SET : next.class?.name || next.label;
     const room = next?.class?.room?.trim() || null;
     const key = `${title.trim().toLowerCase()}\u0000${room?.toLowerCase() ?? ''}`;
     const group = groups.get(key) ?? { title, room, startAt: next?.startAt ?? null, classmates: [] };
