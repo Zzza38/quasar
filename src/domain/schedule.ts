@@ -172,7 +172,7 @@ export const classSchema = z.strictObject({
   directoryId: z.string().uuid().optional(),
 });
 
-export const PERSONAL_SCHEDULE_CLIENT_VERSION = 2;
+export const PERSONAL_SCHEDULE_CLIENT_VERSION = 3;
 const slotChangeSchema = z.strictObject({
   periodId: idSchema.optional(), start: timeSchema.optional(), end: timeSchema.optional(), base: slotSchema.optional(),
 });
@@ -189,6 +189,8 @@ export const personalScheduleSchema = z.strictObject({
   scheduleLocked: z.boolean().optional(),
   classes: z.array(classSchema).max(300),
   assignments: z.record(idSchema, idSchema),
+  /** Periods the student has no class in on purpose. A period with neither an assignment nor this mark is just not filled in. */
+  freePeriods: z.array(idSchema).max(300).optional(),
   cycleDayOverrides: z.array(cycleDayOverrideSchema).max(366),
   dateOverrides: z.array(z.strictObject({
     date: dateSchema,
@@ -201,6 +203,7 @@ export const personalScheduleSchema = z.strictObject({
   if (new Set(personal.periods?.map(period => period.id)).size !== (personal.periods?.length ?? 0)) context.addIssue({ code: "custom", message: "Personal period IDs must be unique", path: ["periods"] });
   const classIds = new Set(personal.classes.map((entry) => entry.id));
   if (classIds.size !== personal.classes.length) context.addIssue({ code: "custom", message: "Class IDs must be unique", path: ["classes"] });
+  if (new Set(personal.freePeriods).size !== (personal.freePeriods?.length ?? 0)) context.addIssue({ code: "custom", message: "Free periods must be unique", path: ["freePeriods"] });
   for (const [periodId, classId] of Object.entries(personal.assignments)) {
     if (!classIds.has(classId)) context.addIssue({ code: "custom", message: "The assigned class does not exist", path: ["assignments", periodId] });
   }
@@ -302,6 +305,15 @@ export function emptyPersonalSchedule(): PersonalSchedule {
   return { classes: [], assignments: {}, cycleDayOverrides: [], dateOverrides: [], customSchedule: null };
 }
 
+/** Drops free marks from periods that have a class again, and the field itself once nothing is free. */
+export function withoutAssignedFreePeriods(personal: PersonalSchedule): PersonalSchedule {
+  if (!personal.freePeriods) return personal;
+  const freePeriods = personal.freePeriods.filter(periodId => !personal.assignments[periodId]);
+  if (freePeriods.length === personal.freePeriods.length && freePeriods.length) return personal;
+  const { freePeriods: _dropped, ...rest } = personal;
+  return freePeriods.length ? { ...rest, freePeriods } : rest;
+}
+
 export interface ResolvedPeriod {
   slotId: string;
   periodId: string;
@@ -312,6 +324,8 @@ export interface ResolvedPeriod {
   startAt: string;
   endAt: string;
   class?: StudentClass;
+  /** A class period the student marked free. Unset on a period that simply has no class yet. */
+  free?: true;
 }
 
 export interface ScheduleIssue {
@@ -515,7 +529,7 @@ export function resolveDay(schoolSchedule: Schedule, dateString: string, persona
       end,
       startAt: startAt.toString(),
       endAt: endAt.toString(),
-      ...(assignedClass ? { class: assignedClass } : {}),
+      ...(assignedClass ? { class: assignedClass } : period?.kind === "class" && personal.freePeriods?.includes(slot.periodId) ? { free: true as const } : {}),
     });
   }
   result.periods.sort((left, right) => left.startAt.localeCompare(right.startAt));

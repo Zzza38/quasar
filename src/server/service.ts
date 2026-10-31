@@ -49,15 +49,17 @@ export const SYNC_LIMITS = { liveTasks: 5000, dailyMutations: 5000, dailyBytes: 
  * How the server shapes what it sends a client. Bundles built before `completedAt` existed parse tasks strictly and
  * do not send TASK_CLIENT_VERSION (a tab left open across a deploy, or one started offline from the cached shell),
  * so the router sets `legacyTasks` for them and their workspace and sync replies leave that field out.
- * Bundles without sparse personal override support reload before reading or writing that format.
+ * Bundles without sparse personal override support (`legacyPersonal`) or free periods (`legacyFreePeriods`) reload
+ * before reading or writing a personal schedule that uses them.
  */
-export type ClientOptions = { legacyTasks?: boolean; legacyPersonal?: boolean };
+export type ClientOptions = { legacyTasks?: boolean; legacyPersonal?: boolean; legacyFreePeriods?: boolean };
 const RELOAD_PERSONAL_MESSAGE = 'Quasar has been updated. Reload the page, or close and reopen the app, to continue.';
-function forClient(entity: Entity, { legacyTasks = false, legacyPersonal = false }: ClientOptions): Entity {
+function forClient(entity: Entity, { legacyTasks = false, legacyPersonal = false, legacyFreePeriods = false }: ClientOptions): Entity {
   const overrides = entity.data.cycleDayOverrides;
   if (legacyPersonal && entity.kind === 'personal' && (entity.data.periods !== undefined || (Array.isArray(overrides) && overrides.some(entry => entry && typeof entry === 'object' && entry.slotChanges !== undefined)))) {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
   }
+  if (legacyFreePeriods && entity.kind === 'personal' && entity.data.freePeriods !== undefined) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
   if (!legacyTasks || entity.kind !== 'task' || !('completedAt' in entity.data)) return entity;
   const { completedAt: _completedAt, ...data } = entity.data;
   return { ...entity, data };
