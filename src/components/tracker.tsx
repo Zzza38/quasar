@@ -14,7 +14,7 @@ import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
-import { Beta, BetaProvider } from './betas';
+import { BetaProvider } from './betas';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
 import { useWorkspace, type InitialBoot } from './use-workspace';
@@ -24,8 +24,7 @@ import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
-import { PeopleView } from './views/people';
-import { PeopleBeta } from './views/people-beta';
+import { PeopleView } from './views/people-now';
 import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
@@ -282,7 +281,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     {route.view === 'tasks' && <TasksView state={state} />}
     {route.view === 'classes' && <ClassesView state={state} />}
     {route.view === 'school' && <SchoolView state={state} />}
-    {route.view === 'people' && <Beta id="people-redesign" fallback={<PeopleView state={state} />}><PeopleBeta state={state} /></Beta>}
+    {route.view === 'people' && <PeopleView state={state} />}
     {route.view === 'messages' && <MessagesView state={state} />}
   </Shell></BetaProvider>;
 }
