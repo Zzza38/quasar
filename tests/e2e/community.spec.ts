@@ -49,7 +49,7 @@ test('friends share classes only after acceptance, and removal revokes access', 
   const page = await signedIn(browser, f.alice);
   await page.goto('/people');
   await expect(page.getByRole('heading', { name: 'People', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'School verification' })).toBeVisible();
+  await expect(page.getByText('Verify that you go to')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Verify my school' })).toBeVisible();
   const bobRow = page.getByRole('list', { name: 'Schoolmates' }).getByRole('listitem').filter({ hasText: 'Bob' });
   await expect(bobRow).toContainText('Grade 10');
@@ -68,11 +68,11 @@ test('friends share classes only after acceptance, and removal revokes access', 
   const incoming = bob.getByRole('list', { name: 'Incoming friend requests' }).getByRole('listitem').filter({ hasText: 'Alice' });
   await incoming.getByRole('button', { name: 'Accept' }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'You and Alice are now friends.' })).toBeVisible();
-  await expect(bob.getByRole('list', { name: 'Friends' })).toContainText('Alice');
+  await expect(bob.getByRole('list', { name: 'Friends', exact: true })).toContainText('Alice');
 
   // Alice can now see Bob's classes and his day.
   await page.reload();
-  await page.getByRole('list', { name: 'Friends' }).getByRole('button', { name: 'See day' }).click();
+  await page.getByRole('list', { name: 'Friends', exact: true }).getByRole('button', { name: 'Open Bob’s profile' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Bob', exact: true })).toBeVisible();
   await expect(dialog).toContainText('Algebra II');
