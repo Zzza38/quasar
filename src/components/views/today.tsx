@@ -15,6 +15,7 @@ import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
+import { FreePeriodPrompt } from '../free-period-prompt';
 import { PeriodSheet } from '../period-sheet';
 import { editSchedule } from '../schedule-lock';
 import { Button, Chip, ColorDot, EmptyState, Eyebrow, Hint, Input, Section, Select, StatTile } from '../primitives';
@@ -122,6 +123,7 @@ export function TodayView({ state }: { state: AppState }) {
     </div>
     {state.personalValid && <PeriodSheet state={state} period={changePeriod} date={displayDate} onClose={() => setChangePeriod(null)} onAdjustDay={() => { setChangePeriod(null); setAdjustDay(true); }} />}
     <DateAdjustmentSheet open={adjustDay} onClose={() => setAdjustDay(false)} date={displayDate} school={schedule} personal={personal} save={state.savePersonal} />
+    <FreePeriodPrompt state={state} paused={!!changePeriod || adjustDay} />
   </div>;
 }
 
