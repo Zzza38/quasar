@@ -242,6 +242,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     online: session.online,
     saveTask: (id: string, task: Task | null) => session.save('task', id, task),
     savePersonal,
+    saveConfirmed: saveUnlocked,
     linkClasses,
     refresh: session.initialize,
     navigate: route.navigate,
