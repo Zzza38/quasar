@@ -13,8 +13,8 @@ import { Button, Callout, Chip, EmptyState, Eyebrow, Hint, IconButton, Input, Pa
 import { LoadingRows, MemberRow, usePeople, type Member } from './people';
 
 /**
- * The people-redesign beta: friends grouped by the class they are in right now (or next), as cards coloured by
- * class. It shares usePeople (lists, search, actions, sheets) with the current page.
+ * The People page: friends grouped by the class they are in right now (or next), as cards coloured by class. The
+ * lists, search, actions and sheets come from usePeople in people.tsx.
  */
 
 type People = ReturnType<typeof usePeople>;
@@ -272,7 +272,7 @@ function NowDesign({ state, people, days }: Props) {
 
 /* ---------- The page ---------- */
 
-export function PeopleBeta({ state }: { state: AppState }) {
+export function PeopleView({ state }: { state: AppState }) {
   const people = usePeople(state);
   const days = useFriendDays(state);
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">

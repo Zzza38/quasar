@@ -2,10 +2,7 @@ import { test, expect } from './fixtures';
 import type { BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { CommunityService } from '../../src/server/community';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
@@ -47,20 +44,9 @@ async function authenticate(context: BrowserContext, id: string) {
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
 
-test('people redesign beta: friends are grouped by the class they are in right now', async ({ page, context }, testInfo) => {
+test('people: friends are grouped by the class they are in right now', async ({ page, context }, testInfo) => {
   const fixture = seed();
   try {
-    // What `npm run beta -- create` writes, then the student joins with the code.
-    const key = 'people-redesign';
-    const code = `PEOPLE-${fixture.me.slice(0, 4)}`;
-    const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-    const registry = readBetaRegistry(listPath);
-    writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((beta) => beta.key !== key) }, { key, name: 'People page redesign', description: 'Where your friends are.', code }), listPath);
-    // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-    const previous = process.env.DATABASE_PATH;
-    process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-    try { new BetaService(fixture.service).join(fixture.me, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-
     await authenticate(context, fixture.me);
     // 8:30 AM in New York: the middle of period A.
     await page.clock.setFixedTime(new Date('2026-09-08T12:30:00Z'));
@@ -79,11 +65,10 @@ test('people redesign beta: friends are grouped by the class they are in right n
     await expect(now.getByRole('list', { name: 'Friends in Spanish 2' })).toContainText('Nora');
     await expect(now.getByRole('list', { name: 'Friends in Free' })).toContainText('Ian');
     await expect(now.getByRole('list', { name: 'Friends in No class set' })).toContainText('Theo');
-    await expect(page.getByText('Beta layout')).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath('people-redesign-phone.png'), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('people-phone.png'), fullPage: true });
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.screenshot({ path: testInfo.outputPath('people-redesign-desktop.png'), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('people-desktop.png'), fullPage: true });
 
     await first.getByRole('button', { name: 'Evan' }).click();
     await expect(page.getByRole('dialog')).toContainText('Evan');
