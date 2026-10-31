@@ -155,6 +155,8 @@ export interface AppState {
   online: boolean;
   saveTask: (id: string, task: Task | null) => Promise<void>;
   savePersonal: (personal: PersonalSchedule) => Promise<void>;
+  /** Saves without the schedule lock prompt; only for a change the student just confirmed in its own dialog (FreePeriodPrompt). */
+  saveConfirmed: (personal: PersonalSchedule) => Promise<void>;
   /** Points classes at school directory entries without the schedule lock prompt (see directory-links.ts). */
   linkClasses: (links: DirectoryLink[]) => Promise<void>;
   /** Reloads the workspace from the server; resolves false when that failed (the error is shown by the shell). */

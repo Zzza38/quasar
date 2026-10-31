@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures';
+import { declineFreePeriods, test, expect } from './fixtures';
 import type { BrowserContext } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
@@ -51,6 +51,8 @@ test('classmates popup: the chip shows faces and opens every friend in the class
     await page.setViewportSize({ width: 390, height: 844 });
 
     await page.goto('/');
+    // B and D are Zed's only empty blocks, so Today asks about them first.
+    await declineFreePeriods(page, ['B', 'D']);
 
     const chip = page.getByRole('button', { name: 'In this class with Evan, Ian and Maya' });
     await expect(chip).toContainText('3 friends');

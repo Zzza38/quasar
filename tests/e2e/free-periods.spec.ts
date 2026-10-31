@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures';
+import { declineFreePeriods, test, expect } from './fixtures';
 import type { BrowserContext, Locator } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
@@ -52,6 +52,8 @@ test('free periods: a period marked free reads as free on Today and to friends, 
     await page.clock.setFixedTime(new Date('2026-09-08T11:30:00Z'));
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
+    // B and D are Zed's only empty blocks, so Today asks about them first; B stays empty here on purpose.
+    await declineFreePeriods(page, ['B', 'D']);
 
     // Ian left B empty, so the classmates popup cannot say he is free.
     await page.getByRole('button', { name: 'In this class with Ian', exact: true }).click();
