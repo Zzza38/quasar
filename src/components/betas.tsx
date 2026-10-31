@@ -13,7 +13,7 @@ import { Button, Callout, Eyebrow, Field, Hint, Input, Modal, Spacer, Textarea }
 /**
  * Betas on the client (README "Running a beta"). Wrap new UI in <Beta id="key" fallback={<Old />}> or branch on
  * useBeta('key'): both are on only for members who joined that beta, with its code or, for a public beta, with a tap.
- * Members join, leave and send feedback from Account (BetaSettings, or the BetasButton popup); leaving never needs a code.
+ * Members join, leave and send feedback from the Betas popup in Account (BetasButton); leaving never needs a code.
  */
 
 export type JoinedBeta = WorkspaceContext['betas'][number];
@@ -139,19 +139,8 @@ function BetaCodeForm({ accountId, betas, online, onChanged, hint }: BetaListPro
   </form>;
 }
 
-/** The Betas block in Account: the betas the member is in (feedback, leave) and the code field to join one. */
-export function BetaSettings(props: BetaListProps) {
-  const [error, setError] = useState('');
-  return <div className="grid gap-3">
-    <JoinedBetaList {...props} onError={setError} />
-    <BetaCodeForm {...props} hint={props.betas.length ? 'Have a code for another beta? Enter it here.' : 'Got a code from the person who runs Quasar? Enter it to try something early. You can leave any time.'} />
-    {error && <Hint tone="danger" role="alert">{error}</Hint>}
-    {!props.online && <Hint>Connect to the internet to join or leave a beta.</Hint>}
-  </div>;
-}
-
 /**
- * Betas as its own popup (the betas-screen beta): the Account sheet shows one row that opens it. Inside are the betas
+ * Betas as its own popup: the Account sheet shows one row that opens it. Inside are the betas
  * the member is in, the public betas anyone can join with a tap, and the code field for private ones.
  */
 export function BetasButton(props: BetaListProps) {

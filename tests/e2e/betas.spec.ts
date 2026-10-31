@@ -59,7 +59,8 @@ test('betas: one from the beta list shows its code to the owner; a member joins 
   const member = await signedIn(browser, f.member, true);
   await member.goto('/');
   await member.getByRole('button', { name: 'Account', exact: true }).click();
-  const account = member.getByRole('dialog', { name: 'Account', exact: true });
+  await member.getByRole('dialog', { name: 'Account', exact: true }).getByRole('button', { name: /^Betas/ }).click();
+  const account = member.getByRole('dialog', { name: 'Betas', exact: true });
   const code = account.getByRole('textbox', { name: 'Beta code' });
   await code.fill('NOPE-1234');
   await account.getByRole('button', { name: 'Join', exact: true }).click();
@@ -103,48 +104,37 @@ test('betas: one from the beta list shows its code to the owner; a member joins 
   await member.goto('/schedule?beta=off');
   await expect(member).toHaveURL(/\/schedule$/);
   await member.getByRole('button', { name: 'Account', exact: true }).click();
+  await member.getByRole('dialog', { name: 'Account', exact: true }).getByRole('button', { name: /^Betas/ }).click();
   await expect(account.getByRole('textbox', { name: 'Beta code' })).toBeVisible();
   await expect(account.getByRole('list', { name: 'Your betas' })).toHaveCount(0);
 });
 
-test('betas screen: a member in the betas-screen beta opens Betas as a popup from Account and joins a public beta with a tap', async ({ browser }) => {
+test('betas popup: a member opens Betas from Account and joins a public beta with a tap, no code', async ({ browser }) => {
   test.setTimeout(120_000);
   const f = seed();
   const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const screenCode = `SCREEN-${f.member.slice(0, 4)}`;
   const openName = `Quick add ${f.member.slice(0, 4)}`;
-  let list = readBetaRegistry(listPath);
-  // The screen's own beta is private, so its code gets the member in first.
-  if (!list.betas.some((beta) => beta.key === 'betas-screen')) list = createBeta(list, { key: 'betas-screen', name: 'Betas screen', code: screenCode });
-  const screen = list.betas.find((beta) => beta.key === 'betas-screen')!;
-  list = createBeta(list, { key: `open-${f.member.slice(0, 8)}`, name: openName, description: 'Add tasks faster.', public: true });
-  writeBetaRegistry(list, listPath);
+  writeBetaRegistry(createBeta(readBetaRegistry(listPath), { key: `open-${f.member.slice(0, 8)}`, name: openName, description: 'Add tasks faster.', public: true }), listPath);
 
   const member = await signedIn(browser, f.member, true);
   await member.goto('/');
   await member.getByRole('button', { name: 'Account', exact: true }).click();
   const account = member.getByRole('dialog', { name: 'Account', exact: true });
-  // Before joining, Betas is the inline block, and public betas are not listed there.
-  await expect(account.getByText(openName)).toHaveCount(0);
-  await account.getByRole('textbox', { name: 'Beta code' }).fill(screen.code!);
-  await account.getByRole('button', { name: 'Join', exact: true }).click();
-
-  // Now Account has a single Betas row that opens the popup.
+  // Account has a single Betas row; the code field and the public list live in the popup.
   await expect(account.getByRole('textbox', { name: 'Beta code' })).toHaveCount(0);
   await account.getByRole('button', { name: /^Betas/ }).click();
   const popup = member.getByRole('dialog', { name: 'Betas', exact: true });
-  await expect(popup.getByRole('list', { name: 'Your betas' }).getByText('Betas screen')).toBeVisible();
   const offered = popup.getByRole('list', { name: 'Betas you can join' });
   await expect(offered.getByText('Add tasks faster.')).toBeVisible();
   await offered.getByRole('button', { name: `Join ${openName}` }).click();
   await expect(popup.getByRole('status').filter({ hasText: `You’re in ${openName}.` })).toBeVisible();
   await expect(popup.getByRole('list', { name: 'Your betas' }).getByText(openName)).toBeVisible();
-  await expect(popup.getByRole('list', { name: 'Betas you can join' })).toHaveCount(0);
+  await expect(offered.getByRole('button', { name: `Join ${openName}` })).toHaveCount(0);
 
   // Leaving puts it back on offer, with no code.
   await popup.getByRole('button', { name: `Leave ${openName}` }).click();
   await expect(offered.getByRole('button', { name: `Join ${openName}` })).toBeVisible();
-  await expect(popup.getByRole('textbox', { name: 'Beta code' })).toBeVisible();
   await popup.getByRole('button', { name: 'Done' }).click();
   await expect(popup).toHaveCount(0);
+  await expect(account.getByRole('button', { name: /^Betas/ })).toBeVisible();
 });
