@@ -384,27 +384,39 @@ export function hasSlur(text: string): boolean {
  * they sit inside a slur: censorBody passes the markdown markers, so "n**igg**er" (shown as one word) is caught.
  */
 export function censorSlurs(text: string, options: { ignore?: RegExp } = {}): string {
+  const ranges = slurRanges(text, options);
+  if (!ranges.length) return text;
   const points = Array.from(text);
-  const kept = options.ignore ? points.flatMap((point, index) => (options.ignore!.test(point) ? [] : [index])) : points.map((_, index) => index);
-  const normalization = normalizeWithOrigins(options.ignore ? kept.map(index => points[index]).join('') : text);
-  const { origins } = normalization;
-  const matches = slurMatches(normalization);
-  if (!matches.length) return text;
-  const replaced: { from: number; to: number; stars: number }[] = [];
-  for (const match of matches) {
-    const start = match.index;
-    const end = start + match.text.length - 1;
-    replaced.push({ from: kept[origins[start]!]!, to: kept[origins[end]!]!, stars: match.letters ?? match.text.replace(/[^a-zA-Z*\u0001]/g, '').length });
-  }
   const out: string[] = [];
   let cursor = 0;
-  for (const range of replaced) {
-    if (range.from < cursor) continue;
+  for (const range of ranges) {
     out.push(...points.slice(cursor, range.from), '*'.repeat(range.stars));
     cursor = range.to + 1;
   }
   out.push(...points.slice(cursor));
   return out.join('');
+}
+
+/**
+ * What censorSlurs replaces: for each slur, the first and last code point it covers in `text` (inclusive) and how many
+ * asterisks stand in for it. In order and never overlapping.
+ */
+export function slurRanges(text: string, options: { ignore?: RegExp } = {}): { from: number; to: number; stars: number }[] {
+  const points = Array.from(text);
+  const kept = options.ignore ? points.flatMap((point, index) => (options.ignore!.test(point) ? [] : [index])) : points.map((_, index) => index);
+  const normalization = normalizeWithOrigins(options.ignore ? kept.map(index => points[index]).join('') : text);
+  const { origins } = normalization;
+  const ranges: { from: number; to: number; stars: number }[] = [];
+  let cursor = 0;
+  for (const match of slurMatches(normalization)) {
+    const start = match.index;
+    const end = start + match.text.length - 1;
+    const range = { from: kept[origins[start]!]!, to: kept[origins[end]!]!, stars: match.letters ?? match.text.replace(/[^a-zA-Z*\u0001]/g, '').length };
+    if (range.from < cursor) continue;
+    ranges.push(range);
+    cursor = range.to + 1;
+  }
+  return ranges;
 }
 
 /** The composer's notice for a draft with a slur in it, or null. Nothing is refused; the server censors. */

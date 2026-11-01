@@ -4,7 +4,7 @@ import { chatImage } from '@/client/chat-image';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
+import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, revealableText, type CensorMask, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
 import { censorSlurs, slurNotice } from '@/domain/chat-filter';
 import { parseMarkdown, plainText, type Block, type Inline } from '@/domain/markdown';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts, pluralize } from '@/lib/format';
@@ -23,6 +23,7 @@ import { Label } from '../ui/label';
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
 import { Toggle } from '../ui/toggle';
 import { Button as MenuRow } from '../ui/button';
+import { STAFF_LABELS, STAFF_NOUNS, type StaffRank } from '@/domain/staff';
 import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatThread, type GlobalSummary, type GroupInfo, type GroupSummary, type Outgoing, type Receipt } from '../use-chat';
 
 type OpenRow = Extract<ChatInboxRow, { state: 'open' }>;
@@ -96,15 +97,18 @@ function senderName(message: ChatMessage): string {
 function senderAvatar(message: ChatMessage): string | null {
   return 'sender' in message ? message.sender.avatar : null;
 }
-/** The owner's edit or removal note on a global message, if any. */
-function moderation(message: ChatMessage): { edited: boolean; reason: string | null } {
-  if (!('sender' in message)) return { edited: false, reason: null };
-  return { edited: message.editedAt !== null, reason: message.reason };
+/**
+ * A moderator's edit or removal note on a global message, if any, and who made it ("the owner", "a moderator").
+ * A message from a server before staff roles has no `moderatedBy`; only the owner moderated then.
+ */
+function moderation(message: ChatMessage): { edited: boolean; reason: string | null; by: string } {
+  if (!('sender' in message)) return { edited: false, reason: null, by: STAFF_NOUNS.owner };
+  return { edited: message.editedAt !== null, reason: message.reason, by: STAFF_NOUNS[('moderatedBy' in message ? message.moderatedBy : null) ?? 'owner'] };
 }
 function removedText(message: ChatMessage): string {
-  const { reason } = moderation(message);
+  const { reason, by } = moderation(message);
   if (message.deletedBy === 'support') return 'Hidden by support';
-  if (message.deletedBy === 'owner') return reason ? `Removed by the owner: ${reason}` : 'Removed by the owner';
+  if (message.deletedBy === 'owner') return reason ? `Removed by ${by}: ${reason}` : `Removed by ${by}`;
   if (message.deletedBy === 'admin') return 'Removed by the group admin';
   return 'Message deleted';
 }
@@ -139,45 +143,70 @@ export function typingText(names: string[]): string {
 
 /* ---------- Message text: the markdown subset, censored at display time ---------- */
 
-function renderInline(nodes: Inline[], mine: boolean, keyPrefix: string): ReactNode[] {
+/**
+ * A text run, censored at display time too (messages stored before the filter, slur-shaped words in links). With
+ * `masks` (the owner's view, revealableText), each marker becomes the asterisks the filter put there, which show
+ * what they hid on hover or focus.
+ */
+function shownText(text: string, masks: CensorMask[] | null, key: string): ReactNode {
+  if (!masks) return censorSlurs(text);
+  return text.split(/\uE000(\d+)\uE001/).map((part, index) => (index % 2 ? <Censored key={`${key}-m${index}`} mask={masks[Number(part)]} /> : censorSlurs(part)));
+}
+
+/** The owner's view of a word the slur filter hid: its asterisks, swapped for the original on hover or focus. */
+function Censored({ mask }: { mask: CensorMask | undefined }) {
+  if (!mask) return null;
+  return <span tabIndex={0} className="group/censor cursor-help rounded-sm underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <span aria-hidden="true" className="group-hover/censor:hidden group-focus/censor:hidden">{'*'.repeat(mask.stars)}</span>
+    <span aria-hidden="true" className="hidden group-hover/censor:inline group-focus/censor:inline">{mask.original}</span>
+    <span className="sr-only">(censored: {mask.original})</span>
+  </span>;
+}
+
+function renderInline(nodes: Inline[], mine: boolean, keyPrefix: string, masks: CensorMask[] | null): ReactNode[] {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
     switch (node.kind) {
-      // Censored at display time too (messages stored before the filter, slur-shaped words in links), href kept real.
-      case 'text': return <span key={key}>{censorSlurs(node.text)}</span>;
-      case 'link': return <a key={key} href={node.href} target="_blank" rel="noopener noreferrer nofollow ugc" className={cn('underline underline-offset-2', mine ? 'text-primary-foreground decoration-primary-foreground/60' : 'text-primary decoration-primary/50')}>{censorSlurs(node.text)}</a>;
+      // Links keep the real href.
+      case 'text': return <span key={key}>{shownText(node.text, masks, key)}</span>;
+      case 'link': return <a key={key} href={node.href} target="_blank" rel="noopener noreferrer nofollow ugc" className={cn('underline underline-offset-2', mine ? 'text-primary-foreground decoration-primary-foreground/60' : 'text-primary decoration-primary/50')}>{shownText(node.text, masks, key)}</a>;
       // Each style has to read at 15 px on a coloured bubble: 700 weight, a true italic, a visible strike, a mono pill.
-      case 'code': return <code key={key} className={cn('rounded-md px-1.5 py-px font-mono text-[0.88em]', mine ? 'bg-black/25' : 'bg-foreground/[0.1]')}>{censorSlurs(node.text)}</code>;
-      case 'strong': return <strong key={key} className="font-bold">{renderInline(node.children, mine, key)}</strong>;
-      case 'em': return <em key={key} className="italic">{renderInline(node.children, mine, key)}</em>;
-      case 'strike': return <s key={key} className="line-through decoration-[1.5px] opacity-85">{renderInline(node.children, mine, key)}</s>;
+      case 'code': return <code key={key} className={cn('rounded-md px-1.5 py-px font-mono text-[0.88em]', mine ? 'bg-black/25' : 'bg-foreground/[0.1]')}>{shownText(node.text, masks, key)}</code>;
+      case 'strong': return <strong key={key} className="font-bold">{renderInline(node.children, mine, key, masks)}</strong>;
+      case 'em': return <em key={key} className="italic">{renderInline(node.children, mine, key, masks)}</em>;
+      case 'strike': return <s key={key} className="line-through decoration-[1.5px] opacity-85">{renderInline(node.children, mine, key, masks)}</s>;
     }
   });
 }
 
-function renderLines(lines: Inline[][], mine: boolean, keyPrefix: string): ReactNode[] {
-  return lines.flatMap((line, index) => [index > 0 ? <br key={`${keyPrefix}-br-${index}`} /> : null, ...renderInline(line, mine, `${keyPrefix}-${index}`)]);
+function renderLines(lines: Inline[][], mine: boolean, keyPrefix: string, masks: CensorMask[] | null): ReactNode[] {
+  return lines.flatMap((line, index) => [index > 0 ? <br key={`${keyPrefix}-br-${index}`} /> : null, ...renderInline(line, mine, `${keyPrefix}-${index}`, masks)]);
 }
 
-function renderBlock(block: Block, index: number, mine: boolean): ReactNode {
+function renderBlock(block: Block, index: number, mine: boolean, masks: CensorMask[] | null): ReactNode {
   const key = `b${index}`;
   switch (block.kind) {
-    case 'paragraph': return <p key={key} className="m-0">{renderLines(block.lines, mine, key)}</p>;
-    case 'code': return <pre key={key} className={cn('my-1 overflow-x-auto whitespace-pre-wrap rounded-lg px-2.5 py-1.5 font-mono text-[13px] leading-snug', mine ? 'bg-black/25' : 'bg-foreground/[0.1]')}>{censorSlurs(block.text)}</pre>;
-    case 'quote': return <blockquote key={key} className={cn('my-1 border-l-2 pl-2.5', mine ? 'border-primary-foreground/50 text-primary-foreground/90' : 'border-foreground/30 text-foreground/80')}>{renderLines(block.lines, mine, key)}</blockquote>;
+    case 'paragraph': return <p key={key} className="m-0">{renderLines(block.lines, mine, key, masks)}</p>;
+    case 'code': return <pre key={key} className={cn('my-1 overflow-x-auto whitespace-pre-wrap rounded-lg px-2.5 py-1.5 font-mono text-[13px] leading-snug', mine ? 'bg-black/25' : 'bg-foreground/[0.1]')}>{shownText(block.text, masks, key)}</pre>;
+    case 'quote': return <blockquote key={key} className={cn('my-1 border-l-2 pl-2.5', mine ? 'border-primary-foreground/50 text-primary-foreground/90' : 'border-foreground/30 text-foreground/80')}>{renderLines(block.lines, mine, key, masks)}</blockquote>;
     case 'list': return block.ordered
-      ? <ol key={key} start={block.start} className="my-1 list-decimal pl-5">{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, mine, `${key}-${itemIndex}`)}</li>)}</ol>
-      : <ul key={key} className="my-1 list-disc pl-5">{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, mine, `${key}-${itemIndex}`)}</li>)}</ul>;
+      ? <ol key={key} start={block.start} className="my-1 list-decimal pl-5">{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, mine, `${key}-${itemIndex}`, masks)}</li>)}</ol>
+      : <ul key={key} className="my-1 list-disc pl-5">{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, mine, `${key}-${itemIndex}`, masks)}</li>)}</ul>;
   }
 }
 
 /**
  * Message text as React nodes: the markdown subset of docs/CHAT.md §13 rendered without any HTML, slurs censored at
- * display time (see renderInline), and only https links (full URL shown) clickable. Memoised on the text: the log
- * re-renders every bubble on each poll and menu toggle, and parsing and censoring are real work.
+ * display time (see shownText), and only https links (full URL shown) clickable. `original` is the uncensored text
+ * the server sends the owner only (src/server/moderation.ts); with it, censored words reveal themselves on hover.
+ * Memoised on the text: the log re-renders every bubble on each poll and menu toggle, and parsing and censoring are
+ * real work.
  */
-function MessageText({ text, mine }: { text: string; mine: boolean }) {
-  return useMemo(() => <div className="grid gap-1.5">{parseMarkdown(text).map((block, index) => renderBlock(block, index, mine))}</div>, [text, mine]);
+function MessageText({ text, mine, original }: { text: string; mine: boolean; original?: string | null }) {
+  return useMemo(() => {
+    const revealed = original ? revealableText(original) : null;
+    return <div className="grid gap-1.5">{parseMarkdown(revealed?.text ?? text).map((block, index) => renderBlock(block, index, mine, revealed?.masks ?? null))}</div>;
+  }, [text, mine, original]);
 }
 
 /* ---------- View ---------- */
@@ -363,7 +392,7 @@ function previewText(row: OpenRow): string {
 function globalPreview(summary: GlobalSummary): string {
   const last = summary.lastMessage;
   if (!last) return 'Everyone on Quasar can post here';
-  if (last.preview === null) return last.deletedBy === 'owner' ? 'Removed by the owner' : 'Message deleted';
+  if (last.preview === null) return last.deletedBy === 'owner' ? `Removed by ${STAFF_NOUNS[last.moderatedBy ?? 'owner']}` : 'Message deleted';
   return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
 }
 
@@ -811,6 +840,8 @@ function GlobalThread({ state, phone, nudge, onChange }: { state: AppState; phon
   const [actionError, setActionError] = useState('');
   const [muting, setMuting] = useState(false);
   const canModerate = chat.room?.canModerate ?? false;
+  // How the note under a message this viewer moderates names them ("Removed by a moderator").
+  const moderator = STAFF_NOUNS[chat.room?.moderator ?? 'owner'];
   const back = <BackButton state={state} />;
   const section = useThreadFocus(phone);
   const frame = (children: ReactNode) => <section ref={section} tabIndex={-1} aria-label={GLOBAL_NAME} className={FRAME}>{children}</section>;
@@ -850,9 +881,9 @@ function GlobalThread({ state, phone, nudge, onChange }: { state: AppState; phon
     {modal?.kind === 'delete' && (mine
       ? <ConfirmModal title="Delete for everyone?" description="It disappears from the global chat now." confirm="Delete" online={state.online}
           onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.message.id); setModal(null); }} />
-      : <ReasonModal title={`Remove ${senderName(modal.message)}’s message?`} description="Everyone sees “Removed by the owner” and your reason in its place." confirm="Remove" online={state.online}
+      : <ReasonModal title={`Remove ${senderName(modal.message)}’s message?`} description={`Everyone sees “Removed by ${moderator}” and your reason in its place.`} confirm="Remove" online={state.online}
           onClose={() => setModal(null)} onConfirm={async (reason) => { await chat.deleteMessage(modal.message.id, reason); setModal(null); }} />)}
-    {modal?.kind === 'edit' && <EditModal message={modal.message} online={state.online} onClose={() => setModal(null)}
+    {modal?.kind === 'edit' && <EditModal message={modal.message} moderator={moderator} online={state.online} onClose={() => setModal(null)}
       onSave={async (body, reason) => { await chat.editMessage(modal.message.id, body, reason); setModal(null); }} />}
   </>);
 }
@@ -1089,7 +1120,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
       {empty && <div className="grid justify-items-center gap-2 px-4 py-10 text-center">
         <p className="text-[15px] font-bold">No messages yet.</p>
         {mode === 'global'
-          ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs get censored. The owner can edit or remove any message.</Hint>
+          ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs get censored. Moderators can edit or remove any message.</Hint>
           : mode === 'group'
             ? <Hint className="max-w-[40ch] text-[13px]">Only the people in {name} can read this. New members see messages from when they joined. Support sees messages only if someone reports them.</Hint>
             : <Hint className="max-w-[40ch] text-[13px]">Only you and {name} can read this chat. Support sees messages only if one of you reports them.</Hint>}
@@ -1216,6 +1247,10 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
   const mine = message.fromMe;
   const removed = message.body === null || message.deletedBy !== null;
   const { edited, reason } = moderation(message);
+  /** What the viewer's tier may read of a removed message, and of an edited one before the edit (src/server/moderation.ts). */
+  const kept = message.removed ?? null;
+  const before = 'editedFrom' in message ? message.editedFrom : null;
+  const [showBefore, setShowBefore] = useState(false);
   const name = senderName(message);
   const withAvatar = mode !== 'peer' && !mine;
   const sheetId = useId();
@@ -1302,17 +1337,25 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
   const closeFocus = useRef<'trigger' | 'elsewhere' | null>(null);
   const pick = (action: () => void, focus: 'trigger' | 'elsewhere' = 'trigger') => () => { closeFocus.current = focus; onOpenChange(false); action(); };
   const label = mode !== 'peer' && !mine ? `${name}: ` : '';
-  const editNote = edited ? (reason ? `Edited by the owner: ${reason}` : 'Edited by the owner') : '';
+  const by = moderation(message).by;
+  const editNote = edited ? (reason ? `Edited by ${by}: ${reason}` : `Edited by ${by}`) : '';
   const addError = !mine && added && added !== 'added' && added !== 'saving' ? added : '';
-  const caption = stamp || editNote || status || added === 'added' || addError || copied || reactError;
+  const caption = stamp || editNote || before || status || added === 'added' || addError || copied || reactError;
   const reacted_ = message.reactions.length > 0;
   return <li data-seq={message.seq} data-highlighted={highlighted || undefined} className={cn('group/msg flex', mine ? 'justify-end' : 'justify-start', startsRun ? 'mt-2.5' : 'mt-0.5', reacted_ && 'pb-3', fresh && 'chat-bubble-in')}>
     {/* In a room or group, the sender's picture sits beside the last bubble of their run; the others keep the space. */}
     {withAvatar && <span className="mr-2 w-7 shrink-0 self-end">{endsRun && <MemberAvatar name={name} src={senderAvatar(message)} size="sm" />}</span>}
     <div className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
-      {showName && <span className="mb-0.5 px-2 text-[12px] font-semibold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <><Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" /><span className="sr-only"> (verified)</span></>}</span>}
+      {showName && <span className="mb-0.5 px-2 text-[12px] font-semibold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <><Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" /><span className="sr-only"> (verified)</span></>}{'sender' in message && 'staff' in message.sender && message.sender.staff && <StaffBadge rank={message.sender.staff} />}</span>}
       {removed
-        ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'max-w-[80%] border border-dashed border-foreground/20 bg-transparent italic text-muted-foreground lg:max-w-[75%]')}>{label && <span className="sr-only">{label}</span>}{removedText(message)}</div>
+        ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'max-w-[80%] border border-dashed border-foreground/20 bg-transparent text-muted-foreground lg:max-w-[75%]', kept ? 'grid gap-1.5' : 'italic')}>
+          {label && <span className="sr-only">{label}</span>}
+          {kept ? <>
+            <span className="text-[12px] italic">{removedText(message)}</span>
+            {kept.image && <MessageImage src={kept.image} />}
+            {kept.body && <div className="text-foreground"><MessageText text={kept.body} original={kept.original} mine={false} /></div>}
+          </> : removedText(message)}
+        </div>
         : <Popover open={open} onOpenChange={onOpenChange} modal={false}>
           {/* The button sits beside the bubble (flex-row-reverse puts it on the inside for the viewer's own bubbles). */}
           <div className={cn('flex max-w-[calc(80%+2rem)] items-center gap-1 lg:max-w-[calc(75%+2rem)]', mine && 'flex-row-reverse')}>
@@ -1323,7 +1366,7 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
                 {label && <span className="sr-only">{label}</span>}
                 {message.replyTo && <QuoteCard reply={message.replyTo} mine={mine} onClick={quoteTap} />}
                 {message.image && <MessageImage src={message.image} />}
-                <MessageText text={message.body ?? ''} mine={mine} />
+                <MessageText text={message.body ?? ''} original={message.original} mine={mine} />
                 {endsRun && <Tail mine={mine} />}
                 {swipe > 0 && <span aria-hidden="true" style={{ opacity: swipeProgress(swipe) }} className="absolute top-1/2 -left-9 grid size-7 -translate-y-1/2 place-items-center rounded-full bg-muted text-muted-foreground ring-1 ring-foreground/[0.06]"><Icon name="reply" size={15} /></span>}
                 {/* Tapbacks hang off the bottom corner opposite the tail, like iMessage. The list item's bottom padding keeps the next run clear. */}
@@ -1360,12 +1403,17 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
       {caption && <span className={cn('flex flex-wrap items-center gap-1 px-1.5 text-[12px] text-muted-foreground', reacted_ ? 'mt-2.5' : 'mt-0.5', mine && 'justify-end text-right')}>
         {stamp && <span>{formatTime(time)}</span>}
         {editNote && <span>{stamp && '· '}{editNote}</span>}
+        {before && <button type="button" aria-expanded={showBefore} onClick={() => setShowBefore((current) => !current)} className="rounded-sm font-semibold text-foreground/80 underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">{showBefore ? 'Hide original' : 'See original'}</button>}
         {status && <><Icon name={status.icon} size={13} className={status.read ? 'text-primary' : undefined} /><span className={cn(status.read && 'font-semibold text-primary')}>{status.label}</span></>}
         {added === 'added' && <span role="status" className="text-success">Added to Tasks.</span>}
         {addError && <span role="alert" className="text-destructive">{addError}</span>}
         {reactError && <span role="alert" className="text-destructive">{reactError}</span>}
         {copied && <span role="status">Copied.</span>}
       </span>}
+      {before && showBefore && <div className={cn(BUBBLE, 'mt-1 grid max-w-[80%] gap-1.5 border border-dashed border-foreground/20 bg-transparent lg:max-w-[75%]')}>
+        <span className="text-[12px] italic text-muted-foreground">Before the edit</span>
+        <MessageText text={before.body} original={before.original} mine={false} />
+      </div>}
     </div>
   </li>;
 }
@@ -1377,7 +1425,8 @@ function PendingBubble({ item, reply, online, onRetry, onDiscard }: { item: Outg
     <div className={cn(BUBBLE, MINE, 'max-w-[80%] lg:max-w-[75%]', !failed && 'opacity-60', failed && 'ring-2 ring-destructive ring-offset-2 ring-offset-background')}>
       {reply && <QuoteCard reply={reply} mine />}
       {item.image && <MessageImage src={`data:image/jpeg;base64,${item.image}`} />}
-      <MessageText text={item.body} mine /><Tail mine />
+      {/* Censored here as the server will store it, so the pending bubble never shows the slur while the send is out. */}
+      <MessageText text={censorBody(item.body)} mine /><Tail mine />
     </div>
     {failed
       ? <div className="mt-1.5 grid justify-items-end gap-1.5">
@@ -1515,8 +1564,8 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
   const reply = chosen && liveQuote(chosen, chat.messages, name);
   const submit = () => {
     if (!canSend) return;
-    // Censored locally too, so the pending bubble never shows the slur while the send is out. Links stay whole, as the server stores them.
-    chat.send(censorBody(normalized), image);
+    // Sent as typed: only the server censors, so it can keep the original for the owner (src/server/moderation.ts).
+    chat.send(normalized, image);
     setImage(undefined);
     update('');
     field.current?.focus({ preventScroll: true });
@@ -1605,7 +1654,12 @@ function ConfirmModal({ title, description, confirm, online, onClose, onConfirm 
   </Modal>;
 }
 
-/** The owner removes someone's room message, with an optional reason everyone sees in its place. */
+/** Who on Quasar staff is speaking in the room: the role from src/domain/staff.ts, so nobody can pass as the owner. */
+function StaffBadge({ rank }: { rank: StaffRank }) {
+  return <span className="ml-1.5 inline-flex items-center rounded-full bg-primary-soft px-1.5 align-[1px] text-[10px] font-semibold leading-4 text-primary-soft-foreground ring-1 ring-inset ring-primary/15">{STAFF_LABELS[rank]}</span>;
+}
+
+/** A moderator removes someone's room message, with an optional reason everyone sees in its place. */
 function ReasonModal({ title, description, confirm, online, onClose, onConfirm }: { title: string; description: string; confirm: string; online: boolean; onClose: () => void; onConfirm: (reason: string) => Promise<void> }) {
   const [reason, setReason] = useState('');
   const [pending, setPending] = useState(false);
@@ -1621,8 +1675,8 @@ function ReasonModal({ title, description, confirm, online, onClose, onConfirm }
   </Modal>;
 }
 
-/** The owner rewrites a room message. The same body rules and slur filter apply, and the reason shows under the message. */
-function EditModal({ message, online, onClose, onSave }: { message: ChatMessage; online: boolean; onClose: () => void; onSave: (body: string, reason: string) => Promise<void> }) {
+/** A moderator rewrites a room message. The same body rules and slur filter apply, and the reason shows under the message. */
+function EditModal({ message, moderator, online, onClose, onSave }: { message: ChatMessage; moderator: string; online: boolean; onClose: () => void; onSave: (body: string, reason: string) => Promise<void> }) {
   const [draft, setDraft] = useState(message.body ?? '');
   const [reason, setReason] = useState(moderation(message).reason ?? '');
   const [pending, setPending] = useState(false);
@@ -1634,10 +1688,11 @@ function EditModal({ message, online, onClose, onSave }: { message: ChatMessage;
   const save = async () => {
     if (problem) return;
     setPending(true); setError('');
-    try { await onSave(normalized, reason.trim()); } catch (err) { setError(errorMessage(err)); setPending(false); }
+    // The text as typed: the server censors it and keeps the original for the owner.
+    try { await onSave(normalizeBody(draft), reason.trim()); } catch (err) { setError(errorMessage(err)); setPending(false); }
   };
   return <Modal open onClose={onClose} busy={pending} dirty={changed} title={message.fromMe ? 'Edit your message' : `Edit ${senderName(message)}’s message`}
-    description="Everyone sees the new text, “Edited by the owner” and your reason."
+    description={`Everyone sees the new text, “Edited by ${moderator}” and your reason.`}
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="primary" busy={pending} disabled={!online || !!problem || !changed} onClick={() => void save()}>Save</Button></>}>
     <Field label="Message" htmlFor="global-edit-body" hint={notice ?? undefined} error={draft && problem ? problem : undefined}><Textarea id="global-edit-body" rows={4} maxLength={COMPOSER_MAX_LENGTH} value={draft} onChange={(event) => setDraft(event.target.value)} /></Field>
     <Field label="Reason (optional, shown to everyone)" htmlFor="global-edit-reason"><Input id="global-edit-reason" maxLength={200} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Fixed the time, removed a phone number…" /></Field>

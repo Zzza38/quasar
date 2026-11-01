@@ -27,6 +27,8 @@ export function persistedContext(workspace: Workspace | WorkspaceContext): Works
  * 3 adds `user.avatar` and the picture source (docs/CHAT.md §13) and `sanctions` (§14). 4 adds `scheduleFeed`, the
  * connected class schedule (src/server/schedule-feed.ts). 5 adds `betas`, the betas the account joined (src/server/betas.ts).
  * 6 adds `community.classDirectory`, the school directory classmates are matched through (classMatcher).
+ * `staff` (the account's staff role, src/domain/staff.ts) came later without a bump: readers treat a missing one as
+ * no role, and the owner is still recognized by `isAdmin`, so a version 6 copy stays usable offline.
  */
 export const CONTEXT_VERSION = 6;
 
