@@ -21,6 +21,8 @@ export type ChatThreadResult = ChatRouter['thread'];
 export type GlobalThreadResult = GlobalRouter['thread'];
 export type GroupThreadResult = GroupRouter['thread'];
 export type GlobalSummary = ChatInbox['global'];
+/** The member's school room row (docs/CHAT.md §16); null without a school or outside the school-chat beta. */
+export type SchoolSummary = NonNullable<ChatInbox['school']>;
 export type GroupSummary = ChatInbox['groups'][number];
 export type ChatPeer = ChatThreadResult['peer'];
 export type GlobalRoom = GlobalThreadResult['room'];
@@ -32,10 +34,10 @@ export type ChatPause = NonNullable<ChatThreadResult['pause']>;
 /** A message in any kind of thread. Global and group messages also carry their sender (and, in the room, an edit stamp). */
 export type ChatMessage = ChatThreadResult['messages'][number] | GlobalThreadResult['messages'][number] | GroupThreadResult['messages'][number];
 export type GlobalMessage = GlobalThreadResult['messages'][number];
-/** Which conversation a thread hook drives: one friend, a friend group (§12), or the global room (§11). */
-export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string };
+/** Which conversation a thread hook drives: one friend, a friend group (§12), the global room (§11) or the member's school room (§16). */
+export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string } | { kind: 'school'; schoolId: string };
 export const GLOBAL_TARGET: ChatTarget = { kind: 'global' };
-const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : 'global');
+const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : target.kind === 'school' ? `school:${target.schoolId}` : 'global');
 
 /** Window event that asks every mounted chat poller to poll now (Tracker fires it on a service-worker CHAT_ACTIVITY message). */
 export const CHAT_ACTIVITY_EVENT = 'quasar:chat-activity';
@@ -57,8 +59,11 @@ export function pollInterval(kind: 'thread' | 'inbox', live: boolean): number {
 export function eventMatches(event: ChatEvent, target: ChatTarget): boolean {
   if (target.kind === 'peer') return event.kind === 'peer' && event.key === target.userId;
   if (target.kind === 'group') return event.kind === 'group' && event.key === target.groupId;
+  if (target.kind === 'school') return event.kind === 'school' && event.key === target.schoolId;
   return event.kind === 'global';
 }
+/** The server's fixed NOT_FOUND for someone no longer in the school room (they switched or left the school). */
+const SCHOOL_CLOSED = 'You are not in this school chat.';
 const SEND_TIMEOUT_MS = 15_000;
 const SEND_RETRY_MS = 2_000;
 
@@ -180,7 +185,9 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
         ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
         : entry.target.kind === 'group'
           ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
-          : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options);
+          : entry.target.kind === 'school'
+            ? await api.schoolChat.send.mutate({ accountId: entry.accountId, schoolId: entry.target.schoolId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
+            : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -453,13 +460,16 @@ export function useChatInbox(state: AppState, active = true) {
 
 /* ---------- Thread ---------- */
 
-export type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; group: GroupInfo | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null; receipts: Receipt[] };
-export type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; group?: GroupInfo; receipts: Receipt[]; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
+/** A school room's school (docs/CHAT.md §16). */
+export type SchoolInfo = { id: string; name: string };
+export type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; group: GroupInfo | null; school?: SchoolInfo | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null; receipts: Receipt[] };
+export type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; group?: GroupInfo; school?: SchoolInfo; receipts: Receipt[]; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
 
 /** The thread query for any target. All three endpoints answer with the same page shape. */
 function queryThread(accountId: string, target: ChatTarget, cursor: { after?: number; before?: number }, signal?: AbortSignal): Promise<ThreadPage> {
   if (target.kind === 'peer') return api.chat.thread.query({ accountId, userId: target.userId, ...cursor }, { signal });
   if (target.kind === 'group') return api.group.thread.query({ accountId, groupId: target.groupId, ...cursor }, { signal });
+  if (target.kind === 'school') return api.schoolChat.thread.query({ accountId, schoolId: target.schoolId, ...cursor }, { signal });
   return api.global.thread.query({ accountId, ...cursor }, { signal });
 }
 export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
@@ -497,8 +507,9 @@ export function applyThreadPage(previous: ThreadData | null, result: ThreadPage,
   const room = result.room ?? null;
   const group = result.group ?? null;
   const receipts = result.receipts ?? [];
-  if (full || !previous) return { peer: result.peer, room, group, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
-  return { peer: result.peer, room, group, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
+  const school = result.school ?? null;
+  if (full || !previous) return { peer: result.peer, room, group, school, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
+  return { peer: result.peer, room, group, school, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
 }
 
 /**
@@ -522,6 +533,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const entry = threadMemory(accountId, target);
   const userId = target.kind === 'peer' ? target.userId : null;
   const groupId = target.kind === 'group' ? target.groupId : null;
+  const schoolId = target.kind === 'school' ? target.schoolId : null;
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
   const onChangeRef = useRef(options.onChange);
@@ -622,7 +634,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     readRequested.current = seq;
     try {
       // Both answer with the server-stamped badge count, so the badge updates even while the list is unmounted (phones).
-      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : groupId ? await api.group.read.mutate({ accountId, groupId, seq }) : await api.global.read.mutate({ accountId, seq });
+      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : groupId ? await api.group.read.mutate({ accountId, groupId, seq })
+        : schoolId ? await api.schoolChat.read.mutate({ accountId, schoolId, seq }) : await api.global.read.mutate({ accountId, seq });
       latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
@@ -631,12 +644,13 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (errorCode(err) === 'NOT_FOUND') setStatus('closed');
       else if (isUnauthorized(err)) void latest.current.refresh();
     }
-  }, [accountId, userId, groupId]);
+  }, [accountId, userId, groupId, schoolId]);
 
   const setMuted = useCallback(async (muted: boolean) => {
     muteVersion.current += 1;
     try {
-      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted }) : await api.global.mute.mutate({ accountId, muted });
+      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted })
+        : schoolId ? await api.schoolChat.mute.mutate({ accountId, schoolId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
       setData((previous) => previous && { ...previous, muted: result.muted });
       // Muted chats are left out of the badge (§3.4), so the new count comes back with the answer.
@@ -647,18 +661,20 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-  }, [accountId, userId, groupId]);
+  }, [accountId, userId, groupId, schoolId]);
 
-  /** `reason` is the owner's note, shown to everyone; it only applies to global messages the owner removes. */
+  /** `reason` is the owner's note, shown to everyone; it only applies to room messages the owner removes. */
   const deleteMessage = useCallback(async (messageId: string, reason = '') => {
     let result: { message: ChatMessage };
     try {
       result = userId ? await api.chat.delete.mutate({ accountId, userId, messageId })
         : groupId ? await api.group.delete.mutate({ accountId, groupId, messageId })
-          : await api.global.delete.mutate({ accountId, messageId, reason });
+          : schoolId ? await api.schoolChat.delete.mutate({ accountId, schoolId, messageId, reason })
+            : await api.global.delete.mutate({ accountId, messageId, reason });
     } catch (err) {
-      // A private chat that vanished is closed; a global or group message that vanished is simply gone, and the poll shows that.
-      if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.'))) { setStatus('closed'); return; }
+      // A private chat that vanished is closed; a room or group message that vanished is simply gone, and the poll shows that.
+      // Leaving the group or the school closes those.
+      if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.') || (schoolId && errorMessage(err) === SCHOOL_CLOSED))) { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
@@ -666,7 +682,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
-  }, [accountId, userId, groupId, pollNow]);
+  }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
    * The typing signal (§13): `true` while the draft is being typed, renewed every CHAT.typingRenewMs so the server's
@@ -691,12 +707,12 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   // Leaving the thread with a live signal turns it off, so nobody sees "typing" for a closed tab.
   useEffect(() => () => { if (typingOn.current) { typingOn.current = false; const cancel = userId ? api.chat.typing.mutate({ accountId, userId, typing: false }) : groupId ? api.group.typing.mutate({ accountId, groupId, typing: false }) : null; cancel?.catch(() => undefined); } }, [accountId, userId, groupId]);
 
-  /** Owner only, global room only: replaces a message's text. The server applies the same body rules and filter. */
+  /** Owner only, rooms only: replaces a message's text. The server applies the same body rules and filter. */
   const editMessage = useCallback(async (messageId: string, body: string, reason = '') => {
-    if (userId) throw new Error('Only global chat messages can be edited.');
+    if (userId || groupId) throw new Error('Only room messages can be edited.');
     let result: { message: GlobalMessage };
     try {
-      result = await api.global.edit.mutate({ accountId, messageId, body, reason });
+      result = schoolId ? await api.schoolChat.edit.mutate({ accountId, schoolId, messageId, body, reason }) : await api.global.edit.mutate({ accountId, messageId, body, reason });
     } catch (err) {
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
@@ -704,7 +720,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
-  }, [accountId, userId, pollNow]);
+  }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
    * A tapback (docs/CHAT.md §15): the same emoji again removes it, another replaces it, null removes it. The answer is
@@ -714,14 +730,15 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const react = useCallback(async (seq: number, emoji: Reaction | null) => {
     let result: { message: ChatMessage };
     try {
-      result = userId ? await api.chat.react.mutate({ accountId, userId, seq, emoji }) : groupId ? await api.group.react.mutate({ accountId, groupId, seq, emoji }) : await api.global.react.mutate({ accountId, seq, emoji });
+      result = userId ? await api.chat.react.mutate({ accountId, userId, seq, emoji }) : groupId ? await api.group.react.mutate({ accountId, groupId, seq, emoji })
+        : schoolId ? await api.schoolChat.react.mutate({ accountId, schoolId, seq, emoji }) : await api.global.react.mutate({ accountId, seq, emoji });
     } catch (err) {
       if (errorCode(err) === 'NOT_FOUND') pollNow();
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
     setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
-  }, [accountId, userId, groupId, pollNow]);
+  }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
    * The message the composer quotes next; lives beside the draft in the thread's memory. Only its seq matters to the
@@ -744,8 +761,10 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     /** Load error for the first page (the thread shows it with Try again). */
     error,
     peer: data?.peer ?? null,
-    /** The global room's details; null otherwise. */
+    /** The room's details (global or school); null otherwise. */
     room: data?.room ?? null,
+    /** The school room's school; null otherwise. */
+    school: data?.school ?? null,
     /** The friend group's details (name, members, the viewer's role); null otherwise. */
     group: data?.group ?? null,
     /** The other members' delivery and read markers and typing signals (§13); empty in the room. */

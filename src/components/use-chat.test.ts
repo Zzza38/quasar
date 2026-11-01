@@ -259,5 +259,15 @@ describe('event stream', () => {
     expect(eventMatches({ kind: 'group', key: 'g1' }, { kind: 'peer', userId: 'g1' })).toBe(false);
     expect(eventMatches({ kind: 'global', key: 'global' }, GLOBAL_TARGET)).toBe(true);
     expect(eventMatches({ kind: 'peer', key: 'friend-1' }, GLOBAL_TARGET)).toBe(false);
+    // A school room only wakes for its own school, and the global room never for a school's events.
+    expect(eventMatches({ kind: 'school', key: 's1' }, { kind: 'school', schoolId: 's1' })).toBe(true);
+    expect(eventMatches({ kind: 'school', key: 's2' }, { kind: 'school', schoolId: 's1' })).toBe(false);
+    expect(eventMatches({ kind: 'school', key: 's1' }, GLOBAL_TARGET)).toBe(false);
+    expect(eventMatches({ kind: 'global', key: 'global' }, { kind: 'school', schoolId: 's1' })).toBe(false);
+  });
+  it('keeps a school room\'s drafts apart from the global room\'s and from other schools', () => {
+    expect(threadMemory('me', { kind: 'school', schoolId: 's1' }).key).toBe('me:school:s1');
+    expect(threadMemory('me', { kind: 'school', schoolId: 's1' })).not.toBe(threadMemory('me', GLOBAL_TARGET));
+    expect(threadMemory('me', { kind: 'school', schoolId: 's1' })).not.toBe(threadMemory('me', { kind: 'school', schoolId: 's2' }));
   });
 });

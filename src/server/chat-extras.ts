@@ -7,11 +7,12 @@ import type { Db } from './db';
 
 export const reactionSchema = z.object({ seq: z.number().int().positive(), emoji: z.enum(REACTIONS).nullable() });
 export const replySchema = z.number().int().positive().optional();
-type Kind = 'peer' | 'group' | 'global';
+type Kind = 'peer' | 'group' | 'global' | 'school';
 const tables = {
   peer: ['chat_messages', 'chat_reactions', 'thread_id'],
   group: ['chat_group_messages', 'chat_group_reactions', 'group_id'],
   global: ['global_messages', 'global_reactions', null],
+  school: ['school_messages', 'school_reactions', 'school_id'],
 } as const;
 
 /** The same visibility rules apply to a target as to a row in its thread. Deleted rows remain valid quotes. */
@@ -19,7 +20,9 @@ export function targetExists(db: Db, kind: Kind, viewer: string, seq: number, sc
   const [messages, , key] = tables[kind];
   const scopeSql = key ? `AND c.${key}=@scope` : '';
   const visibility = kind === 'group' ? `AND EXISTS(SELECT 1 FROM chat_group_members m WHERE m.group_id=c.group_id
-    AND m.user_id=@viewer AND m.left_at IS NULL AND c.created_at>=m.joined_at)` : '';
+    AND m.user_id=@viewer AND m.left_at IS NULL AND c.created_at>=m.joined_at)`
+    // A school room is readable by the school's current members only (docs/CHAT.md §16).
+    : kind === 'school' ? 'AND EXISTS(SELECT 1 FROM users vu WHERE vu.id=@viewer AND vu.school_id=c.school_id)' : '';
   const blocked = kind === 'peer' ? '' : `AND NOT EXISTS(SELECT 1 FROM blocks b WHERE b.blocker_id=@viewer AND b.blocked_id=c.sender_id)`;
   return !!db.prepare(`SELECT 1 FROM ${messages} c WHERE c.seq=@seq ${scopeSql} ${visibility} ${blocked}`).get({ seq, scope: scope ?? null, viewer });
 }
@@ -61,7 +64,7 @@ export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): 
 }
 
 /** A cursor older than this viewer's last block change must replace its entire loaded window. */
-export function visibilityResetRevision(db: Db, kind: 'group' | 'global', viewer: string, scope: string): number {
+export function visibilityResetRevision(db: Db, kind: 'group' | 'global' | 'school', viewer: string, scope: string): number {
   return (db.prepare('SELECT revision FROM chat_visibility_resets WHERE user_id=? AND kind=? AND scope=?')
     .get(viewer, kind, scope) as { revision: number } | undefined)?.revision ?? 0;
 }

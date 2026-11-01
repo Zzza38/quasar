@@ -15,7 +15,8 @@ import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
 import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
-import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema } from './global-chat';
+import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema,
+  SchoolChatService, schoolThreadSchema, schoolSendSchema, schoolReactSchema, schoolDeleteSchema, schoolEditSchema, schoolReadSchema, schoolMuteSchema } from './global-chat';
 
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, SetupGuideService } from './setup-guides';
@@ -97,6 +98,7 @@ const clientVersionSchema = z.object({ clientVersion: z.number().int().positive(
 const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < 2, legacyFreePeriods: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
+const schoolRoom = (service: Service) => new SchoolChatService(service);
 const groups = (service: Service) => new GroupChatService(service);
 const support = (service: Service) => new SupportService(service);
 const betas = (service: Service) => new BetaService(service);
@@ -153,8 +155,8 @@ export const appRouter = t.router({
   }),
   // Every chat procedure is account-scoped, queries included (docs/CHAT.md §2).
   chat: t.router({
-    // The list carries the global room's row too (§11), so the Messages view polls one endpoint.
-    inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), groups: groups(ctx.service).list(ctx.userId), global: room(ctx.service).summary(ctx.userId) })),
+    // The list carries the global room's row and the member's school room's row too (§11, §16), so the Messages view polls one endpoint.
+    inbox: accountScoped.query(({ ctx }) => ({ ...chat(ctx.service).inbox(ctx.userId), groups: groups(ctx.service).list(ctx.userId), global: room(ctx.service).summary(ctx.userId), school: schoolRoom(ctx.service).summary(ctx.userId) })),
     thread: accountScoped.input(chatThreadSchema).query(({ ctx, input }) => chat(ctx.service).thread(ctx.userId, input.userId, { after: input.after, before: input.before })),
     send: accountScoped.input(chatSendSchema).mutation(async ({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
     react: accountScoped.input(chatReactSchema).mutation(({ ctx, input }) => chat(ctx.service).react(ctx.userId, input.userId, input.seq, input.emoji)),
@@ -191,6 +193,16 @@ export const appRouter = t.router({
     edit: ownerScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
     mute: accountScoped.input(globalMuteSchema).mutation(({ ctx, input }) => room(ctx.service).mute(ctx.userId, input.muted)),
+  }),
+  // The member's school chat room (docs/CHAT.md §16): the global room's rules, for one school's members. Behind the school-chat beta.
+  schoolChat: t.router({
+    thread: accountScoped.input(schoolThreadSchema).query(({ ctx, input }) => schoolRoom(ctx.service).thread(ctx.userId, input.schoolId, { after: input.after, before: input.before })),
+    send: accountScoped.input(schoolSendSchema).mutation(async ({ ctx, input }) => schoolRoom(ctx.service).send(ctx.userId, input.schoolId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
+    react: accountScoped.input(schoolReactSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).react(ctx.userId, input.schoolId, input.seq, input.emoji)),
+    delete: accountScoped.input(schoolDeleteSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).delete(ctx.userId, input.schoolId, input.messageId, input.reason)),
+    edit: ownerScoped.input(schoolEditSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).edit(ctx.userId, input.schoolId, input.messageId, input.body, input.reason)),
+    read: accountScoped.input(schoolReadSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).read(ctx.userId, input.schoolId, input.seq)),
+    mute: accountScoped.input(schoolMuteSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).mute(ctx.userId, input.schoolId, input.muted)),
   }),
   proposals: t.router({
     list: authenticated.query(({ ctx }) => new ProposalService(ctx.service).list(ctx.userId)),

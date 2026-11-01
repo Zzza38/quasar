@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 /** Former beta key, retained for retirement regression tests. Schedule following is available to everyone. */
 export const SCHEDULE_FOLLOWING_BETA = 'schedule-following';
+/** The school chat (docs/CHAT.md §16): a room per school beside the global chat. The server checks it too. */
+export const SCHOOL_CHAT_BETA = 'school-chat';
 
 /**
  * Betas (src/server/betas.ts, README "Running a beta"). A beta key names the code path in the app: useBeta('key') and

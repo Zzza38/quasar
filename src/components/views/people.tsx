@@ -16,6 +16,8 @@ import { Label } from '../ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Skeleton } from '../ui/skeleton';
 import { Timeline } from './today';
+import { useBeta } from '../betas';
+import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 
 export type Member = RouterOutput['community']['members']['members'][number];
 type Friends = RouterOutput['community']['friends'];
@@ -181,6 +183,7 @@ function dayPhrase(date: string, today: string): string {
 }
 
 function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; state: AppState; onClose: () => void; onChanged: () => Promise<void> }) {
+  const schoolChat = useBeta(SCHOOL_CHAT_BETA);
   const accountId = state.context.user.id;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState('');
@@ -333,7 +336,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
         {confirming === 'block' && !profile.blocked && <Callout tone="warning" icon="alert" role="alert" title={`Block ${name}?`} actions={<>
           <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.block.mutate({ accountId, userId, blocked: true }); setConfirming(null); }, 'Blocked.', 'manage')}>Block {name}</Button>
           <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
-        </>}>You will not see each other in the directory, their Global chat messages are hidden from you, and any friendship ends.</Callout>}
+        </>}>You will not see each other in the directory, their {schoolChat ? 'Global chat and school chat' : 'Global chat'} messages are hidden from you, and any friendship ends.</Callout>}
         {confirming === 'remove' && profile.friendState === 'friends' && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${name} as a friend?`} actions={<>
           <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.remove.mutate({ accountId, userId }); setConfirming(null); }, 'Friend removed.', 'manage')}>Remove {name}</Button>
           <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
