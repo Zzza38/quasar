@@ -27,8 +27,9 @@ const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar'
 const NAV_KEY = 'quasar.navigationCollapsed';
 /** Ids of the hidden count descriptions the Tasks, People and Messages links point at with aria-describedby. */
 const COUNT_IDS: Partial<Record<View, string>> = { tasks: 'nav-task-count', people: 'nav-request-count', messages: 'nav-chat-count' };
-/** The pill every nav badge uses: the dock, the top-bar Messages link. */
-const BADGE_PILL = 'grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card';
+/** The dot the phone dock and the top-bar Messages link show for a nonzero count. The number itself is the link's
+    accessible description (COUNT_IDS); the sidebar reveals it on hover. */
+const BADGE_DOT = 'size-2 rounded-full bg-primary ring-2 ring-card';
 
 function badgeText(count: number): string {
   return count > 99 ? '99+' : String(count);
@@ -141,7 +142,7 @@ function TabBar({ view, counts, navigate }: { view: View; counts: NavCounts; nav
           className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
           <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
           <span>{entry.label}</span>
-          {count > 0 && <span aria-hidden="true" className={cn('absolute left-[calc(50%+6px)] top-0.5', BADGE_PILL)}>{badgeText(count)}</span>}
+          {count > 0 && <span aria-hidden="true" className={cn('absolute left-[calc(50%+9px)] top-1.5', BADGE_DOT)} />}
         </a>;
       })}
     </div>
@@ -269,7 +270,11 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
-                  {count > 0 && <SidebarMenuBadge aria-hidden="true" className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums">{badgeText(count)}</SidebarMenuBadge>}
+                  {/* A dot says something is waiting; hovering or focusing the row swaps it for the count. */}
+                  {count > 0 && <SidebarMenuBadge aria-hidden="true" className="top-1/2! right-2.5 grid -translate-y-1/2 place-items-center justify-items-end px-0 text-[12.5px] font-semibold text-foreground!">
+                    <span className="col-start-1 row-start-1 size-[7px] rounded-full bg-primary transition-opacity group-focus-within/menu-item:opacity-0 group-hover/menu-item:opacity-0" />
+                    <span className="col-start-1 row-start-1 opacity-0 transition-opacity group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100">{badgeText(count)}</span>
+                  </SidebarMenuBadge>}
                 </SidebarMenuItem>;
               })}
             </SidebarMenu>
@@ -304,7 +309,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
             className={cn('relative grid size-11 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
             <Icon name="message" size={20} strokeWidth={onMessages ? 2.4 : 2} />
-            {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
+            {chatCount > 0 && <span aria-hidden="true" className={cn('absolute right-2 top-2', BADGE_DOT)} />}
           </a>
           <button type="button" className="grid size-11 shrink-0 place-items-center rounded-full outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar user={context.user} className="size-7" />
