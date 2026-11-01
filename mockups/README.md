@@ -1,20 +1,19 @@
-# Countdown hover mockups
+# Sidebar count badge mockups
 
-Five ways for the Now card's "Ends in 14 min" to show the exact time ("13:42") on hover, focus or tap.
-(The classmates popup mockups that used to live here are in git history.)
+Five replacements for the bright filled pill on the sidebar's Tasks, People and Messages counts.
+(The countdown hover mockups that used to live here are in git history.)
 
-Open `countdown.html?v=1` through `?v=5`:
+Open `nav-badge.html` for all five side by side, or `nav-badge.html?v=1` through `?v=5` for one:
 
 | `v` | Direction |
 | --- | --------- |
-| 1 | Fade: the minutes blur out and the seconds blur in, in the same spot. |
-| 2 | Roll: the value rolls up like a ticker, and each changed digit rolls in every second. |
-| 3 | Flip: a split-flap turn on the X axis. |
-| 4 | Cascade: characters drop out and rise in one after another. |
-| 5 | Subline: "14 min" stays; "13:42 exactly" fades in on a reserved row under it. |
+| 1 | Quiet number: the digits alone, dim, brighter on hover. |
+| 2 | Soft chip: the selected row's tint with a flat 1px ring. |
+| 3 | Neutral chip: a grey chip that blends into the sidebar. |
+| 4 | Inline: the count follows the label ("Tasks · 17"). |
+| 5 | Dot: a small dot; the number shows on hover. |
 
-All five fix the hover flicker the same way. Both forms sit in one grid cell, so the button is always
-as wide as the wider form and nothing under the pointer changes size.
+The Messages row is drawn in its hover state in every column.
 
 ## Serving
 
@@ -22,5 +21,5 @@ as wide as the wider form and nothing under the pointer changes size.
 ./serve.sh   # python3 http.server on 127.0.0.1:3005, loopback only
 ```
 
-Review happens through recordings taken against the local server, not a shared link.
+Review happens through screenshots taken against the local server, not a shared link.
 Stop it with `fuser -k 3005/tcp`.
