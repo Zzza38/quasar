@@ -126,7 +126,7 @@ const ACTION_LABELS: Record<string, string> = {
   'support.feed.enable': 'Resumed a calendar feed', 'support.feed.disable': 'Paused a calendar feed', 'support.feed.remove': 'Removed a calendar feed', 'support.renameSchool': 'Renamed a school',
   'support.resolveRequest': 'Resolved a support request', 'report.resolve': 'Closed a report', 'reports.view': 'Opened report messages', 'verification.approve': 'Approved verification', 'verification.decline': 'Declined verification',
   'proposal.decline': 'Declined a proposal', 'member.remove': 'Removed from school', 'chat.pause': 'Paused messaging', 'chat.resume': 'Lifted a messaging pause', 'chat.redact': 'Hid a chat message',
-  'global.delete': 'Removed a Global chat message', 'global.edit': 'Edited a Global chat message', 'admin.denied': 'Tried an owner tool (refused)', 'school.create': 'Created a school', 'school.join': 'Joined a school',
+  'global.delete': 'Removed a Global chat message', 'global.edit': 'Edited a Global chat message', 'schoolChat.delete': 'Removed a school chat message', 'schoolChat.edit': 'Edited a school chat message', 'admin.denied': 'Tried an owner tool (refused)', 'school.create': 'Created a school', 'school.join': 'Joined a school',
   'school.update': 'Edited the school schedule', 'school.adminUpdate': 'Published a school revision', 'school.proposalApplied': 'Applied a proposal', 'school.menu': 'Changed the lunch menu', 'menu.lookup': 'Looked up a lunch menu',
   'directory.create': 'Added a directory class', 'directory.update': 'Edited a directory class', 'directory.remove': 'Removed a directory class', 'calendar.add': 'Added a calendar feed', 'schedule.scan': 'Scanned a timetable',
 };

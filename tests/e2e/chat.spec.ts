@@ -8,6 +8,9 @@ import { ChatService } from '../../src/server/chat';
 import { CommunityService } from '../../src/server/community';
 import { GroupChatService } from '../../src/server/group-chat';
 import { exampleSchedule } from '../../src/domain/example';
+import { SCHOOL_CHAT_BETA } from '../../src/domain/betas';
+import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
+import { dirname, join } from 'node:path';
 
 // Chat is polled (4 s threads, 10 s lists, 15 s badge), so each scenario gets room for several cycles.
 test.describe.configure({ timeout: 180_000 });
@@ -323,6 +326,106 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
     await bob.screenshot({ path: testInfo.outputPath(`global-chat-phone-${scheme}.png`) });
     await owner.screenshot({ path: testInfo.outputPath(`global-chat-desktop-${scheme}.png`) });
   }
+});
+
+test('school chat (beta): the school’s members share a room beside the global chat, other schools and non-members never see it', async ({ browser }, testInfo) => {
+  const f = seed();
+  // What `npm run beta -- create school-chat` writes, plus three members who joined it. Cara stays outside the beta.
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some((beta) => beta.key === SCHOOL_CHAT_BETA)) writeBetaRegistry(createBeta(registry, { key: SCHOOL_CHAT_BETA, name: 'School chat', description: '', code: 'SCHOOL-E2E' }), listPath);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let dan = '', otherName = '', schoolName = '';
+  try {
+    const service = new Service(db, OWNER_EMAIL);
+    dan = randomUUID();
+    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(dan, dan, `${dan}@example.com`, 'Dan', 'Dan Fullname', new Date().toISOString());
+    otherName = `Other Prep ${dan.slice(0, 6)}`;
+    const other = service.createSchool(dan, { name: otherName, location: 'Austin, TX', schedule: exampleSchedule });
+    service.join(dan, { schoolId: other.id, choice: 'community', grade: '10' });
+    schoolName = service.school(f.schoolId).name;
+    const join = db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)');
+    for (const id of [f.alice, f.bob, f.owner, dan]) join.run(SCHOOL_CHAT_BETA, id, new Date().toISOString());
+  } finally { db.close(); }
+
+  // Alice finds the room under Global chat, with her school's name, and posts.
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto('/messages');
+  const groups = alice.getByRole('list', { name: 'Groups' });
+  await expect(groups.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
+  await groups.getByRole('button', { name: `Open School chat, ${schoolName}` }).click();
+  await expect(alice.getByText(`Everyone at ${schoolName} can read and post here, and nobody from other schools.`)).toBeVisible();
+  const aliceLog = alice.getByRole('log', { name: `School chat messages, ${schoolName}` });
+  const aliceComposer = alice.getByRole('textbox', { name: `Message everyone at ${schoolName}` });
+  await aliceComposer.fill('who has the bio notes');
+  await aliceComposer.press('Enter');
+  await expect(aliceLog.getByText('who has the bio notes', { exact: true })).toBeVisible();
+
+  // Bob, on a phone, sees the unread row, opens it, answers, and Alice gets the answer live.
+  const bob = await phone(browser, f.bob);
+  await bob.goto('/messages');
+  const bobRow = bob.getByRole('button', { name: `Open School chat, ${schoolName}` });
+  await expect(bobRow).toHaveAccessibleDescription(/1 unread message/, { timeout: 20_000 });
+  await bobRow.click();
+  await expect(bob).toHaveURL(/room=school/);
+  const bobLog = bob.getByRole('log', { name: `School chat messages, ${schoolName}` });
+  await expect(bobLog.getByText('who has the bio notes', { exact: true })).toBeVisible();
+  await expect(bob.locator('.tabbar')).toBeHidden();
+  await bob.getByRole('textbox', { name: `Message everyone at ${schoolName}` }).fill('i do, check the drive');
+  await bob.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(aliceLog.getByText('i do, check the drive', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  // The switch moves between the two rooms; school messages never show up in the global room.
+  await bob.getByRole('radiogroup', { name: 'Room' }).getByRole('radio', { name: 'Global' }).click();
+  await expect(bob).toHaveURL(/room=global/);
+  const bobGlobal = bob.getByRole('log', { name: 'Global chat messages' });
+  await expect(bobGlobal).toBeVisible();
+  await expect(bobGlobal.getByText('who has the bio notes', { exact: true })).toHaveCount(0);
+  for (const scheme of ['light', 'dark'] as const) {
+    await bob.emulateMedia({ colorScheme: scheme });
+    await bob.screenshot({ path: testInfo.outputPath(`school-chat-switch-global-phone-${scheme}.png`) });
+  }
+  await bob.getByRole('radiogroup', { name: 'Room' }).getByRole('radio', { name: 'School' }).click();
+  await expect(bobLog.getByText('i do, check the drive', { exact: true })).toBeVisible();
+
+  // The owner moderates the school room too.
+  const owner = await signedIn(browser, f.owner);
+  await owner.goto('/messages?room=school');
+  const ownerLog = owner.getByRole('log', { name: `School chat messages, ${schoolName}` });
+  await expect(owner.getByText('You moderate this room')).toBeVisible();
+  const bobsMessage = ownerLog.getByRole('listitem').filter({ hasText: 'i do, check the drive' });
+  await bobsMessage.hover();
+  await bobsMessage.getByRole('button', { name: 'Message actions' }).click();
+  await bobsMessage.getByRole('button', { name: 'Remove message' }).click();
+  const remove = owner.getByRole('dialog', { name: 'Remove Bob’s message?' });
+  await remove.getByLabel('Reason (optional, shown to everyone)').fill('no sharing answers');
+  await remove.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(aliceLog.getByText('Removed by the owner: no sharing answers')).toBeVisible({ timeout: 10_000 });
+
+  // Dan's school has its own room, which knows nothing of Alice's.
+  const danPage = await signedIn(browser, dan);
+  await danPage.goto('/messages?room=school');
+  await expect(danPage.getByText(`Everyone at ${otherName} can read and post here, and nobody from other schools.`)).toBeVisible();
+  await expect(danPage.getByText('who has the bio notes')).toHaveCount(0);
+
+  // Cara is at Alice's school but outside the beta: no row, and the address alone opens nothing.
+  const cara = await signedIn(browser, f.cara);
+  await cara.goto('/messages');
+  await expect(cara.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
+  await expect(cara.getByRole('button', { name: /Open School chat/ })).toHaveCount(0);
+  await cara.goto('/messages?room=school');
+  await expect(cara.getByRole('log', { name: /School chat messages/ })).toHaveCount(0);
+
+  for (const scheme of ['light', 'dark'] as const) {
+    await bob.emulateMedia({ colorScheme: scheme });
+    await alice.emulateMedia({ colorScheme: scheme });
+    await bob.screenshot({ path: testInfo.outputPath(`school-chat-phone-${scheme}.png`) });
+    await alice.screenshot({ path: testInfo.outputPath(`school-chat-desktop-${scheme}.png`) });
+  }
+  await bob.emulateMedia({ colorScheme: 'light' });
+  await bob.goto('/messages');
+  await expect(bob.getByRole('button', { name: `Open School chat, ${schoolName}` })).toBeVisible();
+  await bob.screenshot({ path: testInfo.outputPath('school-chat-list-phone-light.png') });
 });
 
 test('a blocked chat can be reopened: unblock sends a request, and acceptance brings the history back', async ({ browser }) => {

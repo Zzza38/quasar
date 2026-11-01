@@ -9,7 +9,7 @@ import { CHAT, REPORT_CATEGORIES, bodyError, censorBody, normalizeBody, rawBodyS
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 import { CommunityService } from './community';
-import { countSentSince, countUnreadGlobal } from './global-chat';
+import { countSentSince, countUnreadGlobal, countUnreadSchool } from './global-chat';
 import { countUnreadGroups } from './group-chat';
 import type { Db } from './db';
 import { AVATAR_COLUMNS, avatarUrl, type AvatarRow } from './avatars';
@@ -128,7 +128,7 @@ function accessibleSql(t: string): string {
 
 /**
  * Number of accessible, unmuted threads with at least one unread, undeleted incoming message, plus one
- * for the global chat when it has unread messages and is not muted (§11). No ready() check.
+ * for the global chat and one for the member's school chat when they have unread messages and are not muted (§11, §16). No ready() check.
  */
 export function countUnreadChats(db: Db, userId: string): number {
   const me = db.prepare('SELECT display_name, full_name FROM users WHERE id=?').get(userId) as { display_name: string; full_name: string } | undefined;
@@ -136,7 +136,7 @@ export function countUnreadChats(db: Db, userId: string): number {
   const row = db.prepare(`SELECT count(*) n FROM chat_members m JOIN chat_threads t ON t.id=m.thread_id
     WHERE m.user_id=? AND m.muted=0 AND ${accessibleSql('t')}
     AND EXISTS (SELECT 1 FROM chat_messages c WHERE c.thread_id=t.id AND c.seq>m.last_read_seq AND c.sender_id<>? AND c.deleted_at IS NULL)`).get(userId, userId) as { n: number };
-  return row.n + countUnreadGroups(db, userId) + (countUnreadGlobal(db, userId) > 0 ? 1 : 0);
+  return row.n + countUnreadGroups(db, userId) + (countUnreadGlobal(db, userId) > 0 ? 1 : 0) + (countUnreadSchool(db, userId) > 0 ? 1 : 0);
 }
 
 export class ChatService {

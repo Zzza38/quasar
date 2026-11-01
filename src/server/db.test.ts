@@ -37,7 +37,7 @@ describe('openDatabase migrations', () => {
     const db = openDatabase(path);
     try {
       const versions = (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map(row => row.version);
-      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]);
+      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
       for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
         expect((db.pragma(`table_info(${table})`) as { name: string; notnull: number }[]).find(column => column.name === 'reply_to_seq')).toMatchObject({ notnull: 0 });
       }
@@ -97,6 +97,35 @@ describe('openDatabase migrations', () => {
       expect(db.prepare('SELECT version FROM schema_migrations WHERE version=21').get()).toEqual({ version: 21 });
       db.prepare('DELETE FROM users WHERE id=?').run('member');
       expect(db.prepare('SELECT * FROM user_mod_overrides').all()).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  it('widens older visibility resets to the school kind, keeping rows and the block triggers', () => {
+    const path = tempPath();
+    const old = openDatabase(path);
+    old.exec("INSERT INTO users(id,google_sub,email,created_at) VALUES('a','a','a@example.com','now'),('b','b','b@example.com','now')");
+    old.exec(`
+      DROP TRIGGER blocks_chat_insert; DROP TRIGGER blocks_chat_delete;
+      DROP TRIGGER blocks_school_chat_insert; DROP TRIGGER blocks_school_chat_delete;
+      DROP TABLE chat_visibility_resets;
+      CREATE TABLE chat_visibility_resets (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('global','group')),
+        scope TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(user_id, kind, scope)
+      );
+      INSERT INTO chat_visibility_resets VALUES('a','global','global',3);
+      DELETE FROM schema_migrations WHERE version=29;
+    `);
+    old.close();
+    const db = openDatabase(path);
+    try {
+      expect(db.prepare('SELECT * FROM chat_visibility_resets').all()).toEqual([{ user_id: 'a', kind: 'global', scope: 'global', revision: 3 }]);
+      db.prepare("INSERT INTO chat_visibility_resets VALUES('a','school','s1',1)").run();
+      const triggers = (db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name").all() as { name: string }[]).map(row => row.name);
+      expect(triggers).toEqual(['blocks_chat_delete', 'blocks_chat_insert', 'blocks_school_chat_delete', 'blocks_school_chat_insert']);
+      db.prepare("INSERT INTO blocks(blocker_id,blocked_id,created_at) VALUES('a','b','now')").run();
+      expect(db.prepare("SELECT revision FROM chat_visibility_resets WHERE user_id='a' AND kind='global'").get()).toEqual({ revision: 1 });
+      expect(db.prepare('SELECT version FROM schema_migrations WHERE version=29').get()).toEqual({ version: 29 });
     } finally { db.close(); }
   });
 

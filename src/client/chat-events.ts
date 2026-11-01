@@ -1,4 +1,4 @@
-export type ChatEvent = { kind: 'peer' | 'group' | 'global'; key: string };
+export type ChatEvent = { kind: 'peer' | 'group' | 'global' | 'school'; key: string };
 
 /** Notifications invalidate existing authorized tRPC queries; the stream never carries messages. */
 export function connectChatEvents(onEvent: (event: ChatEvent) => void, onState?: (connected: boolean) => void): () => void {
@@ -37,7 +37,7 @@ export function connectChatEvents(onEvent: (event: ChatEvent) => void, onState?:
       let event: unknown;
       try { event = JSON.parse((message as MessageEvent<string>).data); } catch { return; }
       if (!event || typeof event !== 'object' || !('kind' in event) || !('key' in event)) return;
-      if ((event.kind === 'peer' || event.kind === 'group' || event.kind === 'global') && typeof event.key === 'string') {
+      if ((event.kind === 'peer' || event.kind === 'group' || event.kind === 'global' || event.kind === 'school') && typeof event.key === 'string') {
         onEvent({ kind: event.kind, key: event.key });
       }
     });
