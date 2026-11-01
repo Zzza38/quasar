@@ -13,7 +13,8 @@ import { ThemePicker } from './theme-picker';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
-import { BetasButton } from './betas';
+import { BetasButton, useBeta } from './betas';
+import { DockCountDescriptions, DockGroupSwitch, PHONE_DOCK_BETA, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
@@ -202,6 +203,9 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
   const counts: NavCounts = { taskCount, requestCount, chatCount };
   const onMessages = view === 'messages';
   const chatCountId = chatCount > 0 ? COUNT_IDS.messages : undefined;
+  // The phone-dock beta: Messages and School join the dock under People and Classes, so the top-bar link goes.
+  const phoneDock = useBeta(PHONE_DOCK_BETA);
+  const dockMemory = useDockMemory(view);
   const displayName = context.user.displayName || 'Your account';
   const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
@@ -239,6 +243,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     {taskCount > 0 && <span id={COUNT_IDS.tasks} hidden>{taskCount === 1 ? '1 open task' : `${taskCount} open tasks`}</span>}
     {requestCount > 0 && <span id={COUNT_IDS.people} hidden>{requestCount === 1 ? '1 friend request' : `${requestCount} friend requests`}</span>}
     {chatCount > 0 && <span id={COUNT_IDS.messages} hidden>{chatCount === 1 ? '1 unread chat' : `${chatCount} unread chats`}</span>}
+    {phoneDock && <DockCountDescriptions counts={counts} />}
 
     <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-start group-data-[collapsible=icon]:px-2">
@@ -306,11 +311,11 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} iconOnly />
           {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
               it would become the accessible description whenever there is no unread count. */}
-          <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
+          {!phoneDock && <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
             className={cn('relative grid size-11 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
             <Icon name="message" size={20} strokeWidth={onMessages ? 2.4 : 2} />
             {chatCount > 0 && <span aria-hidden="true" className={cn('absolute right-2 top-2', BADGE_DOT)} />}
-          </a>
+          </a>}
           <button type="button" className="grid size-11 shrink-0 place-items-center rounded-full outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar user={context.user} className="size-7" />
           </button>
@@ -330,11 +335,12 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           {online && session.offlineReady === false && session.offlineSupported && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Try again</Button>}>Quasar couldn’t save itself to this device, so it may not open without signal.</Callout>}
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
+        {phoneDock && !immersive && <DockGroupSwitch view={view} counts={counts} navigate={navigate} />}
         {children}
       </div>
       <AttentionGap zone="right-gutter" top={8} className="mx-3" />
       </div>
-      {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
+      {!immersive && (phoneDock ? <PhoneDock view={view} counts={counts} last={dockMemory} onTab={scrollTopIfActive} /> : <TabBar view={view} counts={counts} navigate={navigate} />)}
     </SidebarInset>
 
     {/* Closing forgets a pending Add-calendar request, so reopening the sheet later does not replay it. */}
