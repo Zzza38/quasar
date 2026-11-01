@@ -19,6 +19,7 @@ import {
   rotationNeverAdvances,
   scheduleSchema,
   withCycleDay,
+  withoutAssignedFreePeriods,
   type Schedule,
 } from "./schedule";
 
@@ -594,4 +595,38 @@ it('retains a legacy removed-day copy even if it matched the last acknowledged s
   const override = { cycleDayId: removed.id, slots: removed.slots };
   const personal = { ...emptyPersonalSchedule(), cycleDayOverrides: [override] };
   expect(normalizePersonalSchedule(current, personal, previous).cycleDayOverrides).toEqual([override]);
+});
+
+describe("free periods", () => {
+  const { A: _algebra, B: _english, ...rest } = examplePersonalSchedule.assignments;
+  // A is marked free, B is just empty, and lunch is marked too but is not a class period.
+  const personal = { ...examplePersonalSchedule, assignments: rest, freePeriods: ["A", "lunch"] };
+
+  it("marks a class period free only when the student said so", () => {
+    const periods = resolveDay(exampleSchedule, "2026-09-08", personal).periods;
+    const byId = (id: string) => periods.find((entry) => entry.periodId === id)!;
+    expect(byId("A")).toMatchObject({ free: true });
+    expect(byId("A").class).toBeUndefined();
+    expect(byId("B").free).toBeUndefined();
+    expect(byId("lunch").free).toBeUndefined();
+    expect(byId("C").free).toBeUndefined();
+  });
+
+  it("lets an assigned class win over a stale free mark", () => {
+    const day = resolveDay(exampleSchedule, "2026-09-08", { ...personal, freePeriods: ["C"] });
+    expect(day.periods.find((entry) => entry.periodId === "C")).toMatchObject({ class: { id: "biology" } });
+    expect(day.periods.find((entry) => entry.periodId === "C")!.free).toBeUndefined();
+  });
+
+  it("rejects duplicate free periods", () => {
+    expect(personalScheduleSchema.safeParse({ ...personal, freePeriods: ["A", "A"] }).success).toBe(false);
+  });
+
+  it("drops free marks from periods that have a class again", () => {
+    expect(withoutAssignedFreePeriods({ ...personal, freePeriods: ["A", "C"] }).freePeriods).toEqual(["A"]);
+    expect("freePeriods" in withoutAssignedFreePeriods({ ...personal, freePeriods: ["C"] })).toBe(false);
+    expect("freePeriods" in withoutAssignedFreePeriods({ ...personal, freePeriods: [] })).toBe(false);
+    const unchanged = { ...personal, freePeriods: ["A"] };
+    expect(withoutAssignedFreePeriods(unchanged)).toBe(unchanged);
+  });
 });

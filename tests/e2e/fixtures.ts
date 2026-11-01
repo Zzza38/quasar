@@ -27,6 +27,18 @@ export function hydrating(page: Page): Page {
   return page;
 }
 
+/**
+ * Answers "No, I have a class" to Today's free-period question (FreePeriodPrompt) for each block, in the order it
+ * asks, for tests whose student leaves one or two class blocks empty on purpose.
+ */
+export async function declineFreePeriods(page: Page, labels: string[]): Promise<void> {
+  for (const label of labels) {
+    const question = page.getByRole('dialog', { name: `Is ${label} a free period?` });
+    await question.getByRole('button', { name: 'No, I have a class' }).click();
+    await question.waitFor({ state: 'detached' });
+  }
+}
+
 export const test = base.extend({
   page: async ({ page }, use) => { await use(hydrating(page)); },
 });
