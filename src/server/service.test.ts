@@ -177,7 +177,7 @@ describe('school membership and owner authorization', () => {
     expect(f.service.requests(f.owner)).toHaveLength(1);
     const request=f.service.requests(f.owner)[0];
     expect(request).not.toHaveProperty('fullName');
-    expect(()=>f.service.requests(f.student)).toThrow('Owner');
+    expect(()=>f.service.requests(f.student)).toThrow('Staff access');
     f.service.resolveRequest(f.owner,request.id);
     expect(f.service.requests(f.owner)).toHaveLength(0);
   });

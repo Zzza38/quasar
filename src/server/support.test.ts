@@ -66,7 +66,7 @@ describe('owner access', () => {
   });
   it('records a member who tries an owner tool, at most once a minute', async () => {
     const f = fixture();
-    await expect(f.caller(f.alice).admin.users.search({ query: '' })).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+    await expect(f.caller(f.alice).admin.users.search({ query: '' })).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Staff access is required.' });
     await expect(f.caller(f.alice).admin.users.view({ accountId: f.alice, userId: f.bob, reason: 'curious' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.audit('admin.denied')).toEqual([expect.objectContaining({ actor_id: f.alice })]);
     expect(JSON.parse(f.audit('admin.denied')[0]!.detail)).toMatchObject({ path: 'admin.users.search' });

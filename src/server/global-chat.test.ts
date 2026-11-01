@@ -52,7 +52,7 @@ describe('global chat', () => {
     f.send(f.owner, 'welcome');
     const seenByBob = f.room.thread(f.bob);
     expect(seenByBob.messages.map(m => [m.sender.displayName, m.body, m.fromMe])).toEqual([['Alice', 'hi everyone', false], ['Owner', 'welcome', false]]);
-    expect(seenByBob.room).toEqual({ members: 3, canModerate: false });
+    expect(seenByBob.room).toEqual({ members: 3, canModerate: false, moderator: null });
     expect(f.room.thread(f.owner).room.canModerate).toBe(true);
     expect(f.room.thread(f.alice).messages[0]!.fromMe).toBe(true);
     fails(() => f.room.thread(f.newcomer), 'BAD_REQUEST');
