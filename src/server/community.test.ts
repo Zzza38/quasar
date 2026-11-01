@@ -48,7 +48,7 @@ describe('school verification', () => {
     const requests = f.community.verificationRequests(f.owner);
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ userId: f.bob, schoolName: 'Community High' });
-    expect(() => f.community.verificationRequests(f.bob)).toThrow('Owner access');
+    expect(() => f.community.verificationRequests(f.bob)).toThrow('Staff access');
     f.community.decideVerification(f.owner, requests[0]!.id, false);
     expect(f.community.verification(f.bob)).toEqual({ status: 'none', method: null });
     expect(f.community.requestVerification(f.bob, { proof: 'Here is better proof of enrollment' }).status).toBe('pending');
@@ -299,7 +299,7 @@ describe('schedule-change voting', () => {
     expect(f.proposals.vote(f.members[2]!, { proposalId: awaiting.id, vote: 'for' }).status).toBe('awaiting-support');
     expect(f.service.school(f.school.id).version).toBe(2);
     expect(f.proposals.awaitingSupport(f.owner).map(entry => entry.id)).toEqual([awaiting.id]);
-    expect(() => f.proposals.awaitingSupport(f.alice)).toThrow('Owner access');
+    expect(() => f.proposals.awaitingSupport(f.alice)).toThrow('Staff access');
     f.proposals.decide(f.owner, awaiting.id, true);
     const school = f.service.school(f.school.id);
     expect(school).toMatchObject({ version: 3, approved: true, supportLocked: true });

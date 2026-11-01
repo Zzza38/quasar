@@ -6,15 +6,20 @@ import { MENU_URL_HELP, menuChoiceName, menuWeekStart, type MenuDay } from '@/do
 import { addDays, formatDate, relativeDate } from '@/lib/format';
 import { cn, scrollToId } from '@/lib/utils';
 import type { AppState, WorkspaceContext } from './app-state';
+import { hasPermission } from '@/domain/staff';
 import { Icon } from './icon';
 import { Button, Callout, ChoiceGroup, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, OptionCard, Section } from './primitives';
 
 export type MenuWeek = RouterOutput['school']['menu'];
 type MenuLookup = RouterOutput['school']['menuSources'];
 
-/** Who may point the school at a menu: the owner, or any member while the shared schedule is open to member edits (the server's rule, MenuService.canEdit). */
-export function canEditMenu(context: Pick<WorkspaceContext, 'isAdmin'> & { school: { memberLocked: boolean; supportLocked: boolean; memberCount: number } }): boolean {
-  return context.isAdmin || !(context.school.memberLocked || context.school.supportLocked || context.school.memberCount >= 10);
+/**
+ * Who may point the school at a menu: staff with schools.edit (src/domain/staff.ts), or any member while the shared
+ * schedule is open to member edits (the server's rule, MenuService.canEdit). A context saved before staff roles has
+ * no `staff`, so the owner is still recognized by isAdmin.
+ */
+export function canEditMenu(context: Pick<WorkspaceContext, 'isAdmin'> & { staff?: WorkspaceContext['staff'] } & { school: { memberLocked: boolean; supportLocked: boolean; memberCount: number } }): boolean {
+  return context.isAdmin || hasPermission(context.staff, 'schools.edit') || !(context.school.memberLocked || context.school.supportLocked || context.school.memberCount >= 10);
 }
 
 /** The weekdays of the provider's week to show: Monday to Friday always, a weekend day only when the menu lists something for it. */

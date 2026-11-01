@@ -5,8 +5,9 @@ import type { MessageExtras, Reaction } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, REPORT_CATEGORIES, bodyError, censorBody, normalizeBody, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
+import { CHAT, REPORT_CATEGORIES, bodyError, messageText, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
+import { Reveal, actorRank, type RemovedText } from './moderation';
 // Cycles with ./chat and ./community, safe because no module uses another's exports while it loads.
 import { activePause, countUnreadChats, listPreview, type ChatPause, type Receipt, type StoredItem } from './chat';
 import { CommunityService } from './community';
@@ -45,7 +46,9 @@ export type GroupMember = GroupSender & { role: GroupRole; joinedAt: string };
 export type GroupInfo = { id: string; name: string; createdAt: string; role: GroupRole; members: GroupMember[] };
 export type GroupMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string; deletedBy: GroupDeletedBy;
   /** Never edited: kept for the same shape as a global message, so one bubble component renders both. */
-  editedAt: null; reason: null; sender: GroupSender };
+  editedAt: null; reason: null; editedFrom: null; sender: GroupSender;
+  /** What the viewer's tier may read beyond `body` (src/server/moderation.ts): the owner's uncensored text, a removed message. */
+  original: string | null; removed: RemovedText | null };
 export type GroupSummary = {
   id: string; name: string; memberCount: number; role: GroupRole;
   /** A few members for the stacked avatars in the list (the viewer excluded). */
@@ -58,7 +61,7 @@ export type GroupSummary = {
 type GroupRow = { id: string; name: string; creator_id: string; revision: number; last_message_at: string | null; created_at: string };
 type MemberRow = { group_id: string; user_id: string; role: GroupRole; joined_at: string; left_at: string | null; last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
 type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; group_id: string; sender_id: string; body: string; created_at: string; deleted_at: string | null; deleted_by: GroupDeletedBy; revision: number;
-  display_name: string; verified: number; google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
+  original: string | null; deleted_rank: string | null; display_name: string; verified: number; google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type PersonRow = AvatarRow & { display_name: string; school_id: string | null; verified: number };
 
 // Group names lose control and format characters and extra spaces, like display names, and a slur in one is censored.
@@ -123,6 +126,12 @@ function leaveGroup(db: Db, groupId: string, userId: string, nowIso: string): vo
 
 export class GroupChatService {
   constructor(private readonly service: Service, private readonly now: () => Date = () => new Date()) {}
+  private readonly reveals = new Map<string, Reveal>();
+  private reveal(viewerId: string): Reveal {
+    let reveal = this.reveals.get(viewerId);
+    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
+    return reveal;
+  }
   private get db() { return this.service.db; }
   private get community() { return new CommunityService(this.service); }
   private iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
@@ -177,8 +186,9 @@ export class GroupChatService {
     return {
       ...messageExtras(this.db, 'group', viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
-      deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: null, reason: null,
+      deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: null, reason: null, editedFrom: null,
       sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
+      original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, 'group'),
     };
   }
   private latestPage(member: MemberRow, before?: number): { rows: MessageRow[]; hasEarlier: boolean } {
@@ -334,7 +344,7 @@ export class GroupChatService {
   /* ---------- Writing ---------- */
 
   send(viewerId: string, groupId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GroupMessage } {
-    const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
+    const { body, original } = messageText(raw);
     const problem = bodyError(body, !!image);
     if (problem) fail('BAD_REQUEST', problem);
     let recipients: string[] = [];
@@ -353,7 +363,7 @@ export class GroupChatService {
       validateReply(this.db, 'group', viewerId, replyTo, group.id);
       const revision = this.bumpRevision(group.id);
       const createdAt = this.iso();
-      const { seq } = this.db.prepare('INSERT INTO chat_group_messages(id,group_id,sender_id,body,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?) RETURNING seq').get(clientId, group.id, viewerId, body, createdAt, revision, replyTo ?? null) as { seq: number };
+      const { seq } = this.db.prepare('INSERT INTO chat_group_messages(id,group_id,sender_id,body,original,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, group.id, viewerId, body, original, createdAt, revision, replyTo ?? null) as { seq: number };
       if (image) this.db.prepare('UPDATE chat_group_messages SET image=? WHERE id=?').run(image, clientId);
       this.db.prepare('UPDATE chat_groups SET last_message_at=? WHERE id=?').run(createdAt, group.id);
       this.db.prepare('UPDATE chat_group_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), typing_until=NULL WHERE group_id=? AND user_id=?').run(seq, seq, group.id, viewerId);
@@ -390,7 +400,7 @@ export class GroupChatService {
       if (row.sender_id !== viewerId && member.role !== 'admin') fail('FORBIDDEN', 'Only the group admin can remove other people’s messages.');
       if (row.deleted_at) return { deleted: true as const, message: this.message(viewerId, row) };
       const by = row.sender_id === viewerId ? 'sender' : 'admin';
-      this.db.prepare('UPDATE chat_group_messages SET deleted_at=?, deleted_by=?, revision=? WHERE seq=?').run(this.iso(), by, this.bumpRevision(group.id), row.seq);
+      this.db.prepare('UPDATE chat_group_messages SET deleted_at=?, deleted_by=?, deleted_rank=?, revision=? WHERE seq=?').run(this.iso(), by, actorRank(this.service, viewerId), this.bumpRevision(group.id), row.seq);
       if (by === 'admin') this.audit(viewerId, 'group.remove', { groupId: group.id, seq: row.seq, senderId: row.sender_id });
       return { deleted: true as const, message: this.message(viewerId, this.find(group.id, messageId)!) };
     }).immediate();
@@ -468,7 +478,7 @@ export function pruneGroupChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM chat_group_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE chat_group_messages SET body='', image=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL)").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE chat_group_messages SET body='', image=NULL, original=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL)").run(ago(CHAT.deletedTextDays));
     db.prepare('DELETE FROM chat_groups WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
   }).immediate();
 }

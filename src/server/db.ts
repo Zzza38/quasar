@@ -685,6 +685,29 @@ function migrate(db: Db): void {
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(28, datetime('now'));
   `);
+
+  // Migration 29: staff roles (src/server/staff.ts), granted only with `npm run staff`. The owner is never a row here;
+  // it stays OWNER_EMAIL. Every message table also keeps what moderation needs to show text to the tiers that may read
+  // it (src/domain/staff.ts): `original` is the text as sent when the slur filter changed it (the owner reads it),
+  // `deleted_rank` the moderation rank of whoever removed the message (null for a member), and in Global chat
+  // `edited_from` the sender's text before the first edit and `edited_rank` the highest rank that edited it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS staff_roles (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('administrator','moderator','support','schedule-editor')),
+      granted_at TEXT NOT NULL
+    );
+  `);
+  const addColumn = (table: string, column: string) => {
+    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  };
+  for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
+    addColumn(table, 'original');
+    addColumn(table, 'deleted_rank');
+  }
+  addColumn('global_messages', 'edited_from');
+  addColumn('global_messages', 'edited_rank');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
