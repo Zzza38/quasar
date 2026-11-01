@@ -69,7 +69,7 @@ export class SetupGuideService {
   }
 
   adminView(adminId: string, schoolId: string | null): AdminGuides {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const view = (kind: GuideKind): AdminGuideKind => ({
       platforms: schoolId ? this.platforms(kind, schoolId) : [], global: this.overrides(kind, ''), school: schoolId ? this.overrides(kind, schoolId) : null,
     });
@@ -78,7 +78,7 @@ export class SetupGuideService {
 
   /** Saves a guide for every school (`schoolId` null) or one school. A null guide goes back to the next level down. */
   save(adminId: string, raw: z.input<typeof saveGuideSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const input = saveGuideSchema.parse(raw);
     const scope = input.schoolId ?? '';
     const { table } = STORE[input.kind];
@@ -100,7 +100,7 @@ export class SetupGuideService {
   }
 
   setPlatforms(adminId: string, raw: z.input<typeof guidePlatformsUpdateSchema>): string[] {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const input = guidePlatformsUpdateSchema.parse(raw);
     return this.db.transaction(() => {
       const from = this.platforms(input.kind, input.schoolId);
@@ -112,7 +112,7 @@ export class SetupGuideService {
 
   /** Re-encodes a screenshot the way chat images are (metadata stripped, at most 1600 px) and returns its id. */
   async uploadImage(adminId: string, raw: z.input<typeof guideImageUploadSchema>): Promise<{ id: string }> {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const data = await prepareChatImage(guideImageUploadSchema.parse(raw).data);
     const id = randomUUID();
     this.db.prepare('INSERT INTO feed_guide_images(id,image,created_at,created_by) VALUES(?,?,?,?)').run(id, Buffer.from(data!, 'base64'), now(), adminId);

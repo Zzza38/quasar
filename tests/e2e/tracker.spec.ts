@@ -276,7 +276,7 @@ test('recovers a suspended browser database and uploads each offline task once',
 test('admin UI enforces owner authorization and publishes locked approved revisions', async ({ page, context }) => {
   const student = seed(); await authenticate(context, student.id);
   await page.goto('/admin');
-  await expect(page.getByText('This page is available to the project owner.')).toBeVisible();
+  await expect(page.getByText('This page is available to Quasar staff.')).toBeVisible();
   const owner = seed('browser-owner@example.com'); await authenticate(context, owner.id);
   await page.reload();
   await page.getByRole('tab', { name: 'Schools' }).click();

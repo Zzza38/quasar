@@ -17,6 +17,8 @@ import { BetaService } from './betas';
 import { seedSchoolMember } from './global-chat';
 import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
+import { ROLE_PERMISSIONS, isStaffRole, staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
+import { adminSignInAllowed } from '@/lib/admin-session';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
 
 /** `avatar` is the picture URL other members see (docs/CHAT.md §13): an uploaded picture, else the Google picture, else null for initials. */
@@ -160,7 +162,8 @@ function canonical(value: unknown): string {
 }
 
 /** Where a request came from, recorded on the owner's audit rows (Service.audit). */
-export type RequestInfo = { ip: string | null; userAgent: string | null };
+/** `authAt` is the session's Google sign-in time (src/server/auth.ts), when the route knows it. */
+export type RequestInfo = { ip: string | null; userAgent: string | null; authAt?: number | null };
 
 export class Service {
   /** Set per request by the tRPC route; absent in the worker and in tests. */
@@ -239,9 +242,10 @@ export class Service {
     if (open.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind) VALUES(?,?,?,?,?,?)').run(randomUUID(), schoolId, id, input.message, now(), `appeal:${input.kind}`);
   }
-  /** Owner: lifts a removal so the student can join that school again. Audited. */
+  /** Staff with members.remove: lifts a removal so the student can join that school again. Audited. */
   liftBan(adminId: string, userId: string, schoolId: string): void {
-    this.admin(adminId);
+    this.permit(adminId, 'members.remove');
+    this.guardTarget(adminId, userId);
     this.db.transaction(() => {
       if (!this.db.prepare('SELECT 1 FROM school_bans WHERE user_id=? AND school_id=?').get(userId, schoolId)) fail('NOT_FOUND', 'This student is not removed from that school.');
       this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(userId, schoolId);
@@ -249,15 +253,15 @@ export class Service {
       this.audit(adminId, 'member.restore', schoolId, { userId });
     }).immediate();
   }
-  /** Owner: every current removal, for the "Removed members" section. */
+  /** Staff with members.remove: every current removal they may act on, for the "Removed members" section. */
   bans(adminId: string): { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean }[] {
-    this.admin(adminId);
+    this.permit(adminId, 'members.remove');
     return this.db.prepare(`SELECT b.user_id userId, u.display_name displayName, u.email, b.school_id schoolId, s.name schoolName, b.reason, b.created_at createdAt,
         EXISTS (SELECT 1 FROM support_requests r WHERE r.user_id=b.user_id AND r.school_id=b.school_id AND r.kind='appeal:ban' AND r.resolved_at IS NULL) appealed
       FROM school_bans b JOIN users u ON u.id=b.user_id JOIN schools s ON s.id=b.school_id ORDER BY b.created_at DESC`).all().map((row) => {
       const entry = row as { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: number };
       return { ...entry, appealed: !!entry.appealed };
-    });
+    }).filter(entry => this.canTarget(adminId, entry.userId));
   }
   ready(id: string): User {
     const user = this.user(id);
@@ -270,7 +274,43 @@ export class Service {
     const row = this.db.prepare('SELECT google_sub FROM users WHERE id=?').get(id) as { google_sub: string };
     return row.google_sub === this.ownerSub.trim();
   }
+  /** Owner-only tools. Staff roles (src/domain/staff.ts) never pass this; they go through `permit`. */
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
+  /** The account's staff rank: 'owner', a role granted with `npm run staff`, or null for a member. */
+  staffRank(id: string): StaffRank | null {
+    if (this.isAdmin(id)) return 'owner';
+    const row = this.db.prepare('SELECT role FROM staff_roles WHERE user_id=?').get(id) as { role: string } | undefined;
+    return row && isStaffRole(row.role) ? row.role : null;
+  }
+  isStaff(id: string): boolean { return this.staffRank(id) !== null; }
+  requireStaff(id: string): void { if (!this.isStaff(id)) fail('FORBIDDEN', 'Staff access is required.'); }
+  can(id: string, permission: StaffPermission): boolean {
+    const rank = this.staffRank(id);
+    return !!rank && ROLE_PERMISSIONS[rank].includes(permission);
+  }
+  permit(id: string, permission: StaffPermission): void {
+    if (!this.can(id, permission)) fail('FORBIDDEN', this.isStaff(id) ? 'Your staff role doesn’t include this.' : 'Staff access is required.');
+  }
+  /**
+   * Whether `actorId` may use support tools on `targetId`. The owner may act on anyone. Other staff never act on the
+   * owner, on another staff account, or on their own, so no role can lock out or quietly watch someone above it.
+   */
+  canTarget(actorId: string, targetId: string): boolean {
+    if (this.isAdmin(actorId)) return true;
+    return targetId !== actorId && !this.isStaff(targetId);
+  }
+  /**
+   * schools.edit outside the support console, in member procedures (the class directory, the lunch menu). The owner
+   * keeps the access it always had; other staff need a recent Google sign-in there too, as in the console.
+   */
+  canEditAnySchool(id: string): boolean {
+    if (this.isAdmin(id)) return true;
+    return this.can(id, 'schools.edit') && adminSignInAllowed(this.request?.authAt ?? null);
+  }
+  guardTarget(actorId: string, targetId: string): void {
+    if (this.canTarget(actorId, targetId)) return;
+    fail('FORBIDDEN', targetId === actorId ? 'Staff can’t use support tools on their own account.' : 'Only the owner can use support tools on a staff account.');
+  }
   profile(id: string, input: z.infer<typeof namesSchema>): User {
     const current = this.user(id);
     const names = namesSchema.parse(input);
@@ -302,14 +342,15 @@ export class Service {
     return this.schoolFromRow(row);
   }
   /**
-   * Appends to audit_log (append-only: see migration 16 in src/server/db.ts). Rows written by the owner also keep
-   * the request's address and browser, and a copy goes to the server log (journald), which the database cannot rewrite.
+   * Appends to audit_log (append-only: see migration 16 in src/server/db.ts). Rows written by the owner or any staff
+   * role also keep the request's address and browser, and a copy goes to the server log (journald), which the
+   * database cannot rewrite.
    */
   audit(actorId: string, action: string, schoolId: string | null, detail: unknown, createdAt = now()): void {
-    const owner = this.request !== null && this.isAdmin(actorId);
-    const ip = owner ? this.request!.ip : null, userAgent = owner ? this.request!.userAgent : null;
+    const role = this.request !== null ? this.staffRank(actorId) : null;
+    const ip = role ? this.request!.ip : null, userAgent = role ? this.request!.userAgent : null;
     this.db.prepare('INSERT INTO audit_log(actor_id,action,school_id,detail,created_at,ip,user_agent) VALUES(?,?,?,?,?,?,?)').run(actorId, action, schoolId, JSON.stringify(detail), createdAt, ip, userAgent);
-    if (owner) console.info(`audit ${JSON.stringify({ actorId, action, schoolId, detail, createdAt, ip, userAgent })}`);
+    if (role) console.info(`audit ${JSON.stringify({ actorId, role, action, schoolId, detail, createdAt, ip, userAgent })}`);
   }
   createSchool(id: string, raw: z.infer<typeof createSchoolSchema>): School {
     this.ready(id);
@@ -357,7 +398,7 @@ export class Service {
   }
   updateSchool(id: string, raw: z.infer<typeof schoolUpdateSchema> | z.infer<typeof adminUpdateSchema>, asAdmin = false): School {
     this.ready(id);
-    if (asAdmin) this.admin(id);
+    if (asAdmin) this.permit(id, 'schools.edit');
     const input = asAdmin ? adminUpdateSchema.parse(raw) : schoolUpdateSchema.parse(raw);
     return this.db.transaction(() => {
       const school = this.school(input.schoolId);
@@ -378,6 +419,9 @@ export class Service {
       if (!asAdmin) this.db.prepare('UPDATE users SET reviewed_version=? WHERE id=? AND reviewed_version=?').run(school.version + 1, id, school.version);
       // Proposals built on the old revision can no longer apply, including ones awaiting support.
       this.db.prepare("UPDATE schedule_proposals SET status='superseded', closed_at=? WHERE school_id=? AND status IN ('open','awaiting-support') AND base_version<>?").run(now(), school.id, school.version + 1);
+      // A domain verifies every member whose Google address is on it (CommunityService.verifyByDomain), so changing
+      // the list is a verification decision, not a schedule edit.
+      if (admin?.emailDomains && admin.emailDomains.join(',') !== school.emailDomains.join(',') && !this.can(id, 'verification')) fail('FORBIDDEN', 'Changing a school’s email domains verifies its students, so it needs the verification permission.');
       if (admin?.emailDomains) this.db.prepare('UPDATE schools SET email_domains=? WHERE id=?').run(admin.emailDomains.join(','), school.id);
       this.audit(id, asAdmin ? 'school.adminUpdate' : 'school.update', school.id, { fromVersion: school.version, approved: admin?.approved ?? false, supportLocked: admin?.supportLocked ?? school.supportLocked,
         // Domains grant verification, so a change to them is recorded like the approval and lock.
@@ -408,7 +452,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), subscriptions: listSubscriptions(this.db, id), feedGuides: new SetupGuideService(this).resolved('calendar', school?.id ?? null), scheduleGuides: new SetupGuideService(this).resolved('schedule', school?.id ?? null), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), staff: staffAccess(this.staffRank(id)), subscriptions: listSubscriptions(this.db, id), feedGuides: new SetupGuideService(this).resolved('calendar', school?.id ?? null), scheduleGuides: new SetupGuideService(this).resolved('schedule', school?.id ?? null), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
@@ -579,20 +623,35 @@ export class Service {
     if (count.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
     this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), schoolId, id, text, now());
   }
+  /**
+   * Whether this staff account handles requests of `kind`: an appeal goes with the sanction it appeals, beta feedback
+   * with support, a class merge with schedule editors, and a correction request (sent from the School view) with
+   * support or schedule editors.
+   */
+  private handlesRequest(id: string, kind: string, userId: string): boolean {
+    if (!this.canTarget(id, userId)) return false;
+    if (kind === 'appeal:pause') return this.can(id, 'chat.pause');
+    if (kind === 'appeal:ban') return this.can(id, 'members.remove');
+    if (kind.startsWith('beta:')) return this.can(id, 'requests');
+    if (kind === MERGE_KIND) return this.can(id, 'schools.edit');
+    return this.can(id, 'requests') || this.can(id, 'schools.edit');
+  }
+  /** Open requests this staff account handles (handlesRequest). */
   requests(id: string) {
-    this.admin(id);
+    this.requireStaff(id);
     // `detail` is a beta report's diagnostics (src/server/betas.ts) or a class merge (src/server/directory.ts); other kinds have none.
     const rows = this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind,r.detail
       FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban' | `beta:${string}` | typeof MERGE_KIND; detail: string | null}[];
-    return rows.map(({ detail, ...row }) => row.kind === MERGE_KIND
+    return rows.filter(row => this.handlesRequest(id, row.kind, row.userId)).map(({ detail, ...row }) => row.kind === MERGE_KIND
       ? { ...row, diagnostics: null, merge: detail ? mergeRequestView(this.db, row.schoolId, detail) : null }
       : { ...row, diagnostics: detail ? JSON.parse(detail) as StoredBetaDiagnostics : null, merge: null });
   }
   resolveRequest(id: string, requestId: string) {
-    this.admin(id);
+    this.requireStaff(id);
     this.db.transaction(() => {
-      const request = this.db.prepare('SELECT user_id, school_id FROM support_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string | null } | undefined;
+      const request = this.db.prepare('SELECT user_id, school_id, kind FROM support_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string | null; kind: string } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already resolved.');
+      if (!this.handlesRequest(id, request!.kind, request!.user_id)) fail('FORBIDDEN', 'Your staff role doesn’t handle this request.');
       this.db.prepare('UPDATE support_requests SET resolved_at=? WHERE id=?').run(now(), requestId);
       this.audit(id, 'support.resolveRequest', request!.school_id, { userId: request!.user_id, requestId });
     }).immediate();

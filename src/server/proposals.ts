@@ -168,14 +168,14 @@ export class ProposalService {
       AND base_version<>(SELECT s.version FROM schools s WHERE s.id=schedule_proposals.school_id)`).run(now());
   }
   awaitingSupport(adminId: string): Proposal[] {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'proposals');
     // A proposal built on an older revision can never be published, so it is not offered.
     this.supersedeStale();
     return this.rows("p.status='awaiting-support'", [], adminId);
   }
-  /** Owner publishes a passed proposal on a support-locked school (approval and lock are retained) or declines it. */
+  /** Staff with `proposals` publish a passed proposal on a support-locked school (approval and lock are retained) or decline it. */
   decide(adminId: string, proposalId: string, publish: boolean): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'proposals');
     // Outside the transaction, so a stale proposal stays superseded even though the lookup below then fails.
     this.supersedeStale();
     this.db.transaction(() => {

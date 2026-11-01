@@ -4,7 +4,8 @@ import { messageExtras, validateReply, targetExists, changeReaction, reactionSch
 import type { MessageExtras, Reaction } from '@/domain/chat';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, bodyError, censorBody, normalizeBody, rawBodySchema } from '@/domain/chat';
+import { CHAT, bodyError, messageText, rawBodySchema } from '@/domain/chat';
+import { Reveal, actorRank, editorRank, type RemovedText, type RevealedText } from './moderation';
 import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 // A cycle with ./chat, safe because neither module uses the other's exports while it loads.
 import { activePause, countUnreadChats, listPreview, type ChatPause, type Receipt } from './chat';
@@ -12,6 +13,7 @@ import { currentBetaRegistry } from './beta-registry';
 import type { Db } from './db';
 import { avatarUrl } from './avatars';
 import type { Service } from './service';
+import { isModerationRank, moderationRank, moderationTier, type StaffRank } from '@/domain/staff';
 
 /**
  * The global chat (docs/CHAT.md §11) and the school chats (§16). Both are rooms: one is open to every member with
@@ -30,15 +32,25 @@ export const PAUSED = 'Support paused your messaging.';
 const MISSING = 'That message is gone.';
 export const NOT_IN_SCHOOL = 'You are not in this school chat.';
 
+/** 'owner' means removed by staff (the owner or a moderating role, named in `moderatedBy`); the value predates staff roles. */
 export type GlobalDeletedBy = 'sender' | 'owner' | null;
-export type GlobalSender = { id: string; displayName: string; verified: boolean; avatar: string | null };
+/** `staff` is the sender's staff rank (src/domain/staff.ts), shown as a badge so members know who is speaking for Quasar. */
+export type GlobalSender = { id: string; displayName: string; verified: boolean; avatar: string | null; staff: StaffRank | null };
 export type GlobalMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string;
   deletedBy: GlobalDeletedBy; editedAt: string | null;
-  /** The owner's reason for editing or removing this message (may be empty); null when the owner didn't touch it. */
-  reason: string | null; sender: GlobalSender };
-export type GlobalRoom = { members: number; canModerate: boolean };
+  /** The moderator's reason for editing or removing this message (may be empty); null when no moderator touched it. */
+  reason: string | null;
+  /** Who moderated it, for the note under it: 'owner' for rows from before staff roles; null when no moderator touched it. */
+  moderatedBy: StaffRank | null; sender: GlobalSender;
+  /**
+   * What the viewer's tier may read beyond `body` (src/server/moderation.ts): the owner's uncensored text, a removed
+   * message's text and photo, and the text from before an edit.
+   */
+  original: string | null; removed: RemovedText | null; editedFrom: RevealedText | null };
+/** `moderator` is the viewer's own rank when they may moderate the room, so the app can say what members will see. */
+export type GlobalRoom = { members: number; canModerate: boolean; moderator: StaffRank | null };
 export type GlobalSummary = {
-  lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GlobalDeletedBy } | null;
+  lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GlobalDeletedBy; moderatedBy: StaffRank | null } | null;
   unread: number; muted: boolean;
 };
 /** A school room's list row: the global row's fields plus which school it belongs to. */
@@ -46,6 +58,7 @@ export type SchoolSummary = GlobalSummary & { schoolId: string; schoolName: stri
 
 type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
   deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number;
+  original: string | null; deleted_rank: string | null; edited_from: string | null; edited_rank: string | null;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type MemberRow = { last_read_seq: number; muted: number };
 
@@ -74,12 +87,18 @@ export const schoolEditSchema = globalEditSchema.extend(schoolScope.shape);
 export const schoolReadSchema = globalReadSchema.extend(schoolScope.shape);
 export const schoolMuteSchema = globalMuteSchema.extend(schoolScope.shape);
 
-/** normalizeBody, slurs censored to asterisks outside https links (censorBody), then bodyError, throwing BAD_REQUEST with a fixed string. Never echoes input. */
-export function parseGlobalBody(raw: string, hasImage = false): string {
-  const body = censorBody(normalizeBody(typeof raw === 'string' ? raw : ''));
-  const problem = bodyError(body, hasImage);
+/** Who moderated a message: the stored rank, or the owner for a row moderated before staff roles. */
+function moderatedBy(row: Pick<MessageRow, 'deleted_at' | 'deleted_by' | 'deleted_rank' | 'edited_at' | 'edited_rank'>): StaffRank | null {
+  if (row.deleted_at) return row.deleted_by !== 'owner' ? null : isModerationRank(row.deleted_rank) ? row.deleted_rank : 'owner';
+  return row.edited_at ? editorRank(row) : null;
+}
+
+/** parseBody for the rooms: the censored body every member is sent, and the uncensored text stored for the owner. */
+export function parseGlobalBody(raw: string, hasImage = false): { body: string; original: string | null } {
+  const text = messageText(raw);
+  const problem = bodyError(text.body, hasImage);
   if (problem) fail('BAD_REQUEST', problem);
-  return body;
+  return text;
 }
 
 /* ---------- Rooms ---------- */
@@ -213,6 +232,12 @@ export function seedSchoolMember(db: Db, userId: string, schoolId: string): void
 class RoomChatService {
   constructor(protected readonly service: Service, protected readonly now: () => Date = () => new Date()) {}
   protected get db() { return this.service.db; }
+  private readonly reveals = new Map<string, Reveal>();
+  private reveal(viewerId: string): Reveal {
+    let reveal = this.reveals.get(viewerId);
+    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
+    return reveal;
+  }
   protected iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
 
   /* ---------- Helpers ---------- */
@@ -236,15 +261,18 @@ class RoomChatService {
   }
   private roomInfo(room: Room, viewerId: string): GlobalRoom {
     const members = this.db.prepare(ROOMS[room.kind].population).get(this.params(room)) as { n: number };
-    return { members: members.n, canModerate: this.service.isAdmin(viewerId) };
+    // Staff who moderate the Global chat moderate the school rooms too.
+    const moderator = this.service.can(viewerId, 'global.moderate') ? this.service.staffRank(viewerId) : null;
+    return { members: members.n, canModerate: moderator !== null, moderator };
   }
   private message(room: Room, viewerId: string, row: MessageRow): GlobalMessage {
     return {
       ...messageExtras(this.db, room.kind, viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at,
-      reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null,
-      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
+      reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null, moderatedBy: moderatedBy(row),
+      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }), staff: this.service.staffRank(row.sender_id) },
+      original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, room.kind), editedFrom: this.reveal(viewerId).editedFrom(row),
     };
   }
   /** Room messages the viewer can see (messages from members they blocked are left out), plus `extra` SQL. */
@@ -284,7 +312,7 @@ class RoomChatService {
     const last = this.db.prepare(this.visible(room, 'ORDER BY c.seq DESC LIMIT 1')).get(this.params(room, { viewer: viewerId })) as MessageRow | undefined;
     const deleted = !!last?.deleted_at;
     return {
-      lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
+      lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null, moderatedBy: deleted ? moderatedBy(last) : null } : null,
       unread: countUnreadRoom(this.db, room, viewerId),
       muted: !!member.muted,
     };
@@ -310,7 +338,7 @@ class RoomChatService {
 
   /** `admit` runs first inside the transaction and settles who may post. */
   protected roomSend(room: Room, admit: () => void, viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GlobalMessage } {
-    const body = parseGlobalBody(raw, !!image);
+    const { body, original } = parseGlobalBody(raw, !!image);
     const { messages } = ROOMS[room.kind];
     const result = this.db.transaction(() => {
       admit();
@@ -330,8 +358,8 @@ class RoomChatService {
       const revision = this.bumpRevision(room);
       const createdAt = this.iso();
       const { seq } = (room.kind === 'school'
-        ? this.db.prepare('INSERT INTO school_messages(id,school_id,sender_id,body,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, room.scope, viewerId, body, createdAt, revision, replyTo ?? null, image ?? null)
-        : this.db.prepare('INSERT INTO global_messages(id,sender_id,body,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, createdAt, revision, replyTo ?? null, image ?? null)) as { seq: number };
+        ? this.db.prepare('INSERT INTO school_messages(id,school_id,sender_id,body,original,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, room.scope, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null)
+        : this.db.prepare('INSERT INTO global_messages(id,sender_id,body,original,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null)) as { seq: number };
       this.db.prepare(ROOMS[room.kind].touch).run(this.params(room, { at: createdAt }));
       ensureRoomMember(this.db, room, viewerId);
       this.db.prepare(`UPDATE ${ROOMS[room.kind].members} AS m SET last_read_seq=max(last_read_seq, @seq) WHERE ${ROOMS[room.kind].member('m', '@user')}`).run(this.params(room, { seq, user: viewerId }));
@@ -355,18 +383,23 @@ class RoomChatService {
     return result;
   }
 
-  /** The sender deletes their own message; the owner deletes anyone's, with a reason everyone can see (audited). */
+  /**
+   * The sender deletes their own message; staff with global.moderate delete anyone's they may act on
+   * (Service.canTarget), with a reason everyone can see (audited).
+   */
   protected roomDelete(room: Room, admit: () => void, viewerId: string, messageId: string, rawReason = ''): { deleted: true; message: GlobalMessage } {
     const reason = reasonSchema.parse(rawReason);
     const result = this.db.transaction(() => {
       admit();
       const row = this.find(room, messageId);
       if (!row) return fail('NOT_FOUND', MISSING);
-      const owner = this.service.isAdmin(viewerId);
-      if (row.sender_id !== viewerId && !owner) fail('FORBIDDEN', 'Only the owner can delete other people’s messages.');
+      if (row.sender_id !== viewerId) {
+        if (!this.service.can(viewerId, 'global.moderate')) fail('FORBIDDEN', 'Only moderators can delete other people’s messages.');
+        this.service.guardTarget(viewerId, row.sender_id);
+      }
       if (row.deleted_at) return { deleted: true as const, message: this.message(room, viewerId, row) };
       const by = row.sender_id === viewerId ? 'sender' : 'owner';
-      this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET deleted_at=?, deleted_by=?, reason=?, revision=? WHERE seq=?`).run(this.iso(), by, by === 'owner' ? reason : null, this.bumpRevision(room), row.seq);
+      this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET deleted_at=?, deleted_by=?, reason=?, deleted_rank=?, revision=? WHERE seq=?`).run(this.iso(), by, by === 'owner' ? reason : null, actorRank(this.service, viewerId), this.bumpRevision(room), row.seq);
       if (by === 'owner') this.audit(room, viewerId, 'delete', { seq: row.seq, senderId: row.sender_id, reason });
       return { deleted: true as const, message: this.message(room, viewerId, this.find(room, messageId)!) };
     }).immediate();
@@ -374,17 +407,25 @@ class RoomChatService {
     return result;
   }
 
-  /** Owner only: replaces the text of any message, with a reason everyone can see. The filter applies to the new text; the edit is audited. */
+  /**
+   * Staff with global.moderate: replaces the text of a message they may act on (Service.canTarget), with a reason
+   * everyone can see. The filter applies to the new text; the edit is audited.
+   */
   protected roomEdit(room: Room, admit: () => void, adminId: string, messageId: string, raw: string, rawReason = ''): { message: GlobalMessage } {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'global.moderate');
     const reason = reasonSchema.parse(rawReason);
     const result = this.db.transaction(() => {
       admit();
       const row = this.find(room, messageId);
       if (!row || row.deleted_at) return fail('NOT_FOUND', MISSING);
-      const body = parseGlobalBody(raw, !!row.image);
+      this.service.guardTarget(adminId, row.sender_id);
+      const { body, original } = parseGlobalBody(raw, !!row.image);
       if (row.body !== body || (row.reason ?? '') !== reason) {
-        this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, edited_at=?, reason=?, revision=? WHERE seq=?`).run(body, this.iso(), reason, this.bumpRevision(room), row.seq);
+        // The sender's own text stays as it was before the first edit, and the rank kept is the highest that has edited,
+        // so a later edit from a lower tier cannot show that tier what a higher one took out.
+        const higher = row.edited_at && moderationTier(editorRank(row)) > moderationTier(moderationRank(this.service.staffRank(adminId)));
+        this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), edited_rank=?, reason=?, revision=? WHERE seq=?`)
+          .run(body, original, this.iso(), row.edited_at ? null : row.original ?? row.body, higher ? editorRank(row) : actorRank(this.service, adminId), reason, this.bumpRevision(room), row.seq);
         this.audit(room, adminId, 'edit', { seq: row.seq, senderId: row.sender_id, reason });
       }
       return { message: this.message(room, adminId, this.find(room, messageId)!) };
@@ -510,7 +551,7 @@ export function pruneGlobalChat(db: Db, now: Date = new Date()): void {
   db.transaction(() => {
     for (const table of ['global_messages', 'school_messages']) {
       db.prepare(`DELETE FROM ${table} WHERE created_at < ?`).run(ago(CHAT.retentionDays));
-      db.prepare(`UPDATE ${table} SET body='', image=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL)`).run(ago(CHAT.deletedTextDays));
+      db.prepare(`UPDATE ${table} SET body='', image=NULL, original=NULL, edited_from=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL OR edited_from IS NOT NULL)`).run(ago(CHAT.deletedTextDays));
     }
   }).immediate();
 }

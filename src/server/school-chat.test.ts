@@ -15,6 +15,7 @@ import { appRouter } from './router';
 import { EMPTY_BETA_REGISTRY, createBeta, writeBetaRegistry } from './beta-registry';
 import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 import { exampleSchedule } from '@/domain/example';
+import { grantStaffRole } from './staff';
 
 const DAY = 86_400_000;
 const databases: Db[] = [];
@@ -71,7 +72,7 @@ describe('school chat', () => {
     const seen = f.rooms.thread(f.bob, f.school.id);
     expect(seen.messages.map(m => [m.sender.displayName, m.body])).toEqual([['Alice', 'hi school']]);
     // Everyone at the school with names counts, in the beta or not.
-    expect(seen.room).toEqual({ members: 4, canModerate: false });
+    expect(seen.room).toEqual({ members: 4, canModerate: false, moderator: null });
     expect(seen.school).toEqual({ id: f.school.id, name: 'Community High' });
     // Another school's member, someone without a school, and a member outside the beta all get the same answer,
     // and so does asking for another school by id.
@@ -114,6 +115,20 @@ describe('school chat', () => {
     expect(f.rooms.delete(f.bob, f.school.id, mine.id).message.deletedBy).toBe('sender');
     const elsewhere = f.send(f.outsider, 'over here', f.other.id);
     fails(() => f.rooms.delete(f.owner, f.school.id, elsewhere.id), 'NOT_FOUND');
+  });
+
+  it('lets a staff moderator at the school moderate it, recording their rank, and keeps the owner’s uncensored text', () => {
+    const f = fixture();
+    const mod = f.user('mod@example.com', 'Mod');
+    f.service.join(mod, { schoolId: f.school.id, choice: 'community', grade: '11' });
+    grantStaffRole(f.service, 'mod@example.com', 'moderator');
+    expect(f.rooms.thread(mod, f.school.id).room).toMatchObject({ canModerate: true, moderator: 'moderator' });
+    const message = f.send(f.alice, 'you f4ggot');
+    expect(message.body).toBe('you ******');
+    expect(f.rooms.thread(f.owner, f.school.id).messages[0]!.original).toBe('you f4ggot');
+    expect(f.rooms.thread(f.bob, f.school.id).messages[0]!.original).toBeNull();
+    expect(f.rooms.delete(mod, f.school.id, message.id, 'slur').message).toMatchObject({ deletedBy: 'owner', moderatedBy: 'moderator', reason: 'slur' });
+    expect(f.rooms.summary(f.bob)!.lastMessage).toMatchObject({ preview: null, moderatedBy: 'moderator' });
   });
 
   it('counts toward the badge only inside the beta, respects mute and marks read', () => {
