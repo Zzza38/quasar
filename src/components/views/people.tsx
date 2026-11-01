@@ -1,17 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AttentionGap } from '../attention-videos';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { gradeLabel, resolveDay, scheduleForGrade, type PersonalSchedule, type Schedule, type StudentClass } from '@/domain/schedule';
 import { classKey, classMatcher, maybeSameClass, type ClassLike } from '@/domain/class-match';
 import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
-import { useBeta } from '../betas';
 import { Icon } from '../icon';
 import { MemberAvatar } from '../member-avatar';
-import { Button, Callout, Chip, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
+import { Button, Callout, Chip, Eyebrow, Field, Hint, IconButton, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
 import { useClassDirectory } from '../class-name-input';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
@@ -46,7 +44,7 @@ export function LoadingRows({ count = 2 }: { count?: number }) {
 
 /**
  * The People page's data and actions: both lists, the search, the open profile and proof sheets, and the friendship
- * actions with their result messages. The current page and the people-redesign beta layouts share it.
+ * actions with their result messages. The People page (people-now.tsx) renders it.
  */
 export function usePeople(state: AppState) {
   const { context, online } = state;
@@ -130,75 +128,6 @@ export function usePeople(state: AppState) {
     {proofOpen && <ProofSheet accountId={accountId} onClose={() => setProofOpen(false)} onSent={async result => { setProofOpen(false); await state.refresh(); setNotice(verificationNotice(result)); }} />}
   </>;
   return { verification, friends, members, directory, query, setQuery, error, notice, failed, pending, friendsLoading, membersLoading, actions, openProfile: setProfileId, openProof: () => setProofOpen(true), sheets };
-}
-
-export function PeopleView({ state }: { state: AppState }) {
-  const { context, online } = state;
-  const { verification, friends, members, directory, query, setQuery, error, notice, failed, pending, friendsLoading, membersLoading, actions, openProfile: setProfileId, openProof, sheets } = usePeople(state);
-
-  return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
-    <header data-attention-zone="page-header" className="flex items-stretch gap-4">
-      <div className="grid min-w-0 gap-1">
-      <h1>People</h1>
-      <p className="text-sm text-muted-foreground">{context.school.name} · {pluralize(context.school.memberCount, 'member')} · {pluralize(context.community?.friendCount ?? 0, 'friend')}</p>
-      </div>
-      <AttentionGap zone="page-header" minWidth={80} className="flex-1" />
-    </header>
-    {!online && <Callout tone="neutral" icon="cloudOff">Connect to browse schoolmates and manage friends.</Callout>}
-    {(error || failed.friends || failed.members) && <Callout tone="danger" icon="alert" role="alert">{error || failed.friends || failed.members}</Callout>}
-    {notice && <Callout tone="success" icon="check" role="status">{notice}</Callout>}
-
-    <div className="grid items-start gap-5 lg:grid-cols-2">
-      <Section id="verification-title" title="School verification" icon={verification.status === 'verified' ? 'checkCircle' : 'school'}
-        description="Verification proves you go to this school. It unlocks full names between verified members and voting on schedule changes.">
-        {verification.status === 'verified' && <Callout tone="success" icon="checkCircle">You are verified at {context.school.name}{verification.method === 'domain' ? ' through your school email address.' : ' by support.'}</Callout>}
-        {verification.status === 'pending' && <Callout tone="info" icon="clock">Support is reviewing your proof. You will be verified here once it is accepted.</Callout>}
-        {verification.status === 'none' && <>
-          <Panel className="grid gap-2 text-sm">
-            <p><strong>Have a school email?</strong> {(context.school.emailDomains ?? []).length ? `Sign in with an address ending in ${context.school.emailDomains.map(domain => `@${domain}`).join(' or ')} to verify automatically.` : 'Support has not attached a school email domain yet. Ask support to add one, or send proof below.'}</p>
-            <p><strong>No school email?</strong> Send support another proof, such as a link to a photo of your student ID with the number covered, or a school portal screenshot.</p>
-          </Panel>
-          <div><Button variant="primary" icon="checkCircle" disabled={!online} onClick={openProof}>Verify my school</Button></div>
-        </>}
-      </Section>
-
-      <Section id="requests-title" title="Friend requests" icon="users" description="Friends can see your classes and timetable. You can remove a friend at any time, which ends their access immediately.">
-        {friendsLoading && <LoadingRows count={1} />}
-        {friends && friends.incoming.length === 0 && friends.outgoing.length === 0 && <Hint>No requests waiting.</Hint>}
-        {!!friends?.incoming.length && <ul className="grid gap-2" aria-label="Incoming friend requests">{friends.incoming.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-          <Button size="sm" variant="primary" icon="check" disabled={!online || pending} onClick={() => void actions.accept(member)}>Accept</Button>
-          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.decline(member)}>Decline</Button>
-        </MemberRow>)}</ul>}
-        {!!friends?.outgoing.length && <ul className="grid gap-2" aria-label="Sent friend requests">{friends.outgoing.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-          <Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.cancel(member)}>Cancel request</Button>
-        </MemberRow>)}</ul>}
-      </Section>
-    </div>
-
-    <Section id="friends-title" title="Friends" icon="star" description={friends ? pluralize(friends.friends.length, 'friend') : undefined}>
-      {friendsLoading && <LoadingRows />}
-      {friends && friends.friends.length === 0 && <EmptyState icon="users" title="No friends yet">Find schoolmates below and send a request. Once they accept, you can compare classes and see each other’s day.</EmptyState>}
-      {!!friends?.friends.length && <ul className="grid gap-2 md:grid-cols-2" aria-label="Friends">{friends.friends.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-        {/* Icon-only below sm so the friend's name keeps its room; the hidden text keeps the name "Message". */}
-        <Button size="sm" icon="message" className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => state.navigate('messages', { with: member.id })}><span className="max-sm:sr-only">Message</span></Button>
-        <Button size="sm" iconRight="arrowRight" onClick={() => setProfileId(member.id)}>See day</Button>
-      </MemberRow>)}</ul>}
-    </Section>
-
-    <Section id="members-title" title="Schoolmates" icon="search" description="Everyone at this school on Quasar. Full names show only when you are both verified."
-      action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Search schoolmates" placeholder="Search by name" maxLength={80} value={query} onChange={event => setQuery(event.target.value)} /></div>}>
-      {membersLoading && <LoadingRows count={3} />}
-      {members && directory.length === 0 && <Hint>{query.trim() ? 'No other schoolmates match that name.' : members.length ? 'Everyone here is already a friend or has a pending request.' : 'Nobody else has joined yet. Invite your schoolmates.'}</Hint>}
-      {directory.length > 0 && <ul className="grid gap-2 sm:grid-cols-2" aria-label="Schoolmates">{directory.map(member => <MemberRow key={member.id} member={member} onOpen={setProfileId}>
-        <Button size="sm" icon="plus" disabled={!online || pending} onClick={() => void actions.add(member)}>Add friend</Button>
-      </MemberRow>)}</ul>}
-      {!!friends?.blocked.length && <details className="group text-sm"><summary className="inline-flex cursor-pointer list-none items-center gap-1 font-semibold text-muted-foreground marker:hidden [&::-webkit-details-marker]:hidden">Blocked ({friends.blocked.length})<Icon name="chevronDown" size={14} className="transition-transform group-open:rotate-180" /></summary>
-        <ul className="mt-2 grid gap-2">{friends.blocked.map(member => <li key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2"><span>{member.displayName}</span><Button size="sm" variant="ghost" disabled={!online || pending} onClick={() => void actions.unblock(member)}>Unblock</Button></li>)}</ul>
-      </details>}
-    </Section>
-
-    {sheets}
-  </div>;
 }
 
 type Verification = RouterOutput['community']['requestVerification'];
@@ -347,8 +276,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
     setReporting(false); setReason(''); setIncludeChat(true);
   };
   const cancelReport = () => { setReporting(false); setReason(''); setIncludeChat(true); };
-  /** Their classes. The people-redesign beta shows them after the day, the regular sheet before it. */
-  const classesLast = useBeta('people-redesign');
+  /** Their classes, shown after their day. */
   const classesSection = profile?.shared && <Section id="profile-classes" title="Classes" icon="book" description={profile.shared.classes.length ? [pluralize(profile.shared.classes.length, 'class', 'classes'), profile.sameSchool ? `${profile.shared.classes.filter(sharedClass).length} in common with you` : null].filter(Boolean).join(' · ') : undefined}>
     {profile.shared.classes.length === 0 && <Hint>{name} has not added classes yet.</Hint>}
     {profile.shared.classes.length > 0 && <ul className="grid gap-2">{profile.shared.classes.map(cls => {
@@ -379,7 +307,6 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </div>
       {!profile.shared && <Callout tone="neutral" icon="lock">Classes and timetable are shared between friends only.{profile.sameSchool && profile.friendState === 'none' ? ' Send a request to compare schedules.' : ''}</Callout>}
       {profile.shared && <>
-        {!classesLast && classesSection}
         <Section id="profile-day" title={`${name}’s day`} icon="calendar"
           description={day ? (day.closed ? `${dayLabel} · no school` : `${dayLabel} · ${day.cycleDayLabel}${day.periods.length ? ` · ${formatRange(day.periods[0]!.start, day.periods[day.periods.length - 1]!.end)}` : ''}`) : 'Their schedule could not be read.'}
           action={day ? <div className="flex items-center gap-1">
@@ -391,7 +318,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
             : (() => { const own = similarIn(period.periodId, period.class); return own ? prompt(own, period.class) : null; })()} />}
           {day && (day.closed || day.periods.length === 0) && <Hint>{day.closed ? `No school ${dayPhrase(date, state.today)}.` : `Nothing scheduled ${dayPhrase(date, state.today)}.`}</Hint>}
         </Section>
-        {classesLast && classesSection}
+        {classesSection}
       </>}
       <div role="group" aria-label="Manage" className="grid gap-3 border-t pt-4">
         <Eyebrow>Manage</Eyebrow>

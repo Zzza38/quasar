@@ -333,6 +333,8 @@ html[data-rgb-mode] body > div:first-of-type {
   /* Chat (docs/CHAT.md §7): a new bubble rises in; the reduced-motion rule above turns it off. No fill mode on purpose:
      a filled transform animation keeps a stacking context (Chrome), which would paint later bubbles over an earlier
      bubble's action sheet. The end state is the element's own style. */
+  /* A countdown digit rolling up as the seconds tick (Countdown in views/today.tsx). */
+  .countdown-tick { animation: countdown-tick 300ms cubic-bezier(0.2, 0.8, 0.2, 1); }
   .chat-bubble-in { animation: chat-bubble-in 160ms ease-out; }
   /* The thread's wallpaper (docs/CHAT.md §7): school doodles masked out of the text colour at 7%, so both themes get the
      same quiet pattern. It sits on the log's frame, under the scroller, so it stays put while messages scroll. */
@@ -343,6 +345,7 @@ html[data-rgb-mode] body > div:first-of-type {
   /* A quoted message scrolled into view pulses its ring once. */
   .chat-highlight { animation: chat-highlight 1s ease-out; }
   @keyframes chat-highlight { 0%, 60% { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring); } 100% { box-shadow: 0 0 0 2px transparent, 0 0 0 4px transparent; } }
+  @keyframes countdown-tick { from { opacity: 0; transform: translateY(70%); } }
   @keyframes chat-bubble-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   /* A long press opens the message actions, so the OS text-selection callout stays out of the way on touch screens. */
   .chat-bubble { -webkit-touch-callout: none; }

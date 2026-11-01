@@ -23,8 +23,13 @@ export const betaDefinitionSchema = z.object({
   /** False stops new members joining; members already in stay in. */
   open: z.boolean(),
   maxMembers: z.number().int().min(1).max(100_000).nullable(),
-  /** As shown to testers. Matching ignores case, spaces and dashes. */
-  code: z.string().refine(code => MANUAL_CODE_PATTERN.test(normalizeBetaCode(code)), 'A code is 4 to 64 letters and numbers.'),
+  /**
+   * A public beta is listed in Account → Betas and joined with one tap; it has no code. Private betas (the field is
+   * left out, so their entries read the same as before public betas existed) are joined with their code.
+   */
+  public: z.literal(true).optional(),
+  /** A private beta's code, as shown to testers. Matching ignores case, spaces and dashes. */
+  code: z.string().refine(code => MANUAL_CODE_PATTERN.test(normalizeBetaCode(code)), 'A code is 4 to 64 letters and numbers.').optional(),
 }).strict();
 export const betaRegistrySchema = z.object({
   betas: z.array(betaDefinitionSchema),
@@ -34,8 +39,12 @@ export const betaRegistrySchema = z.object({
   const keys = registry.betas.map(beta => beta.key);
   for (const key of new Set(keys.filter((key, index) => keys.indexOf(key) !== index))) context.addIssue({ code: 'custom', message: `Beta "${key}" is defined twice.` });
   for (const key of registry.retired.filter(key => keys.includes(key))) context.addIssue({ code: 'custom', message: `Beta "${key}" is both defined and retired.` });
-  const codes = registry.betas.map(beta => normalizeBetaCode(beta.code));
-  for (const [index, code] of codes.entries()) if (codes.indexOf(code) !== index) context.addIssue({ code: 'custom', message: `Betas "${keys[codes.indexOf(code)]}" and "${keys[index]}" have the same code.` });
+  for (const beta of registry.betas) {
+    if (beta.public && beta.code !== undefined) context.addIssue({ code: 'custom', message: `Beta "${beta.key}" is public, so it has no code.` });
+    if (!beta.public && beta.code === undefined) context.addIssue({ code: 'custom', message: `Beta "${beta.key}" is private, so it needs a code.` });
+  }
+  const codes = registry.betas.map(beta => beta.code === undefined ? undefined : normalizeBetaCode(beta.code));
+  for (const [index, code] of codes.entries()) if (code !== undefined && codes.indexOf(code) !== index) context.addIssue({ code: 'custom', message: `Betas "${keys[codes.indexOf(code)]}" and "${keys[index]}" have the same code.` });
 });
 export type BetaDefinition = z.infer<typeof betaDefinitionSchema>;
 export type BetaRegistry = z.infer<typeof betaRegistrySchema>;
@@ -89,10 +98,10 @@ export function generateBetaCode(): string {
   return `${chars.slice(0, 5)}-${chars.slice(5)}`;
 }
 
-/** The beta this code opens, open or not. */
+/** The private beta this code opens, open or not. Public betas have no code. */
 export function betaForCode(registry: BetaRegistry, code: string): BetaDefinition | undefined {
   const typed = normalizeBetaCode(code);
-  return registry.betas.find(beta => normalizeBetaCode(beta.code) === typed);
+  return registry.betas.find(beta => beta.code !== undefined && normalizeBetaCode(beta.code) === typed);
 }
 
 /* ---------- Edits made by `npm run beta` (scripts/beta.ts). Each returns the new list or throws a readable Error. ---------- */
@@ -109,18 +118,21 @@ function replace(registry: BetaRegistry, key: string, change: (beta: BetaDefinit
 function checkedCode(registry: BetaRegistry, code: string, exceptKey?: string): string {
   const trimmed = code.trim();
   if (!MANUAL_CODE_PATTERN.test(normalizeBetaCode(trimmed))) throw new Error('A code is 4 to 64 letters and numbers. Spaces and dashes are allowed and ignored.');
-  const holder = registry.betas.find(beta => beta.key !== exceptKey && normalizeBetaCode(beta.code) === normalizeBetaCode(trimmed));
+  const holder = registry.betas.find(beta => beta.key !== exceptKey && beta.code !== undefined && normalizeBetaCode(beta.code) === normalizeBetaCode(trimmed));
   if (holder) throw new Error(`Beta "${holder.key}" already uses that code.`);
   return trimmed;
 }
 
-/** A new beta, open, with the given code or a generated one. */
-export function createBeta(registry: BetaRegistry, input: { key: string; name: string; description?: string; maxMembers?: number | null; code?: string }): BetaRegistry {
+const PUBLIC_HAS_NO_CODE = 'Public betas have no code: members join them from Account → Betas.';
+
+/** A new beta, open. A private one gets the given code or a generated one; a public one gets none. */
+export function createBeta(registry: BetaRegistry, input: { key: string; name: string; description?: string; maxMembers?: number | null; code?: string; public?: boolean }): BetaRegistry {
   const key = betaKeySchema.parse(input.key);
   if (registry.betas.some(beta => beta.key === key)) throw new Error(`Beta "${key}" already exists.`);
   if (registry.retired.includes(key)) throw new Error(`"${key}" belonged to a removed beta. Pick a new key so its old members don't get this one.`);
+  if (input.public && input.code !== undefined) throw new Error(PUBLIC_HAS_NO_CODE);
   const beta = betaDefinitionSchema.parse({ key, name: input.name, description: input.description ?? '', open: true, maxMembers: input.maxMembers ?? null,
-    code: input.code === undefined ? generateBetaCode() : checkedCode(registry, input.code) });
+    ...(input.public ? { public: true } : { code: input.code === undefined ? generateBetaCode() : checkedCode(registry, input.code) }) });
   return betaRegistrySchema.parse({ ...registry, betas: [...registry.betas, beta] });
 }
 export function editBeta(registry: BetaRegistry, key: string, details: { name?: string; description?: string; maxMembers?: number | null }): BetaRegistry {
@@ -129,9 +141,19 @@ export function editBeta(registry: BetaRegistry, key: string, details: { name?: 
 export function setBetaOpen(registry: BetaRegistry, key: string, open: boolean): BetaRegistry {
   return replace(registry, key, beta => ({ ...beta, open }));
 }
-/** A new code, given or generated. The old code stops working; members stay in. */
+/** A new code for a private beta, given or generated. The old code stops working; members stay in. */
 export function newBetaCode(registry: BetaRegistry, key: string, code?: string): BetaRegistry {
+  if (find(registry, key).public) throw new Error(PUBLIC_HAS_NO_CODE);
   return replace(registry, key, beta => ({ ...beta, code: code === undefined ? generateBetaCode() : checkedCode(registry, code, key) }));
+}
+/** Lists the beta in Account → Betas and drops its code. Members stay in. */
+export function makeBetaPublic(registry: BetaRegistry, key: string): BetaRegistry {
+  return replace(registry, key, ({ code: _code, ...beta }) => ({ ...beta, public: true }));
+}
+/** Takes the beta off the list in Account → Betas; from now on it is joined with a code, given or generated. Members stay in. */
+export function makeBetaPrivate(registry: BetaRegistry, key: string, code?: string): BetaRegistry {
+  if (!find(registry, key).public) throw new Error(`Beta "${key}" is already private.`);
+  return replace(registry, key, ({ public: _public, ...beta }) => ({ ...beta, code: code === undefined ? generateBetaCode() : checkedCode(registry, code, key) }));
 }
 /** Ends a beta: removes it and retires its key. Memberships of a retired key are ignored. */
 export function removeBeta(registry: BetaRegistry, key: string): BetaRegistry {

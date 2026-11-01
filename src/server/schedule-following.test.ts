@@ -122,6 +122,19 @@ describe('following school corrections', () => {
     await expect(caller.workspace({ personalVersion: PERSONAL_SCHEDULE_CLIENT_VERSION })).resolves.toMatchObject({ entities: [{ data: { cycleDayOverrides: [{ slotChanges: { a: { start: '08:05' } } }] } }] });
   });
 
+  it('reloads bundles without free periods before they read or save a schedule that has them', async () => {
+    const f = fixture();
+    const caller = appRouter.createCaller({ service: f.service, userId: f.student });
+    const base = f.service.entity(f.student, 'personal')!;
+    const marked = { accountId: f.student, mutationId: randomUUID(), id: 'personal', kind: 'personal' as const, base, data: { ...f.read(), freePeriods: ['a'] } };
+    // Version 2 understands sparse overrides but not free periods.
+    await expect(caller.sync({ ...marked, personalVersion: 2 })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', message: OUTDATED_CLIENT_MESSAGE });
+    expect(f.service.entity(f.student, 'personal')).toEqual(base);
+    await expect(caller.sync({ ...marked, personalVersion: PERSONAL_SCHEDULE_CLIENT_VERSION })).resolves.toMatchObject({ status: 'applied' });
+    await expect(caller.workspace({ personalVersion: 2 })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', message: OUTDATED_CLIENT_MESSAGE });
+    await expect(caller.workspace({ personalVersion: PERSONAL_SCHEDULE_CLIENT_VERSION })).resolves.toMatchObject({ entities: [{ data: { freePeriods: ['a'] } }] });
+  });
+
   it('reports concurrent time edits that produce an invalid interval instead of hiding the block', () => {
     const f = fixture();
     const base = f.service.entity(f.student, 'personal')!;

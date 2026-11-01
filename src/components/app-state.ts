@@ -1,6 +1,6 @@
 import type { Workspace } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
-import { personalScheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { personalScheduleSchema, withoutAssignedFreePeriods, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import type { Entity } from '@/domain/sync';
 import { repairTaskDates, taskSchema, type Task } from '@/domain/task';
 import { instantParts } from '@/lib/format';
@@ -133,12 +133,12 @@ export const UNREADABLE_PERSONAL = 'Retry sync before changing your saved schedu
  * The one way the app writes the personal schedule. When the saved copy could not be read on this
  * device, views see an empty fallback; saving that fallback (plus one edit) would replace the
  * student's classes, assignments and overrides on the server, so every save is refused until a
- * sync makes the saved copy readable again.
+ * sync makes the saved copy readable again. A period that gets a class stops being marked free.
  */
 export function personalSaver(readable: boolean, save: (personal: PersonalSchedule) => Promise<void>): (personal: PersonalSchedule) => Promise<void> {
   return async (personal) => {
     if (!readable) throw new Error(UNREADABLE_PERSONAL);
-    await save(personalScheduleSchema.parse(personal));
+    await save(withoutAssignedFreePeriods(personalScheduleSchema.parse(personal)));
   };
 }
 
@@ -157,6 +157,8 @@ export interface AppState {
   online: boolean;
   saveTask: (id: string, task: Task | null) => Promise<void>;
   savePersonal: (personal: PersonalSchedule) => Promise<void>;
+  /** Saves without the schedule lock prompt; only for a change the student just confirmed in its own dialog (FreePeriodPrompt). */
+  saveConfirmed: (personal: PersonalSchedule) => Promise<void>;
   /** Points classes at school directory entries without the schedule lock prompt (see directory-links.ts). */
   linkClasses: (links: DirectoryLink[]) => Promise<void>;
   /** Reloads the workspace from the server; resolves false when that failed (the error is shown by the shell). */
