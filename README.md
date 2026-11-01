@@ -153,6 +153,36 @@ npm run beta -- remove month-grid                      # ends the beta: it switc
 
 A beta is done when its PR merges, unless you decide to keep testing it. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
 
+## Staff roles
+
+The owner is the account in `OWNER_EMAIL` (pinned by `OWNER_GOOGLE_SUB`). Other people can help run Quasar with a staff role. Each role is a fixed set of permissions, defined in `src/domain/staff.ts`:
+
+| Role | Can do |
+| --- | --- |
+| `administrator` | Everything below, plus suspending accounts |
+| `moderator` | Reports and their chat messages, messaging pauses, removals from a school, Global chat moderation, and the appeals against pauses and removals |
+| `support` | Correction requests and beta feedback, verification, member search, opening a member's record, signing a member out and forgetting their browsers |
+| `schedule-editor` | Correction requests, passed proposals, shared school timetables and names, and every school's class directory and lunch menu. Changing a school's email domains needs verification, because domains verify students |
+
+These stay with the owner: the whole audit log, betas, mod overrides, editing a member's profile, classes, tasks, feeds and friendships, and moving a member to another school. Staff see a member's record without tasks or feeds, and without the address and browser on audit rows.
+
+Staff never act on the owner, on other staff or on themselves. Only the owner sees reports that involve staff, whether as reporter, reported member or a sender in a group report's messages, and only the owner sees requests, removals or record entries about staff. Staff need a Google sign-in from the last two hours, like the owner, for the console and for editing other schools' directories and menus. Their actions go to the audit log and journald with their address and browser. In Global chat, staff messages carry a role badge, and a moderation note names the role ("Removed by a moderator").
+
+Chat text that moderation took out is shown by tier: member, then moderator, administrator and owner. Support and schedule editors count as members here. Only the server censors and removes. A member is never sent what was taken out. The server keeps the rest for those allowed to read it (`src/server/moderation.ts`):
+
+- **Slurs.** The message is stored censored, plus the text as sent. Only the owner gets that copy. In the bubble, the owner sees the censored word's asterisks, and hovering or focusing them shows the word.
+- **Removed messages.** Moderators and up see a removed message's text and photo inside its dashed outline when whoever removed it ranks at their tier or below. A member's own deletion counts as a member's. A moderator sees what members and moderators removed, an administrator also sees what administrators removed, and the owner sees everything. Members never see removed text. The text is cleared after 30 days like any deleted text.
+- **Edits.** A Global chat edit keeps the sender's text from before the first edit, under "See original", for the editor's tier and up. The rank kept is the highest that has edited, so a moderator's later edit can't show moderators what an administrator took out. A member's own edit would show to everyone, but members can't edit messages yet.
+
+Roles are granted with a command, never from `/admin`. No role can grant roles in the app, administrator included. Run it in the production checkout for the live site. A change applies at the account's next request, with no deploy or restart. The account must have signed in once, and every change goes to the audit log under the owner as `staff.grant` or `staff.revoke`.
+
+```sh
+npm run staff -- roles                                  # every role and its permissions
+npm run staff -- list                                   # current staff
+npm run staff -- grant friend@example.com administrator # or an account ID; replaces any role they had
+npm run staff -- revoke friend@example.com
+```
+
 ## Continuous integration
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: typecheck, the unit suite and the production build on Node 22 (the engines floor) and Node 24 (what production and the Docker image run), then the Playwright suite in Chromium against the Node 24 build. A separate job builds both Docker images (the standalone app and the `worker` target), checks that the app container answers `/api/health` and that the worker container starts. Failed browser runs upload `test-results/` (traces and screenshots) as an artifact.

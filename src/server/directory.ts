@@ -54,7 +54,7 @@ export class DirectoryService {
   /** Any member may read the directory and add a class to it. `canEdit`: may also change or remove existing ones. */
   private access(accountId: string, schoolId: string, need: 'read' | 'edit' = 'read') {
     const user = this.service.ready(accountId);
-    const admin = this.service.isAdmin(accountId);
+    const admin = this.service.canEditAnySchool(accountId);
     if (user.schoolId !== schoolId && !admin) throw new TRPCError({ code: 'FORBIDDEN', message: 'Only school members can access this class directory.' });
     const school = this.service.school(schoolId);
     const canEdit = admin || (!school.memberLocked && !school.supportLocked && school.memberCount < 10);
@@ -180,12 +180,13 @@ export class DirectoryService {
    * cannot link them again; duplicates stay as they are. Either way the request is resolved.
    */
   resolveMerge(adminId: string, raw: z.input<typeof directoryMergeSchema>) {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const input = directoryMergeSchema.parse(raw);
     const db = this.service.db;
     return db.transaction(() => {
       const request = db.prepare('SELECT * FROM support_requests WHERE id=? AND kind=? AND resolved_at IS NULL').get(input.requestId, MERGE_KIND) as { school_id: string; user_id: string; detail: string } | undefined;
       if (!request) throw new TRPCError({ code: 'NOT_FOUND', message: 'This merge request was already resolved.' });
+      this.service.guardTarget(adminId, request.user_id);
       const detail = mergeDetailSchema.parse(JSON.parse(request.detail));
       const schoolId = request.school_id;
       const row = activeRow(db, schoolId, detail.entryId);
