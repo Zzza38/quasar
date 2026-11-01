@@ -363,7 +363,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <div className="grid gap-3"><Eyebrow>Betas</Eyebrow><BetaSettings accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} /></div>
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
-            {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
+            {/* A context saved before staff roles has no `staff` (see CONTEXT_VERSION); the owner still has isAdmin. */}
+            {(context.isAdmin || !!context.staff) && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
             <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
             {!online && <Hint>Signing out removes this account’s saved data from this device, so it needs a connection to make sure everything is uploaded first.</Hint>}
             {snapshot && snapshot.pending > 0 && online && <Hint>{snapshot.pending === 1 ? '1 change is' : `${snapshot.pending} changes are`} still waiting to sync. You will be asked what to do with them.</Hint>}

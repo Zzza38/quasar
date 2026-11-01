@@ -4,6 +4,7 @@ import { CHAT, chatImageSchema } from '@/domain/chat';
 import type { Service } from './service';
 import { ChatService } from './chat';
 import { targetExists } from './chat-extras';
+import { Reveal } from './moderation';
 
 /** Decode and re-encode every upload, stripping metadata and refusing oversized or invalid images. */
 export async function prepareChatImage(raw: string | undefined): Promise<string | undefined> {
@@ -22,15 +23,20 @@ export async function prepareChatImage(raw: string | undefined): Promise<string 
   }
 }
 
-/** Recheck access on each fetch, including blocks, group membership, join time and deletion. */
+/**
+ * Recheck access on each fetch, including blocks, group membership and join time. A removed message's photo is only
+ * served to a viewer whose tier may read the removal (src/server/moderation.ts), until retention clears it.
+ */
 export function readChatImage(service: Service, viewer: string, kind: 'peer' | 'group' | 'global', seq: number): Buffer | null {
   service.ready(viewer);
   const db = service.db;
   const table = { peer: 'chat_messages', group: 'chat_group_messages', global: 'global_messages' }[kind];
-  const row = db.prepare(`SELECT * FROM ${table} WHERE seq=? AND deleted_at IS NULL`).get(seq) as {
-    seq: number; sender_id: string; thread_id?: string; group_id?: string; image: string | null;
+  const row = db.prepare(`SELECT * FROM ${table} WHERE seq=?`).get(seq) as {
+    seq: number; sender_id: string; thread_id?: string; group_id?: string; image: string | null; body: string;
+    deleted_at: string | null; deleted_by: string | null; deleted_rank: string | null;
   } | undefined;
   if (!row?.image) return null;
+  if (row.deleted_at && !new Reveal(service, viewer).removed(row, kind)?.image) return null;
   if (kind === 'peer') {
     const thread = db.prepare('SELECT user_low, user_high FROM chat_threads WHERE id=?').get(row.thread_id) as { user_low: string; user_high: string };
     if (viewer !== thread.user_low && viewer !== thread.user_high) return null;

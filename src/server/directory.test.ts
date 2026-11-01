@@ -230,7 +230,7 @@ describe('merge requests for support', () => {
     expect(f.directory.list(f.student, f.school.id).classes[0]).toMatchObject({ name: litE.name, aliases: [lit] });
     expect(f.open()).toHaveLength(0);
     expect(() => f.directory.resolveMerge(f.owner, { requestId: request.id, decision: 'merge' })).toThrow('already resolved');
-    expect(() => f.directory.resolveMerge(f.student, { requestId: request.id, decision: 'merge' })).toThrow('Owner access');
+    expect(() => f.directory.resolveMerge(f.student, { requestId: request.id, decision: 'merge' })).toThrow('Staff access');
   });
 
   it('merging folds a duplicate entry in and moves its students’ classes', () => {

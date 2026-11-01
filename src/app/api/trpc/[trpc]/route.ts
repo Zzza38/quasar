@@ -49,7 +49,9 @@ async function handler(req: Request) {
     createContext: async () => {
       const { userId, authAt } = await getAuth();
       const service = new Service(getDb());
-      service.request = requestInfo(req);
+      // authAt lets member procedures that staff can also use (the class directory, the lunch menu) apply the
+      // support tools' recent sign-in rule (Service.canEditAnySchool).
+      service.request = { ...requestInfo(req), authAt };
       return { userId, authAt, service };
     },
     // Procedure name and error code only: inputs may hold private schedule data.
