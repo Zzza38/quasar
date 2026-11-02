@@ -379,7 +379,8 @@ test('school chat (beta): the school’s members share a room beside the global 
   await bob.getByRole('radiogroup', { name: 'Room' }).getByRole('radio', { name: 'Global' }).click();
   await expect(bob).toHaveURL(/room=global/);
   const bobGlobal = bob.getByRole('log', { name: 'Global chat messages' });
-  await expect(bobGlobal).toBeVisible();
+  // Attached, not visible: run alone, the global room is empty and its log has no height.
+  await expect(bobGlobal).toBeAttached();
   await expect(bobGlobal.getByText('who has the bio notes', { exact: true })).toHaveCount(0);
   for (const scheme of ['light', 'dark'] as const) {
     await bob.emulateMedia({ colorScheme: scheme });
