@@ -64,10 +64,16 @@ test('countdown slide beta: the forms slide without fading, digits roll, and the
   await expect.poll(() => placed(secondsForm)).toBe('1');
   expect((await countdown.boundingBox())!.width).toBe(box.width);
   // The changed digit rolls up, with the old one riding above it.
+  // The old digit only rides along for the 360ms roll, so watch for it every frame from before the tick.
+  const rolled = page.waitForFunction(() => [...document.querySelectorAll('[data-shown="true"] .countdown-roll')].some((char) => char.textContent === '32'), undefined, { polling: 'raf' });
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:38Z'));
   await expect(countdown).toHaveAccessibleName('Ends in 8:22 (minutes and seconds)');
-  await expect(secondsForm.locator('.countdown-roll')).toHaveText('32');
+  await rolled;
   await page.mouse.move(0, 0);
   await expect.poll(() => placed(secondsForm)).toBe('0');
   await expect(countdown).toHaveAccessibleName('Ends in 9 min');
+  // The hidden form keeps time without rolling: Chrome paints a digit mid-roll outside the clip, under the minutes.
+  await page.clock.setFixedTime(new Date('2026-09-17T12:51:39Z'));
+  await expect.poll(() => secondsForm.textContent()).toBe('8:21');
+  await expect(secondsForm.locator('.countdown-roll')).toHaveCount(0);
 });
