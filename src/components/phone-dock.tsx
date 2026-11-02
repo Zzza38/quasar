@@ -86,12 +86,16 @@ export function PhoneDock({ view, counts, last, onTab }: { view: View; counts: D
     <div className="glass mx-3 grid grid-cols-[1fr_1fr_4.25rem_1fr_1fr] items-center rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
       {tab('schedule', view === 'schedule', 'Schedule', 'calendar')}
       {tab('tasks', view === 'tasks', 'Tasks', 'tasks', counts.taskCount, DOCK_COUNT_IDS.tasks)}
-      {/* The raised Today button: a flat card fill and a border, the soft accent when active, never a glow. */}
+      {/* The Today button: a circle that rises a little above the dock, labelled like the other tabs. Flat card fill
+          and a border, the soft accent when active, never a glow. The negative margin keeps the row at tab height. */}
       <a href="#today" aria-label="Today" title="Today" aria-current={onToday ? 'page' : undefined}
         onClick={(event: MouseEvent<HTMLAnchorElement>) => { if (event.button === 0) onTab(onToday); }}
-        className={cn('-mt-7 grid size-14 place-self-center place-items-center rounded-full border shadow-float no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        className={cn('group/today -mt-5 flex flex-col items-center gap-0.5 self-end pb-1.5 text-[10.5px] font-bold no-underline outline-none hover:no-underline', onToday ? 'text-primary-soft-foreground' : 'text-muted-foreground')}>
+        <span className={cn('grid size-12 place-items-center rounded-full border shadow-float transition-colors group-focus-visible/today:ring-2 group-focus-visible/today:ring-ring group-focus-visible/today:ring-offset-2 group-focus-visible/today:ring-offset-background',
           onToday ? 'border-primary/40 bg-primary-soft text-primary-soft-foreground' : 'border-border bg-card text-foreground')}>
-        <Icon name="home" size={23} strokeWidth={onToday ? 2.4 : 2} />
+          <Icon name="home" size={22} strokeWidth={onToday ? 2.4 : 2} />
+        </span>
+        <span>Today</span>
       </a>
       {tab(classesActive ? view : dockTarget('classes', last, 0), classesActive, 'Classes', 'book')}
       {tab(peopleActive ? view : dockTarget('people', last, counts.chatCount), peopleActive, 'People', 'users', peopleCount, DOCK_COUNT_IDS.people)}
