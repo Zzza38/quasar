@@ -52,12 +52,12 @@ export class Reveal {
     return !row.deleted_at && canSeeCensored(this.rank) ? row.original ?? null : null;
   }
   /** A removed message's text and photo, when the viewer's tier may read it and retention has not cleared them. */
-  removed(row: RemovableRow, kind: 'peer' | 'group' | 'global'): RemovedText | null {
+  removed(row: RemovableRow, kind: 'peer' | 'group' | 'global' | 'school'): RemovedText | null {
     if (!row.deleted_at || (!row.body && !row.image)) return null;
     if (!canSeeRemoved(this.rank, removerRank(this.service, row))) return null;
     return { body: row.body, original: canSeeCensored(this.rank) ? row.original ?? null : null, image: row.image ? `/api/chat/images/${kind}/${row.seq}` : null };
   }
-  /** A Global message's text from before its first edit, when the viewer's tier may read it. */
+  /** A room message's (Global or school) text from before its first edit, when the viewer's tier may read it. */
   editedFrom(row: EditableRow & { deleted_at: string | null; body: string; image: string | null }): RevealedText | null {
     if (!row.edited_at || !row.edited_from || (row.deleted_at && !row.body && !row.image)) return null;
     if (!canSeeEdited(this.rank, editorRank(row))) return null;

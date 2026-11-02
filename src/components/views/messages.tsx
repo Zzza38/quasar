@@ -24,16 +24,22 @@ import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
 import { Toggle } from '../ui/toggle';
 import { Button as MenuRow } from '../ui/button';
 import { STAFF_LABELS, STAFF_NOUNS, type StaffRank } from '@/domain/staff';
-import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatThread, type GlobalSummary, type GroupInfo, type GroupSummary, type Outgoing, type Receipt } from '../use-chat';
+import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatTarget, type ChatThread, type GlobalSummary, type GroupInfo, type GroupSummary, type Outgoing, type Receipt, type SchoolSummary } from '../use-chat';
 
 type OpenRow = Extract<ChatInboxRow, { state: 'open' }>;
 type ClosedRow = Extract<ChatInboxRow, { state: 'closed' }>;
 type Friend = OpenRow['peer'];
-type Mode = 'peer' | 'group' | 'global';
+type Mode = 'peer' | 'group' | 'global' | 'school';
+type RoomKind = 'global' | 'school';
 
-/** `#messages?room=global` opens the global chat (docs/CHAT.md §11); `?group=<id>` a friend group (§12). */
+/**
+ * `#messages?room=global` opens the global chat (docs/CHAT.md §11), `?room=school` the member's school chat (§16),
+ * and `?group=<id>` a friend group (§12).
+ */
 const GLOBAL_ROOM = 'global';
+const SCHOOL_ROOM = 'school';
 const GLOBAL_NAME = 'Global chat';
+const SCHOOL_NAME = 'School chat';
 const groupKey = (groupId: string) => `group:${groupId}`;
 
 /** Gap after which a new run (and a time header) starts, even for the same sender. */
@@ -214,9 +220,10 @@ function MessageText({ text, mine, original }: { text: string; mine: boolean; or
 export function MessagesView({ state }: { state: AppState }) {
   const withId = state.params.get('with');
   const groupId = state.params.get('group');
-  const inRoom = state.params.get('room') === GLOBAL_ROOM;
-  /** The open conversation's key: a friend's id, "group:<id>", "global", or null for the list alone. */
-  const openKey = withId ?? (groupId ? groupKey(groupId) : inRoom ? GLOBAL_ROOM : null);
+  const roomParam = state.params.get('room');
+  const room: RoomKind | null = roomParam === GLOBAL_ROOM ? 'global' : roomParam === SCHOOL_ROOM ? 'school' : null;
+  /** The open conversation's key: a friend's id, "group:<id>", "global", "school", or null for the list alone. */
+  const openKey = withId ?? (groupId ? groupKey(groupId) : room);
   const phone = useIsMobile();
   // Phones show the list or a thread; desktop shows both panes.
   const listMounted = !phone || !openKey;
@@ -318,8 +325,9 @@ export function MessagesView({ state }: { state: AppState }) {
             onChange={onThreadChange} onClosed={onThreadClosed} onReportClosed={setReporting} onReopen={reopen} onLeave={backToList} />
         : groupId
           ? <GroupThread key={groupId} state={state} groupId={groupId} phone={phone} nudge={nudge} friends={friends} onChange={onThreadChange} onLeave={backToList} />
-          : inRoom
-            ? <GlobalThread key={GLOBAL_ROOM} state={state} phone={phone} nudge={nudge} onChange={onThreadChange} />
+          // Keyed by school too: a school switch in another tab must start the room fresh, never merge two schools' pages.
+          : room
+            ? <RoomThread key={room === 'school' ? `school:${state.context.school.id}` : room} kind={room} state={state} phone={phone} nudge={nudge} onChange={onThreadChange} />
             : <div className="hidden min-h-0 place-items-center rounded-3xl bg-card text-sm text-muted-foreground shadow-card ring-1 ring-foreground/[0.06] lg:grid">Pick a chat.</div>}
     </div>
     {reporting && <ReportModal state={state} name={reporting.displayName} target={{ kind: 'peer', userId: reporting.userId, mode: 'closed' }} onClose={() => setReporting(null)}
@@ -354,6 +362,7 @@ function ChatList({ state, inbox, nudge, selected, onReport, onReopen, onNewGrou
       </div>
       <ul className="grid" aria-label="Groups">
         <GlobalChatRow summary={data.global} state={state} selected={selected === GLOBAL_ROOM} />
+        {data.school && <SchoolChatRow summary={data.school} state={state} selected={selected === SCHOOL_ROOM} />}
         {data.groups.map((group) => <GroupChatRow key={group.id} group={group} state={state} selected={selected === groupKey(group.id)} />)}
       </ul>
     </section>}
@@ -392,6 +401,13 @@ function previewText(row: OpenRow): string {
 function globalPreview(summary: GlobalSummary): string {
   const last = summary.lastMessage;
   if (!last) return 'Everyone on Quasar can post here';
+  if (last.preview === null) return last.deletedBy === 'owner' ? `Removed by ${STAFF_NOUNS[last.moderatedBy ?? 'owner']}` : 'Message deleted';
+  return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
+}
+
+function schoolPreview(summary: SchoolSummary): string {
+  const last = summary.lastMessage;
+  if (!last) return `Everyone at ${summary.schoolName} can post here`;
   if (last.preview === null) return last.deletedBy === 'owner' ? `Removed by ${STAFF_NOUNS[last.moderatedBy ?? 'owner']}` : 'Message deleted';
   return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
 }
@@ -437,6 +453,19 @@ function GlobalChatRow({ summary, state, selected }: { summary: GlobalSummary; s
       onClick={() => state.navigate('messages', { room: GLOBAL_ROOM })} className={ROW}>
       <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-full bg-primary-soft text-primary-soft-foreground ring-1 ring-inset ring-primary/15"><Icon name="users" size={20} /></span>
       <RowBody id={id} name={GLOBAL_NAME} unread={summary.unread} muted={summary.muted} time={summary.lastMessage ? chatTime(summary.lastMessage.createdAt, state.timeZone, state.now) : null} preview={globalPreview(summary)} />
+    </button>
+  </li>;
+}
+
+/** The member's school room's row, right under the global room's. */
+function SchoolChatRow({ summary, state, selected }: { summary: SchoolSummary; state: AppState; selected: boolean }) {
+  const id = useId();
+  return <li className={ROW_ITEM}>
+    <button type="button" data-chat-row={SCHOOL_ROOM} aria-label={`Open ${SCHOOL_NAME}, ${summary.schoolName}`} aria-describedby={describedBy(id, ['school', 'preview', summary.lastMessage && 'time', summary.unread > 0 && 'unread', summary.muted && 'muted'])} aria-current={selected ? 'true' : undefined}
+      onClick={() => state.navigate('messages', { room: SCHOOL_ROOM })} className={ROW}>
+      <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-full bg-primary-soft text-primary-soft-foreground ring-1 ring-inset ring-primary/15"><Icon name="school" size={20} /></span>
+      <RowBody id={id} name={SCHOOL_NAME} unread={summary.unread} muted={summary.muted} time={summary.lastMessage ? chatTime(summary.lastMessage.createdAt, state.timeZone, state.now) : null} preview={schoolPreview(summary)}
+        extra={<span id={`${id}-school`} className="min-w-0 truncate text-[12px] text-muted-foreground">{summary.schoolName}</span>} />
     </button>
   </li>;
 }
@@ -638,7 +667,7 @@ function Thread({ state, userId, phone, nudge, fallbackName, closedRow, onChange
 
     {modal?.kind === 'delete' && <ConfirmModal title="Delete for both of you?" description={`It disappears from this chat now. Support can still see it for ${CHAT.deletedTextDays} days if this chat is reported.`} confirm="Delete" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.messageId); setModal(null); }} />}
-    {modal?.kind === 'block' && <ConfirmModal title={`Block ${name}?`} description="You won’t see each other in People, their Global chat and group messages are hidden from you, and this chat closes." confirm="Block" online={state.online}
+    {modal?.kind === 'block' && <ConfirmModal title={`Block ${name}?`} description={`You won’t see each other in People, their Global chat, school chat and group messages are hidden from you, and this chat closes.`} confirm="Block" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => {
         await api.community.block.mutate({ accountId: state.context.user.id, userId, blocked: true });
         setModal(null);
@@ -826,27 +855,42 @@ function RenameGroupModal({ state, group, onClose, onRenamed }: { state: AppStat
   </Modal>;
 }
 
-/* ---------- Global chat thread ---------- */
+/* ---------- Room threads: the global chat and the school chat ---------- */
 
-type GlobalModal = { kind: 'delete'; message: ChatMessage } | { kind: 'edit'; message: ChatMessage } | null;
+type RoomModal = { kind: 'delete'; message: ChatMessage } | { kind: 'edit'; message: ChatMessage } | null;
 
 /**
- * The global room (§11). No block, report or "closed" state: it is public, and the owner moderates it
- * directly with Edit and Delete on any message, each with a reason everyone can read.
+ * A room: the global chat (§11) or the member's school chat (§16). No block, report or "closed" state for the global
+ * room: it is public, and the owner moderates it directly with Edit and Delete on any message, each with a reason
+ * everyone can read. The school room works the same for one school's members; it closes for someone who left the
+ * school. The header switches between the two rooms.
  */
-function GlobalThread({ state, phone, nudge, onChange }: { state: AppState; phone: boolean; nudge: ChatNotifications; onChange: () => void }) {
-  const chat = useChatThread(state, GLOBAL_TARGET, { onChange });
-  const [modal, setModal] = useState<GlobalModal>(null);
+function RoomThread({ state, kind, phone, nudge, onChange }: { state: AppState; kind: RoomKind; phone: boolean; nudge: ChatNotifications; onChange: () => void }) {
+  const schoolId = state.context.school.id;
+  const target = useMemo<ChatTarget>(() => (kind === 'school' ? { kind: 'school', schoolId } : GLOBAL_TARGET), [kind, schoolId]);
+  const chat = useChatThread(state, target, { onChange });
+  const [modal, setModal] = useState<RoomModal>(null);
   const [actionError, setActionError] = useState('');
   const [muting, setMuting] = useState(false);
   const canModerate = chat.room?.canModerate ?? false;
+  const schoolName = chat.school?.name ?? state.context.school.name;
+  const name = kind === 'school' ? SCHOOL_NAME : GLOBAL_NAME;
   // How the note under a message this viewer moderates names them ("Removed by a moderator").
   const moderator = STAFF_NOUNS[chat.room?.moderator ?? 'owner'];
   const back = <BackButton state={state} />;
   const section = useThreadFocus(phone);
-  const frame = (children: ReactNode) => <section ref={section} tabIndex={-1} aria-label={GLOBAL_NAME} className={FRAME}>{children}</section>;
+  const frame = (children: ReactNode) => <section ref={section} tabIndex={-1} aria-label={kind === 'school' ? `${SCHOOL_NAME}, ${schoolName}` : GLOBAL_NAME} className={FRAME}>{children}</section>;
+  /** Both rooms side by side: the switch sits in the header, so the two chats read as one place. */
+  const switcher = <Segmented size="sm" label="Room" value={kind} className="shrink-0" onChange={(next) => state.navigate('messages', { room: next === 'school' ? SCHOOL_ROOM : GLOBAL_ROOM })}
+    options={[{ value: 'global', label: 'Global' }, { value: 'school', label: 'School' }]} />;
 
-  if (chat.status !== 'ready' || !chat.room) return frame(<ThreadLoading state={state} chat={chat} back={back} title={<strong className="truncate text-[15px] font-bold">{GLOBAL_NAME}</strong>} />);
+  if (chat.status === 'closed') return frame(<>
+    <div className="flex items-center gap-2 lg:px-4 lg:pt-3">{back}<strong className="truncate text-[15px] font-bold">{name}</strong><span className="ml-auto">{switcher}</span></div>
+    <div className="grid gap-3 py-4 lg:px-4">
+      <Callout tone="neutral" icon="school" role="status">You’re not in this school’s chat anymore. Each school’s chat is for the people at that school.</Callout>
+    </div>
+  </>);
+  if (chat.status !== 'ready' || !chat.room) return frame(<ThreadLoading state={state} chat={chat} back={back} title={<><strong className="truncate text-[15px] font-bold">{name}</strong><span className="ml-auto">{switcher}</span></>} />);
 
   const members = chat.room.members;
   const toggleMute = async () => {
@@ -854,32 +898,36 @@ function GlobalThread({ state, phone, nudge, onChange }: { state: AppState; phon
     try { await chat.setMuted(!chat.muted); } catch (err) { setActionError(errorMessage(err)); } finally { setMuting(false); }
   };
   const mine = modal?.kind === 'delete' && modal.message.fromMe;
+  const everyone = kind === 'school' ? `everyone at ${schoolName}` : 'everyone';
 
   return frame(<>
     <header className={HEADER}>
       {back}
-      <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-full bg-primary-soft text-primary-soft-foreground ring-1 ring-inset ring-primary/15"><Icon name="users" size={18} /></span>
+      <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-full bg-primary-soft text-primary-soft-foreground ring-1 ring-inset ring-primary/15"><Icon name={kind === 'school' ? 'school' : 'users'} size={18} /></span>
       <div className="grid min-w-0 flex-1 gap-0.5">
-        <strong className="truncate text-[16px] font-bold leading-tight">{GLOBAL_NAME}</strong>
+        <strong className="truncate text-[16px] font-bold leading-tight">{kind === 'school' ? schoolName : GLOBAL_NAME}</strong>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <Chip tone="neutral" icon="users" className="min-h-5 px-2 text-[11px]">{members === 1 ? '1 member' : `${members} members`}</Chip>
           {canModerate && <Chip tone="success" icon="checkCircle" className="min-h-5 px-2 text-[11px]">You moderate this room</Chip>}
           {chat.reconnecting && <Hint role="status" title={liveTitle(chat.live)}>Reconnecting…</Hint>}
         </div>
       </div>
+      <span className="max-sm:hidden">{switcher}</span>
       <NotificationNudgeChip nudge={nudge} />
       <IconButton label={chat.muted ? 'Unmute notifications' : 'Mute notifications'} icon={chat.muted ? 'bell' : 'bellOff'} className="rounded-full" aria-busy={muting || undefined} disabled={!state.online || muting} onClick={() => void toggleMute()} />
     </header>
+    {/* Narrow phones have no room for the switch in the header row, so it gets its own line under it. */}
+    <div className={cn(BAR, 'flex justify-center border-b border-foreground/[0.07] py-1.5 sm:hidden')}>{switcher}</div>
     {actionError && <div className="grid gap-2 pt-3 lg:px-4"><Callout tone="danger" icon="alert" role="alert">{actionError}</Callout></div>}
-    <MessageLog state={state} chat={chat} name="everyone" mode="global" canModerate={canModerate}
+    <MessageLog state={state} chat={chat} name={kind === 'school' ? schoolName : 'everyone'} mode={kind} canModerate={canModerate}
       onDelete={(message) => setModal({ kind: 'delete', message })} onEdit={(message) => setModal({ kind: 'edit', message })} />
     <ComposerNudge nudge={nudge} />
     {chat.pause
       ? <PausedComposer pause={chat.pause} state={state} onAppealed={() => { chat.pollNow(); onChange(); }} />
-      : <Composer key={GLOBAL_ROOM} chat={chat} name="everyone" online={state.online} filtered />}
+      : <Composer key={kind} chat={chat} name={everyone} online={state.online} filtered />}
 
     {modal?.kind === 'delete' && (mine
-      ? <ConfirmModal title="Delete for everyone?" description="It disappears from the global chat now." confirm="Delete" online={state.online}
+      ? <ConfirmModal title="Delete for everyone?" description={`It disappears from the ${kind === 'school' ? 'school' : 'global'} chat now.`} confirm="Delete" online={state.online}
           onClose={() => setModal(null)} onConfirm={async () => { await chat.deleteMessage(modal.message.id); setModal(null); }} />
       : <ReasonModal title={`Remove ${senderName(modal.message)}’s message?`} description={`Everyone sees “Removed by ${moderator}” and your reason in its place.`} confirm="Remove" online={state.online}
           onClose={() => setModal(null)} onConfirm={async (reason) => { await chat.deleteMessage(modal.message.id, reason); setModal(null); }} />)}
@@ -1108,7 +1156,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
   };
 
   const empty = messages.length === 0 && outgoing.length === 0;
-  const logLabel = mode === 'global' ? 'Global chat messages' : mode === 'group' ? `Messages in ${name}` : `Messages with ${name}`;
+  const logLabel = mode === 'global' ? 'Global chat messages' : mode === 'school' ? `School chat messages, ${name}` : mode === 'group' ? `Messages in ${name}` : `Messages with ${name}`;
   return <div className="chat-wallpaper relative flex min-h-0 flex-1 flex-col">
     {/* The side padding leaves room for the bubble tails, which hang 8 px past their bubble. */}
     <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-2.5 py-3 lg:px-5"
@@ -1121,6 +1169,8 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
         <p className="text-[15px] font-bold">No messages yet.</p>
         {mode === 'global'
           ? <Hint className="max-w-[40ch] text-[13px]">Everyone on Quasar can read and post here. Swearing is fine; slurs get censored. Moderators can edit or remove any message.</Hint>
+          : mode === 'school'
+            ? <Hint className="max-w-[40ch] text-[13px]">Everyone at {name} can read and post here, and nobody from other schools. Swearing is fine; slurs get censored. Moderators can edit or remove any message.</Hint>
           : mode === 'group'
             ? <Hint className="max-w-[40ch] text-[13px]">Only the people in {name} can read this. New members see messages from when they joined. Support sees messages only if someone reports them.</Hint>
             : <Hint className="max-w-[40ch] text-[13px]">Only you and {name} can read this chat. Support sees messages only if one of you reports them.</Hint>}

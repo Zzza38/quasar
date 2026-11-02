@@ -575,11 +575,30 @@ function migrate(db: Db): void {
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
   `);
 
-  // Migration 23: durable visibility reset thresholds, shared by every tab and server process.
+  // Migration 23: durable visibility reset thresholds, shared by every tab and server process. Migration 29 widened the
+  // kinds to 'school'. SQLite cannot widen a CHECK in place, so an older table is rebuilt around its rows; the block
+  // triggers that write to it are dropped first and recreated just below.
+  const resetsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_visibility_resets'").get() as { sql: string } | undefined;
+  if (resetsTable && !resetsTable.sql.includes("'school'")) {
+    db.exec(`
+      DROP TRIGGER IF EXISTS blocks_chat_insert;
+      DROP TRIGGER IF EXISTS blocks_chat_delete;
+      CREATE TABLE chat_visibility_resets_next (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('global','group','school')),
+        scope TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        PRIMARY KEY(user_id, kind, scope)
+      );
+      INSERT INTO chat_visibility_resets_next SELECT user_id, kind, scope, revision FROM chat_visibility_resets;
+      DROP TABLE chat_visibility_resets;
+      ALTER TABLE chat_visibility_resets_next RENAME TO chat_visibility_resets;
+    `);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_visibility_resets (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK(kind IN ('global','group')),
+      kind TEXT NOT NULL CHECK(kind IN ('global','group','school')),
       scope TEXT NOT NULL,
       revision INTEGER NOT NULL,
       PRIMARY KEY(user_id, kind, scope)
@@ -708,6 +727,80 @@ function migrate(db: Db): void {
   addColumn('global_messages', 'edited_from');
   addColumn('global_messages', 'edited_rank');
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'))");
+
+  // Migration 30: one school chat per school (docs/CHAT.md §16). The same shape as the global room's tables (with
+  // migration 29's moderation columns), keyed by school: everyone whose users.school_id is the school reads and posts there.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS school_chats (
+      id TEXT PRIMARY KEY REFERENCES schools(id),
+      revision INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS school_messages (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      school_id TEXT NOT NULL REFERENCES school_chats(id),
+      sender_id TEXT NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      image TEXT,
+      created_at TEXT NOT NULL,
+      edited_at TEXT,
+      deleted_at TEXT,
+      deleted_by TEXT CHECK (deleted_by IN ('sender','owner')),
+      reason TEXT,
+      revision INTEGER NOT NULL,
+      reply_to_seq INTEGER,
+      original TEXT,
+      deleted_rank TEXT,
+      edited_from TEXT,
+      edited_rank TEXT,
+      UNIQUE(sender_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS school_messages_school_seq ON school_messages(school_id, seq);
+    CREATE INDEX IF NOT EXISTS school_messages_revision ON school_messages(school_id, revision);
+    CREATE INDEX IF NOT EXISTS school_messages_sender_time ON school_messages(sender_id, created_at);
+    CREATE INDEX IF NOT EXISTS school_messages_created ON school_messages(created_at);
+    CREATE INDEX IF NOT EXISTS school_messages_reply ON school_messages(reply_to_seq);
+    CREATE TABLE IF NOT EXISTS school_members (
+      school_id TEXT NOT NULL REFERENCES school_chats(id),
+      user_id TEXT NOT NULL REFERENCES users(id),
+      last_read_seq INTEGER NOT NULL DEFAULT 0,
+      notified_seq INTEGER NOT NULL DEFAULT 0,
+      muted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(school_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS school_reactions (
+      message_seq INTEGER NOT NULL REFERENCES school_messages(seq) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+      PRIMARY KEY(message_seq, user_id)
+    );
+    CREATE TRIGGER IF NOT EXISTS school_messages_reply_changed AFTER UPDATE OF body, deleted_at ON school_messages
+    WHEN NEW.body<>OLD.body OR NEW.deleted_at IS NOT OLD.deleted_at BEGIN
+      UPDATE school_messages SET revision=max(revision, NEW.revision) WHERE reply_to_seq=NEW.seq AND school_id=OLD.school_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS school_messages_reply_removed AFTER DELETE ON school_messages
+    WHEN EXISTS(SELECT 1 FROM school_messages WHERE reply_to_seq=OLD.seq AND school_id=OLD.school_id)
+      AND EXISTS(SELECT 1 FROM school_chats WHERE id=OLD.school_id) BEGIN
+      UPDATE school_chats SET revision=revision+1 WHERE id=OLD.school_id;
+      UPDATE school_messages SET revision=(SELECT revision FROM school_chats WHERE id=OLD.school_id)
+        WHERE reply_to_seq=OLD.seq AND school_id=OLD.school_id;
+    END;
+  `);
+  // A block or unblock resets the blocker's view of their own school's room, as migration 23 does for the global room.
+  for (const [operation, row] of [['INSERT', 'NEW'], ['DELETE', 'OLD']] as const) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS blocks_school_chat_${operation.toLowerCase()} AFTER ${operation} ON blocks
+      WHEN EXISTS(SELECT 1 FROM school_chats s JOIN users u ON u.school_id=s.id WHERE u.id=${row}.blocker_id) BEGIN
+      UPDATE school_chats SET revision=revision+1 WHERE id=(SELECT school_id FROM users WHERE id=${row}.blocker_id);
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        SELECT ${row}.blocker_id,'school',s.id,s.revision FROM school_chats s JOIN users u ON u.school_id=s.id WHERE u.id=${row}.blocker_id
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE school_messages SET revision=(SELECT revision FROM school_chats WHERE id=school_messages.school_id)
+        WHERE school_id=(SELECT school_id FROM users WHERE id=${row}.blocker_id)
+          AND (sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM school_messages WHERE sender_id=${row}.blocked_id));
+    END`);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

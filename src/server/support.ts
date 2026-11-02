@@ -5,6 +5,7 @@ import { stampCompletion, taskSchema, type Task } from '@/domain/task';
 import type { Entity } from '@/domain/sync';
 import { CalendarService, listSubscriptions, type FeedSubscription } from './calendar';
 import { CommunityService } from './community';
+import { seedSchoolMember } from './global-chat';
 import { namesSchema, reservedDisplayName, type Service } from './service';
 import { readEntity, writeEntity } from './entities';
 import { Reveal } from './moderation';
@@ -321,6 +322,7 @@ export class SupportService {
         const school = this.service.school(input.schoolId);
         if (this.community.isBanned(input.userId, school.id)) fail('CONFLICT', 'Support removed this member from that school. Lift the removal first.');
         this.db.prepare('UPDATE users SET school_id=?, reviewed_version=? WHERE id=?').run(school.id, school.version, input.userId);
+        seedSchoolMember(this.db, input.userId, school.id);
         this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);
         const existing = readEntity(this.db, input.userId, 'personal');
         const personal = existing && !existing.deleted ? personalScheduleSchema.safeParse(existing.data) : null;

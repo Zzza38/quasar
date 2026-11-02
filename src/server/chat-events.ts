@@ -1,4 +1,4 @@
-export type ChatEvent = { kind: 'peer' | 'group' | 'global'; key: string };
+export type ChatEvent = { kind: 'peer' | 'group' | 'global' | 'school'; key: string };
 type Subscriber = { receive: (event: ChatEvent) => void; close: (reason: 'capacity') => void };
 const globals = globalThis as typeof globalThis & { quasarChatSubscribers?: Map<string, Set<Subscriber>> };
 const subscribers = globals.quasarChatSubscribers ??= new Map<string, Set<Subscriber>>();
