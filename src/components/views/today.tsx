@@ -218,8 +218,9 @@ function Countdown({ label, target, minutes }: { label: string; target: string; 
     <small aria-hidden="true" className="mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white">{label}</small>
     {slide
       ? <>{/* Clipped, so a form slides in and out of view instead of fading; no pointer events, so a hidden form's
-          characters can't catch the pointer and turn the hover on and off. */}
-        <span aria-hidden="true" className="pointer-events-none -mx-[0.08em] -my-[0.1em] inline-grid justify-items-end overflow-hidden px-[0.08em] py-[0.1em]">
+          characters can't catch the pointer and turn the hover on and off. clip-path rather than overflow alone:
+          Chrome paints a digit mid-roll outside an overflow clip. */}
+        <span aria-hidden="true" className="pointer-events-none -mx-[0.08em] -my-[0.1em] inline-grid justify-items-end overflow-hidden px-[0.08em] py-[0.1em] [clip-path:inset(0)]">
           <Cascade text={compact} shown={!precise} away="-translate-y-[130%]" />
           <Cascade text={exact} shown={precise} away="translate-y-[130%]" />
         </span></>
@@ -238,7 +239,7 @@ function Cascade({ text, shown, away }: { text: string; shown: boolean; away: st
   const chars = [...text];
   return <span className="col-start-1 row-start-1" data-shown={shown}>
     {chars.map((char, index) => <span key={chars.length - index} style={{ transitionDelay: `${index * 28}ms` }}
-      className={cn('inline-block transition-[translate] duration-[320ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', !shown && away)}><Roll char={char} /></span>)}
+      className={cn('inline-block transition-[translate] duration-[320ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', !shown && away)}><Roll char={char} still={!shown} /></span>)}
   </span>;
 }
 
@@ -253,12 +254,15 @@ function FadeCascade({ text, shown, away, roll }: { text: string; shown: boolean
   </span>;
 }
 
-/** A character that rolls up like an odometer when it changes: the old one leaves upward as the new one rises in. */
-function Roll({ char }: { char: string }) {
-  const [state, setState] = useState({ char, previous: char, turns: 0 });
-  if (state.char !== char) setState({ char, previous: state.char, turns: state.turns + 1 });
-  return <span key={state.turns} className={cn('relative inline-block', state.turns > 0 && 'countdown-roll')}>
-    {state.turns > 0 && <span className="absolute bottom-full left-0">{state.previous}</span>}
+/**
+ * A character that rolls up like an odometer when it changes: the old one leaves upward as the new one rises in.
+ * A `still` character (the hidden form keeps time too) just changes, and the old one goes once the roll ends.
+ */
+function Roll({ char, still }: { char: string; still: boolean }) {
+  const [state, setState] = useState({ char, previous: char, turns: 0, rolling: false });
+  if (state.char !== char) setState({ char, previous: state.char, turns: state.turns + 1, rolling: !still });
+  return <span key={state.turns} className={cn('relative inline-block', state.rolling && 'countdown-roll')} onAnimationEnd={() => setState((current) => ({ ...current, rolling: false }))}>
+    {state.rolling && <span className="absolute bottom-full left-0">{state.previous}</span>}
     {char}
   </span>;
 }
