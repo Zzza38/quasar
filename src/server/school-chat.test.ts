@@ -1,8 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { TRPCError } from '@trpc/server';
 import webpush from 'web-push';
 import { openDatabase, type Db } from './db';
@@ -12,49 +9,34 @@ import { countUnreadChats } from './chat';
 import { CommunityService } from './community';
 import { NotificationService } from './notifications';
 import { appRouter } from './router';
-import { EMPTY_BETA_REGISTRY, createBeta, writeBetaRegistry } from './beta-registry';
-import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 import { exampleSchedule } from '@/domain/example';
 import { grantStaffRole } from './staff';
 
 const DAY = 86_400_000;
 const databases: Db[] = [];
-let directory = '';
-let previousPath: string | undefined;
-beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), 'quasar-school-chat-'));
-  previousPath = process.env.BETAS_PATH;
-  process.env.BETAS_PATH = join(directory, 'betas.json');
-  writeBetaRegistry(createBeta(EMPTY_BETA_REGISTRY, { key: SCHOOL_CHAT_BETA, name: 'School chat', description: '', code: 'SCHOOL-2026' }));
-});
-afterEach(() => {
-  for (const db of databases.splice(0)) if (db.open) db.close();
-  if (previousPath === undefined) delete process.env.BETAS_PATH; else process.env.BETAS_PATH = previousPath;
-  rmSync(directory, { recursive: true, force: true });
-});
+afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
 
 function fixture() {
   const db = openDatabase(':memory:'); databases.push(db);
   const service = new Service(db, 'owner@example.com');
   const clock = { now: new Date('2026-09-15T16:00:00Z') };
   const tick = (ms: number) => { clock.now = new Date(clock.now.getTime() + ms); };
-  function user(email = `${randomUUID()}@example.com`, name = 'Student', beta = true) {
+  function user(email = `${randomUUID()}@example.com`, name = 'Student') {
     const id = randomUUID();
     db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(id, id, email, name, `${name} Fullname`, new Date(0).toISOString());
-    if (beta) db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(SCHOOL_CHAT_BETA, id, clock.now.toISOString());
     return id;
   }
   const owner = user('owner@example.com', 'Owner');
-  const alice = user(undefined, 'Alice'), bob = user(undefined, 'Bob'), outsider = user(undefined, 'Olive'), noBeta = user(undefined, 'Nina', false), homeless = user(undefined, 'Hal');
+  const alice = user(undefined, 'Alice'), bob = user(undefined, 'Bob'), outsider = user(undefined, 'Olive'), nina = user(undefined, 'Nina'), homeless = user(undefined, 'Hal');
   const school = service.createSchool(alice, { name: 'Community High', location: 'Boston, MA', schedule: exampleSchedule });
   const other = service.createSchool(outsider, { name: 'Other Prep', location: 'Austin, TX', schedule: exampleSchedule });
-  for (const id of [alice, owner, bob, noBeta]) service.join(id, { schoolId: school.id, choice: 'community', grade: '11' });
+  for (const id of [alice, owner, bob, nina]) service.join(id, { schoolId: school.id, choice: 'community', grade: '11' });
   service.join(outsider, { schoolId: other.id, choice: 'community', grade: '11' });
   const rooms = new SchoolChatService(service, () => clock.now);
   const global = new GlobalChatService(service, () => clock.now);
   const caller = (id: string | null) => appRouter.createCaller({ service, userId: id });
   const send = (from: string, body = 'hello', schoolId = school.id, clientId = randomUUID()) => { tick(4000); return rooms.send(from, schoolId, clientId, body).message; };
-  return { db, service, user, owner, alice, bob, outsider, noBeta, homeless, school, other, rooms, global, caller, clock, tick, send };
+  return { db, service, user, owner, alice, bob, outsider, nina, homeless, school, other, rooms, global, caller, clock, tick, send };
 }
 
 function fails(fn: () => unknown, code: TRPCError['code'], message?: string) {
@@ -66,22 +48,21 @@ function fails(fn: () => unknown, code: TRPCError['code'], message?: string) {
 }
 
 describe('school chat', () => {
-  it('is open to the school’s members in the beta, and to nobody else', () => {
+  it('is open to the school’s members, and to nobody else', () => {
     const f = fixture();
     f.send(f.alice, 'hi school');
     const seen = f.rooms.thread(f.bob, f.school.id);
     expect(seen.messages.map(m => [m.sender.displayName, m.body])).toEqual([['Alice', 'hi school']]);
-    // Everyone at the school with names counts, in the beta or not.
+    // Everyone at the school with names counts.
     expect(seen.room).toEqual({ members: 4, canModerate: false, moderator: null });
     expect(seen.school).toEqual({ id: f.school.id, name: 'Community High' });
-    // Another school's member, someone without a school, and a member outside the beta all get the same answer,
+    // Another school's member and someone without a school get the same answer,
     // and so does asking for another school by id.
     fails(() => f.rooms.thread(f.outsider, f.school.id), 'NOT_FOUND', NOT_IN_SCHOOL);
     fails(() => f.rooms.thread(f.homeless, f.school.id), 'NOT_FOUND', NOT_IN_SCHOOL);
-    fails(() => f.rooms.thread(f.noBeta, f.school.id), 'NOT_FOUND', NOT_IN_SCHOOL);
+    expect(f.rooms.thread(f.nina, f.school.id).messages.map(m => m.body)).toEqual(['hi school']);
     fails(() => f.rooms.thread(f.alice, f.other.id), 'NOT_FOUND', NOT_IN_SCHOOL);
     fails(() => f.rooms.send(f.outsider, f.school.id, randomUUID(), 'let me in'), 'NOT_FOUND', NOT_IN_SCHOOL);
-    expect(f.rooms.summary(f.noBeta)).toBeNull();
     expect(f.rooms.summary(f.homeless)).toBeNull();
     expect(f.rooms.summary(f.bob)).toMatchObject({ schoolId: f.school.id, schoolName: 'Community High', unread: 1, lastMessage: { senderName: 'Alice', preview: 'hi school' } });
   });
@@ -131,14 +112,15 @@ describe('school chat', () => {
     expect(f.rooms.summary(f.bob)!.lastMessage).toMatchObject({ preview: null, moderatedBy: 'moderator' });
   });
 
-  it('counts toward the badge only inside the beta, respects mute and marks read', () => {
+  it('counts toward the badge for the school’s members, respects mute and marks read', () => {
     const f = fixture();
     f.send(f.alice, 'one');
     const last = f.send(f.alice, 'two');
     expect(countUnreadSchool(f.db, f.bob)).toBe(2);
     expect(countUnreadChats(f.db, f.bob)).toBe(1);
-    expect(countUnreadSchool(f.db, f.noBeta)).toBe(0);
-    expect(countUnreadChats(f.db, f.noBeta)).toBe(0);
+    expect(countUnreadSchool(f.db, f.nina)).toBe(2);
+    expect(countUnreadSchool(f.db, f.outsider)).toBe(0);
+    expect(countUnreadChats(f.db, f.outsider)).toBe(0);
     expect(f.rooms.mute(f.bob, f.school.id, true)).toMatchObject({ muted: true, unreadChats: 0 });
     expect(f.rooms.mute(f.bob, f.school.id, false)).toMatchObject({ muted: false, unreadChats: 1 });
     expect(f.rooms.read(f.bob, f.school.id, last.seq)).toMatchObject({ unreadSchool: 0, unreadChats: 0 });
@@ -212,7 +194,7 @@ describe('school chat', () => {
     const sent = await f.caller(f.alice).schoolChat.send({ accountId: f.alice, schoolId: f.school.id, clientId: randomUUID(), body: 'hi' });
     expect(sent.message.sender.displayName).toBe('Alice');
     expect((await f.caller(f.bob).chat.inbox({ accountId: f.bob })).school).toMatchObject({ schoolId: f.school.id, unread: 1 });
-    expect((await f.caller(f.noBeta).chat.inbox({ accountId: f.noBeta })).school).toBeNull();
+    expect((await f.caller(f.homeless).chat.inbox({ accountId: f.homeless })).school).toBeNull();
     await expect(f.caller(f.bob).schoolChat.edit({ accountId: f.bob, schoolId: f.school.id, messageId: sent.message.id, body: 'x', reason: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
@@ -221,12 +203,12 @@ describe('school chat pushes', () => {
   const vapid = { ...webpush.generateVAPIDKeys(), subject: 'mailto:owner@example.com' };
   const subscription = (token: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${token}`, keys: { p256dh: vapid.publicKey, auth: Buffer.alloc(16, 1).toString('base64url') } });
 
-  it('pushes members in the beta once, and nobody outside it', async () => {
+  it('pushes the school’s members once, and nobody at another school', async () => {
     const f = fixture();
     const sendPush = vi.fn().mockResolvedValue({});
     const notifications = new NotificationService(f.db, { vapid, sendPush, now: () => f.clock.now });
     notifications.subscribe(f.bob, subscription('bob'));
-    notifications.subscribe(f.noBeta, subscription('nina'));
+    notifications.subscribe(f.outsider, subscription('olive'));
     const message = f.send(f.alice, 'see you at lunch');
     f.tick(61_000);
     expect(await notifications.deliverChat(f.clock.now)).toEqual({ sent: 1, failed: 0 });

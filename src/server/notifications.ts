@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import webpush from 'web-push';
 import { z } from 'zod';
 import { CHAT } from '@/domain/chat';
-import { ensureGlobalMember, ensureRoomMember, GLOBAL_READ_SEQ_SQL, NOT_BLOCKED_SENDER_SQL, roomReadSeqSql, schoolChatOn } from './global-chat';
+import { ensureGlobalMember, ensureRoomMember, GLOBAL_READ_SEQ_SQL, NOT_BLOCKED_SENDER_SQL, roomReadSeqSql } from './global-chat';
 import { taskSchema, type Task } from '@/domain/task';
 import type { Db } from './db';
 
@@ -197,7 +197,7 @@ const GLOBAL_CANDIDATE_SQL = `SELECT 'global' AS threadId, max(c.seq) AS seq
 const GLOBAL_THREAD = 'global';
 /**
  * The recipient's school room (docs/CHAT.md §16), keyed 'school:<id>', under the global room's rules. `@scope` is
- * bound to the recipient's school; the query is only run for members of the school chat beta.
+ * bound to the recipient's school.
  */
 const SCHOOL_CANDIDATE_SQL = `SELECT 'school:' || r.school_id AS threadId, max(c.seq) AS seq
   FROM school_messages c JOIN users r ON r.id=@owner AND r.school_id=c.school_id
@@ -345,7 +345,7 @@ export class NotificationService {
     const candidates = (owner: string) => {
       const params = { owner, newest: at(CHAT.pushDelayMs), oldest: at(DAY) };
       const school = (this.db.prepare('SELECT school_id FROM users WHERE id=?').get(owner) as { school_id: string | null } | undefined)?.school_id;
-      const schoolRows = school && schoolChatOn(this.db, owner) ? this.db.prepare(SCHOOL_CANDIDATE_SQL).all({ ...params, scope: school }) : [];
+      const schoolRows = school ? this.db.prepare(SCHOOL_CANDIDATE_SQL).all({ ...params, scope: school }) : [];
       return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GROUP_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params), ...schoolRows] as { threadId: string; seq: number }[];
     };
     const recipients = this.db.prepare(`SELECT u.id, s.schedule FROM users u LEFT JOIN schools s ON s.id=u.school_id

@@ -4,7 +4,6 @@ import { CHAT, chatImageSchema } from '@/domain/chat';
 import type { Service } from './service';
 import { ChatService } from './chat';
 import { targetExists } from './chat-extras';
-import { schoolChatOn } from './global-chat';
 import { Reveal } from './moderation';
 
 /** Decode and re-encode every upload, stripping metadata and refusing oversized or invalid images. */
@@ -42,7 +41,6 @@ export function readChatImage(service: Service, viewer: string, kind: 'peer' | '
     const thread = db.prepare('SELECT user_low, user_high FROM chat_threads WHERE id=?').get(row.thread_id) as { user_low: string; user_high: string };
     if (viewer !== thread.user_low && viewer !== thread.user_high) return null;
     new ChatService(service).access(viewer, viewer === thread.user_low ? thread.user_high : thread.user_low);
-  } else if (kind === 'school' && !schoolChatOn(db, viewer)) return null;
-  else if (!targetExists(db, kind, viewer, row.seq, row.group_id ?? row.school_id)) return null;
+  } else if (!targetExists(db, kind, viewer, row.seq, row.group_id ?? row.school_id)) return null;
   return Buffer.from(row.image, 'base64');
 }

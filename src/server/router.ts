@@ -204,7 +204,7 @@ export const appRouter = t.router({
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
     mute: accountScoped.input(globalMuteSchema).mutation(({ ctx, input }) => room(ctx.service).mute(ctx.userId, input.muted)),
   }),
-  // The member's school chat room (docs/CHAT.md §16): the global room's rules, for one school's members. Behind the school-chat beta.
+  // The member's school chat room (docs/CHAT.md §16): the global room's rules, for one school's members.
   schoolChat: t.router({
     thread: accountScoped.input(schoolThreadSchema).query(({ ctx, input }) => schoolRoom(ctx.service).thread(ctx.userId, input.schoolId, { after: input.after, before: input.before })),
     send: accountScoped.input(schoolSendSchema).mutation(async ({ ctx, input }) => schoolRoom(ctx.service).send(ctx.userId, input.schoolId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),

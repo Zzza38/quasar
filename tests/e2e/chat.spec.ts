@@ -8,9 +8,6 @@ import { ChatService } from '../../src/server/chat';
 import { CommunityService } from '../../src/server/community';
 import { GroupChatService } from '../../src/server/group-chat';
 import { exampleSchedule } from '../../src/domain/example';
-import { SCHOOL_CHAT_BETA } from '../../src/domain/betas';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { dirname, join } from 'node:path';
 
 // Chat is polled (4 s threads, 10 s lists, 15 s badge), so each scenario gets room for several cycles.
 test.describe.configure({ timeout: 180_000 });
@@ -328,12 +325,9 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
   }
 });
 
-test('school chat (beta): the school’s members share a room beside the global chat, other schools and non-members never see it', async ({ browser }, testInfo) => {
+test('school chat: the school’s members share a room beside the global chat, and other schools never see it', async ({ browser }, testInfo) => {
   const f = seed();
-  // What `npm run beta -- create school-chat` writes, plus three members who joined it. Cara stays outside the beta.
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === SCHOOL_CHAT_BETA)) writeBetaRegistry(createBeta(registry, { key: SCHOOL_CHAT_BETA, name: 'School chat', description: '', code: 'SCHOOL-E2E' }), listPath);
+  // Dan is at another school, with its own room.
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   let dan = '', otherName = '', schoolName = '';
   try {
@@ -344,8 +338,6 @@ test('school chat (beta): the school’s members share a room beside the global 
     const other = service.createSchool(dan, { name: otherName, location: 'Austin, TX', schedule: exampleSchedule });
     service.join(dan, { schoolId: other.id, choice: 'community', grade: '10' });
     schoolName = service.school(f.schoolId).name;
-    const join = db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)');
-    for (const id of [f.alice, f.bob, f.owner, dan]) join.run(SCHOOL_CHAT_BETA, id, new Date().toISOString());
   } finally { db.close(); }
 
   // Alice finds the room under Global chat, with her school's name, and posts.
@@ -409,13 +401,11 @@ test('school chat (beta): the school’s members share a room beside the global 
   await expect(danPage.getByText(`Everyone at ${otherName} can read and post here, and nobody from other schools.`)).toBeVisible();
   await expect(danPage.getByText('who has the bio notes')).toHaveCount(0);
 
-  // Cara is at Alice's school but outside the beta: no row, and the address alone opens nothing.
+  // Cara, at Alice's school, has the room too, with the conversation in it.
   const cara = await signedIn(browser, f.cara);
   await cara.goto('/messages');
-  await expect(cara.getByRole('button', { name: 'Open Global chat' })).toBeVisible();
-  await expect(cara.getByRole('button', { name: /Open School chat/ })).toHaveCount(0);
-  await cara.goto('/messages?room=school');
-  await expect(cara.getByRole('log', { name: /School chat messages/ })).toHaveCount(0);
+  await cara.getByRole('button', { name: `Open School chat, ${schoolName}` }).click();
+  await expect(cara.getByRole('log', { name: `School chat messages, ${schoolName}` }).getByText('who has the bio notes', { exact: true })).toBeVisible();
 
   for (const scheme of ['light', 'dark'] as const) {
     await bob.emulateMedia({ colorScheme: scheme });
