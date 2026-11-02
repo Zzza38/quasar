@@ -21,7 +21,7 @@ export type ChatThreadResult = ChatRouter['thread'];
 export type GlobalThreadResult = GlobalRouter['thread'];
 export type GroupThreadResult = GroupRouter['thread'];
 export type GlobalSummary = ChatInbox['global'];
-/** The member's school room row (docs/CHAT.md §16); null without a school or outside the school-chat beta. */
+/** The member's school room row (docs/CHAT.md §16); null without a school. */
 export type SchoolSummary = NonNullable<ChatInbox['school']>;
 export type GroupSummary = ChatInbox['groups'][number];
 export type ChatPeer = ChatThreadResult['peer'];

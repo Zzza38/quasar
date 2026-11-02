@@ -15,7 +15,6 @@ import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { BetaProvider } from './betas';
-import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
 import { useWorkspace, type InitialBoot } from './use-workspace';
@@ -252,10 +251,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   };
   const onMessages = route.view === 'messages';
   // A phone thread fills the screen above the keyboard; Shell hides the dock (desktop never shows one).
-  // The school room only opens for members of its beta (MessagesView shows the list otherwise), so only then is it immersive.
   const room = route.params.get('room');
-  const schoolChat = (context.betas ?? []).some((beta) => beta.key === SCHOOL_CHAT_BETA);
-  const immersive = onMessages && (route.params.has('with') || route.params.has('group') || room === 'global' || (room === 'school' && schoolChat));
+  const immersive = onMessages && (route.params.has('with') || route.params.has('group') || room === 'global' || room === 'school');
   const onChatPush = async (enabled: boolean) => {
     await api.chat.setPush.mutate({ accountId, enabled });
     await session.synchronize();

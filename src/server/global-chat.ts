@@ -6,10 +6,8 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, bodyError, messageText, rawBodySchema } from '@/domain/chat';
 import { Reveal, actorRank, editorRank, type RemovedText, type RevealedText } from './moderation';
-import { SCHOOL_CHAT_BETA } from '@/domain/betas';
 // A cycle with ./chat, safe because neither module uses the other's exports while it loads.
 import { activePause, countUnreadChats, listPreview, type ChatPause, type Receipt } from './chat';
-import { currentBetaRegistry } from './beta-registry';
 import type { Db } from './db';
 import { avatarUrl } from './avatars';
 import type { Service } from './service';
@@ -169,23 +167,14 @@ export function countUnreadGlobal(db: Db, userId: string): number {
   return countUnreadRoom(db, GLOBAL_ROOM, userId);
 }
 
-/**
- * The school chat beta (docs/CHAT.md §16). Until it ends, a member's school room, its row in the list, its unread
- * count, its pushes and its live events exist only for members of the beta, the same test useBeta makes on the client.
- */
-export function schoolChatOn(db: Db, userId: string): boolean {
-  if (!db.prepare('SELECT 1 FROM beta_members WHERE beta_key=? AND user_id=?').get(SCHOOL_CHAT_BETA, userId)) return false;
-  return currentBetaRegistry().betas.some(beta => beta.key === SCHOOL_CHAT_BETA);
-}
-
-/** The member's school room, or null when they have no school (or are outside the beta). */
+/** The member's school room (docs/CHAT.md §16), or null when they have no school. */
 export function schoolRoomOf(db: Db, userId: string): Room | null {
   const row = db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined;
-  if (!row?.school_id || !schoolChatOn(db, userId)) return null;
+  if (!row?.school_id) return null;
   return { kind: 'school', scope: row.school_id };
 }
 
-/** Unread messages in the member's own school room; 0 without a school, outside the beta, or when muted. */
+/** Unread messages in the member's own school room; 0 without a school or when muted. */
 export function countUnreadSchool(db: Db, userId: string): number {
   const room = schoolRoomOf(db, userId);
   return room ? countUnreadRoom(db, room, userId) : 0;
@@ -301,7 +290,7 @@ class RoomChatService {
   private notify(room: Room): void {
     if (room.kind === 'global') { notifyChat([], { kind: 'global', key: 'global' }); return; }
     const members = this.db.prepare('SELECT id FROM users WHERE school_id=?').pluck().all(room.scope) as string[];
-    notifyChat(members.filter(id => schoolChatOn(this.db, id)), { kind: 'school', key: room.scope });
+    notifyChat(members, { kind: 'school', key: room.scope });
   }
 
   /* ---------- Member procedures ---------- */
@@ -498,15 +487,15 @@ export class GlobalChatService extends RoomChatService {
  * of another school (or of none) gets NOT_FOUND, the same answer whether the school exists or not.
  */
 export class SchoolChatService extends RoomChatService {
-  /** The viewer's school room, after checking they have names, belong to `schoolId` and are in the beta. */
+  /** The viewer's school room, after checking they have names and belong to `schoolId`. */
   private access(viewerId: string, schoolId: string): Room {
     const user = this.service.ready(viewerId);
-    if (!user.schoolId || user.schoolId !== schoolId || !schoolChatOn(this.db, viewerId)) fail('NOT_FOUND', NOT_IN_SCHOOL);
+    if (!user.schoolId || user.schoolId !== schoolId) fail('NOT_FOUND', NOT_IN_SCHOOL);
     return { kind: 'school', scope: schoolId };
   }
   private room(schoolId: string): Room { return { kind: 'school', scope: schoolId }; }
 
-  /** The list row for the viewer's own school, or null without a school (or outside the beta). */
+  /** The list row for the viewer's own school, or null without a school. */
   summary(viewerId: string): SchoolSummary | null {
     this.service.ready(viewerId);
     const room = schoolRoomOf(this.db, viewerId);
