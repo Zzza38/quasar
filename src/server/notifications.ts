@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import webpush from 'web-push';
 import { z } from 'zod';
 import { CHAT } from '@/domain/chat';
-import { ensureGlobalMember, GLOBAL_READ_SEQ_SQL, NOT_BLOCKED_SENDER_SQL } from './global-chat';
+import { ensureGlobalMember, ensureRoomMember, GLOBAL_READ_SEQ_SQL, NOT_BLOCKED_SENDER_SQL, roomReadSeqSql } from './global-chat';
 import { taskSchema, type Task } from '@/domain/task';
 import type { Db } from './db';
 
@@ -196,6 +196,19 @@ const GLOBAL_CANDIDATE_SQL = `SELECT 'global' AS threadId, max(c.seq) AS seq
   HAVING max(c.seq) IS NOT NULL`;
 const GLOBAL_THREAD = 'global';
 /**
+ * The recipient's school room (docs/CHAT.md §16), keyed 'school:<id>', under the global room's rules. `@scope` is
+ * bound to the recipient's school.
+ */
+const SCHOOL_CANDIDATE_SQL = `SELECT 'school:' || r.school_id AS threadId, max(c.seq) AS seq
+  FROM school_messages c JOIN users r ON r.id=@owner AND r.school_id=c.school_id
+  WHERE c.school_id=@scope AND r.chat_push=1 AND r.display_name<>'' AND r.full_name<>''
+    AND coalesce((SELECT m.muted FROM school_members m WHERE m.school_id=@scope AND m.user_id=r.id), 0)=0
+    AND c.sender_id<>r.id AND c.deleted_at IS NULL AND ${NOT_BLOCKED_SENDER_SQL('r.id')}
+    AND c.seq>max(${roomReadSeqSql('school', 'r.id')}, coalesce((SELECT m.notified_seq FROM school_members m WHERE m.school_id=@scope AND m.user_id=r.id), 0))
+    AND c.created_at<=@newest AND c.created_at>=@oldest
+  HAVING max(c.seq) IS NOT NULL`;
+const SCHOOL_PREFIX = 'school:';
+/**
  * Friend groups (docs/CHAT.md §12) as candidates keyed 'group:<id>': the recipient is a live, unmuted member with
  * names and chat_push on, and an undeleted message from someone else (not blocked, sent since they joined) is past
  * both their read and notified markers, at least 60 s old and at most 24 h old.
@@ -320,7 +333,7 @@ export class NotificationService {
    * Generic chat pushes (docs/CHAT.md §6): delayed 60 s, at most one per recipient per 10 minutes and 20 per
    * 24 h, none between 22:00 and 07:00 in the recipient's school time zone, and none for muted chats or with
    * Message notifications off. Nothing older than 24 h is pushed, and the same messages are never pushed twice.
-   * The global room (§11) is one more candidate under the same rules, with its own mute and markers.
+   * The global room (§11) and the recipient's school room (§16) are more candidates under the same rules, each with its own mute and markers.
    */
   async deliverChat(now = new Date()): Promise<{ sent: number; failed: number }> {
     const result = { sent: 0, failed: 0 };
@@ -331,7 +344,9 @@ export class NotificationService {
     const windowStart = new Date(Math.floor(now.getTime() / CHAT.pushWindowMs) * CHAT.pushWindowMs).toISOString();
     const candidates = (owner: string) => {
       const params = { owner, newest: at(CHAT.pushDelayMs), oldest: at(DAY) };
-      return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GROUP_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params)] as { threadId: string; seq: number }[];
+      const school = (this.db.prepare('SELECT school_id FROM users WHERE id=?').get(owner) as { school_id: string | null } | undefined)?.school_id;
+      const schoolRows = school ? this.db.prepare(SCHOOL_CANDIDATE_SQL).all({ ...params, scope: school }) : [];
+      return [...this.db.prepare(CHAT_CANDIDATES_SQL).all(params), ...this.db.prepare(GROUP_CANDIDATES_SQL).all(params), ...this.db.prepare(GLOBAL_CANDIDATE_SQL).all(params), ...schoolRows] as { threadId: string; seq: number }[];
     };
     const recipients = this.db.prepare(`SELECT u.id, s.schedule FROM users u LEFT JOIN schools s ON s.id=u.school_id
       WHERE u.chat_push=1 AND EXISTS (SELECT 1 FROM push_subscriptions p WHERE p.owner_id=u.id) ORDER BY u.id`).all() as { id: string; schedule: string | null }[];
@@ -380,11 +395,17 @@ export class NotificationService {
           const update = this.db.prepare('UPDATE chat_members SET notified_seq=max(notified_seq,?) WHERE thread_id=? AND user_id=?');
           const updateGlobal = this.db.prepare('UPDATE global_members SET notified_seq=max(notified_seq,?) WHERE user_id=?');
           const updateGroup = this.db.prepare('UPDATE chat_group_members SET notified_seq=max(notified_seq,?) WHERE group_id=? AND user_id=?');
+          const updateSchool = this.db.prepare('UPDATE school_members SET notified_seq=max(notified_seq,?) WHERE school_id=? AND user_id=?');
           this.db.transaction(() => {
             for (const [threadId, seq] of notified) {
               // A newcomer's row starts at their read marker, not 0, so a push never marks the backlog unread.
               if (threadId === GLOBAL_THREAD) { ensureGlobalMember(this.db, recipient.id); updateGlobal.run(seq, recipient.id); }
               else if (threadId.startsWith(GROUP_PREFIX)) updateGroup.run(seq, threadId.slice(GROUP_PREFIX.length), recipient.id);
+              else if (threadId.startsWith(SCHOOL_PREFIX)) {
+                const schoolId = threadId.slice(SCHOOL_PREFIX.length);
+                ensureRoomMember(this.db, { kind: 'school', scope: schoolId }, recipient.id);
+                updateSchool.run(seq, schoolId, recipient.id);
+              }
               else update.run(seq, threadId, recipient.id);
             }
           }).immediate();

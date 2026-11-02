@@ -333,7 +333,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
         {confirming === 'block' && !profile.blocked && <Callout tone="warning" icon="alert" role="alert" title={`Block ${name}?`} actions={<>
           <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.block.mutate({ accountId, userId, blocked: true }); setConfirming(null); }, 'Blocked.', 'manage')}>Block {name}</Button>
           <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
-        </>}>You will not see each other in the directory, their Global chat messages are hidden from you, and any friendship ends.</Callout>}
+        </>}>You will not see each other in the directory, their Global chat and school chat messages are hidden from you, and any friendship ends.</Callout>}
         {confirming === 'remove' && profile.friendState === 'friends' && <Callout tone="warning" icon="alert" role="alert" title={`Remove ${name} as a friend?`} actions={<>
           <Button size="sm" variant="danger" busy={pending} disabled={!state.online} onClick={() => void run(async () => { await api.community.remove.mutate({ accountId, userId }); setConfirming(null); }, 'Friend removed.', 'manage')}>Remove {name}</Button>
           <Button size="sm" autoFocus disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>

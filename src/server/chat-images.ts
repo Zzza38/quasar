@@ -27,12 +27,12 @@ export async function prepareChatImage(raw: string | undefined): Promise<string 
  * Recheck access on each fetch, including blocks, group membership and join time. A removed message's photo is only
  * served to a viewer whose tier may read the removal (src/server/moderation.ts), until retention clears it.
  */
-export function readChatImage(service: Service, viewer: string, kind: 'peer' | 'group' | 'global', seq: number): Buffer | null {
+export function readChatImage(service: Service, viewer: string, kind: 'peer' | 'group' | 'global' | 'school', seq: number): Buffer | null {
   service.ready(viewer);
   const db = service.db;
-  const table = { peer: 'chat_messages', group: 'chat_group_messages', global: 'global_messages' }[kind];
+  const table = { peer: 'chat_messages', group: 'chat_group_messages', global: 'global_messages', school: 'school_messages' }[kind];
   const row = db.prepare(`SELECT * FROM ${table} WHERE seq=?`).get(seq) as {
-    seq: number; sender_id: string; thread_id?: string; group_id?: string; image: string | null; body: string;
+    seq: number; sender_id: string; thread_id?: string; group_id?: string; school_id?: string; image: string | null; body: string;
     deleted_at: string | null; deleted_by: string | null; deleted_rank: string | null;
   } | undefined;
   if (!row?.image) return null;
@@ -41,6 +41,6 @@ export function readChatImage(service: Service, viewer: string, kind: 'peer' | '
     const thread = db.prepare('SELECT user_low, user_high FROM chat_threads WHERE id=?').get(row.thread_id) as { user_low: string; user_high: string };
     if (viewer !== thread.user_low && viewer !== thread.user_high) return null;
     new ChatService(service).access(viewer, viewer === thread.user_low ? thread.user_high : thread.user_low);
-  } else if (!targetExists(db, kind, viewer, row.seq, row.group_id)) return null;
+  } else if (!targetExists(db, kind, viewer, row.seq, row.group_id ?? row.school_id)) return null;
   return Buffer.from(row.image, 'base64');
 }
