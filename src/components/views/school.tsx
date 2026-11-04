@@ -17,6 +17,8 @@ import { ComposeProposal, type ProposalSeed, ProposalsSection } from '../proposa
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Modal, Panel, Section, Segmented, Spacer, Textarea } from '../primitives';
 import { Label } from '../ui/label';
+import { useBeta } from '../betas';
+import { PHONE_DOCK_BETA } from '../phone-dock';
 import { Toggle } from '../ui/toggle';
 
 function SchoolCrest({ name }: { name: string }) {
@@ -45,6 +47,7 @@ export function SchoolView({ state }: { state: AppState }) {
   const school = context.school;
   const sharedSchedule = scheduleForGrade(school.schedule, personal.grade);
   const [gradeError, setGradeError] = useState('');
+  const phoneDock = useBeta(PHONE_DOCK_BETA);
   const { locked, voting } = schoolLocks(school);
   const [editing, setEditing] = useState(false);
   const [privateOpen, setPrivateOpen] = useState(false);
@@ -67,7 +70,9 @@ export function SchoolView({ state }: { state: AppState }) {
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">
       <SchoolCrest name={school.name} />
-      <div className="grid min-w-0 flex-1 gap-1">
+      {/* phone-dock beta: a 12rem basis makes the chips wrap onto their own row on phones. With basis 0 the name never
+          forced a wrap, so short chips stayed beside it and squeezed it to one letter per line. */}
+      <div className={cn('grid min-w-0 flex-1 gap-1', phoneDock && 'basis-48')}>
         <h1>{school.name}</h1>
         <p className="text-sm text-muted-foreground">{school.location} · {pluralize(school.memberCount, 'member')}</p>
       </div>

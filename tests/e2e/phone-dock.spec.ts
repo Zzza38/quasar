@@ -25,8 +25,10 @@ function seed() {
       return id;
     };
     const me = user('Dee'), maya = user('Maya'), rory = user('Rory');
-    const school = service.createSchool(me, { name: `Dock High ${me.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
-    for (const id of [me, maya, rory]) service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
+    const school = service.createSchool(me, { name: `Friends Academy ${me.slice(0, 4)}`, location: 'Glen Cove, New York', schedule: exampleSchedule });
+    // Approved and locked: the two short chips that used to sit beside the name and squeeze it on phones.
+    db.prepare('UPDATE schools SET approved=1, support_locked=1 WHERE id=?').run(school.id);
+    for (const id of [me, maya, rory]) service.join(id, { schoolId: school.id, choice: 'approved', grade: '10' });
     const community = new CommunityService(service);
     community.request(me, maya); community.respond(maya, me, true);
     community.request(rory, me);
@@ -80,6 +82,10 @@ test('phone dock beta: Home sits in the middle, People holds chats and friends, 
   await classesSwitch.getByRole('radio', { name: 'School' }).click();
   await expect(page).toHaveURL(/\/school$/);
   await expect(classes).toHaveAttribute('aria-current', 'page');
+  // The school name keeps a readable width; the chips wrap below it instead.
+  const name = await page.getByRole('heading', { level: 1, name: /Friends Academy/ }).boundingBox();
+  expect(name!.width).toBeGreaterThan(150);
+  expect(name!.height).toBeLessThan(80);
   if (process.env.DOCK_SHOTS) await page.screenshot({ path: `${process.env.DOCK_SHOTS}/school-390.png` });
   await dock.getByRole('link', { name: 'Today' }).click();
   await expect(page).toHaveURL(/:3[0-9]+\/$/);
