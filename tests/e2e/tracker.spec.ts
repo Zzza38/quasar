@@ -1602,6 +1602,12 @@ test.describe('timetable touch', () => {
     await expect.poll(scrollY).toBeGreaterThan(before + 50);
     await expect(empty).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cancel selection' })).toHaveCount(0);
+    // Native swipe momentum must stop before positioning the next touch.
+    await expect.poll(async () => {
+      const y = await scrollY();
+      await page.waitForTimeout(100);
+      return Math.abs(await scrollY() - y);
+    }).toBe(0);
     // Held first, the class lifts and follows the finger; the page stays put and the class lands in the block.
     await palette.evaluate(element => element.scrollIntoView({ block: 'center' }));
     before = await scrollY();
