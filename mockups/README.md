@@ -1,7 +1,28 @@
-# Sidebar count badge mockups
+# Mockups
+
+Two current sets. Older rounds (countdown hover, classmates popup, landing) are in git history.
+
+## Phone Messages entry
+
+Five ways to open Messages on a phone instead of the bare icon in the top bar's corner. The owner picked 4 with
+2's raised button holding Home, and School folded into Classes so the dock is symmetric (`?v=b`), which shipped
+as the `phone-dock` beta.
+
+Open `messages-entry.html?v=0` (before) and `?v=1` through `?v=5`, plus `?v=a` and `?v=b` for the two dock layouts:
+
+| `v` | Direction |
+| --- | --------- |
+| 1 | Seventh tab: "Chats" joins the dock. |
+| 2 | Centre bubble: a raised round Messages button in the middle of the dock. |
+| 3 | Split dock: a separate round Messages button beside the six-tab dock. |
+| 4 | Chats inside People: a Chats / Friends switch on the People tab. |
+| 5 | Peek bar + sheet: the newest unread message above the dock; tapping it slides Messages up as a sheet. |
+| a | Home in the middle, two tabs left, three right. |
+| b | Home in the middle, School folded into Classes, two and two. |
+
+## Sidebar count badges
 
 Five replacements for the bright filled pill on the sidebar's Tasks, People and Messages counts.
-(The countdown hover mockups that used to live here are in git history.)
 
 Open `nav-badge.html` for all five side by side, or `nav-badge.html?v=1` through `?v=5` for one:
 

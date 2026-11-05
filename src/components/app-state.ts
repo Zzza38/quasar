@@ -74,15 +74,15 @@ export function withClassmates(context: WorkspaceContext, classmates: WorkspaceC
   return { ...context, community: { ...context.community, classmates } };
 }
 export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school' | 'people' | 'messages';
-/** Every routable view. `dock: false` keeps a view out of the six-tab phone dock (it has its own top-bar link). */
-export const VIEWS: Array<{ id: View; label: string; dock?: boolean }> = [
+/** Every routable view, in sidebar order. The phone dock groups them differently (phone-dock.tsx). */
+export const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'classes', label: 'Classes' },
   { id: 'school', label: 'School' },
   { id: 'people', label: 'People' },
-  { id: 'messages', label: 'Messages', dock: false },
+  { id: 'messages', label: 'Messages' },
 ];
 
 export interface TaskItem { id: string; task: Task; entity: Entity }
