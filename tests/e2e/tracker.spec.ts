@@ -557,7 +557,9 @@ test('remaining screens render without horizontal overflow on desktop and mobile
     await expect(page.getByRole('heading', { name: 'Classes', exact: true })).toBeVisible();
     await fits();
     await page.screenshot({ path: testInfo.outputPath(`classes-${name}.png`), fullPage: true });
-    await page.getByRole('link', { name: 'School' }).click();
+    // Desktop has a School sidebar link; phones reach School through the Classes tab's My classes / School switch.
+    if (name === 'desktop') await page.getByRole('link', { name: 'School' }).click();
+    else await page.getByRole('radiogroup', { name: 'Your classes or your school' }).getByRole('radio', { name: 'School' }).click();
     await expect(page.getByRole('heading', { name: fixture.school.name })).toBeVisible();
     await fits();
     await page.screenshot({ path: testInfo.outputPath(`school-${name}.png`), fullPage: true });

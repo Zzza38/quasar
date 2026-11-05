@@ -67,7 +67,9 @@ export function SchoolView({ state }: { state: AppState }) {
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <header className="flex flex-wrap items-center gap-4">
       <SchoolCrest name={school.name} />
-      <div className="grid min-w-0 flex-1 gap-1">
+      {/* A 12rem basis makes the chips wrap onto their own row on phones. With basis 0 the name never forced a
+          wrap, so short chips stayed beside it and squeezed it to one letter per line. */}
+      <div className="grid min-w-0 flex-1 basis-48 gap-1">
         <h1>{school.name}</h1>
         <p className="text-sm text-muted-foreground">{school.location} · {pluralize(school.memberCount, 'member')}</p>
       </div>

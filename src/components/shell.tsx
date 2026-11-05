@@ -14,6 +14,7 @@ import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
 import { BetasButton } from './betas';
+import { DockCountDescriptions, DockGroupSwitch, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
@@ -25,11 +26,8 @@ import { OPEN_ACCOUNT_EVENT } from './setup-checklist';
 
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users', messages: 'message' };
 const NAV_KEY = 'quasar.navigationCollapsed';
-/** Ids of the hidden count descriptions the Tasks, People and Messages links point at with aria-describedby. */
+/** Ids of the hidden count descriptions the sidebar's Tasks, People and Messages links point at with aria-describedby. */
 const COUNT_IDS: Partial<Record<View, string>> = { tasks: 'nav-task-count', people: 'nav-request-count', messages: 'nav-chat-count' };
-/** The dot the phone dock and the top-bar Messages link show for a nonzero count. The number itself is the link's
-    accessible description (COUNT_IDS); the sidebar reveals it on hover. */
-const BADGE_DOT = 'size-2 rounded-full bg-primary ring-2 ring-card';
 
 function badgeText(count: number): string {
   return count > 99 ? '99+' : String(count);
@@ -130,25 +128,6 @@ function badgeCount(id: View, { taskCount, requestCount, chatCount }: NavCounts)
   return id === 'tasks' ? taskCount : id === 'people' ? requestCount : id === 'messages' ? chatCount : 0;
 }
 
-/** The six-tab phone dock. Messages lives in the top bar instead (`dock: false`). */
-function TabBar({ view, counts, navigate }: { view: View; counts: NavCounts; navigate: (view: View) => void }) {
-  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }} aria-label="Main">
-    <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
-      {VIEWS.filter((entry) => entry.dock !== false).map((entry) => {
-        const active = entry.id === view;
-        const count = badgeCount(entry.id, counts);
-        return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} aria-describedby={count > 0 ? COUNT_IDS[entry.id] : undefined} title={entry.label} aria-current={active ? 'page' : undefined}
-          onClick={() => scrollTopIfActive(active)}
-          className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
-          <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
-          <span>{entry.label}</span>
-          {count > 0 && <span aria-hidden="true" className={cn('absolute left-[calc(50%+9px)] top-1.5', BADGE_DOT)} />}
-        </a>;
-      })}
-    </div>
-  </nav>;
-}
-
 function useNavigationOpen(): [boolean, (open: boolean) => void] {
   // The server renders the sidebar open (it cannot see this device's preference); the saved choice is applied in a
   // layout effect, before the first interactive frame, so the HTML and its hydration agree.
@@ -201,7 +180,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
   const chatCount = online ? chatUnread ?? 0 : 0;
   const counts: NavCounts = { taskCount, requestCount, chatCount };
   const onMessages = view === 'messages';
-  const chatCountId = chatCount > 0 ? COUNT_IDS.messages : undefined;
+  // Phones reach Messages and School through the dock's People and Classes tabs (phone-dock.tsx).
+  const dockMemory = useDockMemory(view);
   const displayName = context.user.displayName || 'Your account';
   const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
@@ -239,6 +219,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     {taskCount > 0 && <span id={COUNT_IDS.tasks} hidden>{taskCount === 1 ? '1 open task' : `${taskCount} open tasks`}</span>}
     {requestCount > 0 && <span id={COUNT_IDS.people} hidden>{requestCount === 1 ? '1 friend request' : `${requestCount} friend requests`}</span>}
     {chatCount > 0 && <span id={COUNT_IDS.messages} hidden>{chatCount === 1 ? '1 unread chat' : `${chatCount} unread chats`}</span>}
+    <DockCountDescriptions counts={counts} />
 
     <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-start group-data-[collapsible=icon]:px-2">
@@ -304,13 +285,6 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         <Brand onClick={home} markSize={28} className="min-h-11 gap-2 text-base" />
         <div className="flex shrink-0 items-center gap-0.5">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} iconOnly />
-          {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
-              it would become the accessible description whenever there is no unread count. */}
-          <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
-            className={cn('relative grid size-11 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
-            <Icon name="message" size={20} strokeWidth={onMessages ? 2.4 : 2} />
-            {chatCount > 0 && <span aria-hidden="true" className={cn('absolute right-2 top-2', BADGE_DOT)} />}
-          </a>
           <button type="button" className="grid size-11 shrink-0 place-items-center rounded-full outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar user={context.user} className="size-7" />
           </button>
@@ -330,11 +304,12 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           {online && session.offlineReady === false && session.offlineSupported && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Try again</Button>}>Quasar couldn’t save itself to this device, so it may not open without signal.</Callout>}
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
+        {!immersive && <DockGroupSwitch view={view} counts={counts} navigate={navigate} />}
         {children}
       </div>
       <AttentionGap zone="right-gutter" top={8} className="mx-3" />
       </div>
-      {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
+      {!immersive && <PhoneDock view={view} counts={counts} last={dockMemory} onTab={scrollTopIfActive} />}
     </SidebarInset>
 
     {/* Closing forgets a pending Add-calendar request, so reopening the sheet later does not replay it. */}
