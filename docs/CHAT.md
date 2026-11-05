@@ -59,7 +59,7 @@ Sources read before writing:
 
 *Reversed 2026-09-25 by the owner (§13):* one-to-one chats and friend groups now show "Delivered", "Read" (or "Read by n") under the sender's newest message and a "typing…" row. The safety reasoning above still holds; the owner weighed it against students expecting these from every other messaging app. The Global chat room has neither. There is still no "online now" or "last seen". A per-account switch to turn receipts off is the natural next step if the concern turns out to be real.
 
-**D11. The phone dock keeps its 6 tabs. "Messages" is a top-bar icon on phones and a 7th sidebar item on desktop.** Both surfaces use the one name "Messages". The reasons are in §7.
+**D11. On phones Messages lives under the dock's People tab; on desktop it is a 7th sidebar item.** This replaced the original top-bar icon in November 2026 (the owner found it out of thumb reach). The reasons are in §7.
 
 **D12. Delivery uses SSE-triggered polling over the existing tRPC endpoint.** Amended 2026-10-16: an authenticated, same-origin SSE connection wakes the existing polls immediately. The old intervals remain the fallback. There is no WebSocket or tRPC subscription. See §6.
 
@@ -613,7 +613,7 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
 
 **Marking read.** The thread calls `chat.read` with the highest incoming `seq` when three things hold: new incoming messages have rendered, the page is visible, and the log is scrolled within 80 px of the bottom.
 
-**Offline.** The badge is hidden while offline, on both the top-bar icon and the sidebar item.
+**Offline.** The badge is hidden while offline, on both the dock's People tab and the sidebar item.
 
 ### Push notifications (inside the existing single worker cycle)
 
@@ -658,24 +658,19 @@ Every `unreadAt` is stamped **by the server** (`new Date().toISOString()`) when 
 
 ### Where chat lives
 
-**Phone (below `lg`).** A **Messages** icon link (icon `message`, a 40 px circle) sits in the sticky top bar between the status pill and the account avatar. The unread badge sits on its top-right corner: `absolute -right-0.5 -top-0.5`, the same pill classes as the dock badges. The link gets `bg-primary-soft` and `aria-current="page"` while on Messages. The 6-tab dock is unchanged.
+**Phone (below `lg`).** The dock (`PhoneDock` in `phone-dock.tsx`) is Schedule, Tasks, a raised Today button, Classes and People. People covers both `messages` and `people`: a Chats / Friends switch (`DockGroupSwitch`) sits at the top of both views, and the tab opens on Chats while anything is unread, otherwise on whichever half was used last on this device. Classes covers `classes` and `school` the same way (My classes / School). Routes are unchanged, so `/messages` and `/school` still work. The People tab's dot counts unread chats plus friend requests; its hidden description (`DOCK_COUNT_IDS.people`) reads both, for example "1 unread chat, 1 friend request".
 
-**Badge accessibility** matches the Tasks and People badges, so all three read the same way. Counts live in hidden spans referenced by `aria-describedby` (`COUNT_IDS` in `shell.tsx`, which includes `messages: 'nav-chat-count'`): one hidden `<span id="nav-chat-count" hidden>` holds "1 unread chat" / "{n} unread chats" beside the existing ones, and both the top-bar link and the sidebar link point at it.
+**Badge accessibility** matches across surfaces. Counts live in hidden spans referenced by `aria-describedby`: `COUNT_IDS` in `shell.tsx` for the sidebar (`messages: 'nav-chat-count'` holds "1 unread chat" / "{n} unread chats"), and `DOCK_COUNT_IDS` in `phone-dock.tsx` for the dock.
 
 The Playwright locator follows the same choice (§7, Accessible names).
 
-Why not the alternatives:
-- **A 7th tab:** it would give about 52 px per tab at 390 px, and "Schedule" at 10.5 px bold barely fits in that.
-- **A sub-view of People:** it would hide the most-used social action behind the least-used one (the directory), and mix friend-request and message badges.
-- **Replacing Classes:** it would bury setup, which PLAN.md treats as the heart of the product.
-
-A top-bar messages icon is the pattern students know from Instagram, and it can be reached in one tap from every view. The status pill is already icon-only below 480 px, so the space exists (about 110 + 28 + 40 + 32 px plus gaps).
+Why this layout: the original top-bar icon sat in the corner a thumb can't reach. The owner picked it from five mockups (`mockups/messages-entry.html`). A 7th tab was too cramped at 360 px, and folding School into Classes keeps the dock symmetric around Today.
 
 **Desktop (`lg` and up).** Messages is a 7th sidebar item after People (`VIEW_ICONS.messages = 'message'`), with a `SidebarMenuBadge` like the ones on Tasks and People.
 
-**Routing.** The `View` union gains `'messages'`. The `VIEWS` element type gains an optional `dock?: boolean`, and `VIEWS` gains `{ id: 'messages', label: 'Messages', dock: false }` last. `TabBar` renders `VIEWS.filter(v => v.dock !== false)`, and the sidebar still maps all of `VIEWS`. `parseHash` already resolves any `VIEWS` id, so no routing code changes. `Shell` gains the props `chatUnread: number | null` (`null` while offline, which hides both badges), `immersive: boolean` and `chatPush: boolean`. The routes are `/messages` (the list), `/messages?with=<userId>` (a thread) and, since §11, `/messages?room=global` (the Global chat room).
+**Routing.** The `View` union gains `'messages'`, and `VIEWS` gains `{ id: 'messages', label: 'Messages' }` last. The sidebar maps all of `VIEWS`; the phone dock groups them itself (`DOCK_GROUPS`). `parseHash` already resolves any `VIEWS` id, so no routing code changes. `Shell` gains the props `chatUnread: number | null` (`null` while offline, which hides both badges), `immersive: boolean` and `chatPush: boolean`. The routes are `/messages` (the list), `/messages?with=<userId>` (a thread) and, since §11, `/messages?room=global` (the Global chat room).
 
-**Inside a thread on the phone.** The dock is hidden. Tracker passes `immersive = view === 'messages' && (params.has('with') || params.get('room') === 'global')`, so the Global chat room (§11) hides it too, and `TabBar` isn't rendered then.
+**Inside a thread on the phone.** The dock is hidden. Tracker passes `immersive = view === 'messages' && (params.has('with') || params.get('room') === 'global')`, so the Global chat room (§11) hides it too, and neither `PhoneDock` nor the group switch is rendered then.
 - `app-main` becomes `flex flex-col pb-0` with `height: var(--chat-h, calc(100dvh - 3.5rem))`. Shell's own banners (session error, sync failure) stay first in the column. The thread is `min-h-0 flex-1`, so a banner shrinks the log instead of pushing the composer off screen.
 - `--chat-h` is set on `document.documentElement` by `useChatViewport()` in `use-chat.ts`, only while a phone thread is mounted. It holds `visualViewport.height − document.querySelector('.app-topbar').offsetHeight` in px. The top bar's height includes `env(safe-area-inset-top)` once `viewportFit: 'cover'` is on, so it is measured instead of hard-coded. The value is updated on `visualViewport` `resize` and `scroll`, and the property is removed on unmount. iOS Safari ignores the `interactive-widget` viewport key, so this hook is what keeps the composer above the iOS keyboard. On Android it is harmless either way. `layout.tsx` needs no chat change. (Its viewport sets `interactiveWidget: 'resizes-content'` and `viewportFit: 'cover'` globally. Chat neither depends on that nor conflicts with it.)
 - The composer sits at the bottom with `pb-[max(8px,env(safe-area-inset-bottom))]`.
@@ -853,7 +848,7 @@ Add `message: MessageCircle`, `send: SendHorizontal` and `bellOff: BellOff`.
 
 | Element | Locator |
 | --- | --- |
-| Nav (top bar on phone, sidebar on desktop) | `getByRole('link', { name: 'Messages' })` |
+| Nav (sidebar on desktop; the dock's People tab on phone) | `getByRole('link', { name: 'Messages' })`, or on phones `getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'People' })` |
 | Badge | `expect(getByRole('link', { name: 'Messages' })).toHaveAccessibleDescription('1 unread chat')`, the same `aria-describedby` pattern as the Tasks and People badges. The "badge is gone" checks assert an empty description. |
 | Heading | `getByRole('heading', { name: 'Messages', exact: true })` |
 | Lists | `getByRole('list', { name: 'Chats' })`, `getByRole('list', { name: 'Start a chat' })` |
@@ -1122,7 +1117,7 @@ There is no worker in the e2e server, so push is covered by Vitest only.
 - A support or Quasar chat account, and owner broadcast messages.
 - Account deletion and data export. The retention rules in §3.5 are the only deletion.
 - Verification-gated chat. It exists as `CHAT.requiresVerification`, off by default.
-- Changing the six-tab phone dock, a Today-view chat widget, or an unread count in the document title.
+- A Today-view chat widget, or an unread count in the document title.
 
 ## 11. Global chat (migration 7)
 
