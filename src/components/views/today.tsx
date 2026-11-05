@@ -8,6 +8,7 @@ import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoo
 import { heroBase } from '@/lib/color';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
+import { useBeta } from '../betas';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
@@ -169,7 +170,7 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
         </div>
         <div className="grid justify-items-start gap-1 sm:justify-items-end">
           {countdown
-            ? <Countdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} minutes={until} />
+            ? <Countdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} now={now.getTime()} />
             : <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{when}</span>}
         </div>
       </div>
@@ -185,26 +186,34 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
   </Card>;
 }
 
+/** Beta key for the clipped, sliding countdown (Countdown below). */
+const COUNTDOWN_SLIDE_BETA = 'countdown-slide';
+
 /**
  * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
  * tapped. Minutes round up in both modes (see minutesLeft). Both forms share one grid
  * cell, so the button is always as wide as the wider form and nothing under the pointer
- * changes size; the hover can't end and restart itself. The characters cascade between the
- * forms, and each changed digit rolls in as the seconds tick.
+ * changes size; the hover can't end and restart itself. Complete lines slide together,
+ * and each changed digit rolls inside its own clipped cell as the seconds tick.
  */
-function Countdown({ label, target, minutes }: { label: string; target: string; minutes: number }) {
+function Countdown({ label, target, now }: { label: string; target: string; now: number }) {
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const [tick, setTick] = useState(() => Date.now());
+  const [tick, setTick] = useState(now);
   const precise = hover || focus || pinned;
+  const slide = useBeta(COUNTDOWN_SLIDE_BETA);
   // The hidden seconds form keeps time too, so revealing it moves only the characters it already shows.
   useEffect(() => {
-    const timer = setInterval(() => setTick(Date.now()), 1000);
-    return () => clearInterval(timer);
+    const refresh = () => setTick(Date.now());
+    refresh();
+    const timer = setInterval(refresh, 1000);
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
   const seconds = Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000));
-  const compact = formatMinutes(precise ? Math.ceil(seconds / 60) : minutes);
+  const compact = formatMinutes(Math.ceil(seconds / 60));
   const exact = formatSeconds(seconds);
   // Refresh the clock in the same event as the state change so the first precise frame is current.
   const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };
@@ -213,21 +222,52 @@ function Countdown({ label, target, minutes }: { label: string; target: string; 
     onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHover(true); }} onPointerLeave={() => setHover(false)}
     onFocus={(event) => show(setFocus, event.currentTarget.matches(':focus-visible'))()} onBlur={show(setFocus, false)} onClick={show(setPinned, !pinned)}>
     <small aria-hidden="true" className="mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white">{label}</small>
-    <span aria-hidden="true" className="inline-grid justify-items-end">
-      <Cascade text={compact} shown={!precise} away="-translate-y-[0.35em]" />
-      <Cascade text={exact} shown={precise} away="translate-y-[0.35em]" roll />
-    </span>
+    {slide
+      ? <>{/* Adjacent lines travel the same distance at the same time, so no blank gap opens between them. */}
+        <span aria-hidden="true" className="pointer-events-none inline-grid justify-items-start overflow-hidden leading-[1.2] [clip-path:inset(0)]">
+          <Cascade text={compact} shown={!precise} away="-translate-y-full" />
+          <Cascade text={exact} shown={precise} away="translate-y-full" />
+        </span></>
+      : <span aria-hidden="true" className="inline-grid justify-items-start">
+        <FadeCascade text={compact} shown={!precise} away="-translate-y-[0.35em]" />
+        <FadeCascade text={exact} shown={precise} away="translate-y-[0.35em]" roll />
+      </span>}
   </button>;
 }
 
 /**
- * One form of the countdown, a character per span so they can move one after another.
+ * One complete line of the countdown. Characters are keyed from the end, so
+ * "10:00" turning into "9:59" rolls each digit in its own clipped cell.
+ */
+function Cascade({ text, shown, away }: { text: string; shown: boolean; away: string }) {
+  const chars = [...text];
+  return <span className={cn('col-start-1 row-start-1 h-[1.2em] whitespace-pre transition-[translate] duration-[240ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', !shown && away)} data-shown={shown}>
+    {chars.map((char, index) => <span key={chars.length - index}
+      className="inline-block h-[1.2em] overflow-hidden align-top [clip-path:inset(0)]"><Roll char={char} still={!shown} /></span>)}
+  </span>;
+}
+
+/**
+ * The countdown's form outside the countdown-slide beta, a character per span so they can move one after another.
  * With `roll`, a character remounts when it changes, which plays countdown-tick on just that digit.
  */
-function Cascade({ text, shown, away, roll }: { text: string; shown: boolean; away: string; roll?: boolean }) {
+function FadeCascade({ text, shown, away, roll }: { text: string; shown: boolean; away: string; roll?: boolean }) {
   return <span className="col-start-1 row-start-1" data-shown={shown}>
     {[...text].map((char, index) => <span key={roll ? `${index}${char}` : index} style={{ transitionDelay: `${index * 28}ms` }}
       className={cn('inline-block transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', roll && 'countdown-tick', !shown && `${away} opacity-0`)}>{char}</span>)}
+  </span>;
+}
+
+/**
+ * A character that rolls up like an odometer when it changes: the old one leaves upward as the new one rises in.
+ * A `still` character (the hidden form keeps time too) just changes, and the old one goes once the roll ends.
+ */
+function Roll({ char, still }: { char: string; still: boolean }) {
+  const [state, setState] = useState({ char, previous: char, turns: 0, rolling: false });
+  if (state.char !== char) setState({ char, previous: state.char, turns: state.turns + 1, rolling: !still });
+  return <span key={state.turns} className={cn('relative inline-block h-[1.2em] align-top', state.rolling && 'countdown-roll')} onAnimationEnd={() => setState((current) => ({ ...current, rolling: false }))}>
+    {state.rolling && <span className="absolute bottom-full left-0">{state.previous}</span>}
+    {char}
   </span>;
 }
 
