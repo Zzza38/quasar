@@ -14,6 +14,7 @@ import { parsePlatforms, SetupGuideService } from './setup-guides';
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
 import { BetaService } from './betas';
+import { seedSchoolMember } from './global-chat';
 import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
 import { ROLE_PERMISSIONS, isStaffRole, staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
@@ -388,6 +389,8 @@ export class Service {
       // Switching schools ends membership of the old one, so an open proposal there is withdrawn.
       if (previousSchool && previousSchool !== school.id) community.withdrawProposals(id, previousSchool);
       this.db.prepare('UPDATE users SET school_id=?,reviewed_version=? WHERE id=?').run(school.id, school.version, id);
+      // A new school's room starts read up to now (docs/CHAT.md §16).
+      if (previousSchool !== school.id) seedSchoolMember(this.db, id, school.id);
       this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);
       community.onJoin(id, school.id);
       this.audit(id, 'school.join', school.id, {choice: input.choice});
