@@ -6,9 +6,6 @@ import type { View } from './app-state';
 import { Icon, type IconName } from './icon';
 import { Segmented } from './primitives';
 
-/** The beta that turns on this dock (see README "Running a beta"). */
-export const PHONE_DOCK_BETA = 'phone-dock';
-
 /** The two dock tabs that each cover two views. The first view in each pair is the default. */
 export type DockGroup = 'classes' | 'people';
 export const DOCK_GROUPS: Record<DockGroup, [View, View]> = { classes: ['classes', 'school'], people: ['messages', 'people'] };
@@ -66,13 +63,14 @@ export function DockCountDescriptions({ counts }: { counts: DockCounts }) {
 }
 
 /**
- * The phone dock in the phone-dock beta: Schedule and Tasks, a raised Today button in the middle, then Classes
+ * No `title` on the tabs: with no count to describe, browsers would read the title as the description ("People, People").
+ * The phone dock: Schedule and Tasks, a raised Today button in the middle, then Classes
  * (with School) and People (with Messages). Every view is one tap away, and nothing hides in the top bar.
  */
 export function PhoneDock({ view, counts, last, onTab }: { view: View; counts: DockCounts; last: Partial<Record<DockGroup, View>>; onTab: (active: boolean) => void }) {
   const peopleCount = counts.chatCount + counts.requestCount;
   const tab = (target: View, active: boolean, label: string, icon: IconName, count = 0, countId?: string) =>
-    <a href={`#${target}`} aria-label={label} title={label} aria-current={active ? 'page' : undefined} aria-describedby={count > 0 ? countId : undefined}
+    <a href={`#${target}`} aria-label={label} aria-current={active ? 'page' : undefined} aria-describedby={count > 0 ? countId : undefined}
       onClick={(event: MouseEvent<HTMLAnchorElement>) => { if (event.button === 0) onTab(active && target === view); }}
       className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
       <Icon name={icon} size={21} strokeWidth={active ? 2.4 : 2} />
@@ -88,7 +86,7 @@ export function PhoneDock({ view, counts, last, onTab }: { view: View; counts: D
       {tab('tasks', view === 'tasks', 'Tasks', 'tasks', counts.taskCount, DOCK_COUNT_IDS.tasks)}
       {/* The Today button: a circle that rises a little above the dock, labelled like the other tabs. Flat card fill
           and a border, the soft accent when active, never a glow. The negative margin keeps the row at tab height. */}
-      <a href="#today" aria-label="Today" title="Today" aria-current={onToday ? 'page' : undefined}
+      <a href="#today" aria-label="Today" aria-current={onToday ? 'page' : undefined}
         onClick={(event: MouseEvent<HTMLAnchorElement>) => { if (event.button === 0) onTab(onToday); }}
         className={cn('group/today -mt-5 flex flex-col items-center gap-0.5 self-end pb-1.5 text-[10.5px] font-bold no-underline outline-none hover:no-underline', onToday ? 'text-primary-soft-foreground' : 'text-muted-foreground')}>
         <span className={cn('grid size-12 place-items-center rounded-full border shadow-float transition-colors group-focus-visible/today:ring-2 group-focus-visible/today:ring-ring group-focus-visible/today:ring-offset-2 group-focus-visible/today:ring-offset-background',

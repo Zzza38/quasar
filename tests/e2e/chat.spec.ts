@@ -83,10 +83,12 @@ async function choose(select: Locator, option: string) {
 }
 
 /**
- * The Messages nav link (top bar on phones, sidebar on desktop). Its badge is decorative; the count is the
- * link's accessible description ("1 unread chat"), and an empty description means no badge.
+ * Where the unread count shows: the sidebar's Messages link on desktop, the dock's People tab on phones (which opens
+ * Messages while anything is unread). The badge is decorative; the count is the link's accessible description
+ * ("1 unread chat"), and an empty description means no badge.
  */
-const badge = (page: Page) => page.getByRole('link', { name: 'Messages', exact: true }).filter({ visible: true }).first();
+const badge = (page: Page) => page.getByRole('link', { name: 'Messages', exact: true })
+  .or(page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'People', exact: true })).filter({ visible: true }).first();
 
 /**
  * A closed row looks the same however the chat closed: the name, "Chat closed", a menu with Report and, for a
@@ -121,7 +123,7 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   const f = seed({ friends: [['alice', 'bob'], ['bob', 'cara'], ['alice', 'cara']] });
   const bob = await phone(browser, f.bob);
   await bob.goto('/');
-  await expect(bob.locator('.tabbar a')).toHaveCount(6);
+  await expect(bob.locator('.tabbar a')).toHaveCount(5);
   await expect(badge(bob)).toHaveAccessibleDescription('');
 
   const alice = await signedIn(browser, f.alice);

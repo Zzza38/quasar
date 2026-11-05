@@ -2,20 +2,14 @@ import { test, expect, hydrating } from './fixtures';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { ChatService } from '../../src/server/chat';
 import { CommunityService } from '../../src/server/community';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
-import { PHONE_DOCK_BETA } from '../../src/components/phone-dock';
 
-/** A student in the phone-dock beta with one friend who sent an unread message, and one pending friend request. */
+/** A student with one friend who sent an unread message, and one pending friend request. */
 function seed() {
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === PHONE_DOCK_BETA)) writeBetaRegistry(createBeta(registry, { key: PHONE_DOCK_BETA, name: 'Phone dock', code: 'DOCK-0001' }), listPath);
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -33,7 +27,6 @@ function seed() {
     community.request(me, maya); community.respond(maya, me, true);
     community.request(rory, me);
     new ChatService(service).send(maya, me, randomUUID(), 'are you doing the lab writeup tonight');
-    db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(PHONE_DOCK_BETA, me, new Date().toISOString());
     return { me };
   } finally { db.close(); }
 }
@@ -48,7 +41,7 @@ async function phone(browser: Browser, id: string, width = 390): Promise<Page> {
   return hydrating(await context.newPage());
 }
 
-test('phone dock beta: Home sits in the middle, People holds chats and friends, Classes holds the school', async ({ browser }) => {
+test('phone dock: Home sits in the middle, People holds chats and friends, Classes holds the school', async ({ browser }) => {
   test.setTimeout(120_000);
   const { me } = seed();
   const page = await phone(browser, me);
