@@ -8,6 +8,7 @@ import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/serve
 import { BetaService } from '../../src/server/betas';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
+import sharp from 'sharp';
 
 /** A student in a school, joined to the countdown-slide beta. */
 function seed() {
@@ -37,8 +38,94 @@ async function authenticate(context: BrowserContext, id: string) {
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
 }
 
-/** Whether a form's first character has slid into place ("1") or out of the clipped number ("0"). */
-const placed = (form: Locator) => form.locator('span').first().evaluate((char) => getComputedStyle(char).translate === 'none' ? '1' : '0');
+/** Whether a complete line has slid into place ("1") or out of the clipped number ("0"). */
+const placed = (form: Locator) => form.evaluate((line) => getComputedStyle(line).translate === 'none' ? '1' : '0');
+
+async function whitePixels(number: Locator, path?: string): Promise<number> {
+  const { data, info } = await sharp(await number.screenshot({ path })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  let count = 0;
+  for (let i = 0; i < data.length; i += info.channels)
+    if (data[i] > 220 && data[i + 1] > 220 && data[i + 2] > 220) count++;
+  return count;
+}
+
+for (const width of [390, 1000]) {
+  test(`countdown stays visible throughout slides and reversals at ${width}px`, async ({ page, context }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await authenticate(context, seed());
+    await page.clock.setFixedTime(new Date('2026-09-17T12:35:37Z'));
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Hide setup checklist' }).click();
+    await page.mouse.move(0, 0);
+    const countdown = page.getByRole('button', { name: /^Ends in/ });
+    const number = countdown.locator(':scope > span');
+    const lines = number.locator('[data-shown]');
+    await expect(countdown).toHaveAccessibleName('Ends in 25 min');
+    const baseline = await whitePixels(number);
+
+    for (const enter of [true, false, true, false]) {
+      if (enter) await countdown.hover();
+      else await page.mouse.move(0, 0);
+      await number.evaluate(element => element.getAnimations({ subtree: true }).forEach(animation => animation.pause()));
+      for (const time of [0, 30, 60, 90, 120, 180, 240]) {
+        await number.evaluate((element, time) => element.getAnimations({ subtree: true }).forEach(animation => { animation.currentTime = time; }), time);
+        const [minutes, seconds] = await Promise.all([lines.nth(0).boundingBox(), lines.nth(1).boundingBox()]);
+        // Adjacent complete lines cannot leave the empty strip caused by staggered 130% slides.
+        expect(Math.abs(seconds!.y - minutes!.y - minutes!.height)).toBeLessThan(1);
+        // Revealing seconds keeps the first digit anchored beside the label.
+        expect(Math.abs(seconds!.x - minutes!.x)).toBeLessThan(1);
+        expect(await whitePixels(number, testInfo.outputPath(`${enter ? 'enter' : 'leave'}-${time}.png`)), `visible digits at ${time}ms, entering=${enter}`).toBeGreaterThan(baseline * 0.4);
+      }
+      await number.evaluate(element => element.getAnimations({ subtree: true }).forEach(animation => animation.finish()));
+    }
+
+    // Reverse before a slide finishes, including a timer tick during the reversal.
+    await countdown.hover();
+    await page.waitForTimeout(60);
+    await page.mouse.move(0, 0);
+    await page.clock.setFixedTime(new Date('2026-09-17T12:36:00Z'));
+    await countdown.hover();
+    await expect(countdown).toHaveAccessibleName('Ends in 24:00 (minutes and seconds)');
+    await expect.poll(() => placed(lines.last())).toBe('1');
+    expect(await whitePixels(number)).toBeGreaterThan(baseline * 0.4);
+
+    await page.clock.setFixedTime(new Date('2026-09-17T12:36:01Z'));
+    await expect(countdown).toHaveAccessibleName('Ends in 23:59 (minutes and seconds)');
+    await number.evaluate(element => element.getAnimations({ subtree: true }).forEach(animation => animation.pause()));
+    for (const time of [0, 60, 120, 180, 240, 300, 360]) {
+      await number.evaluate((element, time) => element.getAnimations({ subtree: true }).forEach(animation => { animation.currentTime = time; }), time);
+      expect(await whitePixels(number, testInfo.outputPath(`roll-${time}.png`)), `visible digits during rollover at ${time}ms`).toBeGreaterThan(baseline * 0.4);
+    }
+    await number.evaluate(element => element.getAnimations({ subtree: true }).forEach(animation => animation.finish()));
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.mouse.move(0, 0);
+    await expect(countdown).toHaveAccessibleName('Ends in 24 min');
+    await countdown.hover();
+    await expect(countdown).toHaveAccessibleName('Ends in 23:59 (minutes and seconds)');
+    expect(await whitePixels(number)).toBeGreaterThan(baseline * 0.4);
+  });
+}
+
+test('countdown minutes keep up with seconds while the parent clock has not ticked', async ({ page, context }) => {
+  await authenticate(context, seed());
+  const start = new Date('2026-09-17T12:35:37Z');
+  await page.clock.install({ time: new Date(start.getTime() - 60_000) });
+  await page.clock.pauseAt(start);
+  await page.goto('/');
+  const countdown = page.getByRole('button', { name: /^Ends in/ });
+  await expect(countdown).toHaveAccessibleName('Ends in 25 min');
+
+  // Simulate a delayed browser timer. Only the countdown's one-second timer runs;
+  // the parent's 30-second refresh still holds the original 25-minute value.
+  await page.clock.setFixedTime(new Date('2026-09-17T12:36:37Z'));
+  await page.clock.runFor(1000);
+  await expect(countdown).toHaveAccessibleName('Ends in 24 min');
+  await countdown.hover();
+  await expect(countdown).toHaveAccessibleName('Ends in 23:23 (minutes and seconds)');
+  await page.mouse.move(0, 0);
+  await expect(countdown).toHaveAccessibleName('Ends in 24 min');
+  await expect(countdown.locator('[data-shown="true"]')).toHaveText('24 min');
+});
 
 test('countdown slide beta: the forms slide without fading, digits roll, and the number\'s edge never flickers the hover', async ({ page, context }) => {
   await authenticate(context, seed());
