@@ -216,7 +216,7 @@ function ClassCard({ people, group }: { people: People; group: ClassGroup }) {
   const { period } = group;
   const name = periodName(period);
   const color = classColor(period.class?.id, period.kind === 'lunch' ? 'lunch' : period.class ? 'class' : 'other', period.class?.color);
-  return <li className="grid content-start gap-3 rounded-2xl p-3.5 ring-1 ring-inset ring-foreground/[0.05]" style={{ background: color.soft }}>
+  return <li className="grid min-w-0 flex-1 basis-full content-start gap-3 rounded-2xl p-3.5 ring-1 ring-inset ring-foreground/[0.05] sm:basis-[calc((100%_-_0.75rem)/2)] xl:basis-[calc((100%_-_1.5rem)/3)]" style={{ background: color.soft }}>
     <div className="flex items-start gap-2.5">
       <span aria-hidden="true" className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: color.dot }} />
       <span className="grid min-w-0 flex-1">
@@ -250,7 +250,7 @@ function NowDesign({ state, people, days }: Props) {
         <h3 className="flex items-baseline gap-2 px-1 text-sm font-bold">{block.kind === 'now' ? 'Now' : 'Next'}
           <span className="text-xs font-medium text-muted-foreground">{block.kind === 'now' ? `until ${formatTime(block.period.end)}` : `${formatTime(block.period.start)} – ${formatTime(block.period.end)}`}</span>
         </h3>
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label={block.kind === 'now' ? 'Classes now' : 'Classes next'}>{block.groups.map(group => <ClassCard key={`${periodName(group.period)}-${group.period.periodId}`} people={people} group={group} />)}</ul>
+        <ul className="flex flex-wrap gap-3" aria-label={block.kind === 'now' ? 'Classes now' : 'Classes next'}>{block.groups.map(group => <ClassCard key={`${periodName(group.period)}-${group.period.periodId}`} people={people} group={group} />)}</ul>
       </div>)}
       {idle.length > 0 && <div className="grid gap-3 rounded-2xl bg-muted/60 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
         {idle.map(group => <div key={group.kind} className="grid gap-2">
