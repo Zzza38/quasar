@@ -1262,6 +1262,18 @@ CREATE INDEX chat_reaction_changes_user_time ON chat_reaction_changes(user_id, c
 
 SSE session and capacity handling: the server captures the signed session at connection, then revalidates its expiry, sign-in age, account suspension and session epoch before every event and every 25-second heartbeat. Invalid sessions receive a final `event: bye`, then the stream closes and leaves the bus. The client closes its EventSource and retries after a randomized 5 to 10 seconds. When the eight-stream account cap evicts the oldest stream, it sends `event: capacity` with `retry: 3600000` before closing. The client treats capacity as terminal, reports disconnected, and opens no replacement until the page has been hidden and becomes visible again, or the connection is manually recreated. Polling continues while SSE is disconnected.
 
+### Who reacted, who read, pasted images (beta `chat-polish`, 2026-11-10)
+
+Every message also carries `reactors: { emoji, name, avatar, me }[]`: one entry a person, in the order they reacted (a changed tapback keeps its place), at most `CHAT.reactorsShown` (50). `me` marks the viewer, whose row reads "You". Outside one-to-one chats the list leaves out people the viewer blocked, as their messages are hidden too, so it can be shorter than the counts; the client sums the difference up as "and N more". The server sends the field to everyone. Only the interface below is behind the beta, and members outside it keep the behavior described above.
+
+In the beta a pill no longer toggles the viewer's tapback. It opens a "Reactions" popover that lists who reacted, and the viewer's own row removes their tapback. Reacting stays on the action sheet's strip and the double tap. A pill's accessible name is "❤️ 2, Bob and you. Show who reacted", and the same names are its hover title.
+
+In a group, the "Read by 3" caption is a button that opens a "Read by" popover with three lists: Read, Delivered and Not delivered yet, from the receipts the thread already returns. Tapping any of the viewer's own messages, in a group or a one-to-one chat, shows its receipt beside its time, not only the newest message's.
+
+The composer takes an image pasted into the field or dropped anywhere on the window, through the same resize and limits as the "+" button. A paste that also carries plain text stays a text paste, because spreadsheets and word processors put a picture of the copied cells beside the text. A dropped file that is not an image gets "Only images can be sent here."
+
+The look changes in the beta too. The other side's bubbles use the `secondary` fill with no hairline, because the card-coloured tail had no outline and vanished on dark themes. Quote cards and the composer's reply strip lose their side bar: a 2 px border on a rounded card bent into a crescent.
+
 ## 16. School chat (migration 30)
 
 Added 2026-11-01. Every school gets one room next to the Global chat. Anyone whose current school (`users.school_id`) is that school, with names entered, can read and post. Nobody from another school can. It follows the Global chat's rules (§11) apart from who is in it.

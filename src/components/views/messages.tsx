@@ -2,9 +2,9 @@
 
 import { chatImage } from '@/client/chat-image';
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { api, errorMessage } from '@/client/api';
-import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, revealableText, type CensorMask, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
+import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, revealableText, type CensorMask, type MessageReactor, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
 import { censorSlurs, slurNotice } from '@/domain/chat-filter';
 import { parseMarkdown, plainText, type Block, type Inline } from '@/domain/markdown';
 import { chatTime, daysBetween, formatDate, formatDateTime, formatTime, instantParts, pluralize } from '@/lib/format';
@@ -12,7 +12,8 @@ import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import type { AppState } from '../app-state';
 import { AppealModal } from '../appeal';
-import { FORMAT_HINT_KEY, FORMAT_HINT_TIMES, liveQuote, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, selectionRect, swipeOffset, swipeProgress, swipeReplies } from '../chat-ui';
+import { useBeta } from '../betas';
+import { FORMAT_HINT_KEY, FORMAT_HINT_TIMES, REACTION_NAMES, imageFileFrom, liveQuote, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, reactionWhoLabel, reactorNames, selectionRect, swipeOffset, swipeProgress, swipeReplies } from '../chat-ui';
 import { NotificationNudge, NotificationNudgeChip, useChatNotifications, type ChatNotifications } from '../chat-notifications';
 import { Icon, Spinner, type IconName } from '../icon';
 import { AvatarStack, MemberAvatar } from '../member-avatar';
@@ -41,6 +42,11 @@ const SCHOOL_ROOM = 'school';
 const GLOBAL_NAME = 'Global chat';
 const SCHOOL_NAME = 'School chat';
 const groupKey = (groupId: string) => `group:${groupId}`;
+/**
+ * The beta that holds the chat polish: pasted and dropped images, the list of who reacted, the list of who read a
+ * group message, a bubble fill whose tail shows on every theme, and quotes without the side bar.
+ */
+const CHAT_POLISH = 'chat-polish';
 
 /** Gap after which a new run (and a time header) starts, even for the same sender. */
 const RUN_GAP_MS = 10 * 60_000;
@@ -137,6 +143,18 @@ export function receiptStatus(seq: number, receipts: Receipt[], group: boolean):
   if (delivered === receipts.length) return { label: 'Delivered', icon: 'checkCheck', read: false };
   if (delivered) return { label: `Delivered to ${delivered}`, icon: 'checkCheck', read: false };
   return { label: 'Sent', icon: 'check', read: false };
+}
+
+/**
+ * Who has read the viewer's message, who only received it and who has not got it yet, for the list behind a group's
+ * "Read by 3" caption. Everyone lands in exactly one list, in the order the thread sends them.
+ */
+export function receiptGroups(seq: number, receipts: Receipt[]): { read: Receipt[]; delivered: Receipt[]; waiting: Receipt[] } {
+  return {
+    read: receipts.filter((receipt) => receipt.readSeq >= seq),
+    delivered: receipts.filter((receipt) => receipt.readSeq < seq && receipt.deliveredSeq >= seq),
+    waiting: receipts.filter((receipt) => receipt.readSeq < seq && receipt.deliveredSeq < seq),
+  };
 }
 
 /** "Bob is typing…", "Bob and Cara are typing…", "Bob, Cara and 2 others are typing…" */
@@ -1185,7 +1203,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
             fresh={mountedNewest.current !== null && message.seq > mountedNewest.current}
             open={openActions === message.seq} onOpenChange={(next) => setOpenActions((current) => (next ? message.seq : current === message.seq ? null : current))}
             added={added[message.seq]} copied={copied === message.seq} onAddTask={() => void addTask(message)} onCopy={() => void copy(message)} onDelete={() => onDelete(message)} onEdit={onEdit && (() => onEdit(message))} onReport={onReport && (() => onReport(message.seq))}
-            highlighted={highlight === message.seq} canReact={canReact} reactError={reactError?.seq === message.seq ? reactError.text : ''} onReact={(emoji) => void react(message.seq, emoji)} onReply={canReact ? () => reply(message) : undefined} onJump={(target) => void jumpTo(target)} />;
+            highlighted={highlight === message.seq} canReact={canReact} reactError={reactError?.seq === message.seq ? reactError.text : ''} onReact={(emoji) => void react(message.seq, emoji)} onReply={canReact ? () => reply(message) : undefined} onJump={(target) => void jumpTo(target)} receipts={receipts} />;
         })}
       </ol>
       {/* Outside the live log: a sent message is announced once, when the log gains the confirmed copy. */}
@@ -1207,6 +1225,14 @@ const BUBBLE = 'relative min-w-0 rounded-[18px] px-3.5 py-[7px] text-[15.5px] le
 const MINE = 'bg-primary text-primary-foreground';
 /** Theirs sit on the card colour, not muted: muted is the wallpaper's own tone and would sink into it. */
 const THEIRS = 'bg-card text-foreground ring-1 ring-inset ring-foreground/[0.06]';
+/**
+ * In the chat-polish beta the other side's bubbles are a solid step away from the page instead of the card colour
+ * with a hairline: the tail has no hairline, so on dark themes a card-coloured tail vanished into the wallpaper.
+ */
+const THEIRS_SOLID = 'bg-secondary text-foreground';
+function useTheirs(): string {
+  return useBeta(CHAT_POLISH) ? THEIRS_SOLID : THEIRS;
+}
 
 /**
  * The corners a bubble shares with its neighbours in a run are tightened to 5 px: for the viewer's bubbles the right
@@ -1223,7 +1249,8 @@ function runCorners(mine: boolean, startsRun: boolean, endsRun: boolean): string
  * above the corner, sweeps out to a point 6 px past the edge at the bottom, and returns into the corner's arc.
  */
 function Tail({ mine, className }: { mine: boolean; className?: string }) {
-  return <svg aria-hidden="true" viewBox="0 0 16 16" className={cn('pointer-events-none absolute bottom-0 size-4', mine ? '-right-1.5 fill-primary' : '-left-1.5 -scale-x-100 fill-card', className)}>
+  const solid = useBeta(CHAT_POLISH);
+  return <svg aria-hidden="true" viewBox="0 0 16 16" className={cn('pointer-events-none absolute bottom-0 size-4', mine ? '-right-1.5 fill-primary' : cn('-left-1.5 -scale-x-100', solid ? 'fill-secondary' : 'fill-card'), className)}>
     <path d="M7 0H10C10 7 11.5 12.5 16 16C11.5 16 7.5 14.5 4.7 10.7Z" />
   </svg>;
 }
@@ -1232,9 +1259,10 @@ function Tail({ mine, className }: { mine: boolean; className?: string }) {
 function TypingRow({ typists, withAvatar }: { typists: Receipt[]; withAvatar: boolean }) {
   const text = typingText(typists.map((typist) => typist.displayName));
   const first = typists[0]!;
+  const theirs = useTheirs();
   return <div role="status" aria-live="polite" className="chat-bubble-in mt-2.5 flex items-end gap-2">
     {withAvatar && <MemberAvatar name={first.displayName} src={first.avatar} size="sm" />}
-    <span className={cn(BUBBLE, THEIRS, 'flex items-center gap-1 py-3')} title={text}>
+    <span className={cn(BUBBLE, theirs, 'flex items-center gap-1 py-3')} title={text}>
       {[0, 1, 2].map((dot) => <span key={dot} aria-hidden="true" className="size-2 animate-bounce rounded-full bg-muted-foreground/60" style={{ animationDelay: `${dot * 150}ms` }} />)}
       <span className="sr-only">{text}</span>
       <Tail mine={false} />
@@ -1246,7 +1274,10 @@ function TypingRow({ typists, withAvatar }: { typists: Receipt[]; withAvatar: bo
 /** The quote inside a reply bubble, the composer's strip and a pending bubble (docs/CHAT.md §15): sender and one line. */
 function QuoteCard({ reply, mine, onClick }: { reply: MessageReply; mine: boolean; onClick?: (event: MouseEvent<HTMLButtonElement>) => void }) {
   const text = reply.preview ?? 'Message unavailable';
-  const className = cn('mb-1.5 block w-full min-w-40 rounded-xl border-l-2 px-2.5 py-1.5 text-left outline-none', mine ? 'border-primary-foreground/70 bg-primary-foreground/15' : 'border-primary bg-foreground/[0.06]', onClick && 'focus-visible:ring-2 focus-visible:ring-ring');
+  // In the chat-polish beta the quote is a plain tinted card: a 2 px side border on a rounded card bends into a crescent.
+  const plain = useBeta(CHAT_POLISH);
+  const className = cn('mb-1.5 block w-full min-w-40 rounded-xl px-2.5 py-1.5 text-left outline-none', !plain && 'border-l-2',
+    mine ? cn('bg-primary-foreground/15', !plain && 'border-primary-foreground/70') : cn(plain ? 'bg-foreground/[0.08]' : 'border-primary bg-foreground/[0.06]'), onClick && 'focus-visible:ring-2 focus-visible:ring-ring');
   const body = <>
     <span className={cn('block text-[12px] font-semibold leading-tight', mine ? 'text-primary-foreground/90' : 'text-primary')}>{quoteName(reply)}</span>
     <span className={cn('block truncate text-[13px] leading-snug', mine ? 'text-primary-foreground/85' : 'text-foreground/80', reply.preview === null && 'italic')}>{text}</span>
@@ -1289,12 +1320,62 @@ type Press = { timer: ReturnType<typeof setTimeout> | null; x: number; y: number
 
 const stopEvent = (event: { stopPropagation: () => void }) => event.stopPropagation();
 
-function Bubble({ message, date, time, startsRun, endsRun, showName, status, online, mode, canModerate, fresh, open, onOpenChange, added, copied, onAddTask, onCopy, onDelete, onEdit, onReport, highlighted, canReact, reactError, onReact, onReply, onJump }: {
+const PILL = (mine: boolean) => cn('flex h-6 items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 text-[12px] leading-none shadow-sm ring-1 outline-none transition-colors select-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default', mine ? 'bg-primary-soft text-primary-soft-foreground ring-primary/40' : 'bg-card text-foreground ring-foreground/10 hover:bg-muted');
+
+/**
+ * Who reacted to a message (chat-polish beta), one row a person in the order they reacted. The viewer's row is a
+ * button that takes their tapback off. Names the server left out (a list past its cap, someone the viewer blocked)
+ * are summed up in a last line, so the rows and the pills' counts still add up.
+ */
+function ReactorList({ reactions, reactors, canReact, onRemove }: { reactions: ChatMessage['reactions']; reactors: MessageReactor[]; canReact: boolean; onRemove: (emoji: Reaction) => void }) {
+  const total = reactions.reduce((sum, reaction) => sum + reaction.count, 0);
+  const hidden = Math.max(0, total - reactors.length);
+  const row = 'flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2 py-1 text-left text-[14px]';
+  return <ul className="grid max-h-64 overflow-y-auto">
+    {reactors.map((reactor, index) => {
+      const body = <>
+        <MemberAvatar name={reactor.name} src={reactor.avatar} size="sm" />
+        <span className="grid min-w-0 flex-1">
+          <span className="truncate font-medium">{reactor.me ? 'You' : reactor.name}</span>
+          {reactor.me && canReact && <span className="text-[12px] leading-tight text-muted-foreground">Tap to remove</span>}
+        </span>
+        <span aria-hidden="true" className="text-[17px] leading-none">{reactor.emoji}</span>
+        <span className="sr-only">{REACTION_NAMES[reactor.emoji]}</span>
+      </>;
+      return <li key={index}>
+        {reactor.me && canReact
+          ? <button type="button" aria-label={`You, ${REACTION_NAMES[reactor.emoji]}. Remove your reaction`} onClick={() => onRemove(reactor.emoji)} className={cn(row, 'outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring')}>{body}</button>
+          : <div className={row}>{body}</div>}
+      </li>;
+    })}
+    {hidden > 0 && <li className="px-2 py-1.5 text-[12px] text-muted-foreground">{reactors.length ? `and ${hidden} more` : pluralize(hidden, 'reaction')}</li>}
+  </ul>;
+}
+
+/** Who read, who received and who is still waiting for one of the viewer's group messages (chat-polish beta). */
+function ReaderList({ seq, receipts }: { seq: number; receipts: Receipt[] }) {
+  const groups = receiptGroups(seq, receipts);
+  const sections: Array<[string, Receipt[]]> = [['Read', groups.read], ['Delivered', groups.delivered], ['Not delivered yet', groups.waiting]];
+  return <div className="grid max-h-72 gap-1.5 overflow-y-auto">
+    {sections.filter(([, people]) => people.length > 0).map(([title, people]) => <section key={title} aria-label={title}>
+      <h3 className="px-2 pt-1 pb-0.5 text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{title}</h3>
+      <ul className="grid">
+        {people.map((person) => <li key={person.id} className="flex min-h-9 items-center gap-2.5 px-2 py-1 text-[14px]">
+          <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span>
+        </li>)}
+      </ul>
+    </section>)}
+  </div>;
+}
+
+function Bubble({ message, date, time, startsRun, endsRun, showName, status, online, mode, canModerate, fresh, open, onOpenChange, added, copied, onAddTask, onCopy, onDelete, onEdit, onReport, highlighted, canReact, reactError, onReact, onReply, onJump, receipts }: {
   message: ChatMessage; date: string; time: string; startsRun: boolean; endsRun: boolean; showName: boolean; status: ReturnType<typeof receiptStatus>; online: boolean; mode: Mode; canModerate: boolean; fresh: boolean;
   open: boolean; onOpenChange: (open: boolean) => void; added: 'saving' | 'added' | string | undefined; copied: boolean; onAddTask: () => void; onCopy: () => void; onDelete: () => void; onEdit?: () => void; onReport?: () => void;
-  highlighted: boolean; canReact: boolean; reactError: string; onReact: (emoji: Reaction) => void; onReply?: () => void; onJump: (seq: number) => void;
+  highlighted: boolean; canReact: boolean; reactError: string; onReact: (emoji: Reaction) => void; onReply?: () => void; onJump: (seq: number) => void; receipts: Receipt[];
 }) {
   const mine = message.fromMe;
+  const polish = useBeta(CHAT_POLISH);
+  const theirs = useTheirs();
   const removed = message.body === null || message.deletedBy !== null;
   const { edited, reason } = moderation(message);
   /** What the viewer's tier may read of a removed message, and of an edited one before the edit (src/server/moderation.ts). */
@@ -1390,7 +1471,15 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
   const by = moderation(message).by;
   const editNote = edited ? (reason ? `Edited by ${by}: ${reason}` : `Edited by ${by}`) : '';
   const addError = !mine && added && added !== 'added' && added !== 'saving' ? added : '';
-  const caption = stamp || editNote || before || status || added === 'added' || addError || copied || reactError;
+  /** In the beta, the time a tap shows on any of the viewer's messages comes with who has read that one, not only the newest. */
+  const receipt = status ?? (polish && stamp && mine && !removed && (mode === 'peer' || mode === 'group') && receipts.length ? receiptStatus(message.seq, receipts, mode === 'group') : null);
+  const [readers, setReaders] = useState(false);
+  const readersButton = useRef<HTMLButtonElement>(null);
+  /** The list of who reacted, opened from the pills (beta). */
+  const [who, setWho] = useState(false);
+  const pills = useRef<HTMLSpanElement>(null);
+  const reactors: MessageReactor[] = message.reactors ?? [];
+  const caption = stamp || editNote || before || receipt || added === 'added' || addError || copied || reactError;
   const reacted_ = message.reactions.length > 0;
   return <li data-seq={message.seq} data-highlighted={highlighted || undefined} className={cn('group/msg flex', mine ? 'justify-end' : 'justify-start', startsRun ? 'mt-2.5' : 'mt-0.5', reacted_ && 'pb-3', fresh && 'chat-bubble-in')}>
     {/* In a room or group, the sender's picture sits beside the last bubble of their run; the others keep the space. */}
@@ -1412,7 +1501,7 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
             <PopoverAnchor asChild>
               <div ref={bubble} title={formatDateTime(date, time)} onClick={tap} onContextMenu={contextMenu} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={onPointerCancel}
                 style={swipe ? { transform: `translateX(${swipe}px)` } : undefined}
-                className={cn(BUBBLE, 'chat-bubble min-w-0 touch-pan-y', mine ? MINE : THEIRS, runCorners(mine, startsRun, endsRun), swipe === 0 && 'transition-transform duration-150', open && 'ring-2 ring-ring ring-offset-2 ring-offset-background', highlighted && 'chat-highlight')}>
+                className={cn(BUBBLE, 'chat-bubble min-w-0 touch-pan-y', mine ? MINE : theirs, runCorners(mine, startsRun, endsRun), swipe === 0 && 'transition-transform duration-150', open && 'ring-2 ring-ring ring-offset-2 ring-offset-background', highlighted && 'chat-highlight')}>
                 {label && <span className="sr-only">{label}</span>}
                 {message.replyTo && <QuoteCard reply={message.replyTo} mine={mine} onClick={quoteTap} />}
                 {message.image && <MessageImage src={message.image} />}
@@ -1421,10 +1510,27 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
                 {swipe > 0 && <span aria-hidden="true" style={{ opacity: swipeProgress(swipe) }} className="absolute top-1/2 -left-9 grid size-7 -translate-y-1/2 place-items-center rounded-full bg-muted text-muted-foreground ring-1 ring-foreground/[0.06]"><Icon name="reply" size={15} /></span>}
                 {/* Tapbacks hang off the bottom corner opposite the tail, like iMessage. The list item's bottom padding keeps the next run clear. */}
                 {reacted_ && <span className={cn('absolute -bottom-3 flex gap-0.5', mine ? 'left-1.5' : 'right-1.5')} onPointerDown={stopEvent} onClick={stopEvent} onContextMenu={stopEvent}>
-                  {message.reactions.map((reaction) => <button key={reaction.emoji} type="button" aria-label={reactionLabel(reaction)} aria-pressed={reaction.mine} disabled={!canReact} onClick={() => onReact(reaction.emoji)}
-                    className={cn('flex h-6 items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 text-[12px] leading-none shadow-sm ring-1 outline-none transition-colors select-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default', reaction.mine ? 'bg-primary-soft text-primary-soft-foreground ring-primary/40' : 'bg-card text-foreground ring-foreground/10 hover:bg-muted')}>
-                    <span aria-hidden="true">{reaction.emoji}</span>{reaction.count > 1 && <span aria-hidden="true" className="font-semibold tabular-nums">{reaction.count}</span>}
-                  </button>)}
+                  {polish
+                    /* Beta: a pill opens the list of who reacted, where the viewer's own row takes their tapback off. Reacting stays on the sheet and the double tap. */
+                    ? <Popover open={who} onOpenChange={setWho}>
+                      <PopoverAnchor asChild>
+                        <span ref={pills} className="flex gap-0.5">
+                          {message.reactions.map((reaction) => <button key={reaction.emoji} type="button" aria-label={reactionWhoLabel(reaction, reactors)} title={reactorNames(reaction, reactors) || undefined} aria-pressed={reaction.mine} aria-haspopup="dialog" aria-expanded={who} onClick={() => setWho((current) => !current)}
+                            className={PILL(reaction.mine)}>
+                            <span aria-hidden="true">{reaction.emoji}</span>{reaction.count > 1 && <span aria-hidden="true" className="font-semibold tabular-nums">{reaction.count}</span>}
+                          </button>)}
+                        </span>
+                      </PopoverAnchor>
+                      <PopoverContent side="bottom" align={mine ? 'start' : 'end'} sideOffset={6} collisionPadding={12} aria-label="Reactions" className="w-64 rounded-2xl p-1.5 whitespace-normal shadow-float"
+                        onInteractOutside={(event) => { if (pills.current?.contains(event.target as Node)) event.preventDefault(); }}
+                        onCloseAutoFocus={(event) => event.preventDefault()}>
+                        <ReactorList reactions={message.reactions} reactors={reactors} canReact={canReact} onRemove={(emoji) => { setWho(false); onReact(emoji); }} />
+                      </PopoverContent>
+                    </Popover>
+                    : message.reactions.map((reaction) => <button key={reaction.emoji} type="button" aria-label={reactionLabel(reaction)} aria-pressed={reaction.mine} disabled={!canReact} onClick={() => onReact(reaction.emoji)}
+                      className={PILL(reaction.mine)}>
+                      <span aria-hidden="true">{reaction.emoji}</span>{reaction.count > 1 && <span aria-hidden="true" className="font-semibold tabular-nums">{reaction.count}</span>}
+                    </button>)}
                 </span>}
               </div>
             </PopoverAnchor>
@@ -1454,7 +1560,21 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
         {stamp && <span>{formatTime(time)}</span>}
         {editNote && <span>{stamp && '· '}{editNote}</span>}
         {before && <button type="button" aria-expanded={showBefore} onClick={() => setShowBefore((current) => !current)} className="rounded-sm font-semibold text-foreground/80 underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">{showBefore ? 'Hide original' : 'See original'}</button>}
-        {status && <><Icon name={status.icon} size={13} className={status.read ? 'text-primary' : undefined} /><span className={cn(status.read && 'font-semibold text-primary')}>{status.label}</span></>}
+        {receipt && (polish && mode === 'group'
+          /* Beta: a group's "Read by 3" opens the list of who read it, who only received it and who has not yet. */
+          ? <Popover open={readers} onOpenChange={setReaders}>
+            <PopoverAnchor asChild>
+              <button ref={readersButton} type="button" aria-haspopup="dialog" aria-expanded={readers} aria-label={`${receipt.label}. Show who`} onClick={() => setReaders((current) => !current)}
+                className="-mx-1 flex items-center gap-1 rounded-md px-1 outline-none hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring">
+                <Icon name={receipt.icon} size={13} className={receipt.read ? 'text-primary' : undefined} /><span className={cn(receipt.read && 'font-semibold text-primary')}>{receipt.label}</span>
+              </button>
+            </PopoverAnchor>
+            <PopoverContent side="bottom" align="end" sideOffset={6} collisionPadding={12} aria-label="Read by" className="w-60 rounded-2xl p-1.5 text-left text-foreground shadow-float"
+              onInteractOutside={(event) => { if (readersButton.current?.contains(event.target as Node)) event.preventDefault(); }}>
+              <ReaderList seq={message.seq} receipts={receipts} />
+            </PopoverContent>
+          </Popover>
+          : <><Icon name={receipt.icon} size={13} className={receipt.read ? 'text-primary' : undefined} /><span className={cn(receipt.read && 'font-semibold text-primary')}>{receipt.label}</span></>)}
         {added === 'added' && <span role="status" className="text-success">Added to Tasks.</span>}
         {addError && <span role="alert" className="text-destructive">{addError}</span>}
         {reactError && <span role="alert" className="text-destructive">{reactError}</span>}
@@ -1539,6 +1659,44 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
       if (mounted.current) setImage(prepared);
     } catch (error) { if (mounted.current) setImageError(error instanceof Error ? error.message : 'This image could not be opened.'); }
     finally { if (mounted.current) setImageBusy(false); }
+  };
+  const polish = useBeta(CHAT_POLISH);
+  /** A file is being dragged over the window (beta): the composer says it will take it. */
+  const [dropping, setDropping] = useState(false);
+  const pick = useRef(pickImage);
+  useEffect(() => { pick.current = pickImage; });
+  /**
+   * Beta: an image dropped anywhere on the window attaches to this thread's composer, as the "+" button would. The
+   * listeners sit on the window so a drop on the log counts too, and so a missed drop never navigates the tab to the file.
+   */
+  useEffect(() => {
+    if (!polish || !online) return;
+    let depth = 0;
+    const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+    const enter = (event: DragEvent) => { if (!carriesFiles(event)) return; depth += 1; setDropping(true); };
+    const leave = (event: DragEvent) => { if (!carriesFiles(event)) return; depth = Math.max(0, depth - 1); if (!depth) setDropping(false); };
+    const over = (event: DragEvent) => { if (carriesFiles(event)) event.preventDefault(); };
+    const drop = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setDropping(false);
+      const file = imageFileFrom(event.dataTransfer);
+      if (file) void pick.current(file); else setImageError('Only images can be sent here.');
+    };
+    window.addEventListener('dragenter', enter); window.addEventListener('dragleave', leave); window.addEventListener('dragover', over); window.addEventListener('drop', drop);
+    return () => { window.removeEventListener('dragenter', enter); window.removeEventListener('dragleave', leave); window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); setDropping(false); };
+  }, [polish, online]);
+  /**
+   * Beta: pasting a copied image (a screenshot, "Copy image" on a web page) attaches it. A paste that also carries
+   * plain text stays a text paste: spreadsheets and word processors put a picture of the copied cells beside the text.
+   */
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!polish || imageBusy) return;
+    const file = imageFileFrom(event.clipboardData);
+    if (!file || event.clipboardData.getData('text/plain')) return;
+    event.preventDefault();
+    void pickImage(file);
   };
   /** The "Aa" button pins the formatting toolbar open for keyboard and touch users who cannot select text first. */
   const [tools, setTools] = useState(false);
@@ -1657,7 +1815,7 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
     {/* The toolbar floats over the selected text; the "Aa" button pins it above the field instead. One toolbar, one node. */}
     {toolbarOpen && toolbar(selection !== null)}
     {reply && <div role="status" className="ml-11 flex items-center gap-2.5 rounded-xl bg-muted/70 py-1.5 pr-1 pl-3 ring-1 ring-inset ring-foreground/[0.05]">
-      <span aria-hidden="true" className="h-8 w-0.5 shrink-0 rounded-full bg-primary" />
+      {!polish && <span aria-hidden="true" className="h-8 w-0.5 shrink-0 rounded-full bg-primary" />}
       <span className="grid min-w-0 flex-1">
         <span className="text-[12px] font-semibold leading-tight text-primary">{quoteName(reply)}</span>
         <span className={cn('truncate text-[13px] leading-snug text-muted-foreground', reply.preview === null && 'italic')}>{reply.preview ?? 'Message unavailable'}</span>
@@ -1669,9 +1827,10 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
       <IconButton label="Remove image" icon="x" size="sm" className="absolute top-1 right-1 rounded-full bg-card" onClick={() => setImage(undefined)} />
     </div>}
     {imageError && <Hint tone="danger" role="alert">{imageError}</Hint>}
+    {dropping && <Hint role="status" className="ml-11 rounded-xl border border-dashed border-primary/60 bg-primary-soft px-3 py-2 text-[13px] font-medium text-primary-soft-foreground">Drop the image to attach it.</Hint>}
     <input ref={picker} type="file" className="sr-only" aria-label="Choose message image" accept="image/jpeg,image/png,image/webp,image/gif" disabled={!online || imageBusy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void pickImage(file); }} />
     <div className="flex items-end gap-2">
-      <Button variant="ghost" className="mb-0.5 size-9 shrink-0 rounded-full px-0" aria-label="Attach image" disabled={!online || imageBusy} onClick={() => picker.current?.click()}>{imageBusy ? <Spinner /> : <span aria-hidden="true">+</span>}</Button>
+      <Button variant="ghost" className="mb-0.5 size-9 shrink-0 rounded-full px-0" aria-label="Attach image" disabled={!online || imageBusy} onClick={() => picker.current?.click()}>{imageBusy ? <Spinner /> : polish ? <Icon name="plus" size={20} /> : <span aria-hidden="true">+</span>}</Button>
       <Button variant="ghost" aria-label="Formatting" title="Formatting" aria-pressed={tools} aria-expanded={toolbarOpen} disabled={!online} className="mb-0.5 size-9 shrink-0 rounded-full px-0 text-[13px] font-bold tracking-tight text-muted-foreground aria-pressed:bg-primary-soft aria-pressed:text-primary-soft-foreground" onClick={() => setTools((current) => !current)}>Aa</Button>
       <div className="grid min-w-0 flex-1 gap-1">
         {/* The pill: one line of 16 px text at 40 px tall, the Send circle tucked into its right end. */}
@@ -1679,7 +1838,7 @@ function Composer({ chat, name, online, filtered = false }: { chat: ChatThread; 
           <Textarea ref={field} aria-label={`Message ${name}`} rows={1} autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}
             className={cn('field-sizing-fixed max-h-[7.5rem] min-h-10 resize-none border-control-border bg-card py-2 pl-4 pr-11 text-base leading-6 shadow-[inset_0_1px_2px_rgb(0_0_0/0.03)] transition-[border-radius] placeholder:text-muted-foreground/80 md:text-base dark:bg-input/20', tall ? 'rounded-[22px]' : 'rounded-full')}
             placeholder={online ? 'Message' : 'Offline'} disabled={!online} enterKeyHint="send" value={draft}
-            onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} onSelect={readSelection} onKeyUp={readSelection} onBlur={onBlur} />
+            onChange={(event) => update(event.target.value)} onKeyDown={onKeyDown} onSelect={readSelection} onKeyUp={readSelection} onBlur={onBlur} onPaste={onPaste} />
           <IconButton type="submit" label="Send" icon="arrowUp" variant="primary" disabled={!canSend} className="absolute right-1 bottom-1 size-8 rounded-full pointer-coarse:min-h-8 pointer-coarse:min-w-8 disabled:bg-muted-foreground/35 disabled:text-background disabled:opacity-100 disabled:shadow-none [&_svg]:size-[18px] [&_svg]:stroke-[2.5]" />
         </div>
         {notice && <Hint role="status" className="px-3">{notice}</Hint>}

@@ -2,6 +2,8 @@ import { test, expect, hydrating } from './fixtures';
 import { type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { ChatService } from '../../src/server/chat';
@@ -937,4 +939,80 @@ test('image messages preview, send without captions, open full size and stay pri
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try { new CommunityService(new Service(db, OWNER_EMAIL)).block(f.bob, f.alice, true); } finally { db.close(); }
   expect((await bob.request.get(url!)).status()).toBe(404);
+});
+
+test('chat polish beta: a pasted image attaches, pills list who reacted, and a group caption lists who read', async ({ browser }, testInfo) => {
+  const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
+  const key = 'chat-polish';
+  // What `npm run beta -- create chat-polish --public` writes; Alice is in it, Bob is not.
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let groupId: string;
+  try {
+    db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.alice, new Date().toISOString());
+    const groups = new GroupChatService(new Service(db, OWNER_EMAIL));
+    groupId = groups.create(f.alice, { name: 'Lab crew', memberIds: [f.bob, f.cara] }).id;
+    groups.send(f.bob, groupId, randomUUID(), 'Did anyone start the write-up?');
+    const mine = groups.send(f.alice, groupId, randomUUID(), 'Meet at 3 in the library').message;
+    groups.react(f.bob, groupId, mine.seq, '👍');
+    groups.react(f.cara, groupId, mine.seq, '❤️');
+    groups.read(f.bob, groupId, mine.seq);
+  } finally { db.close(); }
+
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto(`/messages?group=${groupId}`);
+  const log = alice.getByRole('log', { name: 'Messages in Lab crew' });
+  const sent = log.getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' });
+
+  // A pill names who is behind it and opens the list; Alice's own row takes her tapback off.
+  await sent.getByRole('button', { name: '👍 1, Bob. Show who reacted' }).click();
+  const reactions = alice.getByRole('dialog', { name: 'Reactions' });
+  await expect(reactions.getByRole('listitem')).toHaveText([/Bob/, /Cara/]);
+  await testInfo.attach('who-reacted', { body: await alice.screenshot(), contentType: 'image/png' });
+  await alice.keyboard.press('Escape');
+  await expect(reactions).toHaveCount(0);
+  await sent.hover();
+  await sent.getByRole('button', { name: 'Message actions' }).click();
+  await sent.getByRole('button', { name: 'React with heart' }).click();
+  await sent.getByRole('button', { name: '❤️ 2, Cara and you. Show who reacted' }).click();
+  await reactions.getByRole('button', { name: 'You, heart. Remove your reaction' }).click();
+  await expect(sent.getByRole('button', { name: '❤️ 1, Cara. Show who reacted' })).toBeVisible();
+
+  // The caption under Alice's newest message opens who read it and who has not got it.
+  await sent.getByRole('button', { name: 'Read by 1. Show who' }).click();
+  const readers = alice.getByRole('dialog', { name: 'Read by' });
+  await expect(readers.getByRole('region', { name: 'Read', exact: true })).toContainText('Bob');
+  await expect(readers.getByRole('region', { name: 'Not delivered yet' })).toContainText('Cara');
+  await testInfo.attach('read-by', { body: await alice.screenshot(), contentType: 'image/png' });
+  await alice.keyboard.press('Escape');
+
+  // Pasting a copied image attaches it; a paste that carries text stays a text paste.
+  const composer = alice.getByRole('textbox', { name: 'Message Lab crew' });
+  await composer.focus();
+  const paste = (withText: boolean) => composer.evaluate(async (field, text) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320; canvas.height = 200;
+    canvas.getContext('2d')!.fillRect(0, 0, 320, 200);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((result) => resolve(result!), 'image/png'));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], 'screenshot.png', { type: 'image/png' }));
+    if (text) data.setData('text/plain', 'cells');
+    return !field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, withText);
+  expect(await paste(true)).toBe(false);
+  await expect(alice.getByAltText('Image to send')).toHaveCount(0);
+  expect(await paste(false)).toBe(true);
+  await expect(alice.getByAltText('Image to send')).toBeVisible();
+  await composer.press('Enter');
+  await expect(log.getByAltText('Message attachment', { exact: true })).toBeVisible();
+
+  // Bob is outside the beta: his pill still toggles his own reaction, and nothing opens a list.
+  const bob = await signedIn(browser, f.bob);
+  await bob.goto(`/messages?group=${groupId}`);
+  const bobs = bob.getByRole('log', { name: 'Messages in Lab crew' }).getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' });
+  await bobs.getByRole('button', { name: '👍 1, you reacted' }).click();
+  await expect(bobs.getByRole('button', { name: /👍/ })).toHaveCount(0);
+  await expect(bob.getByRole('dialog', { name: 'Reactions' })).toHaveCount(0);
 });

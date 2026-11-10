@@ -3,7 +3,7 @@
  * the quote shown for a reply, and the maths behind swipe-to-reply. Kept free of React so they can be unit tested.
  */
 
-import { type MessageReaction, type MessageReply, type Reaction } from '@/domain/chat';
+import { type MessageReaction, type MessageReactor, type MessageReply, type Reaction } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 
@@ -18,6 +18,31 @@ export function reactionToggleLabel(emoji: Reaction): string {
 /** A pill under a bubble: "❤️ 2, you reacted" or "👍 1". */
 export function reactionLabel(reaction: MessageReaction): string {
   return `${reaction.emoji} ${reaction.count}${reaction.mine ? ', you reacted' : ''}`;
+}
+
+/**
+ * A pill's name once tapping it lists who reacted: "❤️ 2, Bob and you. Show who reacted". Names come from `reactors`
+ * for that emoji; a count larger than the names (a long list was cut, or someone is blocked) ends in "and N more".
+ */
+export function reactionWhoLabel(reaction: MessageReaction, reactors: MessageReactor[]): string {
+  const who = reactorNames(reaction, reactors);
+  return `${reaction.emoji} ${reaction.count}${who ? `, ${who}` : ''}. Show who reacted`;
+}
+
+/** "Bob", "Bob and you", "Bob, Cara and you", "Bob, Cara and 3 more": the viewer goes last, as "you". */
+export function reactorNames(reaction: MessageReaction, reactors: MessageReactor[]): string {
+  const mine = reactors.filter((reactor) => reactor.emoji === reaction.emoji);
+  const names = [...mine.filter((reactor) => !reactor.me).map((reactor) => reactor.name), ...(mine.some((reactor) => reactor.me) ? ['you'] : [])];
+  const shown = names.slice(0, 3);
+  const more = Math.max(0, reaction.count - shown.length);
+  if (!shown.length) return '';
+  if (more) return `${shown.join(', ')} and ${more} more`;
+  return shown.length === 1 ? shown[0]! : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+}
+
+/** The first image file in a paste or a drop, if it carries one (a copied screenshot, a dragged photo). */
+export function imageFileFrom(data: { files?: ArrayLike<File> | null } | null | undefined): File | null {
+  return Array.from(data?.files ?? []).find((file) => file.type.startsWith('image/')) ?? null;
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */

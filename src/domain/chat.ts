@@ -8,7 +8,7 @@ import { censorSlurs, joinsIntoSlur, slurRanges } from './chat-filter';
  */
 export const CHAT = {
   imageMaxBytes: 1_000_000, imageMaxDimension: 1600,
-  maxLength: 1000, reactionsPerMinute: 60, perMinute: 20, perDay: 500, newChatsPerDay: 20,
+  maxLength: 1000, reactionsPerMinute: 60, reactorsShown: 50, perMinute: 20, perDay: 500, newChatsPerDay: 20,
   page: 50, maxChanges: 200, evidence: 30, evidenceBefore: 15, evidenceAfter: 14,
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
@@ -236,6 +236,8 @@ export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: s
 export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'] as const;
 export type Reaction = typeof REACTIONS[number];
 export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
+/** One person's tapback, for the list of who reacted. `me` marks the viewer, whose row reads "You". */
+export type MessageReactor = { emoji: Reaction; name: string; avatar: string | null; me: boolean };
 export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
 export const chatImageSchema = z.string().max(Math.ceil(CHAT.imageMaxBytes * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
-export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[] };
+export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[]; reactors: MessageReactor[] };

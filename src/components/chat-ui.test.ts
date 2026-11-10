@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveQuote, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
+import { imageFileFrom, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
 
 describe('reaction names', () => {
   it('names the strip toggles by the emoji', () => {
@@ -82,5 +82,28 @@ describe('swipe to reply', () => {
     expect(swipeProgress(SWIPE_MAX)).toBe(1);
     expect(swipeReplies(SWIPE_THRESHOLD - 1)).toBe(false);
     expect(swipeReplies(SWIPE_THRESHOLD)).toBe(true);
+  });
+});
+
+describe('who reacted', () => {
+  const bob = { emoji: '❤️' as const, name: 'Bob', avatar: null, me: false };
+  const cara = { emoji: '❤️' as const, name: 'Cara', avatar: null, me: false };
+  const me = { emoji: '❤️' as const, name: 'Alice', avatar: null, me: true };
+  it('names the people behind a pill, the viewer last', () => {
+    expect(reactorNames({ emoji: '❤️', count: 1, mine: false }, [bob])).toBe('Bob');
+    expect(reactorNames({ emoji: '❤️', count: 2, mine: true }, [me, bob])).toBe('Bob and you');
+    expect(reactorNames({ emoji: '❤️', count: 3, mine: true }, [me, bob, cara])).toBe('Bob, Cara and you');
+    expect(reactionWhoLabel({ emoji: '❤️', count: 2, mine: true }, [me, bob])).toBe('❤️ 2, Bob and you. Show who reacted');
+  });
+  it('only counts the pill’s own emoji and sums up the names it does not have', () => {
+    expect(reactorNames({ emoji: '👍', count: 1, mine: false }, [bob])).toBe('');
+    expect(reactorNames({ emoji: '❤️', count: 5, mine: false }, [bob, cara])).toBe('Bob, Cara and 3 more');
+    expect(reactionWhoLabel({ emoji: '👍', count: 1, mine: false }, [])).toBe('👍 1. Show who reacted');
+  });
+  it('finds the image in a paste or a drop', () => {
+    const text = { type: 'text/plain' } as File, png = { type: 'image/png' } as File;
+    expect(imageFileFrom({ files: [text, png] })).toBe(png);
+    expect(imageFileFrom({ files: [text] })).toBeNull();
+    expect(imageFileFrom(null)).toBeNull();
   });
 });

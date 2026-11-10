@@ -1,8 +1,9 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, REACTIONS, type Reaction, type MessageExtras, type MessageReaction } from '@/domain/chat';
+import { CHAT, REACTIONS, type Reaction, type MessageExtras, type MessageReaction, type MessageReactor } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
+import { AVATAR_COLUMNS, avatarUrl, type AvatarRow } from './avatars';
 import type { Db } from './db';
 
 export const reactionSchema = z.object({ seq: z.number().int().positive(), emoji: z.enum(REACTIONS).nullable() });
@@ -40,6 +41,19 @@ export function reactionsFor(db: Db, kind: Kind, viewer: string, seq: number): M
   });
 }
 
+/**
+ * Who reacted, in the order they did, for the "Reactions" list under a pill. The viewer is flagged instead of named.
+ * Outside a one-to-one chat, people the viewer blocked are left out (their messages are hidden from the viewer too),
+ * so the list can be shorter than the counts. Capped at CHAT.reactorsShown names per message.
+ */
+export function reactorsFor(db: Db, kind: Kind, viewer: string, seq: number): MessageReactor[] {
+  const blocked = kind === 'peer' ? '' : 'AND NOT EXISTS(SELECT 1 FROM blocks b WHERE b.blocker_id=@viewer AND b.blocked_id=r.user_id)';
+  const rows = db.prepare(`SELECT r.emoji, u.id, u.display_name, ${AVATAR_COLUMNS.split(', ').map(column => `u.${column}`).join(', ')}
+    FROM ${tables[kind][1]} r JOIN users u ON u.id=r.user_id WHERE r.message_seq=@seq ${blocked} ORDER BY r.rowid LIMIT @limit`)
+    .all({ seq, viewer, limit: CHAT.reactorsShown }) as (AvatarRow & { emoji: Reaction; display_name: string })[];
+  return rows.map(row => ({ emoji: row.emoji, name: row.display_name, avatar: avatarUrl(row), me: row.id === viewer }));
+}
+
 /** Resolve quotes from a self-join at read time, never from a frozen copy of the target's text. */
 export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): MessageExtras {
   const [messages, , key] = tables[kind];
@@ -53,13 +67,15 @@ export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): 
   const visible = row.reply_to_seq !== null && row.target_seq !== null && !row.deleted_at && (!!row.body || !!row.image)
     && targetExists(db, kind, viewer, row.reply_to_seq, row.scope ?? undefined);
   const attachment = db.prepare(`SELECT id, image, deleted_at FROM ${messages} WHERE seq=?`).get(seq) as { id: string; image: string | null; deleted_at: string | null };
+  const reactions = reactionsFor(db, kind, viewer, seq);
   return {
     image: attachment.image && !attachment.deleted_at ? `/api/chat/images/${kind}/${seq}` : null,
     replyTo: row.reply_to_seq === null ? null : {
       seq: row.reply_to_seq, fromMe: visible && row.sender_id === viewer, senderName: visible ? row.display_name ?? '' : '',
       preview: visible ? censorSlurs(plainText(row.body!)).replace(/\s+/g, ' ').trim().slice(0, 140) || (row.image ? 'Photo' : '') : null,
     },
-    reactions: reactionsFor(db, kind, viewer, seq),
+    reactions,
+    reactors: reactions.length ? reactorsFor(db, kind, viewer, seq) : [],
   };
 }
 
