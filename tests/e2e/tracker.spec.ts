@@ -3,7 +3,9 @@ import { type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { BetaService } from '../../src/server/betas';
+import { readBetaRegistry } from '../../src/server/beta-registry';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
@@ -855,7 +857,8 @@ test('second school day beta separates its tasks without a pill on desktop and m
       ['Finish lab notebook', '2026-11-13'], ['AMC 10B competition', '2026-11-13'], ['Chemistry test', '2026-11-16'],
     ]) service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
       data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
-    new BetaService(service).enroll(fixture.id, { key: 'second-school-day' });
+    new BetaService(service, () => readBetaRegistry(join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json')))
+      .enroll(fixture.id, { key: 'second-school-day' });
   } finally { db.close(); }
   await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-11-10T17:00:00Z'));
