@@ -100,6 +100,14 @@ const STATUS_TONES = {
 } as const;
 
 export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = false, labelClassName, className }: { sync: SyncState; online: boolean; onRetry: () => void; onConflicts: () => void; iconOnly?: boolean; labelClassName?: string; className?: string }) {
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    setDismissed(false);
+    if (sync.kind !== 'saved') return;
+    const timer = window.setTimeout(() => setDismissed(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [sync.kind]);
+  if (sync.kind === 'saved' && dismissed) return null;
   const tone = sync.kind === 'saved' ? 'success' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'danger' : sync.kind === 'offline' ? 'neutral' : 'accent';
   const icon: IconName = sync.kind === 'saved' ? 'checkCircle' : sync.kind === 'offline' ? 'cloudOff' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'alert' : sync.kind === 'pending' ? 'cloud' : 'refresh';
   const label = statusLabel(sync);
@@ -109,6 +117,14 @@ export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = fals
     {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
     <span className={cn('truncate', labelClassName, iconOnly && 'sr-only')}>{label}</span>
   </>;
+  if (sync.kind === 'saved') {
+    return <Badge asChild variant="secondary" className={cn(classes, 'relative isolate overflow-hidden cursor-pointer hover:brightness-95')}>
+      <button type="button" aria-label="Saved. Dismiss notification" onClick={() => setDismissed(true)}>
+        <span aria-hidden="true" className="saved-countdown pointer-events-none absolute inset-0 -z-10 origin-left bg-success/[0.08]" />
+        {inner}
+      </button>
+    </Badge>;
+  }
   // Announcements come from the one live region in Shell (the pill renders twice and remounts when it
   // becomes clickable), so the pill itself stays quiet: a plain button when it acts, a silent status otherwise.
   if (clickable) {

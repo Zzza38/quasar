@@ -75,8 +75,15 @@ async function touchDrag(page: Page, from: Point, to: Point, { hold = 400, befor
   } finally { await cdp.detach().catch(() => {}); }
 }
 
-/** The opacity of a countdown form's first character: "1" once it has cascaded in, "0" once it has cascaded out. */
-const shown = (form: Locator) => form.locator('span').first().evaluate((char) => getComputedStyle(char).opacity);
+/** A countdown line is hidden by its clipping container, not by opacity. Wait for the slide to finish. */
+const shown = (form: Locator) => form.evaluate((line) => {
+  const bounds = line.getBoundingClientRect();
+  const clip = line.parentElement!.getBoundingClientRect();
+  const visibleHeight = Math.max(0, Math.min(bounds.bottom, clip.bottom) - Math.max(bounds.top, clip.top));
+  if (visibleHeight < 0.5) return '0';
+  if (visibleHeight >= bounds.height - 0.5) return '1';
+  return 'sliding';
+});
 
 test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
@@ -137,7 +144,7 @@ test.describe('touch countdown', () => {
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
     await expect(countdown).toHaveAttribute('aria-pressed', 'true');
-    await expect(countdown.locator('[data-shown] > span').first()).toHaveCSS('transition-duration', '0s');
+    await expect(countdown.locator('[data-shown]').first()).toHaveCSS('transition-duration', '0s');
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 9 min');
     await expect(countdown).toHaveAttribute('aria-pressed', 'false');
@@ -507,6 +514,7 @@ test('sidebar closes without an empty intermediate rail', async ({ page, context
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto('/classes');
   await expect(page.getByRole('button', { name: 'Collapse navigation sidebar' })).toBeVisible();
+  await expect(page.locator('.app-sidebar').getByRole('button', { name: 'Saved. Dismiss notification', exact: true })).toBeVisible();
 
   const frame = await page.evaluate(async () => {
     const sidebar = document.querySelector('.app-sidebar')!;
@@ -520,7 +528,7 @@ test('sidebar closes without an empty intermediate rail', async ({ page, context
       width: sidebar.getBoundingClientRect().width,
       nav: center('[data-slot="sidebar-content"] a svg'),
       logo: center('[data-slot="sidebar-header"] button svg'),
-      status: center('[data-slot="sidebar-footer"] [role="status"] svg'),
+      status: center('[data-slot="sidebar-footer"] [aria-label="Saved. Dismiss notification"] svg'),
     };
   });
   expect(frame.width).toBe(56);
