@@ -6,7 +6,7 @@ import { errorMessage } from '@/client/api';
 import { slugId } from '@/lib/format';
 import { makesPrivateCopy, queueTimetableEdit, rebaseTimetableEdit, saveTimetableEdit, type QueuedTimetableEdit } from './personal-timetable';
 import { BellTimeChoice, sharedBellTimeDraft } from './overrides';
-import { ScheduleGrid } from './schedule-grid';
+import { ScheduleGrid, type ScheduleBoard } from './schedule-grid';
 import { SlotsEditor } from './schedule-editor';
 import { Button, Callout, Hint, Panel } from './primitives';
 
@@ -48,9 +48,11 @@ export function describePendingChange(change: PendingChange): { title: string; b
 
 type ClassAssignmentGridProps = {
   schedule: Schedule; schoolSchedule?: Schedule; personal: PersonalSchedule; save: (value: PersonalSchedule) => Promise<void>; disabled?: boolean; onSchoolCorrection: (schedule: Schedule, onSaved?: () => void) => void;
+  /** Draws the timetable as the Classes board; the day editor and the other controls below move into its card. */
+  board?: Omit<ScheduleBoard, 'footer'>;
 };
 
-export function ClassAssignmentGrid({ schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule }: ClassAssignmentGridProps) {
+export function ClassAssignmentGrid({ schedule, personal, save, disabled, onSchoolCorrection, schoolSchedule, board }: ClassAssignmentGridProps) {
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
   const queued = useRef<QueuedTimetableEdit | null>(null);
@@ -139,24 +141,7 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled, onScho
   };
   const schoolDraft = timeChange ? sharedBellTimeDraft(timeChange.before, timeChange.schedule, schoolSchedule ?? schedule, personal.grade) : null;
   const renames = (next: Schedule) => next.cycleDays.some(day => draft.cycleDays.some(entry => entry.id === day.id && entry.label !== day.label));
-  return <div className="grid gap-3 min-w-0">
-    {error && <Callout tone="danger" role="alert">{error}</Callout>}
-    {confirming && prompt && <Callout tone="warning" icon="alert" role="alert" title={prompt.title} actions={<>
-      <Button size="sm" variant="danger" disabled={disabled || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
-      <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
-    </>}>{prompt.body}</Callout>}
-    {timeChange && <BellTimeChoice modal schoolUnavailable={schoolDraft?.schoolUnavailable} onCancel={() => setTimeChange(null)} onSchool={() => { if (schoolDraft?.schedule) onSchoolCorrection(schoolDraft.schedule, () => { setTimeChange(null); setEditing(null); }); }} onPersonal={() => { timeChange.run(); setTimeChange(null); }} />}
-    <ScheduleGrid allowStructure={!!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
-      onEditDay={id => { if (latest.current.disabled) return; setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
-        if (latest.current.disabled) return;
-        const days = draft.cycleDays.filter(day => day.id !== id);
-        if (!days.length) return;
-        const remove = () => persist({ ...draft, cycleDays: days, anchorCycleDayId: draft.anchorCycleDayId === id ? days[0].id : draft.anchorCycleDayId, exceptions: draft.exceptions.filter(entry => entry.kind !== 'reset' || entry.cycleDayId !== id) }, 'Removing a day');
-        // Without a private copy yet, removing a day makes one, and that confirmation already asks.
-        if (!personal.customSchedule) { remove(); return; }
-        const label = draft.cycleDays.find(day => day.id === id)?.label ?? 'this day';
-        ask({ kind: 'remove', dayId: id, label, runs: [() => void remove()] });
-      }} />
+  const below = <>
     {draft.cycleDays.filter(day => day.id === editing).map(day => <Panel key={day.id} className="grid gap-2 p-3"><strong className="text-sm">{day.label} times</strong>
       {/* A block the student made is named after the class in it now, as in the grid. */}
       <SlotsEditor slots={editedSlots} periods={draft.periods.map(period => ({ ...period, label: displayPeriodLabel(period, personal.classes.find(cls => cls.id === assignments[period.id])?.name ?? false) }))} disabled={disabled} onChange={setEditedSlots} />
@@ -167,5 +152,25 @@ export function ClassAssignmentGrid({ schedule, personal, save, disabled, onScho
       persist(withCycleDay(draft, { id, label: `Day ${draft.cycleDays.length + 1}`, slots: [] }), 'Adding a day');
     }}>Add rotation day</Button></div>}
     {pending && <Hint role="status">Saving timetable…</Hint>}
+  </>;
+  return <div className="grid gap-3 min-w-0">
+    {error && <Callout tone="danger" role="alert">{error}</Callout>}
+    {confirming && prompt && <Callout tone="warning" icon="alert" role="alert" title={prompt.title} actions={<>
+      <Button size="sm" variant="danger" disabled={disabled || lastDay} onClick={() => { answered(); for (const run of confirming.runs) run(); }}>{prompt.confirmLabel}</Button>
+      <Button size="sm" autoFocus onClick={answered}>Cancel</Button>
+    </>}>{prompt.body}</Callout>}
+    {timeChange && <BellTimeChoice modal schoolUnavailable={schoolDraft?.schoolUnavailable} onCancel={() => setTimeChange(null)} onSchool={() => { if (schoolDraft?.schedule) onSchoolCorrection(schoolDraft.schedule, () => { setTimeChange(null); setEditing(null); }); }} onPersonal={() => { timeChange.run(); setTimeChange(null); }} />}
+    <ScheduleGrid allowStructure={!!personal.customSchedule} value={draft} personal={displayPersonal} personalClassesOnly board={board && { ...board, footer: below }} onAssign={changes => enqueue({ assign: changes })} onChange={next => persist(next, renames(next) ? 'Renaming a day' : 'Placing this class')} disabled={disabled}
+      onEditDay={id => { if (latest.current.disabled) return; setEditing(id); setEditedSlots(draft.cycleDays.find(day => day.id === id)?.slots ?? []); }} onRemoveDay={id => {
+        if (latest.current.disabled) return;
+        const days = draft.cycleDays.filter(day => day.id !== id);
+        if (!days.length) return;
+        const remove = () => persist({ ...draft, cycleDays: days, anchorCycleDayId: draft.anchorCycleDayId === id ? days[0].id : draft.anchorCycleDayId, exceptions: draft.exceptions.filter(entry => entry.kind !== 'reset' || entry.cycleDayId !== id) }, 'Removing a day');
+        // Without a private copy yet, removing a day makes one, and that confirmation already asks.
+        if (!personal.customSchedule) { remove(); return; }
+        const label = draft.cycleDays.find(day => day.id === id)?.label ?? 'this day';
+        ask({ kind: 'remove', dayId: id, label, runs: [() => void remove()] });
+      }} />
+    {!board && below}
   </div>;
 }

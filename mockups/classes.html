@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classes page</title>
+<style>
+  @font-face { font-family: Manrope; src: url(assets/manrope.woff2) format('woff2'); font-weight: 200 800; }
+  :root {
+    color-scheme: dark;
+    --background: #0b0d12; --foreground: #eceff5; --card: #13161d; --popover: #171b23; --secondary: #222732;
+    --muted: #1a1e27; --muted-foreground: #9ba4b5; --border: #242934; --input: #343a47; --control-border: #6b7486;
+    --sidebar: #0f1218; --sidebar-border: #202531; --destructive: #f87171;
+    --warning: #fde68a; --warning-soft: #33290f; --success: #4ade80; --success-soft: #0f2a1b;
+    --primary: #2dd4e0; --primary-foreground: #06161a; --primary-soft: #0f3a44; --primary-soft-foreground: #a5f3fc;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / .3), 0 2px 10px -2px rgb(0 0 0 / .35);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--foreground); font: 500 14px/1.45 Manrope, system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+    background: radial-gradient(1100px 420px at 20% -8%, color-mix(in srgb, var(--primary) 9%, transparent), transparent 70%), var(--background); }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; }
+  h2 { font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
+  b { font-weight: 700; }
+  small { font-size: 12px; color: var(--muted-foreground); }
+  svg.i { flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .phone { display: none !important; }
+
+  /* App shell */
+  .app { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
+  .side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; background: var(--sidebar); border-right: 1px solid var(--sidebar-border); padding: 16px 8px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 800; font-size: 17px; }
+  .logo { width: 28px; height: 28px; flex: none; color: var(--primary); }
+  .nav { display: grid; gap: 4px; }
+  .nav a { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 12px; color: var(--muted-foreground); font-weight: 600; }
+  .nav a.on { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .nav a i { margin-left: auto; width: 6px; height: 6px; border-radius: 9px; background: var(--primary); }
+  .who { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 14px; background: var(--muted); }
+  .who .av { width: 32px; height: 32px; border-radius: 99px; display: grid; place-items: center; background: var(--primary); color: var(--primary-foreground); font-weight: 800; }
+  .who small { display: block; line-height: 1.2; }
+  main { padding: 32px 32px 56px; display: grid; gap: 20px; align-content: start; max-width: 1040px; min-width: 0; }
+  .topbar, .dock { display: none; }
+
+  /* Shared pieces */
+  .ph { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 14px; }
+  .eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); margin-bottom: 4px; }
+  .desc { color: var(--muted-foreground); margin-top: 4px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--input);
+    background: color-mix(in srgb, var(--card) 70%, transparent); color: var(--foreground); font: 700 13.5px/1 Manrope, sans-serif; white-space: nowrap; }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+  .btn.sm { height: 32px; padding: 0 11px; border-radius: 10px; font-size: 12.5px; gap: 6px; }
+  .btn.icon { width: 32px; padding: 0; }
+  .btn.danger { color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 40%, var(--input)); }
+  .card { background: var(--card); border-radius: 18px; box-shadow: var(--shadow-card), inset 0 0 0 1px rgb(236 239 245 / .08); min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 99px; font-size: 11.5px; font-weight: 700; white-space: nowrap;
+    background: var(--muted); color: var(--muted-foreground); box-shadow: inset 0 0 0 1px var(--border); }
+  .chip.warn { background: var(--warning-soft); color: var(--warning); box-shadow: none; }
+  .av { flex: none; display: grid; place-items: center; border-radius: 11px; color: #fff; font-weight: 800; box-shadow: inset 0 1px 0 rgb(255 255 255 / .25);
+    background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 72%, #0b1020)); }
+  .dot { flex: none; width: 10px; height: 10px; border-radius: 99px; background: var(--c); }
+  .lbl { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); }
+  .lbl span { letter-spacing: 0; text-transform: none; font-weight: 600; font-size: 12px; }
+  .rt { display: grid; min-width: 0; flex: 1; }
+  .rt b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.01em; }
+  .rt small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { font-size: 12px; font-weight: 600; color: var(--muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .chev { color: var(--muted-foreground); opacity: .7; }
+  .seg { display: inline-flex; padding: 4px; gap: 4px; border-radius: 14px; background: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .seg span { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 14px; border-radius: 10px; font-weight: 700; font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
+  .seg span.on { background: var(--card); color: var(--foreground); box-shadow: inset 0 0 0 1px var(--input); }
+  .seg em { font-style: normal; font-weight: 600; font-size: 12px; opacity: .7; }
+  .field { display: grid; gap: 5px; min-width: 0; }
+  .field label { font-size: 12px; font-weight: 700; color: var(--muted-foreground); }
+  .inp { display: flex; align-items: center; height: 38px; padding: 0 12px; border-radius: 11px; border: 1px solid var(--control-border); background: var(--background); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .adj { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .adj:first-of-type { border-top: 0; }
+  .adj .when { width: 86px; flex: none; font-weight: 700; font-size: 13px; }
+
+  /* Time canvas, as in the app: tinted blocks with a 1px edge in the class colour, no side bar */
+  .tc { display: grid; grid-template-columns: 56px repeat(5, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 14px; background: var(--card); overflow: hidden; }
+  .tc-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--muted) 70%, var(--card)); font-weight: 700; font-size: 13px; }
+  .tc-h:first-child { font-weight: 600; font-size: 11px; color: var(--muted-foreground); }
+  .tc-axis { position: relative; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--muted) 70%, var(--card)); }
+  .tc-axis span { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11px; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+  .tc-day { position: relative; border-left: 1px solid var(--border); }
+  .tc-day i { position: absolute; left: 0; right: 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  .blk { position: absolute; left: 4px; right: 4px; padding: 6px 8px; border-radius: 9px; border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 22%, var(--card)); font-size: 11.5px; line-height: 1.25; overflow: hidden; }
+  .blk b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; letter-spacing: -.015em; }
+  .blk span { display: block; margin-top: 2px; font-size: 10.5px; opacity: .8; font-variant-numeric: tabular-nums; }
+  .blk.other { --c: var(--input); background: var(--muted); padding-block: 3px; display: flex; align-items: center; }
+  /* A period every day has at the same time is one band across the week, drawn from the first column. */
+  .blk.band { right: auto; width: calc(500% - 4px); z-index: 2; gap: 10px; padding-inline: 12px; }
+  .blk.band span { margin: 0; }
+  .blk.free { border-style: dashed; --c: var(--input); background: transparent; color: var(--muted-foreground); }
+
+  /* 1 Roster and detail */
+  .split { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .list { padding: 8px; display: grid; gap: 2px; }
+  .list .lbl { padding: 10px 10px 6px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 12px; min-width: 0; }
+  .row.sel { background: rgb(236 239 245 / .06); box-shadow: inset 0 0 0 1px var(--input); }
+  .ic { flex: none; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; background: var(--muted); color: var(--muted-foreground); box-shadow: inset 0 0 0 1px var(--border); }
+  .detail { padding: 22px; display: grid; gap: 22px; }
+  .d-head { display: flex; align-items: center; gap: 14px; }
+  .d-head p { color: var(--muted-foreground); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  .d-head .actions { margin-left: auto; }
+  .d-sec { display: grid; gap: 10px; }
+  .wk { display: grid; grid-template-columns: 54px repeat(5, minmax(0, 1fr)); gap: 6px; align-items: center; }
+  .wk > small { font-weight: 700; }
+  .mc { display: grid; gap: 1px; padding: 8px 10px; border-radius: 11px; background: var(--muted); color: var(--muted-foreground); min-width: 0; }
+  .mc b { font-size: 12px; }
+  .mc span { font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mc.on { background: color-mix(in srgb, var(--c) 20%, var(--card)); color: var(--foreground); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent); }
+  .dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .dl > div { padding: 12px 14px; border-radius: 13px; background: var(--muted); display: grid; gap: 2px; }
+  .dl b { display: flex; align-items: center; gap: 8px; }
+  .d-foot { display: flex; gap: 8px; padding-top: 18px; border-top: 1px solid var(--border); }
+
+  /* 2 One board */
+  .board { padding: 16px; display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .rail { display: grid; gap: 6px; }
+  .rail .lbl { padding: 2px 2px 4px; }
+  .pal { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border-radius: 11px; background: color-mix(in srgb, var(--c) 20%, var(--card)); min-width: 0; }
+  .pal .rt b { font-size: 13.5px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+  .pal .rt small { color: color-mix(in srgb, var(--foreground) 62%, transparent); }
+  .pal.other { --c: var(--input); background: var(--muted); padding-block: 9px; font-weight: 700; font-size: 13px; color: var(--muted-foreground); }
+  .pal .btn { background: rgb(11 13 18 / .35); border-color: rgb(236 239 245 / .16); }
+  .pal .warn { color: var(--warning); }
+  .rail-foot { display: grid; gap: 6px; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--border); }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .slim { padding: 14px 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .slim .txt { flex: 1 1 320px; min-width: 0; }
+  .slim .txt small { display: block; }
+  .chips { display: none; }
+
+  /* 3 Tabs */
+  .tbl { padding: 6px 8px; }
+  .tr { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .8fr) minmax(0, .9fr) 176px 118px; gap: 14px; align-items: center; padding: 11px 12px; border-top: 1px solid var(--border); min-width: 0; }
+  .tr.th { border-top: 0; padding-block: 10px 8px; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-foreground); }
+  .tr .nm { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .tr .nm b { letter-spacing: -.01em; }
+  .tr .c2 { color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tr .none { font-style: italic; opacity: .7; }
+  .tr .act { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* 4 Meeting grid */
+  .mx { padding: 18px 20px 10px; display: grid; gap: 4px; }
+  .mrow { display: grid; grid-template-columns: minmax(0, 1fr) repeat(5, 56px) 12px repeat(5, 56px) 44px; gap: 4px; align-items: center; padding: 5px 0; border-top: 1px solid var(--border); }
+  .mrow.mh { border-top: 0; padding-bottom: 8px; font-size: 11.5px; font-weight: 700; color: var(--muted-foreground); text-align: center; }
+  .mrow.mh .wkh { grid-column: span 5; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; padding-bottom: 2px; }
+  .mrow .nm { display: flex; align-items: center; gap: 11px; min-width: 0; padding-right: 10px; }
+  .cell { height: 36px; border-radius: 9px; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+  .cell.on { background: color-mix(in srgb, var(--c) 20%, var(--card)); color: var(--foreground); }
+  .cell.off::before { content: ''; width: 4px; height: 4px; border-radius: 9px; background: var(--input); }
+  .mrow .tot { text-align: right; }
+  .mrow .gap { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 6px 0 12px; border-radius: 9px; border: 1px dashed var(--input); color: var(--muted-foreground); font-size: 12.5px; }
+  .mrow .gap .btn { margin-left: auto; height: 26px; }
+  .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  .pane { padding: 18px 20px; display: grid; gap: 12px; }
+  .pane .hd { display: flex; align-items: center; gap: 12px; }
+  .pane .hd .actions { margin-left: auto; }
+  .pane .rt small, .pane .adj .rt b { white-space: normal; }
+  .pstack { display: none; }
+  .pips { display: grid; grid-template-columns: repeat(5, 1fr) 6px repeat(5, 1fr); gap: 4px; }
+  .pip { height: 26px; border-radius: 7px; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--muted); color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+  .pip.on { background: color-mix(in srgb, var(--c) 26%, var(--card)); color: var(--foreground); }
+
+  /* 5 List with a rotation map */
+  .duo { display: grid; grid-template-columns: minmax(0, 1fr) 356px; gap: 16px; align-items: start; }
+  .acc { padding: 8px; display: grid; gap: 2px; }
+  .open { margin: 4px 0; border-radius: 14px; background: rgb(236 239 245 / .04); box-shadow: inset 0 0 0 1px var(--input); }
+  .form { padding: 4px 14px 14px; display: grid; gap: 14px; }
+  .form .g2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .sw { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sw i { width: 26px; height: 26px; border-radius: 99px; background: var(--c); }
+  .sw i.on { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--foreground); }
+  .form .foot { display: flex; gap: 8px; }
+  .stick { display: grid; gap: 16px; }
+  .mm { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) 8px repeat(5, minmax(0, 1fr)); gap: 3px; }
+  .mm .n { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted-foreground); padding-bottom: 3px; }
+  .mm .colm { position: relative; border-radius: 6px; background: rgb(236 239 245 / .03); }
+  .mm .colm u { position: absolute; left: 0; right: 0; border-radius: 4px; background: color-mix(in srgb, var(--c) 34%, var(--card)); }
+  .mm .colm u.hot { background: var(--c); }
+  .mm .colm u.other { background: var(--muted); }
+  .mm .colm u.free { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+  .mm-ax { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
+
+  /* 6 Board with the list's look */
+  .duo6 { display: grid; grid-template-columns: 356px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .leftcol { display: grid; gap: 16px; min-width: 0; }
+  .rt.wrap b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+  .list-foot { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 10px 6px; margin-top: 6px; border-top: 1px solid var(--border); }
+  .others { display: flex; gap: 6px; align-items: center; padding: 8px 10px 4px; }
+  .others small { font-weight: 700; margin-right: 4px; }
+  .others .pal { padding: 6px 12px; }
+  .board6 { padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .b6-top { display: flex; gap: 10px; align-items: stretch; }
+  .wkt { width: 184px; display: grid; gap: 8px; padding: 10px 12px 12px; border-radius: 14px; background: rgb(236 239 245 / .03); box-shadow: inset 0 0 0 1px var(--border); }
+  .wkt.on { background: rgb(236 239 245 / .06); box-shadow: inset 0 0 0 1.5px var(--control-border); }
+  .wkt-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .mm.mm5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .mm.mm5 .colm u { border-radius: 3px; }
+  .mm.all .colm u:not(.other):not(.free) { background: color-mix(in srgb, var(--c) 58%, var(--card)); }
+  .b6-note { flex: 1; display: grid; align-content: center; justify-items: end; gap: 2px; text-align: right; font-size: 12.5px; color: var(--muted-foreground); min-width: 0; }
+  .b6-note b { display: inline-flex; align-items: center; gap: 6px; color: var(--foreground); font-size: 13.5px; }
+  .pinbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); background: var(--card); font-weight: 600; font-size: 13px; }
+  .pinbar p { flex: 1 1 12rem; }
+  .blk.hot { background: color-mix(in srgb, var(--c) 44%, var(--card)); box-shadow: 0 0 0 1px var(--c); }
+  .blk.target { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .pal.sel { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 70%, transparent); }
+
+  /* Phone */
+  @media (max-width: 700px) {
+    .phone { display: revert !important; }
+    .desk { display: none !important; }
+    h1 { font-size: 26px; }
+    .app { display: block; }
+    .side { display: none; }
+    .topbar { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--sidebar-border); background: var(--sidebar); font-weight: 800; font-size: 17px; }
+    .topbar .ok { margin-left: auto; color: var(--success); display: grid; }
+    .topbar .av { width: 30px; height: 30px; border-radius: 99px; --c: var(--primary); color: var(--primary-foreground); font-size: 13px; }
+    main { padding: 16px 16px 112px; gap: 16px; }
+    .pswitch { display: flex !important; width: 100%; }
+    .pswitch span { flex: 1; justify-content: center; padding: 0 8px; }
+    .ph { align-items: start; }
+    .dock { display: grid; grid-template-columns: repeat(5, 1fr); align-items: end; position: fixed; left: 12px; right: 12px; bottom: 12px; height: 66px; padding: 6px; border-radius: 24px;
+      background: color-mix(in srgb, var(--card) 86%, transparent); backdrop-filter: blur(18px); border: 1px solid var(--border); box-shadow: 0 12px 40px -12px rgb(0 0 0 / .6); }
+    .dock a { display: grid; justify-items: center; gap: 3px; padding: 7px 0 6px; border-radius: 17px; font-size: 10.5px; font-weight: 700; color: var(--muted-foreground); }
+    .dock a.on { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+    .dock a.home span { width: 46px; height: 46px; margin-top: -24px; border-radius: 99px; display: grid; place-items: center; background: var(--card); border: 1px solid var(--input); color: var(--foreground); }
+    .split, .duo, .duo6, .two, .board { grid-template-columns: minmax(0, 1fr); }
+    .board6 { order: -1; padding: 12px; }
+    .board6 .chips { margin-bottom: 0; }
+    .wkt { width: auto; flex: 1; min-width: 0; }
+    .b6-note { display: none; }
+    .row.sel { background: none; box-shadow: none; }
+    .board { padding: 12px; gap: 12px; }
+    .chips { display: flex; gap: 6px; overflow: hidden; margin: 0 -12px 12px; padding: 0 12px; }
+    .chips .pal { flex: none; padding: 9px 12px; font-weight: 700; font-size: 13px; white-space: nowrap; }
+    .tc-scroll { overflow: hidden; border: 1px solid var(--border); border-radius: 14px; }
+    .tc { grid-template-columns: 42px repeat(5, 104px); width: max-content; border: 0; border-radius: 0; }
+    .tc-axis span { right: 5px; font-size: 10.5px; }
+    .bar .seg { flex: 1; }
+    .bar .seg span { flex: 1; justify-content: center; }
+    .slim { padding: 14px; }
+    .slim .ic { display: none; }
+    .slim .txt { flex-basis: 100%; }
+    .slim .actions .btn { flex: 1; }
+    .tbl { padding: 4px 6px; }
+    .tr { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 11px 8px; }
+    .tr:first-of-type { border-top: 0; }
+    .pstack { display: grid; gap: 10px; }
+    .pcard { display: grid; gap: 10px; padding: 14px; }
+    .pcard .top { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .pcard .wk { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
+    .pcard .mc { padding: 6px 7px; }
+    .pcard .mc span { font-size: 11px; }
+    .form .g2 { grid-template-columns: minmax(0, 1fr); }
+    .pane { padding: 16px; }
+    .pane .hd { flex-wrap: wrap; }
+    .adj .when { width: 70px; }
+  }
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="home" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="calendar" viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></symbol>
+  <symbol id="tasks" viewBox="0 0 24 24"><path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/></symbol>
+  <symbol id="book" viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="school" viewBox="0 0 24 24"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></symbol>
+  <symbol id="users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="message" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="edit" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="unlock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+  <symbol id="pin" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></symbol>
+  <symbol id="alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+  <symbol id="sliders" viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol>
+  <symbol id="palette" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/><circle cx="8" cy="8.5" r=".6"/><circle cx="13" cy="6.5" r=".6"/><circle cx="17" cy="10" r=".6"/><circle cx="6.5" cy="13" r=".6"/></symbol>
+  <symbol id="ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 8l6.4 14.2L54 28l-15.6 5.8L32 48l-6.4-14.2L10 28l15.6-5.8z" fill="currentColor"/><circle cx="49" cy="49" r="6" fill="currentColor" opacity=".7"/></svg>Quasar</div>
+    <nav class="nav" id="nav"></nav>
+    <div class="who"><span class="av">M</span><div><b>Maya</b><small>Lincoln High School</small></div></div>
+  </aside>
+  <div>
+    <header class="topbar"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 8l6.4 14.2L54 28l-15.6 5.8L32 48l-6.4-14.2L10 28l15.6-5.8z" fill="currentColor"/><circle cx="49" cy="49" r="6" fill="currentColor" opacity=".7"/></svg>Quasar<span class="ok"><svg class="i" width="20" height="20"><use href="#ok"/></svg></span><span class="av">M</span></header>
+    <main id="main"></main>
+  </div>
+</div>
+<nav class="dock" id="dock"></nav>
+
+<script>
+  const v = Number(new URLSearchParams(location.search).get('v')) || 1;
+  const ico = (name, size = 16, cls = '') => `<svg class="i ${cls}" width="${size}" height="${size}"><use href="#${name}"/></svg>`;
+  const btn = (label, { icon, kind = '', extra = '' } = {}) => `<button class="btn ${kind}" ${extra}>${icon ? ico(icon, kind.includes('sm') ? 14 : 16) : ''}${label}</button>`;
+  const chip = (text, tone = '') => `<span class="chip ${tone}">${tone === 'warn' ? ico('alert', 12) : ''}${text}</span>`;
+  const avatar = (c, size = 36) => `<span class="av" style="--c:${c.color};width:${size}px;height:${size}px;font-size:${Math.round(size * .4)}px;border-radius:${Math.round(size * .3)}px">${c.name[0]}</span>`;
+
+  // Shaped like the real thing: nine classes, a ten-day rotation, a full 8:00 to 3:10 day, one long name, one class not placed.
+  const C = [
+    { name: 'Algebra II', room: 'Room 204', teacher: 'Ms. Rivera', color: '#3b82f6' },
+    { name: 'Chemistry', room: 'Lab 3', teacher: 'Dr. Okafor', color: '#22c55e' },
+    { name: 'English 10', room: 'Room 112', teacher: 'Mr. Hale', color: '#ec4899' },
+    { name: 'US History', room: 'Room 305', teacher: 'Mrs. Lin', color: '#f97316' },
+    { name: 'Spanish III', room: 'Room 221', teacher: 'Sra. Ortiz', color: '#8b5cf6' },
+    { name: 'Studio Art', room: 'Art Room', teacher: 'Ms. Kim', color: '#14b8a6' },
+    { name: 'Intro to Computer Science and Programming', room: 'Room 118', teacher: 'Mr. Patel', color: '#ef4444' },
+    { name: 'Wellness', room: 'Gym', teacher: '', color: '#84cc16' },
+    { name: 'Jazz Ensemble', room: '', teacher: '', color: '#facc15' },
+  ];
+  const SLOTS = [[480, 545], [550, 615], [650, 715], [765, 830], [840, 910]];
+  const OTHER = [[620, 645, 'Advisory'], [715, 760, 'Lunch']];
+  const at = (day, slot) => { const c = C[(day * 5 + slot) % 8]; return c.name === 'Wellness' && day % 2 ? null : c; };
+  const meets = c => Array.from({ length: 10 }, (_, day) => SLOTS.findIndex((_, slot) => at(day, slot) === c));
+  const count = c => meets(c).filter(slot => slot >= 0).length;
+  const t = minute => `${Math.floor(minute / 60) % 12 || 12}:${String(minute % 60).padStart(2, '0')}`;
+  const range = slot => `${t(SLOTS[slot][0])} – ${t(SLOTS[slot][1])}`;
+  const where = c => [c.room, c.teacher].filter(Boolean).join(' · ');
+  const sub = c => where(c) || '<i>No room or teacher yet</i>';
+  const ADJ = [['Fri, Nov 13', 'Chemistry moves to 12:45', 'Lab safety assembly'], ['Day 6', 'Studio Art runs 12:45 to 3:10', 'Every rotation']];
+  const adjRows = ADJ.map(([when, what, why]) => `<div class="adj"><span class="when">${when}</span><span class="rt"><b>${what}</b><small>${why}</small></span>${btn('Edit', { kind: 'sm' })}</div>`).join('');
+
+  document.getElementById('nav').innerHTML = [['home', 'Today'], ['calendar', 'Schedule'], ['tasks', 'Tasks', 1], ['book', 'Classes'], ['school', 'School'], ['users', 'People', 1], ['message', 'Messages']]
+    .map(([icon, label, dot]) => `<a class="${label === 'Classes' ? 'on' : ''}">${ico(icon, 18)}${label}${dot ? '<i></i>' : ''}</a>`).join('');
+  document.getElementById('dock').innerHTML = [['calendar', 'Schedule'], ['tasks', 'Tasks'], ['home', 'Today'], ['book', 'Classes'], ['users', 'People']]
+    .map(([icon, label]) => label === 'Today' ? `<a class="home"><span>${ico(icon, 22)}</span>${label}</a>` : `<a class="${label === 'Classes' ? 'on' : ''}">${ico(icon, 22)}${label}</a>`).join('');
+
+  const pswitch = (items = [['book', 'My classes'], ['school', 'School']]) => `<div class="seg pswitch phone">${items.map(([icon, label], i) => `<span class="${i ? '' : 'on'}">${ico(icon, 15)}${label}</span>`).join('')}</div>`;
+  const head = (actions, desc = '9 classes · 10-day rotation') => `<header class="ph"><div><div class="eyebrow">Your timetable</div><h1>Classes</h1><p class="desc">${desc}</p></div><div class="actions">${actions}</div></header>`;
+  const stdActions = btn('Import schedule', { icon: 'calendar' }) + btn('Browse school classes', { icon: 'search' }) + btn('Add class', { icon: 'plus', kind: 'primary' });
+  const strip = c => { const m = meets(c); return [0, 1].map(week => `<div class="wk"><small class="desk">Week ${week + 1}</small>${m.slice(week * 5, week * 5 + 5).map((slot, i) => `<div class="mc ${slot >= 0 ? 'on' : ''}" style="--c:${c.color}"><b>Day ${week * 5 + i + 1}</b>${slot >= 0 ? `<span class="desk">${range(slot)}</span><span class="phone">${t(SLOTS[slot][0])}</span>` : '<span>No class</span>'}</div>`).join('')}</div>`).join(''); };
+
+  /** One week of the time canvas, 8:00 to 3:15. */
+  function canvas(week, px, { pencils = true, lit = null, placing = false } = {}) {
+    const y = minute => 10 + (minute - 480) * px, height = y(915) + 6;
+    const hours = [480, 540, 600, 660, 720, 780, 840, 900];
+    const days = [0, 1, 2, 3, 4].map(i => week * 5 + i);
+    return `<div class="tc-scroll"><div class="tc"><div class="tc-h">Time</div>${days.map(day => `<div class="tc-h">Day ${day + 1}${pencils ? btn('', { icon: 'edit', kind: 'sm icon', extra: 'title="Edit times" style="height:26px;width:26px;border-radius:8px"' }) : ''}</div>`).join('')}
+      <div class="tc-axis" style="height:${height}px">${hours.map(hour => `<span style="top:${y(hour)}px">${t(hour)}</span>`).join('')}</div>
+      ${days.map(day => `<div class="tc-day" style="height:${height}px">${hours.map(hour => `<i style="top:${y(hour)}px"></i>`).join('')}
+        ${SLOTS.map(([start, end], slot) => { const c = at(day, slot); return c
+          ? `<div class="blk ${c === lit ? 'hot' : ''}" style="--c:${c.color};top:${y(start)}px;height:${(end - start) * px}px"><b>${c.name}</b><span>${t(start)}–${t(end)}</span></div>`
+          : `<div class="blk free ${placing ? 'target' : ''}" style="top:${y(start)}px;height:${(end - start) * px}px"><b>Free block</b><span>${placing ? 'Tap to place here' : 'Drop a class here'}</span></div>`; }).join('')}
+        ${day !== days[0] ? '' : OTHER.map(([start, end, label]) => `<div class="blk other band" style="top:${y(start)}px;height:${(end - start) * px}px"><b>${label}</b><span>${t(start)}–${t(end)}</span></div>`).join('')}</div>`).join('')}</div></div>`;
+  }
+
+  const views = {
+    // 1 Roster and detail: the class list is the menu, the chosen class fills the right. Timetable and Adjustments are entries in the same list.
+    1() {
+      const sel = C[1];
+      const rows = C.map(c => `<a class="row ${c === sel ? 'sel' : ''}">${avatar(c)}<span class="rt"><b>${c.name}</b><small>${sub(c)}</small></span>${count(c) ? `<span class="meta">${count(c)} of 10</span>` : chip('Not placed', 'warn')}${ico('chev', 16, 'chev')}</a>`).join('');
+      const more = [['layers', 'Timetable', 'Locked · 10 days in 2 weeks'], ['sliders', 'Adjustments', '2 coming up']].map(([icon, name, text]) => `<a class="row"><span class="ic">${ico(icon, 17)}</span><span class="rt"><b>${name}</b><small>${text}</small></span>${ico('chev', 16, 'chev')}</a>`).join('');
+      return pswitch() + head(stdActions) + `<div class="split">
+        <section class="card list"><div class="lbl">Classes</div>${rows}<div class="lbl" style="margin-top:6px">Rotation</div>${more}</section>
+        <section class="card detail desk">
+          <div class="d-head">${avatar(sel, 56)}<div><h2 style="font-size:22px">${sel.name}</h2><p>${ico('pin', 14)}${where(sel)}</p></div><div class="actions">${btn('Color', { icon: 'palette' })}${btn('Edit', { icon: 'edit' })}</div></div>
+          <div class="d-sec"><div class="lbl">When it meets <span>${count(sel)} of 10 days</span></div>${strip(sel)}</div>
+          <div class="dl"><div><small>Room</small><b>${sel.room}</b></div><div><small>Teacher</small><b>${sel.teacher}</b></div><div><small>Tasks</small><b>3 open ${ico('chev', 14, 'chev')}</b></div></div>
+          <div class="d-foot">${btn('Move on timetable', { icon: 'layers' })}<span style="flex:1"></span>${btn('Remove class', { kind: 'danger' })}</div>
+        </section></div>`;
+    },
+    // 2 One board: the class cards and the palette are the same list, one week shows at a time, the lock lives in the header.
+    2() {
+      const rail = C.map(c => `<div class="pal" style="--c:${c.color}"><span class="rt"><b>${c.name}</b><small class="${count(c) ? '' : 'warn'}">${count(c) ? where(c) : 'Not placed yet · drag onto a block'}</small></span>${btn('', { icon: 'edit', kind: 'sm icon', extra: 'title="Edit class"' })}</div>`).join('');
+      const chips = C.map(c => `<span class="pal" style="--c:${c.color}">${c.name.length > 24 ? 'Intro to Computer Science…' : c.name}</span>`).join('');
+      const week = `<div class="seg"><span class="on">Week 1 <em>Days 1–5</em></span><span>Week 2 <em>Days 6–10</em></span></div>`;
+      return pswitch() + head(btn('Locked', { icon: 'lock' }) + btn('Add class', { icon: 'plus', kind: 'primary' }), '9 classes · unlock to move them') + `<section class="card board">
+        <aside class="rail desk"><div class="lbl">Classes <span>drag onto a block</span></div>${rail}<div class="pal other">Advisory</div><div class="pal other">Lunch</div>
+          <div class="rail-foot">${btn('Browse school classes', { icon: 'search', kind: 'sm' })}${btn('Import schedule', { icon: 'calendar', kind: 'sm' })}</div></aside>
+        <div style="min-width:0"><div class="chips">${chips}</div><div class="bar" style="margin-top:0">${week}</div>
+          <div class="desk">${canvas(0, 1.02)}</div><div class="phone">${canvas(0, .92)}</div></div></section>
+        <section class="card slim"><span class="ic">${ico('sliders', 17)}</span><div class="txt"><b>Adjustments</b><small>${ADJ.map(([when, what]) => `${when}: ${what}`).join(' · ')}</small></div>
+          <div class="actions">${btn('Adjust a date', { kind: 'sm' })}${btn('Adjust a rotation day', { kind: 'sm' })}</div></section>`;
+    },
+    // 3 Tabs: three jobs, three tabs. The class list becomes a table. On a phone the top switch grows a Timetable entry.
+    3() {
+      const rows = C.map(c => `<div class="tr"><span class="nm">${avatar(c, 32)}<span class="rt"><b>${c.name}</b><small class="phone">${count(c) ? `${sub(c)} · ${count(c)} of 10 days` : sub(c)}</small></span></span>
+        <span class="c2 desk ${c.room ? '' : 'none'}">${c.room || 'Add a room'}</span><span class="c2 desk ${c.teacher ? '' : 'none'}">${c.teacher || 'Add a teacher'}</span>
+        <span class="desk">${count(c) ? `<span class="meta">${count(c)} of 10 days</span>` : chip('Not on your timetable', 'warn')}</span>
+        <span class="act">${count(c) ? '' : `<span class="phone">${chip('Not placed', 'warn')}</span>`}<span class="desk">${btn('', { icon: 'palette', kind: 'sm icon', extra: 'title="Color"' })}</span>${btn('Edit', { icon: 'edit', kind: 'sm' })}</span></div>`).join('');
+      return pswitch([['book', 'Classes'], ['layers', 'Timetable'], ['school', 'School']]) + head(stdActions, '9 classes · 1 not on your timetable')
+        + `<div class="desk"><div class="seg"><span class="on">${ico('book', 15)}Classes <em>9</em></span><span>${ico('layers', 15)}Timetable</span><span>${ico('sliders', 15)}Adjustments <em>2</em></span></div></div>
+        <section class="card tbl"><div class="tr th desk"><span>Class</span><span>Room</span><span>Teacher</span><span>Meets</span><span></span></div>${rows}</section>`;
+    },
+    // 4 Meeting grid: every class against every rotation day. The drag editor opens only when asked for.
+    4() {
+      const rows = C.map(c => { const m = meets(c); const cells = (from) => m.slice(from, from + 5).map(slot => slot >= 0 ? `<span class="cell on" style="--c:${c.color}">${t(SLOTS[slot][0])}</span>` : '<span class="cell off"></span>').join('');
+        return `<div class="mrow"><span class="nm"><span class="dot" style="--c:${c.color}"></span><span class="rt"><b>${c.name}</b><small>${sub(c)}</small></span></span>
+          ${count(c) ? `${cells(0)}<span></span>${cells(5)}<span class="meta tot">${count(c)}</span>` : `<span class="gap">${ico('alert', 14)}Not on your timetable yet${btn('Place it', { kind: 'sm' })}</span>`}</div>`; }).join('');
+      const head10 = from => Array.from({ length: 5 }, (_, i) => `<span>Day ${from + i + 1}</span>`).join('');
+      const cards = C.map((c, index) => { const m = meets(c); const pips = from => m.slice(from, from + 5).map((slot, i) => `<span class="pip ${slot >= 0 ? 'on' : ''}" style="--c:${c.color}">${from + i + 1}</span>`).join('');
+        return `<section class="card pcard"><div class="top"><span class="dot" style="--c:${c.color}"></span><span class="rt"><b>${c.name}</b><small>${sub(c)}</small></span>${count(c) ? ico(index === 0 ? 'down' : 'chev', 16, 'chev') : btn('Place it', { kind: 'sm' })}</div>
+          ${!count(c) ? '' : index === 0 ? strip(c) : `<div class="pips">${pips(0)}<span></span>${pips(5)}</div>`}</section>`; }).join('');
+      return pswitch() + head(btn('Browse school classes', { icon: 'search' }) + btn('Add class', { icon: 'plus', kind: 'primary' })) + `
+        <section class="card mx desk"><div class="mrow mh"><span></span><span class="wkh">Week 1</span><span></span><span class="wkh">Week 2</span><span></span></div>
+          <div class="mrow mh" style="padding-top:0"><span style="text-align:left">Start time on each rotation day</span>${head10(0)}<span></span>${head10(5)}<span style="text-align:right">Days</span></div>${rows}</section>
+        <div class="pstack">${cards}</div>
+        <div class="two"><section class="card pane"><div class="hd"><span class="ic">${ico('lock', 17)}</span><span class="rt"><b>Timetable editor</b><small>Locked. Unlock to move classes or change bell times.</small></span><div class="actions">${btn('Unlock and edit', { kind: 'sm' })}</div></div></section>
+          <section class="card pane"><div class="hd"><span class="ic">${ico('sliders', 17)}</span><span class="rt"><b>Adjustments</b><small>Changes for one date or one rotation day</small></span><div class="actions">${btn('Add', { icon: 'plus', kind: 'sm' })}</div></div><div>${adjRows}</div></section></div>`;
+    },
+    // 5 List with a rotation map: classes open in place to edit, and the whole rotation sits beside them as a small map.
+    5() {
+      const sel = C[3];
+      const palette = ['#3b82f6', '#22c55e', '#ec4899', '#f97316', '#8b5cf6', '#14b8a6', '#ef4444', '#84cc16', '#facc15'];
+      const form = c => `<div class="form"><div class="g2"><div class="field" style="grid-column:1/-1"><label>Class name</label><div class="inp">${c.name}</div></div><div class="field"><label>Room</label><div class="inp">${c.room}</div></div><div class="field"><label>Teacher</label><div class="inp">${c.teacher}</div></div></div>
+        <div class="field"><label>Color</label><div class="sw">${palette.map(color => `<i class="${color === c.color ? 'on' : ''}" style="--c:${color}"></i>`).join('')}${btn('Custom', { icon: 'palette', kind: 'sm' })}</div></div>
+        <div class="foot">${btn('Save', { kind: 'primary sm' })}${btn('Move on timetable', { icon: 'layers', kind: 'sm' })}<span style="flex:1"></span>${btn('Remove', { kind: 'danger sm' })}</div></div>`;
+      const rows = C.map(c => { const row = `<a class="row">${avatar(c)}<span class="rt"><b>${c.name}</b><small>${sub(c)}</small></span>${count(c) ? `<span class="meta">${count(c)} of 10</span>` : chip('Not placed', 'warn')}${ico(c === sel ? 'down' : 'chev', 16, 'chev')}</a>`; return c === sel ? `<div class="open">${row}${form(c)}</div>` : row; }).join('');
+      const px = .42, y = minute => (minute - 480) * px;
+      const map = `<div class="mm">${Array.from({ length: 10 }, (_, day) => `${day === 5 ? '<span></span>' : ''}<span class="n">${day + 1}</span>`).join('')}
+        ${Array.from({ length: 10 }, (_, day) => `${day === 5 ? '<span></span>' : ''}<div class="colm" style="height:${y(912)}px">${SLOTS.map(([start, end], slot) => { const c = at(day, slot); return `<u class="${c ? (c === sel ? 'hot' : '') : 'free'}" style="--c:${c?.color};top:${y(start)}px;height:${(end - start) * px}px"></u>`; }).join('')}${OTHER.map(([start, end]) => `<u class="other" style="top:${y(start)}px;height:${(end - start) * px}px"></u>`).join('')}</div>`).join('')}</div>`;
+      const side = `<section class="card pane"><div class="hd"><span class="rt"><b>Your rotation</b><small>${sel.name} is lit up · ${count(sel)} of 10 days</small></span></div>${map}<div class="mm-ax"><span>8:00</span><span>Days 1–5 · 6–10</span><span>3:10</span></div>
+          <div class="hd" style="padding-top:12px;border-top:1px solid var(--border)"><span class="rt"><b style="display:flex;align-items:center;gap:7px">${ico('lock', 14)}Locked</b></span><div class="actions">${btn('Unlock and edit timetable', { kind: 'sm' })}</div></div></section>
+        <section class="card pane"><div class="hd"><span class="rt"><b>Adjustments</b><small>Changes for one date or one rotation day</small></span><div class="actions">${btn('Add', { icon: 'plus', kind: 'sm' })}</div></div><div>${adjRows}</div></section>`;
+      return pswitch() + head(stdActions) + `<div class="duo"><section class="card acc" style="order:var(--o,0)">${rows}</section><div class="stick">${side}</div></div>`;
+    },
+    // 6 The pick: 2's board (classes beside one week of the timetable, lock in the header) drawn with 5's list rows,
+    // in-place editing and rotation map. The map is the week switch. ?s=edit opens a class, ?s=place picks one up.
+    6() {
+      const state = new URLSearchParams(location.search).get('s') || '';
+      const unlocked = state === 'edit' || state === 'place';
+      const open = state === 'edit' ? C[3] : null, picked = state === 'place' ? C[8] : null;
+      const palette = ['#3b82f6', '#22c55e', '#ec4899', '#f97316', '#8b5cf6', '#14b8a6', '#ef4444', '#84cc16', '#facc15'];
+      const form = c => `<div class="form"><div class="field"><label>Class name</label><div class="inp">${c.name}</div></div>
+        <div class="g2"><div class="field"><label>Room</label><div class="inp">${c.room}</div></div><div class="field"><label>Teacher</label><div class="inp">${c.teacher}</div></div></div>
+        <div class="field"><label>Color</label><div class="sw">${palette.map(color => `<i class="${color === c.color ? 'on' : ''}" style="--c:${color}"></i>`).join('')}${btn('Custom', { icon: 'palette', kind: 'sm' })}</div></div>
+        <div class="foot">${btn('Save', { kind: 'primary sm' })}${btn('Cancel', { kind: 'sm' })}<span style="flex:1"></span>${btn('Remove', { kind: 'danger sm' })}</div></div>`;
+      const rows = C.map(c => { const row = `<a class="row ${c === picked ? 'sel' : ''}">${avatar(c)}<span class="rt wrap"><b>${c.name}</b><small>${c === picked ? 'Selected · tap a block' : sub(c)}</small></span>${count(c) ? `<span class="meta">${count(c)} of 10</span>` : chip('Not placed', 'warn')}${btn('', { icon: c === open ? 'down' : 'edit', kind: 'sm icon', extra: `title="Edit ${c.name}"` })}</a>`; return c === open ? `<div class="open">${row}${form(c)}</div>` : row; }).join('');
+      const px = .13, y = minute => (minute - 480) * px;
+      const tile = week => `<a class="wkt ${week ? '' : 'on'}"><span class="wkt-h"><b>Week ${week + 1}</b><small>Days ${week * 5 + 1}–${week * 5 + 5}</small></span><div class="mm mm5 ${open ? '' : 'all'}">${[0, 1, 2, 3, 4].map(i => { const day = week * 5 + i;
+        return `<div class="colm" style="height:${y(912)}px">${SLOTS.map(([start, end], slot) => { const c = at(day, slot); return `<u class="${c ? (c === open ? 'hot' : '') : 'free'}" style="--c:${c?.color};top:${y(start)}px;height:${(end - start) * px}px"></u>`; }).join('')}${OTHER.map(([start, end]) => `<u class="other" style="top:${y(start)}px;height:${(end - start) * px}px"></u>`).join('')}</div>`; }).join('')}</div></a>`;
+      const note = open ? `<b>${open.name} is lit up</b><span>${count(open)} of 10 days</span>` : unlocked ? '<b>Unlocked</b><span>Drag a class onto a block. Drag a block to move it.</span>' : `<b>${ico('lock', 13)} Locked</b><span>Unlock to move classes or change times.</span>`;
+      const chipOrder = picked ? [picked, ...C.filter(c => c !== picked)] : C;
+      const chips = unlocked ? `<div class="chips">${chipOrder.map(c => `<span class="pal ${c === picked ? 'sel' : ''}" style="--c:${c.color}">${c.name.length > 24 ? 'Intro to Computer Science…' : c.name}</span>`).join('')}</div>` : '';
+      const pin = picked ? `<div class="pinbar"><p>${picked.name} selected. Tap a block to put it there, or tap an empty time.</p>${btn('Cancel selection', { kind: 'sm' })}</div>` : '';
+      const options = { pencils: unlocked, lit: open, placing: !!picked };
+      return pswitch() + head(btn(unlocked ? 'Lock schedule' : 'Unlock schedule', { icon: unlocked ? 'unlock' : 'lock' }) + btn('Add class', { icon: 'plus', kind: 'primary' })) + `<div class="duo6">
+        <div class="leftcol"><section class="card acc"><div class="lbl" style="padding:10px 10px 6px">Classes <span>${unlocked ? 'drag onto a block' : 'tap one to find it'}</span></div>${rows}
+            ${unlocked ? '<div class="others"><small>Also</small><span class="pal other">Advisory</span><span class="pal other">Lunch</span></div>' : ''}
+            <div class="list-foot">${btn('Browse classes', { icon: 'search', kind: 'sm' })}${btn('Import schedule', { icon: 'calendar', kind: 'sm' })}</div></section>
+          <section class="card pane"><div class="hd"><span class="rt"><b>Adjustments</b><small>One date or one rotation day</small></span><div class="actions">${btn('Add', { icon: 'plus', kind: 'sm' })}</div></div><div>${ADJ.map(([when, what, why]) => `<div class="adj"><span class="when">${when}</span><span class="rt"><b>${what}</b><small>${why}</small></span>${btn('', { icon: 'edit', kind: 'sm icon', extra: 'title="Edit"' })}</div>`).join('')}</div></section></div>
+        <section class="card board6">${chips}<div class="b6-top">${tile(0)}${tile(1)}<div class="b6-note">${note}</div></div>${pin}
+          <div class="desk">${canvas(0, 1.02, options)}</div><div class="phone">${canvas(0, .92, options)}</div></section></div>`;
+    },
+  };
+  document.getElementById('main').innerHTML = (views[v] ?? views[1])();
+</script>
+</body>
+</html>

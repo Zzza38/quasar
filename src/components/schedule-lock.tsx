@@ -74,7 +74,7 @@ export function useScheduleLock(accountId: string | undefined, personal: Persona
   return { savePersonal, requestEdit, dialog };
 }
 
-export function ScheduleLockButton({ state, showLabel = false }: { state: AppState; showLabel?: boolean }) {
+export function ScheduleLockButton({ state, showLabel = false, size = 'sm' }: { state: AppState; showLabel?: boolean; size?: 'sm' | 'md' }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const locked = !!state.personal.scheduleLocked;
@@ -89,7 +89,7 @@ export function ScheduleLockButton({ state, showLabel = false }: { state: AppSta
     finally { setPending(false); }
   };
   return <div className="grid justify-items-end gap-2">
-    {showLabel ? <Button size="sm" icon={locked ? 'lock' : 'unlock'} aria-pressed={locked} variant={locked ? 'secondary' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()}>{locked ? 'Unlock schedule' : 'Lock schedule'}</Button>
+    {showLabel ? <Button size={size} icon={locked ? 'lock' : 'unlock'} aria-pressed={locked} variant={locked ? 'secondary' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()}>{locked ? 'Unlock schedule' : 'Lock schedule'}</Button>
       : <IconButton size="sm" label={locked ? 'Unlock schedule' : 'Lock schedule'} icon={locked ? 'lock' : 'unlock'}
         aria-pressed={locked} variant={locked ? 'soft' : 'ghost'} disabled={pending || !state.personalValid} onClick={() => void toggle()} />}
     {error && <Callout tone="danger" role="alert">{error}</Callout>}
