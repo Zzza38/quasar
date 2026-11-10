@@ -209,21 +209,23 @@ describe('account binding', () => {
     expect(f.service.user(f.student).schoolId).toBe(f.school.id);
     expect((await caller.profile.save({accountId:f.student,displayName:'Maya',fullName:'Maya Chen'})).displayName).toBe('Maya');
   });
-  it('keeps the Now card as it was until the member chooses another style, for their own account only', async () => {
+  it('shows the block until the student chooses another Now card style, for their own account only', async () => {
     const f=fixture();
     const caller=appRouter.createCaller({service:f.service,userId:f.student});
-    expect(f.service.workspace(f.student).user).toMatchObject({nowCard:'classic',nowSplit:false});
+    expect(f.service.workspace(f.student).user).toMatchObject({nowCard:'block',nowSplit:false});
     expect(await caller.profile.nowCard({accountId:f.student,style:'split'})).toMatchObject({nowCard:'split',nowSplit:true});
     expect(f.service.workspace(f.student).user.nowCard).toBe('split');
     expect(await caller.profile.nowCard({accountId:f.student,style:'block'})).toMatchObject({nowCard:'block',nowSplit:false});
     // A request composed as another account is refused, so nobody's choice is changed for them.
     await expect(caller.profile.nowCard({accountId:f.owner,style:'split'})).rejects.toMatchObject({code:'UNAUTHORIZED'});
-    expect(f.service.user(f.owner).nowCard).toBe('classic');
+    expect(f.service.user(f.owner).nowCard).toBe('block');
     await expect(caller.profile.nowCard({accountId:f.student,style:'huge' as 'split'})).rejects.toMatchObject({code:'BAD_REQUEST'});
     expect((await caller.profile.nowCard({accountId:f.student,style:'classic'})).nowCard).toBe('classic');
+    // The beta's column follows, for a build from the beta.
+    expect(f.db.prepare('SELECT now_split FROM users WHERE id=?').pluck().get(f.student)).toBe(0);
     // A number no style has, from a newer build's column, reads as the default.
-    f.db.prepare('UPDATE users SET now_split=9 WHERE id=?').run(f.student);
-    expect(f.service.user(f.student).nowCard).toBe('classic');
+    f.db.prepare('UPDATE users SET now_card=9 WHERE id=?').run(f.student);
+    expect(f.service.user(f.student).nowCard).toBe('block');
   });
 });
 

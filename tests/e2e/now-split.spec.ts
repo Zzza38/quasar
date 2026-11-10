@@ -2,23 +2,19 @@ import { test, expect } from './fixtures';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 import type { StudentClass } from '../../src/domain/schedule';
 import type { NowCardStyle } from '../../src/lib/now-split';
 
-const KEY = 'now-card-setting';
-
 /**
- * A student with a class in every block of the example schedule. `beta` joins them to the now-card-setting beta, and
- * `card` is their choice for "Next class on the Now card" (Account → Look), which that beta gives them. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
+ * A student with a class in every block of the example schedule. `card` is their choice for "Next class on the Now
+ * card" (Account → Look), or null for an account that never chose. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
  * Pre-Calculus Honors 10:50-11:50, Eastern time.
  */
-function seed({ beta = true, card = 'split' }: { beta?: boolean; card?: NowCardStyle } = {}) {
+function seed({ card = 'split' }: { card?: NowCardStyle | null } = {}) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -34,18 +30,7 @@ function seed({ beta = true, card = 'split' }: { beta?: boolean; card?: NowCardS
     ];
     service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'),
       data: { grade: '10', classes, assignments: { A: 'art', B: 'bio', C: 'math', D: 'hist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
-    service.setNowCard(id, card);
-    if (beta) {
-      // What `npm run beta -- create` writes, then the student joins with the code.
-      const code = `SPLIT-${id.slice(0, 4)}`;
-      const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-      const registry = readBetaRegistry(listPath);
-      writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((entry) => entry.key !== KEY) }, { key: KEY, name: 'Next class on the Now card', code }), listPath);
-      // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-      const previous = process.env.DATABASE_PATH;
-      process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-      try { new BetaService(service).join(id, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-    }
+    if (card) service.setNowCard(id, card);
     return id;
   } finally { db.close(); }
 }
@@ -58,7 +43,7 @@ async function authenticate(context: BrowserContext, id: string) {
 /** Eastern daylight time on 2026-09-08, as an instant. */
 const at = (time: string) => new Date(`2026-09-08T${time}:00-04:00`);
 
-async function open(page: Page, context: BrowserContext, time: string, width: number, account: { beta?: boolean; card?: NowCardStyle } = {}) {
+async function open(page: Page, context: BrowserContext, time: string, width: number, account: { card?: NowCardStyle | null } = {}) {
   await page.setViewportSize({ width, height: 900 });
   // The grey part has its own shade in the dark theme.
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -192,7 +177,7 @@ test('the last period of the day keeps the card whole', async ({ page, context }
   await expect(page.locator('.ns-card')).toHaveCount(0);
 });
 
-test('a beta member picks the line, the block or the split card in Account, and the choice follows the account', async ({ page, context }, testInfo) => {
+test('a student picks the line, the block or the split card in Account, and the choice follows the account', async ({ page, context }, testInfo) => {
   const card = await open(page, context, '08:36', 1280, { card: 'classic' });
   await page.locator('html[data-hydrated]').waitFor({ state: 'attached' });
   await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
@@ -236,7 +221,7 @@ test('a beta member picks the line, the block or the split card in Account, and 
 });
 
 for (const width of [390, 1280]) {
-  test(`in the beta the line names the next class between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
+  test(`the line names the next class between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
     const card = await open(page, context, '09:04', width, { card: 'classic' });
     await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
     const line = card.getByText('Then Lunch at 10:15 AM');
@@ -268,25 +253,13 @@ for (const width of [390, 1280]) {
   });
 }
 
-test('outside the beta there is no choice in Account, and the card keeps its line whatever the account had chosen', async ({ page, context, browser }) => {
-  for (const chosen of ['split', 'block'] as const) {
-    const other = await browser.newContext();
-    try {
-      const visitor = await other.newPage();
-      const card = await open(visitor, other, '08:36', 1280, { beta: false, card: chosen });
-      await visitor.locator('html[data-hydrated]').waitFor({ state: 'attached' });
-      await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
-      await expect(visitor.locator('.ns-card')).toHaveCount(0);
-      await expect(card.getByRole('group')).toHaveCount(0);
-      await visitor.getByRole('button', { name: /^Remy/ }).click();
-      const account = visitor.getByRole('dialog', { name: 'Account', exact: true });
-      await expect(account.getByText('Accent color', { exact: true }).first()).toBeVisible();
-      await expect(account.getByRole('radiogroup', { name: 'Next class on the Now card' })).toHaveCount(0);
-      // Between periods its line still names the cycle day, not the class after the next one.
-      await account.press('Escape');
-      await setTime(visitor, '09:04');
-      await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
-      await expect(card.getByText('Then Lunch at')).toHaveCount(0);
-    } finally { await other.close(); }
-  }
+test('an account that never chose gets the block, and Account shows it chosen', async ({ page, context }) => {
+  const card = await open(page, context, '08:36', 1280, { card: null });
+  await page.locator('html[data-hydrated]').waitFor({ state: 'attached' });
+  await expect(card.getByRole('group', { name: 'Next: Biology' })).toContainText('9:10 AM');
+  await expect(card.getByText('Then Biology at')).toHaveCount(0);
+  await expect(page.locator('.ns-card')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Remy/ }).click();
+  const account = page.getByRole('dialog', { name: 'Account', exact: true });
+  await expect(account.getByRole('radiogroup', { name: 'Next class on the Now card' }).getByRole('radio', { name: 'Block', exact: true })).toBeChecked();
 });

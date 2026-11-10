@@ -10,12 +10,12 @@ import { viewPath } from '@/lib/routes';
 import { SITE_TITLE } from '@/server/site';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
-import { NOW_SPLIT_BETA, NowCardSetting } from './now-card-setting';
+import { NowCardSetting } from './now-card-setting';
 import type { NowCardStyle } from '@/lib/now-split';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
-import { Beta, BetasButton } from './betas';
+import { BetasButton } from './betas';
 import { DockCountDescriptions, DockGroupSwitch, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
@@ -358,7 +358,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             {session.storagePersistent === false && <div><dt className="text-muted-foreground">Device storage</dt><dd className="text-right font-semibold">The browser may clear it if space runs low</dd></div>}
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
-          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /><Beta id={NOW_SPLIT_BETA}><NowCardSetting accountId={context.user.id} value={nowCard} online={online} onChange={onNowCard} /></Beta></div>
+          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /><NowCardSetting accountId={context.user.id} value={nowCard} online={online} onChange={onNowCard} /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
           <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
