@@ -1,6 +1,23 @@
 # Mockups
 
-Two current sets. Older rounds (countdown hover, classmates popup, landing) are in git history.
+Three current sets. Older rounds (countdown hover, classmates popup, landing) are in git history.
+
+## Classes page
+
+Five redesigns of the Classes page, then the owner's pick: 2's board drawn with 5's look.
+
+Open `classes.html?v=1` through `?v=6`. The sample data has nine classes, a ten-day rotation and one class not placed yet.
+
+| `v` | Direction |
+| --- | --------- |
+| 1 | Roster and detail: the class list is the menu, the chosen class fills the right. |
+| 2 | One board: the class cards and the drag palette are one rail beside one week of the timetable. |
+| 3 | Tabs: Classes, Timetable and Adjustments, with the classes as a table. |
+| 4 | Meeting grid: every class against every rotation day, the drag editor opens on request. |
+| 5 | List with a rotation map: classes open in place to edit, beside a small colour map of the rotation. |
+| 6 | The pick, 2 and 5 combined: 5's list rows and in-place editing beside 2's timetable, with the rotation map as the week switch. |
+
+`?v=6` is the locked, everyday view. `?v=6&s=edit` opens a class in place and lights its blocks; `?v=6&s=place` shows a class picked up for placing.
 
 ## Phone Messages entry
 
