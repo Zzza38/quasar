@@ -7,8 +7,8 @@ import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolve
 import { addDays, classColor, daysBetween, formatMinutes, formatMinutesInWords, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { barTint, heroBase } from '@/lib/color';
 import { nowSplit, type NowCardStyle, type NowSplit } from '@/lib/now-split';
-import { Beta } from '../betas';
-import { NOW_SPLIT_BETA } from '../now-card-setting';
+import { Beta, useBeta } from '../betas';
+import { NOW_SPLIT_BETA, nowCardStyle } from '../now-card-setting';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
@@ -40,6 +40,8 @@ export function TodayView({ state }: { state: AppState }) {
   const { schedule, personal, now, today, timeZone, context } = state;
   const next = useMemo(() => nextClass(schedule, now, personal), [schedule, now, personal]);
   const following = useMemo(() => next ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
+  // The block and the split card are a choice the beta gives; everyone else keeps the line.
+  const cardStyle: NowCardStyle = useBeta(NOW_SPLIT_BETA) ? nowCardStyle(context.user) : 'classic';
   const day = useMemo(() => { try { return resolveDay(schedule, today, personal); } catch { return null; } }, [schedule, today, personal]);
   // Between two of today's periods, the one that just ended: the split Now card measures the wait from its start.
   const previous = useMemo(() => {
@@ -94,7 +96,7 @@ export function TodayView({ state }: { state: AppState }) {
 
     {setupFirst && <SetupChecklist state={state} />}
 
-    <NowCard cardStyle={context.user.nowSplit === true ? 'split' : 'classic'} next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
+    <NowCard cardStyle={cardStyle} next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
 
     {!setupFirst && <SetupChecklist state={state} />}
 
@@ -276,15 +278,17 @@ export function FollowingBlock({ period, label, sameDay, today }: { period: NonN
   const name = period.class?.name ?? period.label;
   const base = nowCardBase(classColor(period.class?.id, period.kind, period.class?.color).dot);
   const time = sameDay ? formatTime(period.start) : `${relativeDate(period.date, today, { weekday: 'long' })} ${formatTime(period.start)}`;
-  const meta = [period.class?.room ? formatRoom(period.class.room) || null : null, period.class?.teacher ?? null].filter(Boolean);
+  // Keyed by what each is, since a room and a teacher can be written the same.
+  const meta = [{ key: 'room', text: period.class?.room ? formatRoom(period.class.room) || null : null }, { key: 'teacher', text: period.class?.teacher ?? null }].filter((entry) => entry.text);
   return <div className="grid gap-1 border-t border-white/20 px-5 pt-3 pb-3.5 sm:px-7" style={{ background: heroGradient(base) }} aria-label={`${label}: ${name}`} role="group">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-      <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/85">{label}</span>
-      <strong className="min-w-0 text-[15.5px] font-extrabold tracking-[-0.01em] text-white">{name}</strong>
-      <span className="ml-auto rounded-full bg-white/15 px-2.5 py-0.5 text-[13px] font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{time}</span>
+      <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white">{label}</span>
+      <strong className="min-w-0 text-[15.5px] font-extrabold tracking-[-0.01em] text-white [overflow-wrap:anywhere]">{name}</strong>
+      {/* Darker than the block, not lighter: the block's colour is only just dark enough for white text. */}
+      <span className="ml-auto rounded-full bg-black/20 px-2.5 py-0.5 text-[13px] font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{time}</span>
     </div>
     {meta.length > 0 && <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] font-medium text-white">
-      {meta.map((entry, index) => <span key={entry} className="inline-flex items-center gap-2.5">{index > 0 && <span aria-hidden="true" className="size-1 rounded-full bg-white/50" />}{entry}</span>)}
+      {meta.map((entry, index) => <span key={entry.key} className="inline-flex items-center gap-2.5">{index > 0 && <span aria-hidden="true" className="size-1 rounded-full bg-white/50" />}{entry.text}</span>)}
     </p>}
   </div>;
 }

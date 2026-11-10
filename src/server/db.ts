@@ -801,8 +801,9 @@ function migrate(db: Db): void {
     END`);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
-  // users.now_split: the account shares Today's Now card with the next class (Account → Look; Service.setNowSplit).
-  // Off unless the member turns it on. It began as the now-card-split beta, so that beta's members start with it on.
+  // users.now_split: how the account's Now card shows the next class (Account → Look; Service.setNowCard): 0 a line of
+  // text, 1 the split card, 2 a block. It began as the split card's on/off switch, hence the name, and before that as
+  // the now-card-split beta, so that beta's members start on the split card.
   // Checked by column instead of a migration number, so it cannot collide with a numbered migration on another branch.
   if (!(db.pragma('table_info(users)') as { name: string }[]).some(column => column.name === 'now_split')) {
     db.exec(`

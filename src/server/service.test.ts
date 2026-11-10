@@ -209,16 +209,21 @@ describe('account binding', () => {
     expect(f.service.user(f.student).schoolId).toBe(f.school.id);
     expect((await caller.profile.save({accountId:f.student,displayName:'Maya',fullName:'Maya Chen'})).displayName).toBe('Maya');
   });
-  it('keeps the Now card whole until the member chooses the split, for their own account only', async () => {
+  it('keeps the Now card as it was until the member chooses another style, for their own account only', async () => {
     const f=fixture();
     const caller=appRouter.createCaller({service:f.service,userId:f.student});
-    expect(f.service.workspace(f.student).user.nowSplit).toBe(false);
-    expect((await caller.profile.nowSplit({accountId:f.student,enabled:true})).nowSplit).toBe(true);
-    expect(f.service.workspace(f.student).user.nowSplit).toBe(true);
+    expect(f.service.workspace(f.student).user).toMatchObject({nowCard:'classic',nowSplit:false});
+    expect(await caller.profile.nowCard({accountId:f.student,style:'split'})).toMatchObject({nowCard:'split',nowSplit:true});
+    expect(f.service.workspace(f.student).user.nowCard).toBe('split');
+    expect(await caller.profile.nowCard({accountId:f.student,style:'block'})).toMatchObject({nowCard:'block',nowSplit:false});
     // A request composed as another account is refused, so nobody's choice is changed for them.
-    await expect(caller.profile.nowSplit({accountId:f.owner,enabled:true})).rejects.toMatchObject({code:'UNAUTHORIZED'});
-    expect(f.service.user(f.owner).nowSplit).toBe(false);
-    expect((await caller.profile.nowSplit({accountId:f.student,enabled:false})).nowSplit).toBe(false);
+    await expect(caller.profile.nowCard({accountId:f.owner,style:'split'})).rejects.toMatchObject({code:'UNAUTHORIZED'});
+    expect(f.service.user(f.owner).nowCard).toBe('classic');
+    await expect(caller.profile.nowCard({accountId:f.student,style:'huge' as 'split'})).rejects.toMatchObject({code:'BAD_REQUEST'});
+    expect((await caller.profile.nowCard({accountId:f.student,style:'classic'})).nowCard).toBe('classic');
+    // A number no style has, from a newer build's column, reads as the default.
+    f.db.prepare('UPDATE users SET now_split=9 WHERE id=?').run(f.student);
+    expect(f.service.user(f.student).nowCard).toBe('classic');
   });
 });
 
