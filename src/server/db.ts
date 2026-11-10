@@ -822,6 +822,24 @@ function migrate(db: Db): void {
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(31, datetime('now'));
   `);
+
+  // Migration 35: every logo a school has had, so staff can revert a change (src/server/school-logos.ts). An entry
+  // with a NULL image is a removal. Numbers 32 to 34 are skipped on purpose: unmerged betas that are live on
+  // production already recorded them, and every statement here is safe to repeat, so no number has to be free.
+  // A school that already has a logo starts its history with it. Logos used to wait for support after a vote; that
+  // step is gone, so any left waiting go back to an open vote.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS school_logo_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, school_id TEXT NOT NULL REFERENCES schools(id), image BLOB, mime TEXT NOT NULL DEFAULT '',
+      proposal_id TEXT REFERENCES school_logo_proposals(id), actor_id TEXT REFERENCES users(id), created_at TEXT NOT NULL, reverted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS school_logo_history_school ON school_logo_history(school_id, id);
+    INSERT INTO school_logo_history(school_id,image,mime,actor_id,created_at)
+      SELECT l.school_id, l.image, l.mime, l.actor_id, l.updated_at FROM school_logos l
+      WHERE l.image IS NOT NULL AND NOT EXISTS (SELECT 1 FROM school_logo_history h WHERE h.school_id=l.school_id);
+    UPDATE school_logo_proposals SET status='open', closed_at=NULL WHERE status='awaiting-support';
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(35, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

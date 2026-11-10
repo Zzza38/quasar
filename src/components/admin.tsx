@@ -30,7 +30,7 @@ type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
 type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
-type PendingLogo = RouterOutput['admin']['logoProposals'][number];
+type PendingLogo = RouterOutput['admin']['logoVotes'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type BanRow = RouterOutput['admin']['bans'][number];
 /**
@@ -147,7 +147,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       const may = (permission: StaffPermission) => hasPermission(session.staff, permission);
       const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList, logoList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(),
         may('verification') ? api.admin.verificationRequests.query() : [], may('reports') ? api.admin.reports.query() : [], may('proposals') ? api.admin.proposals.query() : [],
-        may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : [], may('proposals') ? api.admin.logoProposals.query() : []]);
+        may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : [], may('proposals') ? api.admin.logoVotes.query() : []]);
       setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setLogos(logoList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
@@ -372,14 +372,14 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         </li>)}</ul>}
       </Section>}
 
-      {may('proposals') && <Section id="logos-title" title="School logos awaiting support" icon="imageUp" description="Logos that passed a school’s vote, or came from a school too small to vote. Publishing shows the logo to every member of that school.">
-        {!loading && logos.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
+      {may('proposals') && <Section id="logos-title" title="School logo votes" icon="imageUp" description="Logos a school is voting on. A vote publishes or rejects its logo without you; force one either way here. To undo a published logo, open the school and revert it.">
+        {!loading && logos.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open votes</Hint>}
         {logos.length > 0 && <ul className="grid gap-2">{logos.map((logo) => <li key={logo.id} className="flex flex-wrap items-center gap-4 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           {/* eslint-disable-next-line @next/next/no-img-element -- a small picture from our own route. */}
           <img src={logo.image} alt={`Proposed logo for ${logo.schoolName}`} draggable={false} className="size-24 shrink-0 rounded-2xl bg-white object-contain p-1.5 ring-1 ring-foreground/10" />
           <div className="grid min-w-0 flex-1 basis-56 gap-2">
-            <span><strong className="text-sm font-bold">{logo.schoolName}</strong><Hint>Proposed by {logo.proposerName} · {logo.votesFor} for, {logo.votesAgainst} against · {formatDate(instantParts(logo.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></span>
-            <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" aria-label={`Publish the logo for ${logo.schoolName}`} onClick={() => void act(() => api.admin.decideLogo.mutate({ id: logo.id, publish: true }))}>Publish logo</Button><Button size="sm" variant="ghost" aria-label={`Decline the logo for ${logo.schoolName}`} onClick={() => void act(() => api.admin.decideLogo.mutate({ id: logo.id, publish: false }))}>Decline</Button></div>
+            <span><strong className="text-sm font-bold">{logo.schoolName}</strong><Hint>Proposed by {logo.proposerName} · {logo.votesFor} for, {logo.votesAgainst} against, passes at {logo.threshold} · {formatDate(instantParts(logo.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></span>
+            <div className="flex flex-wrap gap-2"><Button size="sm" aria-label={`Force the logo for ${logo.schoolName} to win`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: true }))}>Force win</Button><Button size="sm" variant="ghost" aria-label={`Force the logo for ${logo.schoolName} to lose`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: false }))}>Force loss</Button></div>
           </div>
         </li>)}</ul>}
       </Section>}
@@ -392,7 +392,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
     {guideSchool && accountId && schools.some((entry) => entry.id === guideSchool) && <SchoolGuideSheet key={guideSchool} school={schools.find((entry) => entry.id === guideSchool)!} accountId={accountId} onClose={() => setGuideSchool(null)} onSaved={refresh} />}
-    {school && <ReviewSheet key={school.id} school={school} canSetDomains={may('verification')} onClose={() => setSelected(null)} onSaved={refresh} />}
+    {school && <ReviewSheet key={school.id} school={school} canSetDomains={may('verification')} canForceLogos={may('proposals')} onClose={() => setSelected(null)} onSaved={refresh} />}
     {openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
       onOpen={(reason) => { reasons.current.set(openingMember.userId, reason); setMember({ ...openingMember, reason }); setOpeningMember(null); }} />}
     {member && accountId && access && <MemberRecord key={member.userId} accountId={accountId} access={access} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
@@ -402,7 +402,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
 }
 
 /** `canSetDomains`: email domains verify students, so only roles with verification may change them (Service.updateSchool). */
-function ReviewSheet({ school, canSetDomains, onClose, onSaved }: { school: School; canSetDomains: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
+function ReviewSheet({ school, canSetDomains, canForceLogos, onClose, onSaved }: { school: School; canSetDomains: boolean; canForceLogos: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState<Schedule>(() => structuredClone(school.schedule));
   const [approved, setApproved] = useState(school.approved);
   const [supportLocked, setSupportLocked] = useState(school.supportLocked);
@@ -422,7 +422,7 @@ function ReviewSheet({ school, canSetDomains, onClose, onSaved }: { school: Scho
       }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
-    <Panel><SupportLogoControls school={school} onChanged={onSaved} /></Panel>
+    <Panel><SupportLogoControls school={school} canForce={canForceLogos} onChanged={onSaved} /></Panel>
     <Panel className="grid gap-3">
       <ScheduleSummary schedule={school.schedule} />
       <div className="grid gap-3 sm:grid-cols-2">

@@ -166,7 +166,7 @@ test('on a phone the redesigned School page is a list that opens one section at 
   await expect(rotation).toBeHidden();
 });
 
-test('a member proposes a school logo, the school votes it in, and support publishes it', async ({ page, context, browser }, testInfo) => {
+test('a member proposes a school logo and the school votes it in; support can force a vote and revert a logo', async ({ page, context, browser }, testInfo) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const { id, name, members, schoolId } = seed(true);
@@ -193,43 +193,69 @@ test('a member proposes a school logo, the school votes it in, and support publi
   expect(shown).toEqual([256, 256]);
   await card.screenshot({ path: testInfo.outputPath('logo-voting.png') });
 
-  // Two classmates vote for it. Passing the vote sends it to support and shows nothing yet.
+  // Two classmates vote for it. Passing the vote publishes the logo; nobody approves it first.
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   const ownerId = randomUUID();
+  const rival = { mime: 'image/png' as const, data: (await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 20, g: 90, b: 200, alpha: 1 } } }).png().toBuffer()).toString('base64') };
   try {
     const service = new Service(db, 'browser-owner@example.com');
     const logos = new SchoolLogoService(service);
     const proposalId = logos.list(id).proposals[0].id;
     for (const member of members.slice(1, 3)) logos.vote(member, { proposalId, vote: 'for' });
+    // A second logo goes up for a vote afterwards, for support to force.
+    logos.propose(members[3], { schoolId, ...rival });
     db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(ownerId, ownerId, 'browser-owner@example.com', 'Logo Owner', 'Logo Test Owner', new Date().toISOString());
   } finally { db.close(); }
   await page.reload();
-  await expect(proposal).toContainText('passed the vote and is waiting for support to check it');
-  await expect(proposal.getByRole('button', { name: 'For' })).toHaveCount(0);
-  await expect(header.locator('img')).toHaveCount(0);
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=1`);
+  await expect(header.locator('svg text')).toHaveCount(0);
+  await expect(card).toContainText('The school’s logo');
+  await expect(proposal).toHaveCount(0);
+  const response = await page.request.get(`/api/school-logos/${schoolId}?v=1`);
+  expect(response.status()).toBe(200);
+  expect(response.headers()['content-type']).toBe('image/png');
+  // A member has no staff controls.
+  for (const label of ['Force win', 'Force loss', 'Revert last change', 'Set as support']) await expect(card.getByRole('button', { name: label })).toHaveCount(0);
+  await header.screenshot({ path: testInfo.outputPath('card-logo.png') });
+  await page.screenshot({ path: testInfo.outputPath('logo-published.png'), fullPage: true });
 
-  // Support publishes it from /admin.
+  // Support forces the second vote to lose from the /admin inbox.
   const support = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: ownerId, authAt: Date.now() }, maxAge: 3600 });
   await support.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
   const admin = hydrating(await support.newPage());
   await admin.goto('/admin');
-  const queue = admin.getByRole('region', { name: 'School logos awaiting support' });
-  await queue.getByRole('button', { name: `Publish the logo for ${name}` }).click();
-  await expect(queue.getByRole('button', { name: `Publish the logo for ${name}` })).toHaveCount(0);
-  await support.close();
+  const queue = admin.getByRole('region', { name: 'School logo votes' });
+  await expect(queue).toContainText('1 for, 0 against, passes at 3');
+  await queue.getByRole('button', { name: `Force the logo for ${name} to lose` }).click();
+  await expect(queue).toContainText('No open votes');
 
-  // Every member now sees the logo on the school card.
-  await page.goto('/school?section=logo');
-  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=1`);
-  await expect(header.locator('svg text')).toHaveCount(0);
-  await expect(card).toContainText('The school’s logo');
-  await expect(card).toContainText('No logos are waiting.');
-  const response = await page.request.get(`/api/school-logos/${schoolId}?v=1`);
-  expect(response.status()).toBe(200);
-  expect(response.headers()['content-type']).toBe('image/png');
-  await header.screenshot({ path: testInfo.outputPath('card-logo.png') });
-  await page.screenshot({ path: testInfo.outputPath('logo-published.png'), fullPage: true });
+  // In the school's review sheet support reverts the published logo, and the school shows its initials again.
+  await admin.getByRole('tab', { name: 'Schools', exact: true }).click();
+  await admin.getByRole('textbox', { name: 'Filter schools', exact: true }).fill(name);
+  await admin.getByRole('button', { name: `Review ${name}`, exact: true }).click();
+  const sheet = admin.getByRole('dialog', { name: `Review ${name}` });
+  const votes = sheet.getByRole('list', { name: 'Logo votes' }).getByRole('listitem');
+  await expect(votes).toHaveCount(2);
+  await expect(votes.filter({ hasText: 'Stopped by support' })).toHaveCount(1);
+  await sheet.getByRole('button', { name: 'Revert last change' }).click();
+  await expect(votes.filter({ hasText: 'Reverted by support' })).toHaveCount(1);
+  await expect(sheet.getByRole('button', { name: 'Revert last change' })).toHaveCount(0);
+  await admin.screenshot({ path: testInfo.outputPath('admin-logo-reverted.png') });
+  await page.reload();
+  await expect(header.locator('svg text')).toHaveText('HH');
+  await expect(card).toContainText('No logo yet');
+
+  // Support then forces the vote that lost to win: its logo shows, at a new address.
+  await votes.filter({ hasText: 'Stopped by support' }).getByRole('button', { name: 'Force win' }).click();
+  await expect(votes.filter({ hasText: 'Published by support' })).toHaveCount(1);
+  await support.close();
+  await page.reload();
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=3`);
+  await card.getByRole('button', { name: /earlier logos \(2\)/ }).click();
+  await expect(card).toContainText('Published by support');
+  await expect(card).toContainText('Reverted by support');
+  await card.screenshot({ path: testInfo.outputPath('logo-history.png') });
 });
 
 for (const width of [1280, 390]) {

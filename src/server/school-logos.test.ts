@@ -33,64 +33,126 @@ function fixture(members: number, verified = members) {
 }
 
 describe('school logos', () => {
-  it('a voted-in logo still waits for support, and publishing makes it the school’s logo', () => {
+  it('a logo that wins the vote is published at once, with nobody approving it', () => {
     const { service, logos, owner, students, school, outsider } = fixture(11, 10);
     const [alice, bob, cara, dan] = students;
     // Ten verified members: the threshold is three.
     expect(() => logos.propose(students[10], { schoolId: school.id, ...png() })).toThrow(/Verify your school membership/);
     const proposal = logos.propose(alice, { schoolId: school.id, ...png(1) });
-    expect(proposal).toMatchObject({ status: 'open', votesFor: 1, votesAgainst: 0, threshold: 3, myVote: 'for', image: `/api/school-logos/proposals/${proposal.id}` });
+    expect(proposal).toMatchObject({ status: 'open', votesFor: 1, votesAgainst: 0, threshold: 3, myVote: 'for', byStaff: false, image: `/api/school-logos/proposals/${proposal.id}` });
     const rival = logos.propose(bob, { schoolId: school.id, ...png(2) });
     expect(logos.vote(cara, { proposalId: proposal.id, vote: 'for' }).status).toBe('open');
+    expect(service.school(school.id).logo).toBeNull();
     expect(() => logos.vote(students[10], { proposalId: proposal.id, vote: 'for' })).toThrow(/Only verified members/);
     expect(() => logos.vote(outsider, { proposalId: proposal.id, vote: 'for' })).toThrow(/not found/);
-    // The third vote passes it, which sends it to support and publishes nothing.
-    expect(logos.vote(dan, { proposalId: proposal.id, vote: 'for' })).toMatchObject({ status: 'awaiting-support', votesFor: 3 });
-    expect(service.school(school.id).logo).toBeNull();
-    expect(() => logos.vote(bob, { proposalId: proposal.id, vote: 'against' })).toThrow(/closed/);
-    // Members of the school and deciding staff can load the picture; other schools cannot.
+    // Members of the school and staff can load the picture; other schools cannot.
     expect(logos.proposalImage(bob, proposal.id)?.mime).toBe('image/png');
     expect(logos.proposalImage(owner, proposal.id)).not.toBeNull();
     expect(logos.proposalImage(outsider, proposal.id)).toBeNull();
+    expect(logos.openVotes(owner).map((entry) => [entry.id, entry.schoolName])).toEqual([[proposal.id, 'Logo High'], [rival.id, 'Logo High']]);
 
-    expect(() => logos.decide(alice, proposal.id, true)).toThrow(/Staff access is required/);
-    expect(logos.awaitingSupport(owner).map((entry) => [entry.id, entry.schoolName])).toEqual([[proposal.id, 'Logo High']]);
-    logos.decide(owner, proposal.id, true);
+    // The third vote passes it, and that is all it takes.
+    expect(logos.vote(dan, { proposalId: proposal.id, vote: 'for' })).toMatchObject({ status: 'published', votesFor: 3, byStaff: false });
     expect(service.school(school.id).logo).toBe(`/api/school-logos/${school.id}?v=1`);
     expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(1);
+    expect(() => logos.vote(bob, { proposalId: proposal.id, vote: 'against' })).toThrow(/closed/);
     const after = logos.list(alice);
-    expect(after.logo).toBe(`/api/school-logos/${school.id}?v=1`);
+    expect(after).toMatchObject({ logo: `/api/school-logos/${school.id}?v=1`, canForce: false, canSet: false, canRevert: false });
     // The rival that was still being voted on is superseded.
     expect(after.proposals.map((entry) => [entry.id, entry.status]).sort()).toEqual([[proposal.id, 'published'], [rival.id, 'superseded']].sort());
-    expect(() => logos.decide(owner, proposal.id, true)).toThrow(/no longer waiting/);
+    expect(logos.openVotes(owner)).toEqual([]);
   });
 
   it('enough votes against reject a logo, and its proposer can withdraw one that is still open', () => {
     const { logos, students, school } = fixture(10);
     const proposal = logos.propose(students[0], { schoolId: school.id, ...png() });
-    expect(() => logos.propose(students[0], { schoolId: school.id, ...png(3) })).toThrow(/already have a logo waiting/);
+    expect(() => logos.propose(students[0], { schoolId: school.id, ...png(3) })).toThrow(/already have a logo being voted on/);
     for (const id of students.slice(1, 3)) logos.vote(id, { proposalId: proposal.id, vote: 'against' });
     expect(logos.vote(students[3], { proposalId: proposal.id, vote: 'against' })).toMatchObject({ status: 'rejected', votesFor: 1, votesAgainst: 3 });
     const second = logos.propose(students[0], { schoolId: school.id, ...png(4) });
-    expect(() => logos.withdraw(students[1], second.id)).toThrow(/no waiting logo of yours/);
+    expect(() => logos.withdraw(students[1], second.id)).toThrow(/no open logo vote of yours/);
     logos.withdraw(students[0], second.id);
     expect(logos.list(students[0]).proposals.find((entry) => entry.id === second.id)?.status).toBe('withdrawn');
   });
 
-  it('a school too small to vote sends a member’s logo straight to support, who can decline it', () => {
-    const { service, logos, owner, students, school } = fixture(3, 0);
-    const state = logos.list(students[1]);
-    expect(state).toMatchObject({ voting: false, canPropose: true, canVote: false, canDecide: false, canSet: false, logo: null });
-    const proposal = logos.propose(students[1], { schoolId: school.id, ...png() });
-    expect(proposal).toMatchObject({ status: 'awaiting-support', votesFor: 0 });
-    expect(() => logos.vote(students[2], { proposalId: proposal.id, vote: 'for' })).toThrow(/closed/);
-    logos.decide(owner, proposal.id, false);
-    expect(logos.list(students[1]).proposals[0].status).toBe('declined');
+  it('a school too small to vote publishes a member’s logo as soon as they add it', () => {
+    const { service, logos, students, school } = fixture(3, 0);
+    expect(logos.list(students[1])).toMatchObject({ voting: false, canPropose: true, canVote: false, canForce: false, canSet: false, logo: null });
+    expect(logos.propose(students[1], { schoolId: school.id, ...png(1) })).toMatchObject({ status: 'published', votesFor: 0, byStaff: false });
+    expect(service.school(school.id).logo).toBe(`/api/school-logos/${school.id}?v=1`);
+    // Another member changes it the same way; nothing is left waiting.
+    logos.propose(students[2], { schoolId: school.id, ...png(2) });
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(2);
+    expect(logos.list(students[1]).proposals.map((entry) => entry.status)).toEqual(['published', 'published']);
+  });
+
+  it('staff force an open vote to win or to lose, and force a vote that already lost to win', () => {
+    const { service, logos, owner, students, school } = fixture(10);
+    const [alice, bob, cara] = students;
+    const first = logos.propose(alice, { schoolId: school.id, ...png(1) });
+    const second = logos.propose(bob, { schoolId: school.id, ...png(2) });
+    expect(() => logos.force(alice, first.id, true)).toThrow(/Staff access is required/);
+    // Forced to lose with one vote for and none against.
+    logos.force(owner, first.id, false);
+    expect(logos.list(alice).proposals.find((entry) => entry.id === first.id)).toMatchObject({ status: 'declined', byStaff: true, votesFor: 1 });
+    expect(() => logos.vote(cara, { proposalId: first.id, vote: 'for' })).toThrow(/closed/);
+    expect(() => logos.force(owner, first.id, false)).toThrow(/closed/);
+    // Forced to win with one vote of the three it needs.
+    logos.force(owner, second.id, true);
+    expect(logos.list(alice).proposals.find((entry) => entry.id === second.id)).toMatchObject({ status: 'published', byStaff: true, votesFor: 1, threshold: 3 });
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(2);
+    expect(() => logos.force(owner, second.id, true)).toThrow(/already published/);
+    // The one that was forced to lose can still be forced to win, and so can one the school voted down.
+    logos.force(owner, first.id, true);
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(1);
+    expect(service.school(school.id).logo).toBe(`/api/school-logos/${school.id}?v=2`);
+    const third = logos.propose(cara, { schoolId: school.id, ...png(3) });
+    for (const id of students.slice(3, 6)) logos.vote(id, { proposalId: third.id, vote: 'against' });
+    expect(logos.list(cara).proposals.find((entry) => entry.id === third.id)?.status).toBe('rejected');
+    logos.force(owner, third.id, true);
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(3);
+    // A withdrawn logo is its proposer's to bring back.
+    const fourth = logos.propose(alice, { schoolId: school.id, ...png(4) });
+    logos.withdraw(alice, fourth.id);
+    expect(() => logos.force(owner, fourth.id, true)).toThrow(/withdrew/);
+  });
+
+  it('staff revert the last logo change, and reverting again steps back further', () => {
+    const { service, logos, owner, students, school } = fixture(10);
+    const [alice, bob, cara] = students;
+    const address = (version: number) => `/api/school-logos/${school.id}?v=${version}`;
+    expect(() => logos.revert(owner, school.id)).toThrow(/no logo change to revert/);
+    // Version 1: the school votes one in.
+    const voted = logos.propose(alice, { schoolId: school.id, ...png(1) });
+    logos.vote(bob, { proposalId: voted.id, vote: 'for' });
+    logos.vote(cara, { proposalId: voted.id, vote: 'for' });
+    // Version 2: staff set another. Version 3: staff remove it.
+    logos.set(owner, { schoolId: school.id, ...png(2) });
+    logos.remove(owner, school.id);
     expect(service.school(school.id).logo).toBeNull();
+    expect(() => logos.revert(alice, school.id)).toThrow(/Staff access is required/);
+    expect(logos.forSchool(owner, school.id)).toMatchObject({ logo: null, canRevert: true });
+
+    // Each revert undoes one change, and the address always moves forward so no cached picture comes back.
+    expect(logos.revert(owner, school.id).logo).toBe(address(4));
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(2);
+    expect(logos.revert(owner, school.id).logo).toBe(address(5));
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(1);
+    expect(logos.list(alice).proposals.find((entry) => entry.id === voted.id)?.status).toBe('published');
+    // Reverting the voted-in logo leaves the initials, and marks the vote as reverted by staff.
+    expect(logos.revert(owner, school.id).logo).toBeNull();
+    expect(logos.logoImage(school.id)).toBeNull();
+    expect(logos.forSchool(owner, school.id)).toMatchObject({ logo: null, canRevert: false });
+    expect(logos.forSchool(owner, school.id).proposals[0]).toMatchObject({ id: voted.id, status: 'reverted', byStaff: true, votesFor: 3 });
+    expect(() => logos.revert(owner, school.id)).toThrow(/no logo change to revert/);
+    // A reverted vote can be forced to win again.
+    logos.force(owner, voted.id, true);
+    expect(service.school(school.id).logo).toBe(address(7));
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(1);
   });
 
   it('staff set and remove a logo directly, and the version keeps counting so an old address never comes back', () => {
-    const { service, logos, owner, students, school } = fixture(3);
+    const { service, logos, owner, students, school } = fixture(10);
     expect(() => logos.set(students[0], { schoolId: school.id, ...png() })).toThrow(/Staff access is required/);
     const waiting = logos.propose(students[0], { schoolId: school.id, ...png(5) });
     expect(logos.set(owner, { schoolId: school.id, ...png(6) }).logo).toBe(`/api/school-logos/${school.id}?v=1`);
@@ -110,5 +172,8 @@ describe('school logos', () => {
     await expect(caller.schoolLogo.propose({ accountId: students[0], schoolId: school.id, mime: 'image/svg+xml' as never, data: 'AAAA' })).rejects.toThrow();
     expect((await caller.schoolLogo.list()).proposals).toEqual([]);
     await expect(caller.admin.setSchoolLogo({ schoolId: school.id, ...png() })).rejects.toThrow();
+    await expect(caller.admin.revertSchoolLogo({ schoolId: school.id })).rejects.toThrow();
+    await expect(caller.admin.forceLogo({ id: school.id, win: true })).rejects.toThrow();
+    await expect(caller.admin.schoolLogos({ schoolId: school.id })).rejects.toThrow();
   });
 });

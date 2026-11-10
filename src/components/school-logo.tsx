@@ -62,13 +62,20 @@ export function SchoolMark({ name, logo, size = 'md', className }: { name: strin
   </svg>;
 }
 
-const STATUS: Record<Exclude<LogoProposal['status'], 'open'>, { label: string; tone: 'neutral' | 'success' | 'warning' | 'accent' }> = {
-  'awaiting-support': { label: 'Waiting for support', tone: 'accent' },
+type Closed = Exclude<LogoProposal['status'], 'open'>;
+const STATUS: Record<Closed, { label: string; tone: 'neutral' | 'success' | 'warning' | 'accent' }> = {
   published: { label: 'Published', tone: 'success' },
   rejected: { label: 'Voted down', tone: 'neutral' },
   withdrawn: { label: 'Withdrawn', tone: 'neutral' },
-  declined: { label: 'Declined by support', tone: 'warning' },
+  declined: { label: 'Stopped by support', tone: 'warning' },
   superseded: { label: 'Replaced', tone: 'neutral' },
+  reverted: { label: 'Reverted by support', tone: 'warning' },
+};
+/** The statuses a staff member can still force to win (WINNABLE in src/server/school-logos.ts), apart from an open vote. */
+const LOST: readonly LogoProposal['status'][] = ['rejected', 'declined', 'superseded', 'reverted'];
+const statusChip = (proposal: LogoProposal) => {
+  const status = STATUS[proposal.status as Closed];
+  return <Chip tone={status.tone}>{proposal.status === 'published' && proposal.byStaff ? 'Published by support' : status.label}</Chip>;
 };
 
 function ProposedLogo({ src }: { src: string }) {
@@ -77,8 +84,9 @@ function ProposedLogo({ src }: { src: string }) {
 }
 
 /**
- * The School page's logo section: the current logo, proposing a new one, and the vote. Members propose and vote;
- * support looks at every logo before it shows. Staff who are members of the school can decide and set one here too.
+ * The School page's logo section: the current logo, proposing a new one, and the vote. Members propose and vote, and
+ * a vote that passes publishes the logo. Staff who are members of the school can overrule it here: force a vote to
+ * win or lose, set or remove the logo, and revert the last change.
  */
 export function SchoolLogoSection({ state }: { state: AppState }) {
   const { context, online } = state;
@@ -113,13 +121,14 @@ export function SchoolLogoSection({ state }: { state: AppState }) {
   };
   const choose = (next: 'propose' | 'set') => { mode.current = next; picker.current?.click(); };
   const logo = board?.logo ?? school.logo ?? null;
-  const waiting = (board?.proposals ?? []).filter((entry) => entry.status === 'open' || entry.status === 'awaiting-support');
-  const closed = (board?.proposals ?? []).filter((entry) => entry.status !== 'open' && entry.status !== 'awaiting-support');
+  const waiting = (board?.proposals ?? []).filter((entry) => entry.status === 'open');
+  const closed = (board?.proposals ?? []).filter((entry) => entry.status !== 'open');
+  const force = (id: string, win: boolean) => void run(() => api.admin.forceLogo.mutate({ id, win }));
   const blocked = pending || !online;
   const when = (iso: string) => formatDate(instantParts(iso, state.timeZone).date);
 
   return <Section id="logo-title" title="School logo" icon="imageUp"
-    description={board ? (board.voting ? `Verified members vote on a new logo. One with at least ${board.threshold} votes for, and more for than against, goes to support, who check it before it shows.` : 'This school is small enough to skip the vote. Support checks every logo before it shows.') : 'Members propose a logo and support checks it before it shows.'}>
+    description={board ? (board.voting ? `Verified members vote on a new logo. One with at least ${board.threshold} votes for, and more for than against, becomes the school’s logo.` : 'This school is small enough to skip the vote, so a logo a member adds shows right away.') : 'Members choose the school’s logo.'}>
     {/* The only raw input allowed (AGENTS.md): a hidden file picker a shadcn Button opens. */}
     <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" tabIndex={-1} aria-hidden="true" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; upload(file); }} />
     <div className="flex flex-wrap items-center gap-4">
@@ -130,9 +139,10 @@ export function SchoolLogoSection({ state }: { state: AppState }) {
           <Hint>{logo ? 'Every member sees it on the School page.' : 'The school shows its initials until a logo is published.'}</Hint>
         </div>
         <div className="flex flex-wrap gap-2">
-          {board?.canPropose && <Button size="sm" icon="imageUp" busy={pending} disabled={blocked} onClick={() => choose('propose')}>{logo ? 'Propose a new logo' : 'Propose a logo'}</Button>}
+          {board?.canPropose && <Button size="sm" icon="imageUp" busy={pending} disabled={blocked} onClick={() => choose('propose')}>{board.voting ? (logo ? 'Propose a new logo' : 'Propose a logo') : (logo ? 'Change the logo' : 'Add a logo')}</Button>}
           {board?.canSet && <Button size="sm" variant="ghost" disabled={blocked} onClick={() => choose('set')}>Set as support</Button>}
           {board?.canSet && logo && <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void run(() => api.admin.removeSchoolLogo.mutate({ schoolId: school.id }))}>Remove logo</Button>}
+          {board?.canRevert && <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void run(() => api.admin.revertSchoolLogo.mutate({ schoolId: school.id }))}>Revert last change</Button>}
         </div>
       </div>
     </div>
@@ -147,62 +157,81 @@ export function SchoolLogoSection({ state }: { state: AppState }) {
         <div className="grid min-w-0 flex-1 basis-52 gap-2">
           <div className="grid gap-0.5">
             <strong className="text-sm font-bold">{mine ? 'Your proposal' : `Proposed by ${proposal.proposerName}`}</strong>
-            <Hint>{proposal.status === 'open'
-              ? `${when(proposal.createdAt)} · ${proposal.votesFor} for, ${proposal.votesAgainst} against · passes at ${proposal.threshold}`
-              : `${when(proposal.createdAt)} · ${board?.voting ? 'passed the vote and is ' : ''}waiting for support to check it`}</Hint>
+            <Hint>{when(proposal.createdAt)} · {proposal.votesFor} for, {proposal.votesAgainst} against · passes at {proposal.threshold}</Hint>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {proposal.status === 'open' && board?.canVote && <>
+            {board?.canVote && <>
               <Button size="sm" variant={proposal.myVote === 'for' ? 'primary' : 'secondary'} icon="check" disabled={blocked} aria-pressed={proposal.myVote === 'for'} onClick={() => void run(() => api.schoolLogo.vote.mutate({ accountId, proposalId: proposal.id, vote: 'for' }))}>For</Button>
               <Button size="sm" variant={proposal.myVote === 'against' ? 'danger' : 'secondary'} icon="x" disabled={blocked} aria-pressed={proposal.myVote === 'against'} onClick={() => void run(() => api.schoolLogo.vote.mutate({ accountId, proposalId: proposal.id, vote: 'against' }))}>Against</Button>
             </>}
-            {proposal.status === 'awaiting-support' && <Chip tone="accent">Waiting for support</Chip>}
-            {proposal.status === 'awaiting-support' && board?.canDecide && <>
-              <Button size="sm" variant="primary" icon="check" disabled={blocked} onClick={() => void run(() => api.admin.decideLogo.mutate({ id: proposal.id, publish: true }))}>Publish</Button>
-              <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void run(() => api.admin.decideLogo.mutate({ id: proposal.id, publish: false }))}>Decline</Button>
+            {board?.canForce && <>
+              <Button size="sm" variant="ghost" disabled={blocked} onClick={() => force(proposal.id, true)}>Force win</Button>
+              <Button size="sm" variant="ghost" disabled={blocked} onClick={() => force(proposal.id, false)}>Force loss</Button>
             </>}
             {mine && <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void run(() => api.schoolLogo.withdraw.mutate({ accountId, proposalId: proposal.id }))}>Withdraw</Button>}
           </div>
         </div>
       </li>;
     })}</ul>}
-    {board && waiting.length === 0 && <Hint>No logos are waiting.</Hint>}
+    {board?.voting && waiting.length === 0 && <Hint>No logos are being voted on.</Hint>}
 
     {closed.length > 0 && <div className="grid gap-2">
       <Button size="sm" variant="ghost" className="w-fit" iconRight="chevronDown" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>{showClosed ? 'Hide' : 'Show'} earlier logos ({closed.length})</Button>
-      {showClosed && <ul className="grid gap-2">{closed.map((proposal) => <li key={proposal.id} className="flex items-center gap-3 rounded-xl bg-muted/60 px-3 py-2">
+      {showClosed && <ul className="grid gap-2">{closed.map((proposal) => <li key={proposal.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-muted/60 px-3 py-2">
         <ProposedLogo src={proposal.image} />
-        <span className="grid min-w-0 flex-1"><strong className="truncate text-sm font-semibold">{proposal.proposerName}</strong><Hint>{when(proposal.createdAt)} · {proposal.votesFor} for, {proposal.votesAgainst} against</Hint></span>
-        <Chip tone={STATUS[proposal.status as Exclude<LogoProposal['status'], 'open'>].tone}>{STATUS[proposal.status as Exclude<LogoProposal['status'], 'open'>].label}</Chip>
+        <span className="grid min-w-0 flex-1 basis-32"><strong className="truncate text-sm font-semibold">{proposal.proposerName}</strong><Hint>{when(proposal.createdAt)} · {proposal.votesFor} for, {proposal.votesAgainst} against</Hint></span>
+        {statusChip(proposal)}
+        {board?.canForce && LOST.includes(proposal.status) && <Button size="sm" variant="ghost" disabled={blocked} onClick={() => force(proposal.id, true)}>Force win</Button>}
       </li>)}</ul>}
     </div>}
   </Section>;
 }
 
-/** Support's controls for one school's logo in the /admin review sheet: set it from a file, or remove it. */
-export function SupportLogoControls({ school, onChanged }: { school: { id: string; name: string; logo?: string | null }; onChanged: () => Promise<unknown> }) {
+/**
+ * Support's controls for one school's logo in the /admin review sheet: set it from a file, remove it, revert the last
+ * change, and force any of the school's logo votes. Staff need not belong to the school.
+ */
+export function SupportLogoControls({ school, canForce, onChanged }: { school: { id: string; name: string; logo?: string | null }; canForce: boolean; onChanged: () => Promise<unknown> }) {
   const picker = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [board, setBoard] = useState<RouterOutput['admin']['schoolLogos'] | null>(null);
+  const load = useCallback(async () => {
+    try { setBoard(await api.admin.schoolLogos.query({ schoolId: school.id })); } catch (err) { setError(errorMessage(err)); }
+  }, [school.id]);
+  useEffect(() => { void load(); }, [load]);
   const run = async (action: () => Promise<unknown>) => {
     setPending(true); setError('');
-    try { await action(); await onChanged(); } catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
+    try { await action(); } catch (err) { setError(errorMessage(err)); }
+    await load();
+    await onChanged().catch(() => undefined);
+    setPending(false);
   };
-  return <div className="grid gap-2">
+  const logo = board ? board.logo : school.logo;
+  const force = (id: string, win: boolean) => void run(() => api.admin.forceLogo.mutate({ id, win }));
+  return <div className="grid gap-3">
     <div className="flex flex-wrap items-center gap-3">
-      <SchoolMark name={school.name} logo={school.logo} />
+      <SchoolMark name={school.name} logo={logo} />
       {/* The only raw input allowed (AGENTS.md): a hidden file picker a shadcn Button opens. */}
       <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" tabIndex={-1} aria-hidden="true"
         onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void run(async () => api.admin.setSchoolLogo.mutate({ schoolId: school.id, ...await encodeLogo(file) })); }} />
       <div className="grid gap-1.5">
         <strong className="text-sm font-bold">School logo</strong>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" icon="imageUp" busy={pending} disabled={pending} onClick={() => picker.current?.click()}>{school.logo ? 'Replace logo' : 'Set logo'}</Button>
-          {school.logo && <Button size="sm" variant="ghost" disabled={pending} onClick={() => void run(() => api.admin.removeSchoolLogo.mutate({ schoolId: school.id }))}>Remove logo</Button>}
+          <Button size="sm" icon="imageUp" busy={pending} disabled={pending} onClick={() => picker.current?.click()}>{logo ? 'Replace logo' : 'Set logo'}</Button>
+          {logo && <Button size="sm" variant="ghost" disabled={pending} onClick={() => void run(() => api.admin.removeSchoolLogo.mutate({ schoolId: school.id }))}>Remove logo</Button>}
+          {board?.canRevert && <Button size="sm" variant="ghost" disabled={pending} onClick={() => void run(() => api.admin.revertSchoolLogo.mutate({ schoolId: school.id }))}>Revert last change</Button>}
         </div>
       </div>
     </div>
-    <Hint>Setting a logo here publishes it at once and replaces any the members are voting on.</Hint>
+    <Hint>Setting a logo here publishes it at once and closes any vote the members have open. Reverting brings back the logo from before the last change.</Hint>
+    {board && board.proposals.length > 0 && <ul aria-label="Logo votes" className="grid gap-2">{board.proposals.map((proposal) => <li key={proposal.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-muted/60 px-3 py-2">
+      <ProposedLogo src={proposal.image} />
+      <span className="grid min-w-0 flex-1 basis-32"><strong className="truncate text-sm font-semibold">{proposal.proposerName}</strong><Hint>{proposal.votesFor} for, {proposal.votesAgainst} against{proposal.status === 'open' ? ` · passes at ${proposal.threshold}` : ''}</Hint></span>
+      {proposal.status === 'open' ? <Chip tone="accent">Voting</Chip> : statusChip(proposal)}
+      {canForce && (proposal.status === 'open' || LOST.includes(proposal.status)) && <Button size="sm" variant="ghost" disabled={pending} onClick={() => force(proposal.id, true)}>Force win</Button>}
+      {canForce && proposal.status === 'open' && <Button size="sm" variant="ghost" disabled={pending} onClick={() => force(proposal.id, false)}>Force loss</Button>}
+    </li>)}</ul>}
     {error && <Hint tone="danger" role="alert">{error}</Hint>}
   </div>;
 }
