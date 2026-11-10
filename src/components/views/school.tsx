@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { upcomingDaysOff } from '@/domain/days-off';
+import { menuMainDish } from '@/domain/menu';
 import { GRADES, effectiveSchedule, gradeLabel, resolveDayInRange, scheduleForGrade, scheduleSchema, type Grade, type Schedule } from '@/domain/schedule';
 import { formatDate, pluralize } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -223,7 +224,8 @@ function SchoolHub({ state, voting, panels, children }: { state: AppState; votin
   const shown = open ?? 'rotation';
   const { menu } = useLunchMenu(state, today);
   const todayDay = resolveDayInRange(state.schedule, today, personal);
-  const lunchToday = menu?.source ? menu.days.find((day) => day.date === today)?.sections[0]?.items[0] : undefined;
+  const menuToday = menu?.source ? menu.days.find((day) => day.date === today) : undefined;
+  const lunchToday = menuToday ? menuMainDish(menuToday) : undefined;
   const go = (id: HubSection) => state.navigate('school', { section: id });
   const classPeriods = schedule.periods.filter((period) => period.kind === 'class').length;
   const lock: { icon: IconName; tone: string; text: string } = school.supportLocked ? { icon: 'lock', tone: 'text-muted-foreground', text: 'Locked by support' }

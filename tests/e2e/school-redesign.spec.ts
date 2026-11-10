@@ -239,6 +239,12 @@ for (const width of [1280, 390]) {
     await open(page, context, id, '/school?section=lunch');
     const card = page.getByRole('region', { name: 'Lunch menu' });
     await expect(card).toContainText('Upper School Lunch');
+    // The section list names today's lunch by its main course: "Global Kitchen" here, not the soup listed first.
+    if (width === 1280) {
+      const row = page.getByRole('navigation', { name: 'School sections' }).getByRole('button', { name: /^Lunch menu/ });
+      await expect(row).toContainText('Korean BBQ Beef Bowl');
+      await expect(row).not.toContainText('Tomato Basil');
+    }
     const days = card.locator('ul').first().locator(':scope > li');
     await expect(days).toHaveCount(5);
 
@@ -267,7 +273,8 @@ for (const width of [1280, 390]) {
     // Opening another day closes the first; a station with no name lists its dishes without a heading.
     await days.nth(1).getByRole('button').click();
     await expect(thursday.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
-    await expect(thursday).toContainText('Tomato Basil · Korean BBQ Beef Bowl');
+    // The preview leads with the main course, not the soup the menu site lists first.
+    await expect(thursday).toContainText('Korean BBQ Beef Bowl with Kimchi, Pickled Vegetables and Steamed Jasmine Rice · Tomato Basil · Low Fat Milk');
     await expect(days.nth(1).getByRole('heading', { level: 3 })).toHaveCount(0);
     await expect(days.nth(1)).toContainText('Picture day');
     await expect(days.nth(1).getByRole('listitem')).toHaveText(['Chicken Nuggets', 'Dinner Roll', 'Fresh Apple']);

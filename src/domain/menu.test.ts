@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { menuApiBase, menuChoiceName, menuDayCount, menuDayPreview, menuPageUrl, menuWeekStart, parseMenuChoices, parseMenuSite, parseMenuWeek } from './menu';
+import { menuApiBase, menuChoiceName, menuDayCount, menuDayPreview, menuMainDish, menuPageUrl, menuWeekStart, parseMenuChoices, parseMenuSite, parseMenuWeek } from './menu';
 
 describe('parseMenuSite', () => {
   it('reads the organisation and domain from any address on a Nutrislice or FLIK site', () => {
@@ -80,11 +80,25 @@ describe('parseMenuChoices', () => {
   });
 });
 
-describe('menuDayPreview and menuDayCount', () => {
+describe('menuMainDish, menuDayPreview and menuDayCount', () => {
   const day = (sections: Array<{ title: string; items: string[] }>) => ({ date: '2026-11-10', notes: [], sections });
-  it('previews the first dish of every station in the menu site’s order, whatever the stations are called', () => {
-    expect(menuDayPreview(day([{ title: 'Soup', items: ['Curried Lentil Soup'] }, { title: 'Entree', items: ['Chicken Tikka Masala', 'Basmati Rice'] }, { title: '', items: ['Vegetable Samosas'] }])))
-      .toEqual(['Curried Lentil Soup', 'Chicken Tikka Masala', 'Vegetable Samosas']);
+  const tikka = day([{ title: 'Soup', items: ['Curried Lentil Soup'] }, { title: 'Entree', items: ['Chicken Tikka Masala', 'Basmati Rice'] }, { title: '', items: ['Vegetable Samosas'] }]);
+  it('names the day by the main-course station, however the school spells it', () => {
+    expect(menuMainDish(tikka)).toBe('Chicken Tikka Masala');
+    for (const title of ['Entrées', 'Hot Entree', 'Main Line', 'Mains', 'HOT LUNCH'])
+      expect(menuMainDish(day([{ title: 'Soup', items: ['Tomato Soup'] }, { title, items: ['Ziti'] }])), title).toBe('Ziti');
+    // "Maintenance" and "Remains" are not the main course.
+    expect(menuMainDish(day([{ title: 'Remains of the day', items: ['Leftovers'] }, { title: 'Entree', items: ['Ziti'] }]))).toBe('Ziti');
+  });
+  it('falls back to the first station that is not a side, then to the first station', () => {
+    expect(menuMainDish(day([{ title: 'Soup', items: ['Tomato Soup'] }, { title: 'Create', items: ['Orange Chicken', 'Brown Rice'] }, { title: 'Grill', items: ['Hamburger'] }]))).toBe('Orange Chicken');
+    expect(menuMainDish(day([{ title: 'Milk & Condiments', items: ['Low Fat Milk'] }, { title: '', items: ['Chicken Nuggets'] }]))).toBe('Chicken Nuggets');
+    expect(menuMainDish(day([{ title: 'Soup', items: ['Tomato Soup'] }, { title: 'Salad Bar', items: ['Caesar'] }]))).toBe('Tomato Soup');
+    expect(menuMainDish(day([{ title: 'Entree', items: [] }, { title: 'Grill', items: ['Hamburger'] }]))).toBe('Hamburger');
+    expect(menuMainDish(day([]))).toBeUndefined();
+  });
+  it('previews one dish per station, the main course first and the rest in the menu site’s order', () => {
+    expect(menuDayPreview(tikka)).toEqual(['Chicken Tikka Masala', 'Curried Lentil Soup', 'Vegetable Samosas']);
     expect(menuDayPreview(day([{ title: 'Create', items: ['Orange Chicken', 'Brown Rice'] }, { title: 'Milk & Condiments', items: ['Low Fat Milk'] }]))).toEqual(['Orange Chicken', 'Low Fat Milk']);
     expect(menuDayPreview(day([]))).toEqual([]);
   });
