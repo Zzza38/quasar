@@ -75,8 +75,15 @@ async function touchDrag(page: Page, from: Point, to: Point, { hold = 400, befor
   } finally { await cdp.detach().catch(() => {}); }
 }
 
-/** The opacity of a countdown form's first character: "1" once it has cascaded in, "0" once it has cascaded out. */
-const shown = (form: Locator) => form.locator('span').first().evaluate((char) => getComputedStyle(char).opacity);
+/** A countdown line is hidden by its clipping container, not by opacity. Wait for the slide to finish. */
+const shown = (form: Locator) => form.evaluate((line) => {
+  const bounds = line.getBoundingClientRect();
+  const clip = line.parentElement!.getBoundingClientRect();
+  const visibleHeight = Math.max(0, Math.min(bounds.bottom, clip.bottom) - Math.max(bounds.top, clip.top));
+  if (visibleHeight < 0.5) return '0';
+  if (visibleHeight >= bounds.height - 0.5) return '1';
+  return 'sliding';
+});
 
 test('countdown reveals live seconds on hover and keyboard focus', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
@@ -137,7 +144,7 @@ test.describe('touch countdown', () => {
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 8:23 (minutes and seconds)');
     await expect(countdown).toHaveAttribute('aria-pressed', 'true');
-    await expect(countdown.locator('[data-shown] > span').first()).toHaveCSS('transition-duration', '0s');
+    await expect(countdown.locator('[data-shown]').first()).toHaveCSS('transition-duration', '0s');
     await countdown.tap();
     await expect(countdown).toHaveAccessibleName('Ends in 9 min');
     await expect(countdown).toHaveAttribute('aria-pressed', 'false');
