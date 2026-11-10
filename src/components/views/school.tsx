@@ -177,7 +177,7 @@ export function SchoolView({ state }: { state: AppState }) {
         {shared}
         {!voting && signals}
       </>,
-      lunch: <LunchMenuSection state={state} />,
+      lunch: <LunchMenuSection state={state} redesign />,
       changes: <>{signals}<ProposalsSection state={state} /></>,
       setup: source,
       correction: correctionRequest,

@@ -20,6 +20,21 @@ export type MenuSource = z.infer<typeof menuSourceSchema>;
 /** One day of a menu: notes such as a holiday name, and the items grouped by station (Soup, Entree, Grill). */
 export type MenuDay = { date: string; notes: string[]; sections: Array<{ title: string; items: string[] }> };
 
+/**
+ * One dish from each station, in the menu site's own order: a one-line preview of the day. Schools name their
+ * stations freely ("Entree", "Create", "Main Line") or not at all, so this never guesses which one is the main course.
+ */
+export function menuDayPreview(day: MenuDay): string[] {
+  return day.sections.map((section) => section.items[0]).filter((item): item is string => !!item);
+}
+
+/** "4 stations · 9 dishes" for a day's menu, or an empty string when it lists no dishes. */
+export function menuDayCount(day: MenuDay): string {
+  const dishes = day.sections.reduce((total, section) => total + section.items.length, 0);
+  if (dishes === 0) return '';
+  return `${day.sections.length === 1 ? '1 station' : `${day.sections.length} stations`} · ${dishes === 1 ? '1 dish' : `${dishes} dishes`}`;
+}
+
 export const MENU_URL_HELP = 'Paste a link from your school’s Nutrislice menu site (for example https://yourschool.nutrislice.com/menu/… or …flikisdining.com/menu/…).';
 
 /**

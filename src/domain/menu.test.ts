@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { menuApiBase, menuChoiceName, menuPageUrl, menuWeekStart, parseMenuChoices, parseMenuSite, parseMenuWeek } from './menu';
+import { menuApiBase, menuChoiceName, menuDayCount, menuDayPreview, menuPageUrl, menuWeekStart, parseMenuChoices, parseMenuSite, parseMenuWeek } from './menu';
 
 describe('parseMenuSite', () => {
   it('reads the organisation and domain from any address on a Nutrislice or FLIK site', () => {
@@ -77,5 +77,20 @@ describe('parseMenuChoices', () => {
     expect(menuChoiceName(choices[0])).toBe('LS Lunch Menu');
     expect(menuChoiceName(choices[2])).toBe('MS/US Employee Lunch · Snack');
     expect(() => parseMenuChoices({ schools: [] })).toThrow(/form Quasar does not understand/);
+  });
+});
+
+describe('menuDayPreview and menuDayCount', () => {
+  const day = (sections: Array<{ title: string; items: string[] }>) => ({ date: '2026-11-10', notes: [], sections });
+  it('previews the first dish of every station in the menu site’s order, whatever the stations are called', () => {
+    expect(menuDayPreview(day([{ title: 'Soup', items: ['Curried Lentil Soup'] }, { title: 'Entree', items: ['Chicken Tikka Masala', 'Basmati Rice'] }, { title: '', items: ['Vegetable Samosas'] }])))
+      .toEqual(['Curried Lentil Soup', 'Chicken Tikka Masala', 'Vegetable Samosas']);
+    expect(menuDayPreview(day([{ title: 'Create', items: ['Orange Chicken', 'Brown Rice'] }, { title: 'Milk & Condiments', items: ['Low Fat Milk'] }]))).toEqual(['Orange Chicken', 'Low Fat Milk']);
+    expect(menuDayPreview(day([]))).toEqual([]);
+  });
+  it('counts stations and dishes with singular and plural words', () => {
+    expect(menuDayCount(day([{ title: 'Soup', items: ['Tomato'] }, { title: 'Entree', items: ['Ziti', 'Carrots'] }]))).toBe('2 stations · 3 dishes');
+    expect(menuDayCount(day([{ title: 'Pizza Day', items: ['Cheese Pizza'] }]))).toBe('1 station · 1 dish');
+    expect(menuDayCount(day([]))).toBe('');
   });
 });

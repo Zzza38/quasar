@@ -13,7 +13,7 @@ import { exampleSchedule } from '../../src/domain/example';
  * A student in a ten-member school (so changes go through proposals), with four classes on the example rotation
  * and three closures on the calendar. `beta` joins the school-redesign beta.
  */
-function seed(beta: boolean) {
+function seed(beta: boolean, menu = false) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -39,6 +39,22 @@ function seed(beta: boolean) {
       assignments: { A: 'alg2', B: 'chem', C: 'eng10', D: 'ushist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null, grade: '10',
     } } as never);
     if (saved.status !== 'applied') throw new Error(`The classes were not saved: ${JSON.stringify(saved)}`);
+    if (menu) {
+      // The week of 2026-09-17, already in the server's cache so nothing reaches a menu site. Station names differ by
+      // school, so the fixture has no "Entree": one station has no name, and one dish is long enough to wrap.
+      const source = { org: 'hubhigh', domain: 'nutrislice.com', school: 'upper-school', menu: 'lunch', name: 'Upper School Lunch' };
+      db.prepare('UPDATE schools SET menu_source=? WHERE id=?').run(JSON.stringify(source), school.id);
+      const days = [
+        { date: '2026-09-14', notes: [], sections: [{ title: 'Create', items: ['Orange Chicken', 'Brown Rice'] }, { title: 'Grill', items: ['Classic Hamburger'] }] },
+        { date: '2026-09-15', notes: ['Picture day'], sections: [{ title: '', items: ['Chicken Nuggets', 'Dinner Roll', 'Fresh Apple'] }] },
+        { date: '2026-09-17', notes: [], sections: [
+          { title: 'Soup Kettle', items: ['Tomato Basil'] },
+          { title: 'Global Kitchen', items: ['Korean BBQ Beef Bowl with Kimchi, Pickled Vegetables and Steamed Jasmine Rice', 'Vegetable Japchae'] },
+          { title: 'Milk & Condiments', items: ['Low Fat Milk', 'Ketchup Packet', 'Ranch Dressing'] }] },
+        { date: '2026-09-18', notes: ['Early dismissal'], sections: [] },
+      ];
+      db.prepare('INSERT INTO menu_weeks(school_id,week_start,source,days,fetched_at) VALUES(?,?,?,?,?)').run(school.id, '2026-09-13', JSON.stringify(source), JSON.stringify(days), new Date().toISOString());
+    }
     if (beta) {
       // What `npm run beta -- create` writes, then the student joins with the code.
       const key = 'school-redesign';
@@ -132,6 +148,51 @@ test('on a phone the redesigned School page is a list that opens one section at 
   await expect(menu).toBeVisible();
   await expect(rotation).toBeHidden();
 });
+
+for (const width of [1280, 390]) {
+  test(`the redesigned lunch menu is a week of rows that open into a menu card at ${width}px`, async ({ page, context }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const { id } = seed(true, true);
+    await open(page, context, id, '/school?section=lunch');
+    const card = page.getByRole('region', { name: 'Lunch menu' });
+    await expect(card).toContainText('Upper School Lunch');
+    const days = card.locator('ul').first().locator(':scope > li');
+    await expect(days).toHaveCount(5);
+
+    // Today starts open: each station is a heading with its dishes listed under it, whatever the school calls it.
+    const thursday = days.nth(3);
+    await expect(thursday.getByRole('button', { name: /Thursday/ })).toHaveAttribute('aria-expanded', 'true');
+    await expect(thursday).toContainText('Today');
+    await expect(thursday).toContainText('3 stations · 6 dishes');
+    await expect(thursday.getByRole('heading', { level: 3 })).toHaveText(['Soup Kettle', 'Global Kitchen', 'Milk & Condiments']);
+    await expect(thursday.getByRole('region', { name: 'Global Kitchen' }).getByRole('listitem')).toHaveText(['Korean BBQ Beef Bowl with Kimchi, Pickled Vegetables and Steamed Jasmine Rice', 'Vegetable Japchae']);
+
+    // A closed day previews one dish from each station; a note rides along with the count.
+    const monday = days.nth(0);
+    await expect(monday.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    await expect(monday).toContainText('Orange Chicken · Classic Hamburger');
+    await expect(monday).toContainText('2 stations · 3 dishes');
+    await expect(days.nth(1)).toContainText('Picture day · 1 station · 3 dishes');
+    // A day with only a note, and a day with nothing, do not open.
+    await expect(days.nth(2)).toContainText('No menu posted.');
+    await expect(days.nth(2).getByRole('button')).toHaveCount(0);
+    await expect(days.nth(4)).toContainText('Early dismissal');
+    await expect(days.nth(4).getByRole('button')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`lunch-${width}.png`), fullPage: true });
+
+    // Opening another day closes the first; a station with no name lists its dishes without a heading.
+    await days.nth(1).getByRole('button').click();
+    await expect(thursday.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    await expect(thursday).toContainText('Tomato Basil · Korean BBQ Beef Bowl');
+    await expect(days.nth(1).getByRole('heading', { level: 3 })).toHaveCount(0);
+    await expect(days.nth(1)).toContainText('Picture day');
+    await expect(days.nth(1).getByRole('listitem')).toHaveText(['Chicken Nuggets', 'Dinner Roll', 'Fresh Apple']);
+    await page.screenshot({ path: testInfo.outputPath(`lunch-${width}-unnamed.png`), fullPage: true });
+    await days.nth(1).getByRole('button').click();
+    await expect(days.nth(1).getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+  });
+}
 
 test('without the beta the School page keeps its single column of cards', async ({ page, context }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
