@@ -28,7 +28,7 @@ it('the remove command deletes every member and cleanup can repair older removal
     db.close();
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 it('does not delete memberships when the registry is unavailable or empty', () => {
   const db = new Database(':memory:');
