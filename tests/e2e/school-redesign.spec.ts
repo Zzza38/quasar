@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures';
+import { test, expect, hydrating } from './fixtures';
 import type { BrowserContext, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
@@ -7,6 +7,8 @@ import { openDatabase } from '../../src/server/db';
 import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { BetaService } from '../../src/server/betas';
 import { Service } from '../../src/server/service';
+import { SchoolLogoService } from '../../src/server/school-logos';
+import sharp from 'sharp';
 import { exampleSchedule } from '../../src/domain/example';
 
 /**
@@ -27,7 +29,10 @@ function seed(beta: boolean, menu = false) {
     const name = `Hub High ${id.slice(0, 6)}`;
     const school = service.createSchool(id, { name, location: 'Boston, MA', schedule: { ...exampleSchedule, exceptions: [closure('2026-10-12'), closure('2026-11-26'), closure('2026-11-27')] } });
     service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
-    for (let index = 0; index < 9; index += 1) service.join(user(`Member ${index}`), { schoolId: school.id, choice: 'community', grade: '10' });
+    const members = [id];
+    for (let index = 0; index < 9; index += 1) { const member = user(`Member ${index}`); members.push(member); service.join(member, { schoolId: school.id, choice: 'community', grade: '10' }); }
+    // Every member is verified, so they can vote: the threshold is three.
+    for (const member of members) db.prepare('INSERT INTO school_verifications(user_id,school_id,method,verified_at) VALUES(?,?,?,?)').run(member, school.id, 'support', new Date().toISOString());
     // Through sync, so the saved revision is one the client may build on (a raw UPDATE leaves the history stale).
     const saved = service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'), data: {
       classes: [
@@ -67,7 +72,7 @@ function seed(beta: boolean, menu = false) {
       process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
       try { new BetaService(service).join(id, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
     }
-    return { id, name };
+    return { id, name, members, schoolId: school.id };
   } finally { db.close(); }
 }
 
@@ -159,6 +164,72 @@ test('on a phone the redesigned School page is a list that opens one section at 
   await page.getByRole('button', { name: 'School', exact: true }).click();
   await expect(menu).toBeVisible();
   await expect(rotation).toBeHidden();
+});
+
+test('a member proposes a school logo, the school votes it in, and support publishes it', async ({ page, context, browser }, testInfo) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const { id, name, members, schoolId } = seed(true);
+  await open(page, context, id, '/school?section=logo');
+  const card = page.getByRole('region', { name: 'School logo' });
+  const header = page.locator('header').filter({ has: page.getByRole('heading', { name, level: 1 }) });
+  // Until there is a logo the school shows its initials on a shield, and its status sits on one line.
+  await expect(card).toContainText('No logo yet');
+  await expect(header.locator('svg text')).toHaveText('HH');
+  await expect(header.locator('img')).toHaveCount(0);
+  const status = header.getByRole('listitem');
+  await expect(status).toHaveText(['Not reviewed', 'Locked at 10 members']);
+  const tops = await status.evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
+  expect(new Set(tops).size).toBe(1);
+  await header.screenshot({ path: testInfo.outputPath('card-initials.png') });
+
+  // A wide picture is fitted inside a square, not cropped, and the proposer's vote counts.
+  const picture = await sharp({ create: { width: 640, height: 360, channels: 4, background: { r: 196, g: 30, b: 58, alpha: 1 } } }).png().toBuffer();
+  await card.locator('input[type="file"]').setInputFiles({ name: 'crest.png', mimeType: 'image/png', buffer: picture });
+  const proposal = card.getByRole('listitem').filter({ hasText: 'Your proposal' });
+  await expect(proposal).toContainText('1 for, 0 against · passes at 3');
+  await expect(proposal.getByRole('button', { name: 'For' })).toHaveAttribute('aria-pressed', 'true');
+  const shown = await proposal.getByRole('img', { name: 'Proposed logo' }).evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight]);
+  expect(shown).toEqual([256, 256]);
+  await card.screenshot({ path: testInfo.outputPath('logo-voting.png') });
+
+  // Two classmates vote for it. Passing the vote sends it to support and shows nothing yet.
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  const ownerId = randomUUID();
+  try {
+    const service = new Service(db, 'browser-owner@example.com');
+    const logos = new SchoolLogoService(service);
+    const proposalId = logos.list(id).proposals[0].id;
+    for (const member of members.slice(1, 3)) logos.vote(member, { proposalId, vote: 'for' });
+    db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run(ownerId, ownerId, 'browser-owner@example.com', 'Logo Owner', 'Logo Test Owner', new Date().toISOString());
+  } finally { db.close(); }
+  await page.reload();
+  await expect(proposal).toContainText('passed the vote and is waiting for support to check it');
+  await expect(proposal.getByRole('button', { name: 'For' })).toHaveCount(0);
+  await expect(header.locator('img')).toHaveCount(0);
+
+  // Support publishes it from /admin.
+  const support = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: ownerId, authAt: Date.now() }, maxAge: 3600 });
+  await support.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
+  const admin = hydrating(await support.newPage());
+  await admin.goto('/admin');
+  const queue = admin.getByRole('region', { name: 'School logos awaiting support' });
+  await queue.getByRole('button', { name: `Publish the logo for ${name}` }).click();
+  await expect(queue.getByRole('button', { name: `Publish the logo for ${name}` })).toHaveCount(0);
+  await support.close();
+
+  // Every member now sees the logo on the school card.
+  await page.goto('/school?section=logo');
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=1`);
+  await expect(header.locator('svg text')).toHaveCount(0);
+  await expect(card).toContainText('The school’s logo');
+  await expect(card).toContainText('No logos are waiting.');
+  const response = await page.request.get(`/api/school-logos/${schoolId}?v=1`);
+  expect(response.status()).toBe(200);
+  expect(response.headers()['content-type']).toBe('image/png');
+  await header.screenshot({ path: testInfo.outputPath('card-logo.png') });
+  await page.screenshot({ path: testInfo.outputPath('logo-published.png'), fullPage: true });
 });
 
 for (const width of [1280, 390]) {

@@ -110,6 +110,8 @@ export class CommunityService {
    */
   withdrawProposals(userId: string, schoolId: string): void {
     this.db.prepare("UPDATE schedule_proposals SET status='withdrawn', closed_at=? WHERE proposer_id=? AND school_id=? AND status='open'").run(now(), userId, schoolId);
+    // A logo still being voted on goes with them too; one that already passed its vote stays with support.
+    this.db.prepare("UPDATE school_logo_proposals SET status='withdrawn', closed_at=? WHERE proposer_id=? AND school_id=? AND status='open'").run(now(), userId, schoolId);
   }
 
   /* ---------- Directory and profiles ---------- */

@@ -10,6 +10,7 @@ import { REPORT_CATEGORIES } from '@/domain/chat';
 import { browserTimeZone, formatDate, formatTime, instantParts, pluralize } from '@/lib/format';
 import { Icon } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
+import { SupportLogoControls } from './school-logo';
 import { SchoolExceptions } from './school-exceptions';
 import { applySchoolDefaultEdits, schoolExceptionGroups } from '@/domain/school-exceptions';
 import { Brand, CenteredNotice } from './shell';
@@ -29,6 +30,7 @@ type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
 type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
+type PendingLogo = RouterOutput['admin']['logoProposals'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type BanRow = RouterOutput['admin']['bans'][number];
 /**
@@ -88,6 +90,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [verifications, setVerifications] = useState<VerificationRequest[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [proposals, setProposals] = useState<PendingProposal[]>([]);
+  const [logos, setLogos] = useState<PendingLogo[]>([]);
   const [pauses, setPauses] = useState<ChatPauseRow[]>([]);
   const [bans, setBans] = useState<BanRow[]>([]);
   // adminScoped mutations carry the signed-in account, so a switch in another tab can't write under the wrong one.
@@ -127,7 +130,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const refresh = useCallback(async () => {
     // Losing staff access drops everything support loaded, including student proofs and report snapshots.
     const revoke = () => {
-      setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setBans([]); setEvidence({});
+      setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setLogos([]); setPauses([]); setBans([]); setEvidence({});
       setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); setGuideSchool(null); reasons.current.clear();
     };
     setLoading(true); setError(''); setFailed(false);
@@ -142,10 +145,10 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       if (!session?.adminReady) { revoke(); return; }
       // Only the lists this role may read are asked for; the rest stay empty.
       const may = (permission: StaffPermission) => hasPermission(session.staff, permission);
-      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(),
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList, logoList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(),
         may('verification') ? api.admin.verificationRequests.query() : [], may('reports') ? api.admin.reports.query() : [], may('proposals') ? api.admin.proposals.query() : [],
-        may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : []]);
-      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
+        may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : [], may('proposals') ? api.admin.logoProposals.query() : []]);
+      setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setLogos(logoList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
       setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
@@ -368,6 +371,18 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button>{may('schools.edit') && <Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button>}</div>
         </li>)}</ul>}
       </Section>}
+
+      {may('proposals') && <Section id="logos-title" title="School logos awaiting support" icon="imageUp" description="Logos that passed a school’s vote, or came from a school too small to vote. Publishing shows the logo to every member of that school.">
+        {!loading && logos.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
+        {logos.length > 0 && <ul className="grid gap-2">{logos.map((logo) => <li key={logo.id} className="flex flex-wrap items-center gap-4 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a small picture from our own route. */}
+          <img src={logo.image} alt={`Proposed logo for ${logo.schoolName}`} draggable={false} className="size-24 shrink-0 rounded-2xl bg-white object-contain p-1.5 ring-1 ring-foreground/10" />
+          <div className="grid min-w-0 flex-1 basis-56 gap-2">
+            <span><strong className="text-sm font-bold">{logo.schoolName}</strong><Hint>Proposed by {logo.proposerName} · {logo.votesFor} for, {logo.votesAgainst} against · {formatDate(instantParts(logo.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></span>
+            <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" aria-label={`Publish the logo for ${logo.schoolName}`} onClick={() => void act(() => api.admin.decideLogo.mutate({ id: logo.id, publish: true }))}>Publish logo</Button><Button size="sm" variant="ghost" aria-label={`Decline the logo for ${logo.schoolName}`} onClick={() => void act(() => api.admin.decideLogo.mutate({ id: logo.id, publish: false }))}>Decline</Button></div>
+          </div>
+        </li>)}</ul>}
+      </Section>}
       </TabsContent>
       {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
       {may('schools.edit') && <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
@@ -407,6 +422,7 @@ function ReviewSheet({ school, canSetDomains, onClose, onSaved }: { school: Scho
       }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
+    <Panel><SupportLogoControls school={school} onChanged={onSaved} /></Panel>
     <Panel className="grid gap-3">
       <ScheduleSummary schedule={school.schedule} />
       <div className="grid gap-3 sm:grid-cols-2">

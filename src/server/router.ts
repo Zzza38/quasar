@@ -10,6 +10,7 @@ import { ScanService, scanInputSchema } from './scan';
 import { scanProgress, withScanProgress } from './scan-progress';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
+import { SchoolLogoService, logoProposeSchema, logoSetSchema, logoVoteSchema } from './school-logos';
 import { ScheduleSignalsService } from './schedule-signals';
 import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
 import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
@@ -220,6 +221,13 @@ export const appRouter = t.router({
     vote: accountScoped.input(voteSchema).mutation(({ ctx, input }) => new ProposalService(ctx.service).vote(ctx.userId, input)),
     withdraw: accountScoped.input(z.object({ proposalId: z.uuid() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).withdraw(ctx.userId, input.proposalId)),
   }),
+  /** School logos: members propose and vote, support publishes (src/server/school-logos.ts). */
+  schoolLogo: t.router({
+    list: authenticated.query(({ ctx }) => new SchoolLogoService(ctx.service).list(ctx.userId)),
+    propose: accountScoped.input(logoProposeSchema).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).propose(ctx.userId, input)),
+    vote: accountScoped.input(logoVoteSchema).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).vote(ctx.userId, input)),
+    withdraw: accountScoped.input(z.object({ proposalId: z.uuid() })).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).withdraw(ctx.userId, input.proposalId)),
+  }),
   scan: t.router({
     status: authenticated.query(({ ctx }) => ({ enabled: new ScanService(ctx.service).enabled() })),
     schedule: accountScoped.input(scanInputSchema).mutation(({ ctx, input }) => withScanProgress(ctx.userId, input.progressId, report => new ScanService(ctx.service).scan(ctx.userId, input, report))),
@@ -300,6 +308,10 @@ export const appRouter = t.router({
     removeMember: staff('members.remove').input(z.object({ userId: z.uuid(), schoolId: z.uuid(), reason: z.string().trim().min(3).max(2000) })).mutation(({ ctx, input }) => new CommunityService(ctx.service).removeFromSchool(ctx.userId, input.userId, input.schoolId, input.reason)),
     proposals: staff('proposals').query(({ ctx }) => new ProposalService(ctx.service).awaitingSupport(ctx.userId)),
     decideProposal: staff('proposals').input(z.object({ id: z.uuid(), publish: z.boolean() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).decide(ctx.userId, input.id, input.publish)),
+    logoProposals: staff('proposals').query(({ ctx }) => new SchoolLogoService(ctx.service).awaitingSupport(ctx.userId)),
+    decideLogo: staff('proposals').input(z.object({ id: z.uuid(), publish: z.boolean() })).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).decide(ctx.userId, input.id, input.publish)),
+    setSchoolLogo: staff('schools.edit').input(logoSetSchema).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).set(ctx.userId, input)),
+    removeSchoolLogo: staff('schools.edit').input(z.object({ schoolId: z.uuid() })).mutation(({ ctx, input }) => new SchoolLogoService(ctx.service).remove(ctx.userId, input.schoolId)),
     // No admin procedure reads chat_messages.body. Chat text reaches staff only through showEvidence, which is audited.
     showEvidence: staffScoped('reports').input(z.object({ reportId: z.uuid() })).mutation(({ ctx, input }) => chat(ctx.service).showEvidence(ctx.userId, input.reportId)),
     redactMessage: staffScoped('reports').input(z.object({ reportId: z.uuid(), seq: z.number().int().positive() })).mutation(({ ctx, input }) => { chat(ctx.service).redactMessage(ctx.userId, input.reportId, input.seq); }),

@@ -16,16 +16,15 @@ import { ScheduleSignalsSection } from '../schedule-signals';
 import { editSchedule } from '../schedule-lock';
 import { RotationOverview } from '../rotation-overview';
 import { RotationTimeline } from '../rotation-timeline';
+import { SchoolLogoSection, SchoolMark } from '../school-logo';
 import { ComposeProposal, type ProposalSeed, ProposalsSection } from '../proposals';
 import { describeIssues, Preview, ScheduleEditor, ScheduleSummary } from '../schedule-editor';
 import { Button, Callout, Chip, Field, Hint, Modal, Panel, Section, Segmented, Spacer, Textarea } from '../primitives';
 import { Label } from '../ui/label';
 import { Toggle } from '../ui/toggle';
 
-function SchoolCrest({ name, flat }: { name: string; flat?: boolean }) {
+function SchoolCrest({ name }: { name: string }) {
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]!.toUpperCase()).join('');
-  // The redesign's crest is a flat soft tile; the classic one keeps its gradient.
-  if (flat) return <span aria-hidden="true" className="grid size-14 shrink-0 place-items-center rounded-2xl bg-primary-soft text-[18px] font-extrabold tracking-tight text-primary-soft-foreground inset-ring inset-ring-primary/30">{initials || 'S'}</span>;
   return <span aria-hidden="true" className="grid size-14 shrink-0 place-items-center rounded-2xl text-[18px] font-extrabold tracking-tight text-primary-foreground shadow-[0_6px_18px_-6px_color-mix(in_srgb,var(--primary)_70%,transparent),inset_0_1px_0_rgb(255_255_255/0.25)]"
     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 80%, white) 0%, var(--primary) 55%, color-mix(in srgb, var(--primary) 70%, black) 100%)' }}>{initials || 'S'}</span>;
 }
@@ -168,7 +167,7 @@ export function SchoolView({ state }: { state: AppState }) {
   </div>;
 
   return <Beta id={SCHOOL_REDESIGN_BETA} fallback={classic}>
-    <SchoolHub state={state} voting={voting} chips={chips} panels={{
+    <SchoolHub state={state} voting={voting} panels={{
       rotation: <>
         <Section id="rotation-title" title={rotation ? 'Rotation' : 'Daily bell schedule'} icon="calendar" description={rotation ? 'Pick a day of the cycle to see its periods, or adjust it for yourself.' : 'The periods of a school day. Adjust them for yourself.'}>
           <RotationTimeline state={state} onAdjust={adjust} onJump={jump} />
@@ -181,6 +180,7 @@ export function SchoolView({ state }: { state: AppState }) {
       changes: <>{signals}<ProposalsSection state={state} /></>,
       setup: source,
       correction: correctionRequest,
+      logo: <SchoolLogoSection state={state} />,
       about: managed,
     }}>{dialogs}</SchoolHub>
   </Beta>;
@@ -193,7 +193,7 @@ export function SchoolView({ state }: { state: AppState }) {
  */
 export const SCHOOL_REDESIGN_BETA = 'school-hub';
 
-type HubSection = 'rotation' | 'lunch' | 'changes' | 'setup' | 'correction' | 'about';
+type HubSection = 'rotation' | 'lunch' | 'changes' | 'setup' | 'correction' | 'logo' | 'about';
 
 function HubRow({ icon, title, detail, value, active, away, onClick }: { icon: IconName; title: string; detail?: string; value?: string; active?: boolean; away?: boolean; onClick: () => void }) {
   // The chosen row is tinted on wide screens only: a phone shows the list by itself, with no section open beside it.
@@ -213,12 +213,12 @@ function HubRow({ icon, title, detail, value, active, away, onClick }: { icon: I
  * The redesigned School page: the school card and a list of sections, with the chosen section beside it. A phone
  * shows the list alone and opens a section as its own screen; `?section=` holds the choice, so Back returns to the list.
  */
-function SchoolHub({ state, voting, chips, panels, children }: { state: AppState; voting: boolean; chips: React.ReactNode; panels: Record<HubSection, React.ReactNode>; children: React.ReactNode }) {
+function SchoolHub({ state, voting, panels, children }: { state: AppState; voting: boolean; panels: Record<HubSection, React.ReactNode>; children: React.ReactNode }) {
   const { context, personal, today } = state;
   const school = context.school;
   const schedule = effectiveSchedule(state.schedule, personal);
   const rotation = schedule.cycleDays.length > 1;
-  const sections: HubSection[] = ['rotation', 'lunch', ...(voting ? ['changes' as const] : []), 'setup', 'correction', 'about'];
+  const sections: HubSection[] = ['rotation', 'lunch', ...(voting ? ['changes' as const] : []), 'setup', 'correction', 'logo', 'about'];
   const open = sections.find((id) => id === state.params.get('section')) ?? null;
   const shown = open ?? 'rotation';
   const { menu } = useLunchMenu(state, today);
@@ -226,18 +226,25 @@ function SchoolHub({ state, voting, chips, panels, children }: { state: AppState
   const lunchToday = menu?.source ? menu.days.find((day) => day.date === today)?.sections[0]?.items[0] : undefined;
   const go = (id: HubSection) => state.navigate('school', { section: id });
   const classPeriods = schedule.periods.filter((period) => period.kind === 'class').length;
+  const lock: { icon: IconName; tone: string; text: string } = school.supportLocked ? { icon: 'lock', tone: 'text-muted-foreground', text: 'Locked by support' }
+    : voting ? { icon: 'lock', tone: 'text-muted-foreground', text: 'Locked at 10 members' } : { icon: 'unlock', tone: 'text-muted-foreground', text: 'Members can edit' };
+  const status: Array<{ icon: IconName; tone: string; text: string }> = school.approved && school.supportLocked ? [{ icon: 'checkCircle', tone: 'text-success', text: 'Approved and locked by support' }]
+    : [school.approved ? { icon: 'checkCircle', tone: 'text-success', text: 'Approved' } : { icon: 'info', tone: 'text-warning', text: 'Not reviewed' }, lock];
   const stat = (value: React.ReactNode, label: string) => <div className="grid gap-0.5 rounded-xl bg-muted/70 px-2 py-2.5 text-center ring-1 ring-inset ring-foreground/[0.04]"><strong className="text-[17px] font-extrabold tracking-tight tabular-nums">{value}</strong><span className="text-[11px] font-bold text-muted-foreground">{label}</span></div>;
   return <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-5 animate-in fade-in-0 duration-300 lg:grid-cols-[340px_minmax(0,1fr)]">
     <div className={cn('grid grid-cols-[minmax(0,1fr)] gap-4', open && 'max-lg:hidden')}>
       <header className="grid gap-4 rounded-2xl bg-card p-4 shadow-card ring-1 ring-foreground/[0.06] sm:p-5 dark:ring-foreground/[0.09]">
-        <div className="flex items-center gap-3.5 lg:grid lg:justify-items-start">
-          <SchoolCrest name={school.name} flat />
+        <div className="flex items-center gap-4">
+          <SchoolMark name={school.name} logo={school.logo} />
           <div className="grid min-w-0 gap-0.5">
             <h1 className="text-[22px] lg:text-[23px]">{school.name}</h1>
             <p className="text-sm text-muted-foreground">{school.location}</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">{chips}</div>
+        {/* One line of status in place of two stacked pills; "How this is managed" has the details. */}
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] font-semibold">
+          {status.map((entry) => <li key={entry.text} className={cn('inline-flex items-center gap-1.5', entry.tone)}><Icon name={entry.icon} size={13} strokeWidth={2.4} />{entry.text}</li>)}
+        </ul>
         <div className="grid grid-cols-3 gap-2">
           {stat(school.memberCount, school.memberCount === 1 ? 'member' : 'members')}
           {rotation ? stat(schedule.cycleDays.length, 'day cycle') : stat(classPeriods, classPeriods === 1 ? 'class period' : 'class periods')}
@@ -250,6 +257,7 @@ function SchoolHub({ state, voting, chips, panels, children }: { state: AppState
         {voting && <HubRow icon="users" title="Proposed changes" detail="Vote on schedule changes" active={shown === 'changes'} onClick={() => go('changes')} />}
         <HubRow icon="school" title="Your setup" detail={personal.customSchedule ? 'Private schedule' : 'School schedule'} value={personal.grade ? gradeLabel(personal.grade) : undefined} active={shown === 'setup'} onClick={() => go('setup')} />
         <HubRow icon="inbox" title="Request a correction" detail="Tell support what is wrong" active={shown === 'correction'} onClick={() => go('correction')} />
+        <HubRow icon="imageUp" title="School logo" detail={school.logo ? 'Propose a new one' : 'Propose one and vote'} active={shown === 'logo'} onClick={() => go('logo')} />
         <HubRow icon="info" title="How this is managed" detail={school.approved ? 'Approved by support' : 'Not reviewed yet'} active={shown === 'about'} onClick={() => go('about')} />
         <HubRow icon="book" title="School classes" detail="Shared by schoolmates" away onClick={() => state.navigate('classes', { directory: 'open' })} />
       </nav>

@@ -801,6 +801,27 @@ function migrate(db: Db): void {
     END`);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
+
+  // Migration 31: school logos (src/server/school-logos.ts). A school's row stays after its logo is removed (image
+  // NULL), so the version keeps counting up and a cached address never shows an older picture. Pictures live apart
+  // from `schools`, whose rows are read whole on every request.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS school_logos (
+      school_id TEXT PRIMARY KEY REFERENCES schools(id), image BLOB, mime TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL,
+      actor_id TEXT REFERENCES users(id), updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS school_logo_proposals (
+      id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id), proposer_id TEXT NOT NULL REFERENCES users(id),
+      image BLOB NOT NULL, mime TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT, actor_id TEXT REFERENCES users(id),
+      tally_for INTEGER, tally_against INTEGER, tally_threshold INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS school_logo_proposals_school ON school_logo_proposals(school_id, status);
+    CREATE TABLE IF NOT EXISTS school_logo_votes (
+      proposal_id TEXT NOT NULL REFERENCES school_logo_proposals(id), user_id TEXT NOT NULL REFERENCES users(id),
+      vote TEXT NOT NULL CHECK (vote IN ('for','against')), created_at TEXT NOT NULL, PRIMARY KEY (proposal_id, user_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(31, datetime('now'));
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {
