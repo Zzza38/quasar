@@ -109,6 +109,8 @@ For logic rather than a whole component, branch on `useBeta('month-grid')`, whic
 
 Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
 
+Keep the old code working for accounts outside the beta while the change remains unmerged. Commit every added beta's implementation, gates, and related tracked files so other agents can identify and continue the work. Do not leave beta implementations only as uncommitted changes, include unrelated work in their commits, or commit the private beta registry or join codes.
+
 Merge and deploy as usual. Until the beta exists in the list, nobody is in it, so the deploy changes nothing for anyone.
 
 ### 2. Create the beta
@@ -154,6 +156,8 @@ To clean up memberships left by older versions, run `pnpm beta cleanup`. The ser
 ### 5. Ship it to everyone
 
 Every merged change goes to everyone unless the owner explicitly asks to retain its beta after merge. A request to create or test a beta does not carry over past merge. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
+
+Before removing a gate or code path, verify that the specific change is being merged. Only graduate that change's beta. Preserve other unmerged betas, their implementations, and their old fallback code, even when they share the same checkout or deployment. Deploying a beta does not mean it has merged.
 
 ## Staff roles
 
