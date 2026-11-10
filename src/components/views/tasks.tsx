@@ -9,7 +9,6 @@ import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
 import { groupTasks, type TaskGroupKey } from '../task-groups';
-import { useBeta } from '../betas';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
 import { Button, Callout, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Select, Spacer, Textarea } from '../primitives';
@@ -51,7 +50,6 @@ export function withoutBlankSubtasks(task: Task): Task {
 const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'before-school': 'bg-success', 'next-school-day': 'bg-warning', 'second-school-day': 'bg-success', 'before-second-school-day': 'bg-success', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
 
 export function TasksView({ state }: { state: AppState }) {
-  const separateSecondSchoolDay = useBeta('second-school-day');
   const items = useMemo(() => taskItems(state.snapshot.entities), [state.snapshot.entities]);
   const open = useMemo(() => sortByDue(items.filter((item) => !item.task.completed)), [items]);
   // Most recently completed first. Tasks completed before completedAt existed have no stamp and follow, newest edits first.
@@ -73,7 +71,7 @@ export function TasksView({ state }: { state: AppState }) {
   const nowTime = clockTime(state.now, state.timeZone);
   const late = (item: TaskItem) => isOverdue(item.task, state.today, nowTime);
   // Groups follow the school calendar: the next school day stands apart from the weekend or holiday before it.
-  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal, separateSecondSchoolDay });
+  const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal });
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter(late).length;
   const filterToggle = 'h-9 shrink-0 gap-1.5 pointer-coarse:h-10 rounded-full bg-card px-3 text-[13px] font-semibold shadow-card ring-1 ring-foreground/[0.06] hover:bg-muted data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:ring-foreground';
