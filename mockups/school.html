@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>School page redesign</title>
+<style>
+  @font-face { font-family: Manrope; src: url(assets/manrope.woff2) format('woff2'); font-weight: 200 800; }
+  :root {
+    --background: #0b0d12; --foreground: #eceff5; --card: #13161d; --popover: #171b23; --secondary: #222732; --muted: #1a1e27; --muted-foreground: #9ba4b5;
+    --border: #242934; --input: #343a47; --primary: #2dd4e0; --primary-foreground: #06161a; --primary-soft: #0f3a44; --primary-soft-foreground: #a5f3fc;
+    --success: #4ade80; --success-soft: #0f2a1b; --warning: #fde68a; --warning-soft: #33290f; --now: #f59e0b; --now-soft: #3a2a0d; --now-foreground: #fcd34d;
+    --sidebar: #0f1218; --sidebar-border: #202531; --ring-soft: rgb(236 239 245 / .07);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / .3), 0 2px 10px -2px rgb(0 0 0 / .35); --shadow-float: 0 12px 40px -12px rgb(0 0 0 / .6), 0 2px 8px -2px rgb(0 0 0 / .4);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--background); }
+  body { margin: 0; font-family: Manrope, system-ui, sans-serif; font-size: 14px; line-height: 1.45; color: var(--foreground); -webkit-font-smoothing: antialiased; }
+  h1, h2, h3, p, ul, ol, dl, dd { margin: 0; padding: 0; } li { list-style: none; }
+  svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  svg.i12 { width: 12px; height: 12px; stroke-width: 2.4; } svg.i14 { width: 14px; height: 14px; } svg.i16 { width: 16px; height: 16px; stroke-width: 2.2; } svg.i21 { width: 21px; height: 21px; }
+
+  /* ---------- App shell ---------- */
+  .app { display: flex; min-height: 100vh; background:
+    radial-gradient(1100px 420px at 20% -8%, color-mix(in srgb, var(--primary) 9%, transparent), transparent 70%),
+    radial-gradient(800px 360px at 100% 0%, color-mix(in srgb, var(--now) 5%, transparent), transparent 70%), var(--background); }
+  .side { width: 256px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 16px 12px; background: var(--sidebar); border-right: 1px solid var(--sidebar-border); }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; letter-spacing: -.02em; }
+  .brand img { width: 30px; height: 30px; filter: invert(1) hue-rotate(180deg); }
+  .side-top { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 14px; color: var(--muted-foreground); }
+  .side-top .brand { color: var(--foreground); }
+  .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 600; color: var(--muted-foreground); position: relative; }
+  .nav.on { background: var(--primary-soft); color: var(--primary-soft-foreground); } .nav.on svg { stroke-width: 2.4; }
+  .nav u { position: absolute; right: 12px; width: 7px; height: 7px; border-radius: 9px; background: var(--primary); }
+  .side-foot { margin-top: auto; display: grid; gap: 12px; }
+  .pill { display: inline-flex; width: fit-content; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 99px; font-size: 12px; font-weight: 700; color: var(--muted-foreground); background: var(--muted); }
+  .acct { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 10px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow-card); outline: 1px solid var(--ring-soft); color: var(--muted-foreground); }
+  .acct div { flex: 1; min-width: 0; line-height: 1.25; } .acct b { display: block; font-size: 13.5px; color: var(--foreground); } .acct span { font-size: 12px; }
+  .avatar { width: 32px; height: 32px; border-radius: 99px; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #06161a; background: linear-gradient(135deg, #67e8f9, #a78bfa); flex: none; }
+  .inset { flex: 1; min-width: 0; }
+  .topbar { display: none; height: 56px; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid rgb(236 239 245 / .06); background: var(--background); }
+  .topbar .brand { font-size: 16px; gap: 8px; } .topbar .brand img { width: 28px; height: 28px; }
+  .topbar .r { display: flex; align-items: center; gap: 14px; color: var(--muted-foreground); } .topbar .avatar { width: 28px; height: 28px; font-size: 12px; }
+  .main { width: 100%; max-width: 1120px; margin: 0 auto; padding: 32px 32px 48px; }
+  .switch { display: none; grid-template-columns: 1fr 1fr; padding: 4px; margin-bottom: 16px; border-radius: 99px; background: var(--card); border: 1px solid var(--border); }
+  .switch span { display: flex; justify-content: center; align-items: center; gap: 6px; height: 34px; border-radius: 99px; font-size: 13.5px; font-weight: 700; color: var(--muted-foreground); }
+  .switch span.on { background: var(--primary-soft); color: var(--primary-soft-foreground); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
+  .tabbar { display: none; position: fixed; left: 0; right: 0; bottom: 0; padding: 0 12px 12px; z-index: 5; }
+  .dock { display: grid; grid-template-columns: 1fr 1fr 68px 1fr 1fr; align-items: center; padding: 6px; border-radius: 22px; background: color-mix(in srgb, var(--card) 86%, transparent); backdrop-filter: blur(18px) saturate(1.4); box-shadow: var(--shadow-float); outline: 1px solid var(--ring-soft); }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-radius: 16px; font-size: 10.5px; font-weight: 700; color: var(--muted-foreground); }
+  .tab.on { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .tab.home { margin-top: -20px; padding: 0 0 6px; } .tab.home i { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 99px; background: var(--card); border: 1px solid var(--border); color: var(--foreground); box-shadow: var(--shadow-float); }
+
+  /* ---------- Shared pieces ---------- */
+  .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 16px; padding: 20px; border-radius: 20px; background: var(--card); box-shadow: var(--shadow-card); outline: 1px solid var(--ring-soft); }
+  .ch { display: flex; align-items: flex-start; gap: 12px; }
+  .ci { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--primary-soft); color: var(--primary-soft-foreground); flex: none; }
+  .ct { flex: 1; min-width: 0; display: grid; gap: 2px; } .ct h2 { font-size: 15.5px; font-weight: 700; letter-spacing: -.015em; line-height: 1.35; } .ct p { font-size: 13px; color: var(--muted-foreground); }
+  .ca { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .eb { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); }
+  .hint { font-size: 12.5px; color: var(--muted-foreground); }
+  .link { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--primary); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 700; background: var(--secondary); color: var(--foreground); white-space: nowrap; }
+  .chip.ok { background: var(--success-soft); color: var(--success); } .chip.now { background: var(--now-soft); color: var(--now-foreground); } .chip.acc { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--input); background: var(--card); font-size: 14px; font-weight: 700; color: var(--foreground); white-space: nowrap; }
+  .btn.sm { height: 34px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+  .btn.soft { background: var(--primary-soft); color: var(--primary-soft-foreground); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 9px; flex: none; }
+  .crest { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 18px; font-size: 18px; font-weight: 800; letter-spacing: -.02em; background: var(--primary-soft); color: var(--primary-soft-foreground); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); flex: none; }
+  .sh { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  .st { flex: 1 1 12rem; min-width: 0; display: grid; gap: 4px; } .st h1 { font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; } .st p { color: var(--muted-foreground); }
+  .tile { border-radius: 16px; background: color-mix(in srgb, var(--muted) 75%, transparent); box-shadow: inset 0 0 0 1px rgb(236 239 245 / .04); }
+  .tile.today { background: color-mix(in srgb, var(--primary-soft) 55%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent); }
+  .num { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; font-size: 13px; font-weight: 800; background: var(--card); box-shadow: var(--shadow-card); outline: 1px solid var(--ring-soft); flex: none; }
+  .num.on { background: var(--primary-soft); color: var(--primary-soft-foreground); outline-color: color-mix(in srgb, var(--primary) 45%, transparent); box-shadow: none; }
+  /* Period rows */
+  .periods { display: grid; gap: 2px; }
+  .pr { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; font-size: 14px; }
+  .pr .pn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .pr b { font-weight: 600; } .pr em { font-style: normal; color: var(--muted-foreground); }
+  .pr .pt { font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pr.now { background: var(--now-soft); } .pr.now .pt { color: var(--now-foreground); } .pr.done { opacity: .5; }
+  /* Menus */
+  .menu { display: grid; gap: 8px; } .menu dt { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); } .menu dd { font-size: 14px; line-height: 1.5; }
+  .menu.cols { grid-template-columns: max-content 1fr; gap: 6px 16px; align-items: baseline; } .menu.cols div { display: contents; }
+  /* Votes */
+  .votes { display: grid; gap: 6px; } .track { height: 6px; border-radius: 9px; background: var(--secondary); overflow: hidden; } .track i { display: block; height: 100%; border-radius: 9px; background: var(--primary); }
+  .vrow { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted-foreground); } .vrow b { color: var(--foreground); }
+  .prop { display: grid; gap: 12px; padding: 14px; } .prop > p { font-size: 14px; font-weight: 600; line-height: 1.45; }
+  .row2 { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* List rows */
+  .rows { display: grid; } .rows > * + * { border-top: 1px solid rgb(236 239 245 / .06); }
+  .lrow { display: flex; align-items: center; gap: 12px; padding: 12px 4px; }
+  .lrow .li { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; background: var(--secondary); color: var(--foreground); flex: none; }
+  .lrow .lt { flex: 1; min-width: 0; display: grid; gap: 1px; } .lrow .lt b { font-size: 14px; font-weight: 700; } .lrow .lt span { font-size: 12.5px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .lv { font-size: 13px; font-weight: 600; color: var(--muted-foreground); white-space: nowrap; } .lrow > svg { color: var(--muted-foreground); }
+  .lrow u { width: 8px; height: 8px; border-radius: 9px; background: var(--primary); flex: none; }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 12px; background: var(--muted); border: 1px solid var(--border); }
+  .seg span { display: grid; place-items: center; height: 32px; border-radius: 9px; font-size: 13px; font-weight: 700; color: var(--muted-foreground); }
+  .seg span.on { background: var(--card); color: var(--foreground); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--ring-soft); }
+
+  /* ---------- 1 Today board ---------- */
+  .bento { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px; align-items: stretch; }
+  .big { display: flex; align-items: baseline; gap: 10px; } .big strong { font-size: 40px; font-weight: 800; letter-spacing: -.04em; line-height: 1; } .big span { font-size: 13px; color: var(--muted-foreground); }
+  .push { margin-top: auto; }
+  .card.flexcol { display: flex; flex-direction: column; }
+  .cyc { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+  .cyc .tile { display: grid; gap: 8px; padding: 12px; } .cyc b { font-size: 14px; font-weight: 700; } .cyc .when { font-size: 12px; font-weight: 600; color: var(--muted-foreground); } .cyc .today .when { color: var(--primary-soft-foreground); }
+  .cyc .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .lets { display: flex; gap: 4px; } .lets i { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; font-style: normal; font-size: 10.5px; font-weight: 800; }
+  .lets i.gap { width: 4px; background: none; }
+  .quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .quick .tile { display: grid; gap: 4px; padding: 14px; align-content: start; } .quick .qi { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13.5px; } .quick p { font-size: 12.5px; color: var(--muted-foreground); line-height: 1.45; } .quick .link { margin-top: 6px; }
+
+  /* ---------- 2 Tabs ---------- */
+  .tabs { display: flex; gap: 4px; padding-bottom: 14px; border-bottom: 1px solid rgb(236 239 245 / .07); overflow: hidden; }
+  .tabs span { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; border-radius: 12px; font-size: 14px; font-weight: 700; color: var(--muted-foreground); white-space: nowrap; }
+  .tabs span.on { background: var(--primary-soft); color: var(--primary-soft-foreground); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
+  .tabs u { width: 7px; height: 7px; border-radius: 9px; background: var(--primary); }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+  .banner { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px; }
+  .banner .num { width: 48px; height: 48px; border-radius: 15px; font-size: 20px; } .banner .bt { flex: 1 1 200px; min-width: 0; } .banner .bt b { display: block; font-size: 16px; font-weight: 700; letter-spacing: -.015em; } .banner .bt span { font-size: 13px; color: var(--muted-foreground); }
+  .acc { display: grid; gap: 8px; }
+  .arow { display: flex; align-items: center; gap: 12px; padding: 12px; } .arow .at { flex: 1; min-width: 0; display: grid; } .arow .at b { font-size: 14px; font-weight: 700; } .arow .at span { font-size: 12.5px; color: var(--muted-foreground); }
+  .arow .when { font-size: 12px; font-weight: 600; color: var(--muted-foreground); } .arow > svg { color: var(--muted-foreground); }
+  .open { background: var(--card); box-shadow: var(--shadow-card), inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent); }
+  .open .when { color: var(--primary-soft-foreground); font-weight: 700; }
+  .open .body { padding: 10px 12px 12px; border-top: 1px solid rgb(236 239 245 / .06); } .open .foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid rgb(236 239 245 / .06); }
+  .facts { display: grid; gap: 10px; } .facts li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; } .facts svg { color: var(--muted-foreground); }
+  .off { display: grid; gap: 10px; } .off li { display: grid; grid-template-columns: 76px 1fr; gap: 10px; font-size: 13.5px; } .off li span { font-size: 12.5px; font-weight: 700; color: var(--muted-foreground); font-variant-numeric: tabular-nums; padding-top: 1px; }
+
+  /* ---------- 3 Rail ---------- */
+  .rail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 312px; gap: 20px; align-items: start; }
+  .rail { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  .ident { justify-items: start; gap: 12px; } .ident h1 { font-size: 22px; font-weight: 700; letter-spacing: -.025em; line-height: 1.2; } .ident .crest { width: 64px; height: 64px; border-radius: 20px; font-size: 21px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; width: 100%; } .stats div { padding: 10px; text-align: center; } .stats b { display: block; font-size: 17px; font-weight: 800; letter-spacing: -.02em; } .stats span { font-size: 11px; font-weight: 700; color: var(--muted-foreground); }
+  .mini { display: grid; gap: 2px; } .mini li { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; font-size: 13.5px; font-weight: 600; } .mini li span { margin-left: auto; font-size: 12px; color: var(--muted-foreground); } .mini .lets i { width: 18px; height: 18px; font-size: 10px; }
+  .mini li.on { background: color-mix(in srgb, var(--primary-soft) 60%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); } .mini li.on span { color: var(--primary-soft-foreground); font-weight: 700; }
+  .week { display: grid; gap: 8px; } .week .tile { display: grid; gap: 8px; padding: 14px; } .week .wh { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .week .wh b { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .weeknav { display: flex; align-items: center; justify-content: space-between; } .weeknav b { font-size: 14px; font-weight: 700; } .ib { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; border: 1px solid var(--input); color: var(--muted-foreground); }
+  .nowline { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; } .nowline .tile { padding: 14px; display: grid; gap: 3px; } .nowline b { font-size: 16px; font-weight: 700; letter-spacing: -.015em; } .nowline span { font-size: 12.5px; color: var(--muted-foreground); }
+
+  /* ---------- 4 Grid ---------- */
+  .matrix { position: relative; display: grid; grid-template-columns: 92px repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .matrix .colhi { grid-row: 1 / -1; margin: -6px -3px; border-radius: 16px; background: color-mix(in srgb, var(--primary-soft) 45%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent); }
+  .matrix > * { position: relative; }
+  .mh { display: grid; justify-items: center; gap: 1px; padding: 6px 0 8px; } .mh b { font-size: 14px; font-weight: 700; } .mh span { font-size: 12px; font-weight: 600; color: var(--muted-foreground); } .mh.on span { color: var(--primary-soft-foreground); font-weight: 700; }
+  .ax { display: grid; align-content: center; font-size: 12px; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; line-height: 1.35; }
+  .cell { display: grid; align-content: center; gap: 1px; min-height: 58px; padding: 8px 10px; border-radius: 11px; font-size: 13px; line-height: 1.25; } .cell b { font-weight: 700; } .cell span { font-size: 11.5px; opacity: .75; }
+  .band { grid-column: 2 / -1; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border-radius: 11px; background: var(--muted); border: 1px dashed var(--input); font-size: 12.5px; font-weight: 700; color: var(--muted-foreground); }
+  .lunchcols { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; } .lunchcols .tile { display: grid; gap: 10px; padding: 14px; align-content: start; } .lunchcols .wh { display: flex; justify-content: space-between; align-items: baseline; } .lunchcols .wh b { font-size: 14px; font-weight: 700; } .lunchcols .menu dd { font-size: 13px; }
+  .strip { display: grid; grid-template-columns: 1.3fr 1fr 1fr; } .strip > div { display: flex; align-items: center; gap: 12px; padding: 4px 18px; } .strip > div + div { border-left: 1px solid rgb(236 239 245 / .07); } .strip > div:first-child { padding-left: 0; } .strip > div:last-child { padding-right: 0; }
+  .strip .lt { flex: 1; min-width: 0; display: grid; gap: 1px; } .strip .lt b { font-size: 14px; font-weight: 700; } .strip .lt span { font-size: 12.5px; color: var(--muted-foreground); }
+  .daypick { display: none; grid-template-columns: repeat(6, 1fr); gap: 6px; } .daypick span { display: grid; justify-items: center; gap: 1px; padding: 7px 0; border-radius: 12px; border: 1px solid var(--border); font-size: 15px; font-weight: 800; } .daypick span small { font-size: 10px; font-weight: 700; color: var(--muted-foreground); }
+  .daypick span.on { background: var(--primary-soft); color: var(--primary-soft-foreground); border-color: color-mix(in srgb, var(--primary) 40%, transparent); } .daypick span.on small { color: inherit; }
+  .only-phone { display: none; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--muted-foreground); } .meta span { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* ---------- 5 List + detail ---------- */
+  .md { display: grid; grid-template-columns: 348px minmax(0, 1fr); gap: 20px; align-items: start; }
+  .group { display: grid; gap: 6px; } .group > .eb { padding: 0 6px; }
+  .group .card { padding: 4px 12px; gap: 0; } .group .lrow { padding: 11px 2px; }
+  .lrow.sel { margin: 0 -8px; padding-left: 10px; padding-right: 10px; border-radius: 12px; background: var(--primary-soft); border-top-color: transparent; } .lrow.sel + .lrow { border-top-color: transparent; }
+  .lrow.sel .li { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--primary-soft-foreground); } .lrow.sel .lt span, .lrow.sel > svg { color: var(--primary-soft-foreground); opacity: .85; }
+  .mdhead { display: flex; align-items: center; gap: 12px; padding: 0 4px 4px; } .mdhead .crest { width: 44px; height: 44px; border-radius: 14px; font-size: 15px; } .mdhead h1 { font-size: 20px; font-weight: 700; letter-spacing: -.025em; line-height: 1.2; } .mdhead p { font-size: 12.5px; color: var(--muted-foreground); }
+
+  /* ---------- Phone ---------- */
+  @media (max-width: 1023px) {
+    .side { display: none; } .topbar { display: flex; } .switch { display: grid; } .tabbar { display: block; }
+    .main { padding: 20px 16px 116px; } .stack { gap: 16px; } .card { padding: 16px; border-radius: 18px; }
+    .st h1 { font-size: 26px; }
+    .bento, .two, .rail-layout, .md, .quick, .nowline { grid-template-columns: minmax(0, 1fr); }
+    .cyc { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; } .cyc .tile { padding: 10px; } .cyc .lets i { width: 15px; height: 15px; font-size: 9px; border-radius: 5px; } .cyc .lets { gap: 2px; } .cyc .lets i.gap { width: 2px; }
+    .cyc .top { display: grid; gap: 0; }
+    .tabs { gap: 2px; } .tabs span { padding: 0 9px; gap: 5px; font-size: 13px; } .tabs span svg:first-child { display: none; } .tabs span.on svg:first-child { display: block; }
+    .only-desktop { display: none !important; } .only-phone { display: grid; } .daypick { display: grid; }
+    .strip { grid-template-columns: 1fr; } .strip > div { padding: 12px 0; } .strip > div + div { border-left: 0; border-top: 1px solid rgb(236 239 245 / .07); } .strip > div:first-child { padding-top: 0; } .strip > div:last-child { padding-bottom: 0; }
+    .rail { order: 2; } .rail .ident { display: none; }
+    .lrow.sel { margin: 0; padding-left: 2px; padding-right: 2px; background: none; border-top-color: rgb(236 239 245 / .06); } .lrow.sel .li { background: var(--secondary); color: var(--foreground); } .lrow.sel .lt span, .lrow.sel > svg { color: var(--muted-foreground); opacity: 1; }
+  }
+  @media (min-width: 1024px) { .phone-ident { display: none !important; } }
+
+  /* ---------- Round 2 additions ---------- */
+  .xbody { display: grid; gap: 12px; padding: 2px 0 14px; } .lrow .li.on { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .half { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  .cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+  .drow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; } .drow > span:first-child { width: 34px; font-size: 12.5px; font-weight: 800; color: var(--muted-foreground); } .drow div { flex: 1; min-width: 0; display: grid; gap: 1px; } .drow b { font-size: 14px; font-weight: 700; } .drow em { font-style: normal; font-size: 12.5px; color: var(--muted-foreground); }
+  .tiles4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; } .tiles4 .tile { display: grid; gap: 3px; padding: 14px; } .tiles4 b { font-size: 15.5px; font-weight: 700; letter-spacing: -.015em; } .tiles4 .tile > span:last-child { font-size: 12.5px; color: var(--muted-foreground); }
+  .tiles4 .eb { display: flex; align-items: center; gap: 6px; } .tiles4 .eb u { width: 7px; height: 7px; border-radius: 9px; background: var(--primary); } .tiles4 .today .eb { color: var(--primary-soft-foreground); }
+  .lbl { font-size: 13px; font-weight: 600; opacity: .8; }
+  .panel { display: flex; align-items: center; gap: 12px; padding: 14px; } .panel .lt { display: grid; gap: 1px; } .panel b { font-size: 14px; font-weight: 700; } .panel .lt span { font-size: 12.5px; color: var(--muted-foreground); }
+  .ta { min-height: 92px; padding: 10px 12px; border-radius: 12px; border: 1px solid #6b7486; font-size: 14px; color: var(--muted-foreground); }
+  .facts.tall li { align-items: flex-start; line-height: 1.5; } .facts.tall svg { margin-top: 3px; }
+  @media (max-width: 1023px) { .cols3, .half { grid-template-columns: minmax(0, 1fr); } .tiles4 { grid-template-columns: 1fr 1fr; } .two[style] { grid-template-columns: minmax(0, 1fr) !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const P = {
+  home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  tasks: '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  book: '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+  school: '<path d="M14 22v-4a2 2 0 1 0-4 0v4"/><path d="m18 10 4 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8l4-2"/><path d="M18 5v17"/><path d="m4 6 8-4 8 4"/><path d="M6 5v17"/><circle cx="12" cy="9" r="2"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  message: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  checkCircle: '<path d="M21.801 10A10 10 0 1 1 17 3.335"/><path d="m9 11 3 3L22 4"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  layers: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+  utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', right: '<path d="m9 18 6-6-6-6"/>', left: '<path d="m15 18-6-6 6-6"/>',
+  edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  sliders: '<path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  spark: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  cap: '<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+  panel: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  vote: '<path d="m9 12 2 2 4-4"/><path d="M5 7c0-1.1.9-2 2-2h10a2 2 0 0 1 2 2v12H5V7Z"/><path d="M22 19H2"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24">${P[n]}</svg>`;
+
+/* ---------- Sample data: Monday, November 9, Day 3 of a six-day rotation, 9:52 AM ---------- */
+const CLASSES = { A: ['Algebra II', '#60a5fa', 'Rm 204'], B: ['Chemistry', '#4ade80', 'Lab 3'], C: ['English 10', '#f472b6', 'Rm 112'], D: ['US History', '#fbbf24', 'Rm 305'], E: ['Spanish III', '#a78bfa', 'Rm 221'], F: ['Studio Art', '#22d3ee', 'Art Room'], L: ['Lunch', '#9ba4b5', 'Dining hall'] };
+const TIMES = [['8:15', '9:20'], ['9:30', '10:35'], ['10:45', '11:50'], ['11:50', '12:35'], ['12:40', '1:45'], ['1:55', '3:00']];
+const ORDER = ['ABCDE', 'FABCD', 'EFABC', 'DEFAB', 'CDEFA', 'BCDEF'];
+const NEXT = ['Fri', 'Mon', 'Today', 'Tomorrow', 'Wed', 'Thu'];
+const TODAY = 2, NOW = 1;
+const slots = (i) => { const l = ORDER[i].split(''); return [l[0], l[1], l[2], 'L', l[3], l[4]].map((p, k) => ({ p, t: TIMES[k] })); };
+const LUNCH = [
+  ['Monday', 'Nov 9', [['Entrée', 'Chicken tikka masala · Basmati rice'], ['Vegetarian', 'Chana masala'], ['Sides', 'Roasted cauliflower · Naan'], ['Soup', 'Tomato basil']]],
+  ['Tuesday', 'Nov 10', [['Entrée', 'Beef tacos'], ['Vegetarian', 'Black bean tacos'], ['Sides', 'Cilantro rice · Street corn'], ['Soup', 'Chicken tortilla']]],
+  ['Wednesday', 'Nov 11', [['Entrée', 'Baked ziti'], ['Vegetarian', 'Eggplant parmesan'], ['Sides', 'Garlic bread · Caesar salad'], ['Soup', 'Minestrone']]],
+  ['Thursday', 'Nov 12', [['Entrée', 'Teriyaki salmon'], ['Vegetarian', 'Vegetable lo mein'], ['Sides', 'Jasmine rice · Bok choy'], ['Soup', 'Miso']]],
+  ['Friday', 'Nov 13', [['Entrée', 'Cheese pizza'], ['Vegetarian', 'Margherita flatbread'], ['Sides', 'Garden salad · Fruit cup'], ['Soup', 'Broccoli cheddar']]],
+];
+const PROPOSAL = 'Move Day 3 lunch to 11:40 – 12:25 to match the new bell schedule posted in the main office.';
+
+/* ---------- Shared pieces ---------- */
+const dot = (c) => `<i class="dot" style="background:${c}"></i>`;
+const chip = (text, icon, tone = '') => `<span class="chip ${tone}">${icon ? ic(icon, 'i12') : ''}${text}</span>`;
+const btn = (text, o = {}) => `<span class="btn ${o.kind ?? ''} ${o.sm ? 'sm' : ''}" ${o.style ? `style="${o.style}"` : ''}>${o.icon ? ic(o.icon, 'i14') : ''}${text}${o.right ? ic(o.right, 'i14') : ''}</span>`;
+const link = (text, icon = 'right') => `<span class="link">${text}${ic(icon, 'i14')}</span>`;
+const sec = (title, icon, body, o = {}) => `<section class="card ${o.cls ?? ''}"><header class="ch"><span class="ci">${ic(icon, 'i16')}</span><div class="ct"><h2>${title}</h2>${o.desc ? `<p>${o.desc}</p>` : ''}</div>${o.action ? `<div class="ca">${o.action}</div>` : ''}</header>${body}</section>`;
+const crest = '<span class="crest">LH</span>';
+const statusChips = `<div class="chips">${chip('Approved by support', 'check', 'ok')}${chip('Locked at 10 members', 'lock')}</div>`;
+const head = (right = statusChips) => `<header class="sh">${crest}<div class="st"><h1>Lincoln High School</h1><p>Boston, MA · 214 members</p></div>${right}</header>`;
+const periodRow = (s, k, live) => { const c = CLASSES[s.p]; return `<li class="pr ${live && k === NOW ? 'now' : ''} ${live && k < NOW ? 'done' : ''}">${dot(c[1])}<span class="pn"><b>${c[0]}</b>${s.p !== 'L' ? `<em> · ${s.p}</em>` : ''}</span>${live && k === NOW ? chip('Now', '', 'now') : ''}<span class="pt">${s.t[0]} – ${s.t[1]}</span></li>`; };
+const periods = (i, live = false) => `<ul class="periods">${slots(i).map((s, k) => periodRow(s, k, live)).join('')}</ul>`;
+const letters = (i) => `<span class="lets">${slots(i).map((s) => s.p === 'L' ? '<i class="gap"></i>' : `<i style="background:color-mix(in srgb, ${CLASSES[s.p][1]} 20%, transparent);color:${CLASSES[s.p][1]}">${s.p}</i>`).join('')}</span>`;
+const menu = (d, cls = '') => `<dl class="menu ${cls}">${d[2].map(([t, items]) => `<div><dt>${t}</dt><dd>${items}</dd></div>`).join('')}</dl>`;
+const votes = `<div class="votes"><div class="track"><i style="width:75%"></i></div><div class="vrow"><span><b>6 for</b> · 1 against</span><span>passes at 8</span></div></div>`;
+const voteButtons = `<div class="row2">${btn('Vote for', { sm: true, kind: 'soft', icon: 'check' })}${btn('Vote against', { sm: true })}${btn('See changes', { sm: true })}</div>`;
+const proposal = `<div class="tile prop"><p>${PROPOSAL}</p><span class="hint">Bob N. · Nov 6 · Affects 10th grade</span>${votes}${voteButtons}</div>`;
+const lrow = (icon, title, sub, o = {}) => `<div class="lrow ${o.sel ? 'sel' : ''}"><span class="li">${ic(icon, 'i16')}</span><span class="lt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>${o.dot ? '<u></u>' : ''}${o.value ? `<span class="lv">${o.value}</span>` : ''}${ic('right', 'i16')}</div>`;
+const gradeSeg = `<div class="seg"><span>9th</span><span class="on">10th</span><span>11th</span><span>12th</span></div>`;
+const weekNav = `<div class="weeknav"><span class="ib">${ic('left', 'i16')}</span><b>Nov 9 – Nov 13, 2026</b><span class="ib">${ic('right', 'i16')}</span></div>`;
+const weekList = `<div class="week">${LUNCH.map((d, i) => `<div class="tile ${i === 0 ? 'today' : ''}"><div class="wh"><b>${d[0]}${i === 0 ? chip('Today', '', 'acc') : ''}</b><span class="eb">${d[1]}</span></div>${menu(d, 'cols')}</div>`).join('')}</div>`;
+const daysOff = `<ul class="off"><li><span>Nov 25</span>Early dismissal at 12:10</li><li><span>Nov 26 – 27</span>Thanksgiving break</li><li><span>Dec 21 – Jan 1</span>Winter break</li></ul>`;
+
+/* ---------- The five directions (round 2: mixes of tabs, side rail, and list + detail) ---------- */
+const phoneIdent = `<header class="sh phone-ident">${crest}<div class="st"><h1>Lincoln High School</h1><p>Boston, MA · 214 members</p></div></header>`;
+const identCard = `<section class="card ident">${crest}<div style="display:grid;gap:4px"><h1>Lincoln High School</h1><p class="hint" style="font-size:13.5px">Boston, MA</p></div>${statusChips}
+  <div class="stats"><div class="tile"><b>214</b><span>members</span></div><div class="tile"><b>6</b><span>day cycle</span></div><div class="tile"><b>r14</b><span>revision</span></div></div></section>`;
+const setupCard = `<section class="card"><div class="ct"><h2>Your setup</h2><p>You follow the school schedule, plus your own adjustments.</p></div>${gradeSeg}${link('Advanced schedule settings')}</section>`;
+const linkCard = `<section class="card" style="padding:6px 16px;gap:0"><div class="rows">${lrow('book', 'School classes', '86 shared classes')}${lrow('inbox', 'Request a correction', 'Tell support what is wrong')}${lrow('info', 'How this is managed', 'Approved, member voting')}</div></section>`;
+const tabs = (items, on) => `<div class="tabs">${items.map(([label, icon, flag]) => `<span class="${label === on ? 'on' : ''}">${ic(icon, 'i16')}${label}${flag ? '<u></u>' : ''}</span>`).join('')}</div>`;
+const rotation = `<div class="acc">${ORDER.map((_, i) => i === TODAY
+  ? `<div class="tile open"><div class="arow"><span class="num on">3</span><span class="at"><b>Day 3</b><span>6 periods · 8:15 – 3:00</span></span><span class="when">Today</span>${ic('up', 'i16')}</div><div class="body">${periods(i)}</div><div class="foot">${btn('Show today', { sm: true, icon: 'calendar' })}${btn('Adjust Day 3', { sm: true, icon: 'edit' })}</div></div>`
+  : `<div class="tile arow"><span class="num">${i + 1}</span><span class="at"><b>Day ${i + 1}</b><span>6 periods · 8:15 – 3:00</span></span><span class="when">${NEXT[i]}</span>${ic('down', 'i16')}</div>`).join('')}</div>`;
+const facts = `<ul class="facts"><li>${ic('layers', 'i16')}6-day rotation</li><li>${ic('book', 'i16')}6 class periods</li><li>${ic('utensils', 'i16')}One lunch, 11:50 – 12:35</li><li>${ic('clock', 'i16')}Eastern time</li></ul>${link('Preview on real dates', 'down')}`;
+const lunchSec = sec('Lunch menu', 'utensils', weekNav + weekList + '<span class="hint">Updated Nov 9, 6:02 AM.</span>', { desc: 'Upper School · from the school menu site', action: `<span class="only-desktop">${link('Open menu site', 'ext')}</span>` });
+const xrow = (icon, title, sub, body, o = {}) => `<div><div class="lrow"><span class="li ${body ? 'on' : ''}">${ic(icon, 'i16')}</span><span class="lt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>${o.dot ? '<u></u>' : ''}${o.value ? `<span class="lv">${o.value}</span>` : ''}${ic(body ? 'up' : 'down', 'i16')}</div>${body ? `<div class="xbody">${body}</div>` : ''}</div>`;
+
+const V = {
+  1: () => `<div class="rail-layout">
+    <div class="stack">${phoneIdent}
+      ${tabs([['Schedule', 'calendar'], ['Lunch', 'utensils'], ['Changes', 'vote', 1]], 'Lunch')}
+      ${lunchSec}
+    </div>
+    <aside class="rail">${identCard}${setupCard}${linkCard}</aside></div>`,
+
+  2: () => `<div class="rail-layout">
+    <div class="stack" style="gap:18px">${phoneIdent}
+      <div class="group"><span class="eb">Schedule</span><section class="card"><div class="rows">
+        ${xrow('layers', 'Rotation', 'Six days, 8:15 – 3:00', '', { value: 'Day 3 today' })}
+        ${xrow('calendar', 'Days off', 'Next: Thanksgiving break', '', { value: 'Nov 26' })}
+        ${xrow('utensils', 'Lunch menu', 'Upper School · this week', '', { value: 'Tikka masala' })}</div></section></div>
+      <div class="group"><span class="eb">Community</span><section class="card"><div class="rows">
+        ${xrow('vote', 'Proposed changes', '1 open · 3 closed', proposal + `<div class="row2" style="justify-content:space-between;align-items:center"><span class="hint">Passes at 8 votes for. 31 verified members can vote.</span>${btn('Propose a change', { sm: true, icon: 'plus' })}</div>`, { dot: true })}
+        ${xrow('spark', 'Suggestions', '4 classmates moved a block', '', { dot: true })}
+        ${xrow('book', 'School classes', 'Shared by schoolmates', '', { value: '86' })}
+        ${xrow('inbox', 'Request a correction', 'Wrong bell time or a missing day off', '')}</div></section></div>
+    </div>
+    <aside class="rail">${identCard}${setupCard}<section class="card" style="padding:6px 16px;gap:0"><div class="rows">${lrow('info', 'How this is managed', 'Approved, member voting')}</div></section></aside></div>`,
+
+  3: () => `<div class="md">
+    <div class="stack" style="gap:16px">${identCard}
+      <section class="card" style="padding:6px 16px;gap:0"><div class="rows">
+        ${lrow('layers', 'Rotation', 'Day 3 today', { sel: true })}${lrow('utensils', 'Lunch menu', 'Chicken tikka masala')}${lrow('vote', 'Proposed changes', '1 open, 6 of 8 votes', { dot: true })}${lrow('book', 'School classes', '', { value: '86' })}${lrow('cap', 'Your setup', '', { value: '10th' })}${lrow('inbox', 'Request a correction', '')}${lrow('info', 'How this is managed', '')}</div></section>
+    </div>
+    <div class="stack only-desktop">
+      ${sec('Rotation', 'calendar', rotation, { desc: 'Every day of the cycle and when it comes up next.', action: chip('Revision 14', 'layers') })}
+      <div class="half">${sec('Shared schedule', 'layers', facts, { desc: '10th grade' })}${sec('Days off coming up', 'calendar', daysOff)}</div>
+    </div></div>`,
+
+  4: () => `<div class="stack">
+    ${head()}
+    ${tabs([['Overview', 'school'], ['Schedule', 'calendar'], ['Lunch', 'utensils'], ['Changes', 'vote', 1]], 'Overview')}
+    <div class="cols3">
+      <div class="stack" style="gap:18px">
+        <div class="group"><span class="eb">Schedule</span><section class="card"><div class="rows">${lrow('layers', 'Rotation', 'Six days, 8:15 – 3:00', { value: 'Day 3' })}${lrow('calendar', 'Days off', 'Thanksgiving break', { value: 'Nov 26' })}${lrow('clock', 'Shared schedule', 'Revision 14 · Eastern time')}</div></section></div>
+        <div class="group"><span class="eb">You</span><section class="card"><div class="rows">${lrow('cap', 'Your grade', '', { value: '10th' })}${lrow('sliders', 'Schedule source', '', { value: 'School' })}</div></section></div>
+      </div>
+      <div class="group"><span class="eb">Lunch this week</span><section class="card"><div class="rows">${LUNCH.map((d, i) => `<div class="drow"><span>${d[0].slice(0, 3)}</span><div><b>${d[2][0][1].split(' · ')[0]}</b><em>${d[2][1][1]}</em></div>${i === 0 ? chip('Today', '', 'acc') : ''}</div>`).join('')}</div><div style="padding:6px 0 10px">${link('Full menu')}</div></section></div>
+      <div class="stack" style="gap:18px">
+        <div class="group"><span class="eb">Community</span><section class="card"><div class="rows">${lrow('vote', 'Proposed changes', '1 open, 6 of 8 votes', { dot: true })}${lrow('spark', 'Suggestions', '4 classmates moved a block', { dot: true })}${lrow('book', 'School classes', '', { value: '86' })}${lrow('inbox', 'Request a correction', '')}</div></section></div>
+        <div class="group"><span class="eb">About</span><section class="card"><div class="rows">${lrow('checkCircle', 'Approved by support', 'Locked at 10 members')}</div></section></div>
+      </div>
+    </div></div>`,
+
+  5: () => `<div class="stack">
+    ${head()}
+    <div class="tiles4">
+      <div class="tile"><span class="eb">Schedule</span><b>Day 3 of 6</b><span>Day 4 tomorrow</span></div>
+      <div class="tile"><span class="eb">Lunch</span><b>Chicken tikka masala</b><span>Tacos tomorrow</span></div>
+      <div class="tile"><span class="eb">Changes<u></u></span><b>1 open proposal</b><span>6 of 8 votes</span></div>
+      <div class="tile today"><span class="eb">Setup</span><b>10th grade</b><span>School schedule</span></div>
+    </div>
+    <div class="two" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      <div class="stack">
+        ${sec('Your schedule', 'cap', `<div style="display:grid;gap:8px"><span class="lbl">Your grade</span>${gradeSeg}</div><div class="tile panel"><span class="ci">${ic('school', 'i16')}</span><span class="lt"><b>School schedule</b><span>You follow the shared schedule, plus your own adjustments.</span></span></div>${link('Advanced schedule settings')}`)}
+        ${sec('How this schedule is managed', 'info', `<ul class="facts tall"><li>${ic('checkCircle', 'i16')}Support checked it against the school's published schedule.</li><li>${ic('lock', 'i16')}Locked at 10 members. Verified members propose changes and vote.</li><li>${ic('users', 'i16')}Corrections keep your classes and your own time changes.</li></ul>`)}
+      </div>
+      <div class="stack">
+        ${sec('Request a correction', 'inbox', `<div style="display:grid;gap:8px"><span class="lbl">What needs to change?</span><div class="ta">Example: Day 3 lunch is 11:20 – 11:50, not 11:40 – 12:10.</div><span class="hint">At least 10 characters.</span></div><div>${btn('Send to support', { kind: 'soft' })}</div>`, { desc: 'Spotted a wrong bell time or a missing day off? Tell support.' })}
+        <section class="card" style="padding:6px 16px;gap:0"><div class="rows">${lrow('book', 'School classes', '86 classes shared by schoolmates')}</div></section>
+      </div>
+    </div></div>`,
+};
+
+/* ---------- Shell ---------- */
+const NAV = [['Today', 'home'], ['Schedule', 'calendar'], ['Tasks', 'tasks', 1], ['Classes', 'book'], ['School', 'school'], ['People', 'users', 1], ['Messages', 'message']];
+const v = new URLSearchParams(location.search).get('v') ?? '1';
+document.getElementById('app').innerHTML = `<div class="app">
+  <aside class="side"><div class="side-top"><span class="brand"><img src="assets/logo-mark.svg" alt="">Quasar</span>${ic('panel')}</div>
+    ${NAV.map(([label, icon, count]) => `<span class="nav ${label === 'School' ? 'on' : ''}">${ic(icon)}${label}${count ? '<u></u>' : ''}</span>`).join('')}
+    <div class="side-foot"><span class="pill">${ic('cloud', 'i14')}Saved</span><div class="acct"><span class="avatar">M</span><div><b>Maya</b><span>Lincoln High School</span></div>${ic('sliders', 'i16')}</div></div></aside>
+  <div class="inset"><header class="topbar"><span class="brand"><img src="assets/logo-mark.svg" alt="">Quasar</span><span class="r">${ic('cloud', 'i21')}<span class="avatar">M</span></span></header>
+    <main class="main"><div class="switch"><span>${ic('book', 'i14')}My classes</span><span class="on">${ic('school', 'i14')}School</span></div>${V[v]()}</main></div>
+  <nav class="tabbar"><div class="dock"><span class="tab">${ic('calendar', 'i21')}Schedule</span><span class="tab">${ic('tasks', 'i21')}Tasks</span><span class="tab home"><i>${ic('home', 'i21')}</i>Today</span><span class="tab on">${ic('book', 'i21')}Classes</span><span class="tab">${ic('users', 'i21')}People</span></div></nav>
+</div>`;
+</script>
+</body>
+</html>

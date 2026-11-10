@@ -1,40 +1,22 @@
 # Mockups
 
-Two current sets. Older rounds (countdown hover, classmates popup, landing) are in git history.
+One current set. Older rounds (phone Messages entry, sidebar count badges, countdown hover, classmates popup, landing) are in git history.
 
-## Phone Messages entry
+## School page redesign
 
-Five ways to open Messages on a phone instead of the bare icon in the top bar's corner. The owner picked 4 with
-2's raised button holding Home, and School folded into Classes so the dock is symmetric (`?v=b`), which shipped
-as the `phone-dock` beta.
+Second round. The owner dropped the first round's Today board (it repeated the Today tab) and rotation grid (it repeated Classes), and asked for five mixes of the other three: tabs, a side rail, and list plus detail. The page stays about the school, not the student's day. Each mockup is responsive: the sidebar shell at desktop widths, the phone shell with the dock under 1024px.
 
-Open `messages-entry.html?v=0` (before) and `?v=1` through `?v=5`, plus `?v=a` and `?v=b` for the two dock layouts:
+Open `school.html?v=1` through `?v=5`:
 
 | `v` | Direction |
 | --- | --------- |
-| 1 | Seventh tab: "Chats" joins the dock. |
-| 2 | Centre bubble: a raised round Messages button in the middle of the dock. |
-| 3 | Split dock: a separate round Messages button beside the six-tab dock. |
-| 4 | Chats inside People: a Chats / Friends switch on the People tab. |
-| 5 | Peek bar + sheet: the newest unread message above the dock; tapping it slides Messages up as a sheet. |
-| a | Home in the middle, two tabs left, three right. |
-| b | Home in the middle, School folded into Classes, two and two. |
+| 1 | Tabs with a rail: Schedule, Lunch and Changes tabs in the main column, the school card, setup and links in a fixed right rail. Lunch tab shown. |
+| 2 | Expanding list with a rail: grouped rows that open in place, with the same right rail. Proposed changes is open. |
+| 3 | School card as the menu: the school card and a list of sections on the left, the chosen section on the right. Rotation shown. Phones show the left column alone. |
+| 4 | Overview tab: tabs across the top, and the first tab is the whole page as three columns of summary rows. |
+| 5 | Summary tiles as tabs: four tiles that each show a live value and switch the content below. Setup shown. |
 
-## Sidebar count badges
-
-Five replacements for the bright filled pill on the sidebar's Tasks, People and Messages counts.
-
-Open `nav-badge.html` for all five side by side, or `nav-badge.html?v=1` through `?v=5` for one:
-
-| `v` | Direction |
-| --- | --------- |
-| 1 | Quiet number: the digits alone, dim, brighter on hover. |
-| 2 | Soft chip: the selected row's tint with a flat 1px ring. |
-| 3 | Neutral chip: a grey chip that blends into the sidebar. |
-| 4 | Inline: the count follows the label ("Tasks · 17"). |
-| 5 | Dot: a small dot; the number shows on hover. |
-
-The Messages row is drawn in its hover state in every column.
+The sample data is Monday, November 9, Day 3 of a six-day rotation.
 
 ## Serving
 
