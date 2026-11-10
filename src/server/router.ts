@@ -124,7 +124,11 @@ export const appRouter = t.router({
     // /admin is outside the workspace, so staff betas (for <Beta> in the school review) come with the session.
     return { user: ctx.service.user(ctx.userId), isAdmin, staff: access, adminReady: !!access && adminSignInAllowed(ctx.authAt), betas: access ? betas(ctx.service).joined(ctx.userId) : [] };
   }),
-  profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
+  profile: t.router({
+    save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input)),
+    // Account → Look: the split Now card.
+    nowSplit: accountScoped.input(z.object({ enabled: z.boolean() })).mutation(({ ctx, input }) => ctx.service.setNowSplit(ctx.userId, input.enabled)),
+  }),
   // Profile pictures (docs/CHAT.md §13): an uploaded picture, or back to the Google picture or initials.
   avatar: t.router({
     upload: accountScoped.input(avatarUploadSchema).mutation(({ ctx, input }) => ctx.service.setAvatar(ctx.userId, input)),

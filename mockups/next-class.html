@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Next class on the Now card</title>
+<style>
+  @font-face { font-family: Manrope; src: url(assets/manrope.woff2) format('woff2'); font-weight: 200 800; }
+  :root {
+    --background: #0b0d12; --foreground: #eceff5; --card: #13161d; --muted: #1a1e27; --muted-foreground: #9ba4b5;
+    --border: #242934; --sidebar: #0f1218; --sidebar-border: #202531; --secondary: #222732;
+    --primary: #2dd4e0; --primary-soft: #0f3a44; --primary-soft-foreground: #a5f3fc;
+    --shadow-float: 0 12px 40px -12px rgb(0 0 0 / 0.6), 0 2px 8px -2px rgb(0 0 0 / 0.4);
+    --now-class: #4f46e5; --next-class: #0f766e; --next-dot: #5eead4;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--background); color: var(--foreground); font-family: Manrope, system-ui, sans-serif; }
+  #shot { width: max-content; padding: 28px 32px 36px; }
+  .cap { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  .cap b { font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+  .cap span { font-size: 14px; color: var(--muted-foreground); }
+  .stage { display: flex; gap: 32px; align-items: flex-start; }
+  .stage + .stage { margin-top: 28px; }
+  .frame { container-type: inline-size; }
+  .frame.d { width: 1080px; }
+  .frame.p { width: 358px; }
+  .tag { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); margin: 0 0 8px 4px; }
+  svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* The Now card as it is in src/components/views/today.tsx and .hero-card in globals.css. */
+  .hero { --base: var(--now-class); position: relative; isolation: isolate; overflow: hidden; border-radius: 24px; color: #fff; box-shadow: var(--shadow-float);
+    background: linear-gradient(120deg, var(--base) 0%, color-mix(in srgb, var(--base) 78%, #0b1020) 100%); }
+  .hero::before { content: ''; position: absolute; inset: 0; z-index: -1; background: radial-gradient(520px 260px at 100% 0%, rgb(255 255 255 / 0.22), transparent 70%), radial-gradient(420px 260px at 0% 100%, rgb(0 0 0 / 0.18), transparent 70%); }
+  .hero::after { content: ''; position: absolute; inset: 0; z-index: -1; opacity: .28; background-image: radial-gradient(rgb(255 255 255 / .55) 1px, transparent 1.2px); background-size: 18px 18px; mask-image: linear-gradient(120deg, transparent 45%, #000 100%); }
+  .body { display: grid; gap: 20px; padding: 36px 28px; }
+  .top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px 24px; }
+  .id { display: grid; gap: 8px; min-width: 0; }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+  h2 { margin: 0; font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -.03em; }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; font-size: 14px; font-weight: 500; }
+  .meta i { width: 4px; height: 4px; border-radius: 9px; background: rgb(255 255 255 / .5); }
+  .count { display: inline-flex; align-items: baseline; font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; white-space: pre; }
+  .count small { margin-right: 8px; font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+  .bar { height: 8px; border-radius: 99px; background: rgb(255 255 255 / .2); overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 99px; background: #fff; }
+  .foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; font-weight: 500; }
+  .foot .then { display: inline-flex; align-items: center; gap: 8px; }
+  .foot .then svg { width: 14px; height: 14px; opacity: .6; }
+  .foot b { font-weight: 700; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px; background: rgb(255 255 255 / .15); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .2); font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .pill svg { width: 14px; height: 14px; }
+  .dot { width: 10px; height: 10px; flex: none; border-radius: 99px; background: var(--next-dot); }
+  @container (max-width: 500px) {
+    .body { padding: 28px 20px; }
+    h2 { font-size: 34px; }
+    .count { font-size: 30px; }
+  }
+
+  /* 1 Next row: the arrow line becomes a full-width row at the foot of the card. */
+  .band { display: flex; align-items: center; gap: 22px; margin: 4px -28px -36px; padding: 16px 28px 18px; background: rgb(8 10 22 / .3); border-top: 1px solid rgb(255 255 255 / .12); }
+  .band .b1 { display: grid; gap: 4px; min-width: 0; }
+  .band .eyebrow { opacity: .75; }
+  .band .nm { display: inline-flex; align-items: center; gap: 10px; font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+  .band .b2 { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; }
+  .band .at { margin-left: auto; font-size: 22px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @container (max-width: 500px) {
+    .band { position: relative; display: grid; gap: 10px; margin: 4px -20px -28px; padding: 14px 20px 18px; }
+    .band .at { position: absolute; top: 12px; right: 20px; font-size: 15px; }
+    .band .nm { font-size: 22px; }
+  }
+
+  /* 2 Split card: now and next side by side, each in its class colour. */
+  .split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  .pane-next { --base: var(--next-class); position: relative; display: grid; align-content: center; justify-items: start; gap: 10px; padding: 32px 28px 32px 44px;
+    background: linear-gradient(120deg, var(--base) 0%, color-mix(in srgb, var(--base) 78%, #0b1020) 100%); }
+  .pane-next h3 { margin: 0; font-size: 30px; line-height: 1.08; font-weight: 800; letter-spacing: -.03em; }
+  .pane-next .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 14px; font-weight: 500; }
+  .seam { position: absolute; left: -18px; top: 50%; translate: 0 -50%; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 99px; background: var(--background); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); }
+  .seam .down { display: none; }
+  @container (max-width: 500px) {
+    .split { grid-template-columns: minmax(0, 1fr); }
+    .pane-next { padding: 30px 20px 24px; }
+    .pane-next h3 { font-size: 28px; }
+    .seam { left: 20px; top: -18px; translate: none; }
+    .seam .right { display: none; }
+    .seam .down { display: block; }
+  }
+
+  /* 3 Day rail: the next stops of the day inside the card. */
+  .rail { display: grid; grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .stop { display: grid; align-content: start; gap: 3px; min-width: 0; padding: 12px 14px 13px; border-radius: 16px; background: rgb(255 255 255 / .1); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); }
+  .stop .t { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .8; }
+  .stop strong { overflow: hidden; font-size: 15px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; text-overflow: ellipsis; }
+  .stop .where { font-size: 12.5px; font-weight: 500; opacity: .85; }
+  .stop.next { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 12px; background: #fff; color: #121520; box-shadow: none; }
+  .stop.next .eyebrow { grid-column: 1 / -1; color: #4b5565; }
+  .stop.next strong { display: inline-flex; align-items: center; gap: 9px; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+  .stop.next .dot { background: var(--next-class); }
+  .stop.next .room { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px; background: #eef0f5; font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .stop.next .room svg { width: 14px; height: 14px; }
+  @container (max-width: 500px) {
+    .rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stop.next { grid-column: 1 / -1; }
+    .stop:nth-child(4) { display: none; }
+  }
+
+  /* 5 Everywhere: a next-class strip outside Today. */
+  .side { display: flex; flex-direction: column; width: 244px; height: 590px; padding: 16px 12px 12px; border: 1px solid var(--sidebar-border); border-radius: 18px; background: var(--sidebar); }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px 14px; font-size: 17px; font-weight: 800; }
+  .brand img, .appbar img { filter: invert(1); }
+  .brand img { width: 26px; height: 26px; }
+  .side ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .side li { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 12px; color: var(--muted-foreground); font-size: 14px; font-weight: 600; }
+  .side li svg { width: 18px; height: 18px; }
+  .side li.active { background: var(--primary-soft); color: var(--primary-soft-foreground); }
+  .mini { display: grid; gap: 3px; margin-top: auto; padding: 12px 14px 13px; border-radius: 14px; background: color-mix(in srgb, var(--next-class) 26%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--next-dot) 22%, transparent); }
+  .mini .eyebrow { display: flex; justify-content: space-between; color: var(--muted-foreground); }
+  .mini strong { display: inline-flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+  .mini .where { font-size: 13px; font-weight: 600; }
+  .mini .bar { height: 4px; margin-top: 8px; background: rgb(255 255 255 / .14); }
+  .mini .left { margin-top: 3px; font-size: 11.5px; color: var(--muted-foreground); }
+  .page { flex: 1; align-self: stretch; display: grid; align-content: start; gap: 14px; min-width: 0; padding: 22px 24px; border: 1px solid var(--border); border-radius: 18px; background: var(--card); }
+  .page h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+  .task { display: flex; align-items: center; gap: 12px; padding: 4px 0; font-size: 15px; font-weight: 600; }
+  .task::before { content: ''; width: 22px; height: 22px; flex: none; border: 2px solid #6b7486; border-radius: 99px; }
+  .task span { display: block; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+  .phone { width: 358px; overflow: hidden; border: 1px solid var(--border); border-radius: 26px; background: var(--background); }
+  .appbar { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; font-size: 17px; font-weight: 800; }
+  .appbar img { width: 24px; height: 24px; }
+  .appbar .me { width: 30px; height: 30px; margin-left: auto; border-radius: 99px; background: var(--secondary); }
+  .strip { display: flex; align-items: center; gap: 9px; margin: 0 12px 6px; padding: 10px 12px 10px 14px; border-radius: 14px; background: color-mix(in srgb, var(--next-class) 26%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--next-dot) 22%, transparent); }
+  .strip .eyebrow { color: var(--muted-foreground); }
+  .strip strong { min-width: 0; overflow: hidden; font-size: 15px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; text-overflow: ellipsis; }
+  .strip .rm { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .strip .at { margin-left: auto; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .phone .page { margin: 6px 0 0; border: 0; border-radius: 0; background: none; padding: 12px 18px 22px; }
+  /* 6 and 7 Time split: the card is the 50 minutes from the current class's start to the next class's start.
+     The current class keeps what is left of it, the grey is the passing time, the next class has what has elapsed. */
+  .tl { display: grid; gap: 22px; }
+  .tl.ph { grid-template-columns: repeat(3, 358px); gap: 26px 28px; }
+  .tcard { position: relative; isolation: isolate; display: flex; overflow: hidden; border-radius: 24px; color: #fff; box-shadow: var(--shadow-float); }
+  .tcard.h { width: 1080px; height: 220px; }
+  .tcard.v { flex-direction: column; width: 358px; height: 320px; }
+  .tcard::before { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: radial-gradient(520px 260px at 100% 0%, rgb(255 255 255 / 0.16), transparent 70%), radial-gradient(420px 260px at 0% 100%, rgb(0 0 0 / 0.16), transparent 70%); }
+  .seg { --base: var(--now-class); display: flex; flex: none; min-width: 0; min-height: 0; overflow: hidden; background: linear-gradient(120deg, var(--base) 0%, color-mix(in srgb, var(--base) 78%, #0b1020) 100%); }
+  .seg > * { position: relative; z-index: 2; }
+  .seg.next { --base: var(--next-class); }
+  .seg.gap { align-items: center; justify-content: center; background: #3d4453; color: rgb(255 255 255 / .82); text-align: center; white-space: nowrap; }
+  .h .gl { display: grid; justify-items: center; gap: 4px; }
+  .h .gl .eyebrow { font-size: 10px; opacity: .8; }
+  .h .gl b { font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
+  .v .gl { font-size: 12px; font-weight: 600; }
+  .v .gl b { font-weight: 800; }
+  .in { display: flex; width: 100%; min-width: 0; }
+  .in .meta .pill { margin-right: 2px; }
+  .h .in { align-items: center; padding: 0 28px; }
+  .h .in.full { justify-content: space-between; gap: 24px; }
+  .h .in.med h2 { font-size: 34px; }
+  .h .in.med .id { gap: 8px; }
+  .count.sm { margin-top: 6px; font-size: 26px; }
+  .count.sm small { font-size: 12px; }
+  .h .in.cmp { padding: 0 18px; }
+  .h .in.cmp .id { gap: 5px; }
+  .cmp .nm { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 17px; font-weight: 800; line-height: 1.2; letter-spacing: -.01em; }
+  .cmp .rm { font-size: 13px; font-weight: 600; opacity: .9; }
+  .count.xs { display: grid; gap: 3px; margin-top: 8px; font-size: 22px; }
+  .count.xs small, .count.stack small { margin: 0; font-size: 10.5px; }
+  .v .in { flex-direction: column; gap: 12px; padding: 26px 20px 0; }
+  .v .in h2 { font-size: 34px; }
+  .v .in .count { font-size: 30px; }
+  .v .seg.next .in.full { padding-top: 22px; }
+  .v .in.med { justify-content: center; gap: 8px; height: 100%; padding: 0 20px; }
+  .mrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .nm2 { font-size: 25px; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }
+  .v .in .count.stack { display: grid; justify-items: end; gap: 3px; font-size: 22px; }
+  .v .in.cmp { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; height: 100%; padding: 0 20px; font-size: 13.5px; font-weight: 500; white-space: nowrap; }
+  .v .in.cmp .l { display: inline-flex; align-items: baseline; gap: 9px; min-width: 0; }
+  .v .in.cmp .l b { font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+  .v .in.cmp .r b { font-weight: 800; }
+  /* 8 to 10: the progress bar on the time split. */
+  .h .in.full.col { flex-direction: column; align-items: stretch; justify-content: center; gap: 22px; }
+  .h .in.full.col .top { flex-wrap: nowrap; align-items: center; }
+  .h .in.hasbar .id { flex: 1; }
+  .h .in.med .bar { margin-top: 10px; }
+  .h .in.cmp .bar { height: 6px; margin-top: 8px; }
+  .v .in.full.hasbar { padding-top: 22px; }
+  .v .in.med .bar { margin-top: 4px; }
+  .v .in.cmp .bar { position: absolute; right: 20px; bottom: 5px; left: 20px; height: 4px; }
+  .tcard.bb.h, .tl.tall .tcard.h { height: 244px; }
+  .tcard.bb.h .seg { padding-bottom: 40px; }
+  .h .cbar { position: absolute; z-index: 3; right: 28px; bottom: 28px; left: 28px; }
+  .v .cbar { position: absolute; z-index: 3; top: 22px; bottom: 22px; left: 16px; width: 8px; height: auto; }
+  .v .cbar > i { width: 100%; }
+  /* The fill carries a little of the current class's colour; the track stays neutral. */
+  /* The fill is white mixed with the hue of the part under it, taken at one fixed brightness. Mixing in the part's own
+     (dark) colour makes the fill's lightness follow the background, which reads as a see-through overlay. */
+  .tcard { --fill-now: color-mix(in oklab, oklch(from var(--now-class) .72 .21 h) var(--tint, 35%), #fff); --fill-gap: color-mix(in oklab, oklch(from #3d4453 .72 .03 h) var(--tint, 35%), #fff); --fill-next: color-mix(in oklab, oklch(from var(--next-class) .72 .21 h) var(--tint, 35%), #fff); }
+  .tcard .bar > i { background: var(--fill-now); }
+  .tcard.bb.v .in { padding-left: 40px; }
+</style>
+</head>
+<body>
+<div id="shot"></div>
+<script>
+const ICON = {
+  right: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
+  down: '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>',
+  pin: '<svg viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>',
+  home: '<svg viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>',
+  tasks: '<svg viewBox="0 0 24 24"><path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/></svg>',
+  book: '<svg viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>',
+  school: '<svg viewBox="0 0 24 24"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  chat: '<svg viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>',
+};
+
+/** The current period's half of the card, the same in every direction. */
+const nowTop = `<div class="top">
+  <div class="id"><span class="eyebrow">Right now</span><h2>AP Chemistry</h2>
+    <p class="meta"><span>10:05–10:50 AM</span><i></i><span>Period 3</span><i></i><span>Room 214</span><i></i><span>Ms. Alvarez</span></p></div>
+  <div class="count"><small>Ends in</small>9 min</div>
+</div>
+<div class="bar"><i style="width:80%"></i></div>`;
+const thenLine = `<div class="foot"><span class="then">${ICON.right}<span>Then <b>US History</b> at 10:55 AM</span></span></div>`;
+
+const cards = {
+  0: () => `<div class="hero"><div class="body">${nowTop}${thenLine}</div></div>`,
+  1: () => `<div class="hero"><div class="body">${nowTop}
+    <div class="band">
+      <div class="b1"><span class="eyebrow">Next</span><span class="nm"><i class="dot"></i>US History</span></div>
+      <div class="b2"><span class="pill">${ICON.pin}Room 108</span><span>Mr. Okafor</span></div>
+      <span class="at">10:55 AM</span>
+    </div></div></div>`,
+  2: () => `<div class="hero split"><div class="body">${nowTop}</div>
+    <div class="pane-next"><span class="seam"><span class="right">${ICON.right}</span><span class="down">${ICON.down}</span></span>
+      <span class="eyebrow">Next · 10:55 AM</span><h3>US History</h3>
+      <div class="row"><span class="pill">${ICON.pin}Room 108</span><span>Mr. Okafor</span></div>
+    </div></div>`,
+  3: () => `<div class="hero"><div class="body">${nowTop}
+    <div class="rail">
+      <div class="stop next"><span class="eyebrow">Next · 10:55 AM</span><strong><i class="dot"></i>US History</strong><span class="room">${ICON.pin}Room 108</span></div>
+      <div class="stop"><span class="t">11:45 AM</span><strong>Lunch</strong><span class="where">Dining hall</span></div>
+      <div class="stop"><span class="t">12:30 PM</span><strong>Algebra II</strong><span class="where">Room 301</span></div>
+      <div class="stop"><span class="t">1:20 PM</span><strong>Spanish III</strong><span class="where">Room 212</span></div>
+    </div></div></div>`,
+  '4b': () => `<div class="hero" style="--base:var(--next-class)"><div class="body">
+    <div class="top">
+      <div class="id"><span class="eyebrow">Go to</span><h2>US History</h2>
+        <p class="meta"><span>10:55–11:40 AM</span><i></i><span>Period 4</span><i></i><span>Mr. Okafor</span></p></div>
+      <div class="count"><small>Room</small>108</div>
+    </div>
+    <div class="bar"><i style="width:96%"></i></div>
+    <div class="foot"><span>AP Chemistry ends in <b>2 min</b></span><span>Starts at <b>10:55 AM</b></span></div>
+  </div></div>`,
+};
+
+const pair = (key, label) => `<div class="stage">
+  <div><p class="tag">${label ? `${label} · ` : ''}Desktop</p><div class="frame d">${cards[key]()}</div></div>
+  <div><p class="tag">${label ? `${label} · ` : ''}Phone, 390px</p><div class="frame p">${cards[key]()}</div></div>
+</div>`;
+
+const taskRows = `<div class="task"><div>Lab report: titration<span>Today · AP Chemistry</span></div></div>
+  <div class="task"><div>Read chapter 12<span>Tomorrow · US History</span></div></div>
+  <div class="task"><div>Problem set 4.3<span>Wednesday · Algebra II</span></div></div>`;
+const everywhere = `<div class="stage">
+  <div><p class="tag">Desktop, any page</p><div style="display:flex;gap:16px;width:1080px">
+    <aside class="side"><div class="brand"><img src="assets/logo-mark.svg" alt="">Quasar</div>
+      <ul><li>${ICON.home}Today</li><li>${ICON.calendar}Schedule</li><li class="active">${ICON.tasks}Tasks</li><li>${ICON.book}Classes</li><li>${ICON.school}School</li><li>${ICON.users}People</li><li>${ICON.chat}Messages</li></ul>
+      <div class="mini"><span class="eyebrow"><span>Next</span><span>10:55 AM</span></span><strong><i class="dot"></i>US History</strong><span class="where">Room 108 · Mr. Okafor</span>
+        <div class="bar"><i style="width:80%"></i></div><span class="left">AP Chemistry ends in 9 min</span></div>
+    </aside>
+    <div class="page"><h1>Tasks</h1>${taskRows}</div>
+  </div></div>
+  <div><p class="tag">Phone, any page</p><div class="phone">
+    <div class="appbar"><img src="assets/logo-mark.svg" alt="">Tasks<span class="me"></span></div>
+    <div class="strip"><i class="dot"></i><strong>US History</strong><span class="rm">Room 108</span><span class="at">10:55 · in 9 min</span></div>
+    <div class="page">${taskRows}</div>
+  </div></div>
+</div>`;
+
+/* Time split. P is the period's length, G the passing time, both in minutes; `e` is minutes into the period. */
+const P = 45, G = 5, T = P + G;
+const SEG = {
+  now: { name: 'AP Chemistry', eyebrow: 'Right now', label: 'Ends in', meta: ['10:05–10:50 AM', 'Period 3', 'Room 214', 'Ms. Alvarez'] },
+  next: { name: 'US History', eyebrow: 'Next · 10:55 AM', label: 'Starts in', room: 'Room 108', meta: ['10:55–11:40 AM', 'Period 4', 'Mr. Okafor'] },
+};
+const dotted = (items) => items.map((item) => `<span>${item}</span>`).join('<i></i>');
+const info = (kind, wide) => kind === 'now'
+  ? `<p class="meta">${dotted(wide ? SEG.now.meta : SEG.now.meta.slice(0, 3))}</p>`
+  : `<p class="meta"><span class="pill">${ICON.pin}Room 108</span>${wide ? dotted(SEG.next.meta) : '<span>Mr. Okafor</span>'}</p>`;
+
+/**
+ * One class's part of the card. What it says depends on how many pixels it has along the split.
+ * `bar` is the period's progress in percent when the progress bar lives in this part.
+ */
+function seg(kind, px, vertical, mins, passing, bar) {
+  const s = SEG[kind];
+  const eyebrow = kind === 'next' && passing ? 'Up next · 10:55 AM' : s.eyebrow;
+  const m = `${mins} min`;
+  const b = bar === undefined ? '' : `<div class="bar"><i style="width:${bar}%"></i></div>`;
+  const hb = b ? ' hasbar' : '';
+  const [full, med, cmp] = vertical ? [kind === 'next' ? 185 : b ? 190 : 175, 92, 40] : [740, 280, 110];
+  const id = `<div class="id"><span class="eyebrow">${eyebrow}</span><h2>${s.name}</h2>${info(kind, !vertical)}</div>`;
+  const count = `<div class="count"><small>${s.label}</small>${m}</div>`;
+  let inner = '';
+  if (px >= full) inner = vertical || !b
+    ? `<div class="in full${hb}">${id}${count}${b}</div>`
+    : `<div class="in full col"><div class="top">${id}${count}</div>${b}</div>`;
+  else if (px >= med) inner = vertical
+    ? `<div class="in med${hb}"><span class="eyebrow">${eyebrow}${px < 127 && s.room ? ` · ${s.room}` : ''}</span><div class="mrow"><strong class="nm2">${s.name}</strong><div class="count stack"><small>${s.label}</small>${m}</div></div>${px >= 127 ? info(kind, false) : ''}${b}</div>`
+    : `<div class="in med${hb}"><div class="id"><span class="eyebrow">${eyebrow}</span><h2>${s.name}</h2>${info(kind, false)}<div class="count sm"><small>${s.label}</small>${m}</div>${b}</div></div>`;
+  else if (px >= cmp) inner = vertical
+    ? `<div class="in cmp${hb}"><span class="l">${kind === 'next' ? '<span class="eyebrow">Next</span>' : ''}<b>${s.name}</b>${s.room ? `<span>${s.room}</span>` : ''}</span><span class="r">${kind === 'next' ? 'in' : 'ends in'} <b>${m}</b></span>${b}</div>`
+    : `<div class="in cmp${hb}"><div class="id"><span class="eyebrow">${kind === 'next' ? 'Next' : 'Right now'}</span><strong class="nm">${s.name}</strong>${s.room ? `<span class="rm">${s.room}</span>` : ''}<div class="count xs"><small>${s.label}</small>${m}</div>${b}</div></div>`;
+  return `<div class="seg ${kind}" style="flex-basis:${px}px">${inner}</div>`;
+}
+
+/** `barMode`: 'in' puts the progress bar in the current class's part, 'card' runs it along the bottom of the whole card. */
+function timeCard(e, vertical, barMode, tint) {
+  const size = vertical ? 320 : 1080;
+  const minNow = vertical ? 44 : 132;
+  let now, gap, next;
+  if (e < P) {
+    gap = G / T * size;
+    next = Math.max(0.025 * size, e / T * size);
+    now = size - gap - next;
+    // While the class is on it keeps room for its own countdown.
+    if (now < minNow) { now = minNow; next = size - gap - now; }
+  } else { now = 0; gap = (T - e) / T * size; next = size - gap; }
+  const gapLabel = vertical ? (gap >= 28 ? '<span class="gl"><b>5 min</b> passing</span>' : '') : (gap >= 90 ? '<span class="gl"><span class="eyebrow">Passing</span><b>5 min</b></span>' : '');
+  const pct = Math.round(e / P * 100);
+  // The bar follows the split's direction: left to right on desktop, top to bottom on a phone.
+  // The fill takes the tint of the part it is over, so its colour changes at the same two seams as the card.
+  const inset = vertical ? 22 : 28;
+  const fill = `linear-gradient(to ${vertical ? 'bottom' : 'right'}, var(--fill-now) 0 ${now - inset}px, var(--fill-gap) ${now - inset}px ${now + gap - inset}px, var(--fill-next) ${now + gap - inset}px)`;
+  const cardBar = barMode === 'card' && now ? `<div class="bar cbar"><i style="${vertical ? 'height' : 'width'}:${pct}%;background:${fill}"></i></div>` : '';
+  return `<div class="tcard ${vertical ? 'v' : 'h'}${cardBar ? ' bb' : ''}"${tint ? ` style="--tint:${tint}%"` : ''}>${now ? seg('now', now, vertical, P - e, false, barMode === 'in' ? pct : undefined) : ''}<div class="seg gap" style="flex-basis:${gap}px">${gapLabel}</div>${seg('next', next, vertical, T - e, e >= P)}${cardBar}</div>`;
+}
+const FRAMES = [1, 8, 15, 27, 38, 47];
+const clock = (e) => `10:${String(5 + e).padStart(2, '0')} AM`;
+const frameTag = (e, short) => `${clock(e)} · ${e < P ? `${P - e} min left${short ? '' : ' in AP Chemistry'}` : 'passing period'}`;
+const timeline = (vertical, barMode) => `<div class="tl${vertical ? ' ph' : ''}${barMode === 'card' ? ' tall' : ''}">${FRAMES.map((e) => `<div><p class="tag">${frameTag(e, vertical)}</p>${timeCard(e, vertical, barMode)}</div>`).join('')}</div>`;
+
+const views = {
+  0: ['Today', 'The arrow line as it ships.', () => pair(0)],
+  1: ['1 · Next row', 'The arrow line becomes a full-width row with the class, the room and the time.', () => pair(1)],
+  2: ['2 · Split card', 'Now and next share the card, each in its own class colour.', () => pair(2)],
+  3: ['3 · Day rail', 'The next stops of the day sit inside the card, so the schedule comes to you.', () => pair(3)],
+  4: ['4 · Handoff', 'For the last 5 minutes and the passing period the card turns into directions to the next class.', () => pair(0, 'Most of the period') + pair('4b', 'Last 5 minutes')],
+  5: ['5 · Everywhere', 'A next-class strip on every page: sidebar on desktop, under the top bar on a phone.', () => everywhere],
+  6: ['Time split · desktop', 'The seam is the clock. US History grows from the right as its start gets closer; the grey is the passing time.', () => timeline(false)],
+  7: ['Time split · phone, 390px', 'Same clock, turned on its side: US History rises from the bottom.', () => timeline(true)],
+  8: ['Bar A · inside the current class', 'The bar belongs to AP Chemistry and lives in its part of the card, so it gets shorter as that part shrinks.', () => timeline(false, 'in')],
+  9: ['Bar B · across the whole card', 'One bar along the bottom, the same length all period, like the card has today.', () => timeline(false, 'card')],
+  11: ['Bar across the card · phone, 390px', 'The phone version of the bar that crosses all three parts: it runs down the left edge and fills from the top.', () => timeline(true, 'card')],
+  12: ['Bar tint', 'The fill mixed with more and more of AP Chemistry\'s colour, at 10:32 where it crosses all three parts.', () => [14, 25, 35, 45, 60].map((tint) => `<div class="stage"><div><p class="tag">${tint}% class colour</p>${timeCard(27, false, 'card', tint)}</div><div><p class="tag">${tint}% · phone</p>${timeCard(27, true, 'card', tint)}</div></div>`).join('')],
+  10: ['Bar · phone, 390px', 'On a phone both options land in the same place: the bar closes out the AP Chemistry part.', () => timeline(true, 'in')],
+};
+const [title, note, render] = views[new URLSearchParams(location.search).get('v') ?? '1'] ?? views[1];
+document.getElementById('shot').innerHTML = `<div class="cap"><b>${title}</b><span>${note}</span></div>${render()}`;
+</script>
+</body>
+</html>

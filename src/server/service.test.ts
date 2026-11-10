@@ -209,6 +209,17 @@ describe('account binding', () => {
     expect(f.service.user(f.student).schoolId).toBe(f.school.id);
     expect((await caller.profile.save({accountId:f.student,displayName:'Maya',fullName:'Maya Chen'})).displayName).toBe('Maya');
   });
+  it('keeps the Now card whole until the member chooses the split, for their own account only', async () => {
+    const f=fixture();
+    const caller=appRouter.createCaller({service:f.service,userId:f.student});
+    expect(f.service.workspace(f.student).user.nowSplit).toBe(false);
+    expect((await caller.profile.nowSplit({accountId:f.student,enabled:true})).nowSplit).toBe(true);
+    expect(f.service.workspace(f.student).user.nowSplit).toBe(true);
+    // A request composed as another account is refused, so nobody's choice is changed for them.
+    await expect(caller.profile.nowSplit({accountId:f.owner,enabled:true})).rejects.toMatchObject({code:'UNAUTHORIZED'});
+    expect(f.service.user(f.owner).nowSplit).toBe(false);
+    expect((await caller.profile.nowSplit({accountId:f.student,enabled:false})).nowSplit).toBe(false);
+  });
 });
 
 describe('durable synchronization', () => {

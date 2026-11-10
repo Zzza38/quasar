@@ -24,7 +24,9 @@ export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from '
 /** `avatar` is the picture URL other members see (docs/CHAT.md §13): an uploaded picture, else the Google picture, else null for initials. */
 export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null; suggestedNames: { displayName: string; fullName: string }; avatar: string | null;
   /** Which picture the account shows, for the account sheet's picture controls. */
-  avatarSource: 'upload' | 'google' | 'none'; hasGooglePicture: boolean };
+  avatarSource: 'upload' | 'google' | 'none'; hasGooglePicture: boolean;
+  /** Account → Look: Today's Now card is shared with the next class (NowSplitCard) instead of staying whole. */
+  nowSplit: boolean };
 /** A support sanction the student can see and appeal (§14). */
 export type Ban = { schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean };
 export type Sanctions = { bans: Ban[]; pause: { until: string | null; reason: string; appealed: boolean } | null };
@@ -37,7 +39,7 @@ export const schoolLogoUrl = (schoolId: string, version: number | null | undefin
 /** The published logo's version for school row `s`, for schoolFromRow; NULL when the school has no logo. */
 const LOGO_VERSION = '(SELECT l.version FROM school_logos l WHERE l.school_id=s.id AND l.image IS NOT NULL) logo_version';
 type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null;
-  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null };
+  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null; now_split: number };
 /** Uploaded pictures are small: the client resizes to 256 px and encodes as JPEG or WebP before sending (§13). */
 export const AVATAR_MAX_BYTES = 200_000;
 export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -184,7 +186,7 @@ export class Service {
     const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined;
     if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
     return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id, suggestedNames: suggestNames(row.google_name ?? '', row.email),
-      avatar: avatarUrl(row), avatarSource: row.avatar_hidden ? 'none' : row.avatar_version ? 'upload' : usableGooglePicture(row.google_picture) ? 'google' : 'none', hasGooglePicture: usableGooglePicture(row.google_picture) };
+      avatar: avatarUrl(row), avatarSource: row.avatar_hidden ? 'none' : row.avatar_version ? 'upload' : usableGooglePicture(row.google_picture) ? 'google' : 'none', hasGooglePicture: usableGooglePicture(row.google_picture), nowSplit: row.now_split === 1 };
   }
   /* ---------- Profile pictures (docs/CHAT.md §13) ---------- */
 
@@ -322,6 +324,12 @@ export class Service {
     // Only a new or changed display name is checked, so an existing student can still save a new full name.
     if (names.displayName !== current.displayName && reservedDisplayName(names.displayName)) fail('BAD_REQUEST', 'Choose a display name that doesn’t mention Quasar or support.');
     this.db.prepare('UPDATE users SET display_name=?,full_name=? WHERE id=?').run(names.displayName, names.fullName, id);
+    return this.user(id);
+  }
+  /** Account → Look: share Today's Now card with the next class, or keep it whole. Account-wide, like the names. */
+  setNowSplit(id: string, enabled: boolean): User {
+    this.user(id);
+    this.db.prepare('UPDATE users SET now_split=? WHERE id=?').run(Number(enabled), id);
     return this.user(id);
   }
   schools(query = '', limit = 100): School[] {

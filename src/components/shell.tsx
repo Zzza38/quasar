@@ -10,6 +10,7 @@ import { viewPath } from '@/lib/routes';
 import { SITE_TITLE } from '@/server/site';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
+import { NowCardSetting } from './now-card-setting';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
@@ -173,13 +174,16 @@ export interface ShellProps {
   /** The account-wide "Message notifications" switch. */
   chatPush: boolean;
   onChatPush: (enabled: boolean) => Promise<void>;
+  /** The account-wide "Next class on the Now card" switch. */
+  nowSplit: boolean;
+  onNowSplit: (enabled: boolean) => Promise<void>;
   children: ReactNode;
   gradeSettings?: ReactNode;
   /** The Connected calendars block; receives how many times the sheet was asked to open the Add dialog. */
   calendarSettings?: (openAdd: number) => ReactNode;
 }
 
-export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings, calendarSettings }: ShellProps) {
+export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, nowSplit, onNowSplit, children, gradeSettings, calendarSettings }: ShellProps) {
   const home = (event: MouseEvent<HTMLAnchorElement>) => { if (!followsInPage(event)) return; event.preventDefault(); if (view === 'today') scrollTopIfActive(true); else navigate('today'); };
   const [account, setAccount] = useState(false);
   // The checklist's "Add calendar" asks for the sheet with the Add dialog open; the count is what CalendarFeeds watches.
@@ -353,7 +357,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             {session.storagePersistent === false && <div><dt className="text-muted-foreground">Device storage</dt><dd className="text-right font-semibold">The browser may clear it if space runs low</dd></div>}
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
-          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
+          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /><NowCardSetting accountId={context.user.id} enabled={nowSplit} online={online} onChange={onNowSplit} /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
           <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
