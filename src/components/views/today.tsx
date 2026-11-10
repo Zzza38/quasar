@@ -539,8 +539,7 @@ export function TaskRow({ item, state, showDate = true, centered = false, onComp
   const keyboardRef = useRef(false);
   const metaId = useId();
   const { task } = item;
-  const notesLinks = useBeta('task-note-links');
-  const link = notesLinks ? taskLink(task) : task.imported?.url;
+  const link = taskLink(task);
   const cls = state.personal.classes.find((entry) => entry.id === task.classId);
   const overdue = isOverdue(task, state.today, clockTime(state.now, state.timeZone));
   const dueToday = task.dueDate === state.today && !overdue;
