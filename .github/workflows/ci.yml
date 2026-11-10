@@ -42,11 +42,15 @@ jobs:
           retention-days: 1
           include-hidden-files: true
 
-  browser:
-    name: Browser tests
+  browser-shards:
+    name: Browser tests (${{ matrix.shard }}/4)
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,15 +64,28 @@ jobs:
           name: next-build
           path: .next
       - run: npx playwright install --with-deps chromium
-      # playwright.config.ts starts `next start` on port 3100 with its own throwaway database and secrets.
-      - run: npm run test:e2e
+      # Each shard has its own runner, server, database, and mock-provider port.
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
       - name: Keep traces and screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-results
+          name: playwright-results-${{ matrix.shard }}
           path: test-results
           retention-days: 7
+
+  # Preserve the existing required check name for branch protection.
+  browser:
+    name: Browser tests
+    needs: browser-shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require every browser shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.browser-shards.result }}
+        run: test "$SHARD_RESULT" = success
 
   docker:
     name: Docker images
