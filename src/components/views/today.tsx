@@ -36,7 +36,7 @@ function greeting(now: Date, timeZone: string): string {
 export function TodayView({ state }: { state: AppState }) {
   const { schedule, personal, now, today, timeZone, context } = state;
   const next = useMemo(() => nextClass(schedule, now, personal), [schedule, now, personal]);
-  const following = useMemo(() => next?.status === 'current' ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
+  const following = useMemo(() => next ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
   const day = useMemo(() => { try { return resolveDay(schedule, today, personal); } catch { return null; } }, [schedule, today, personal]);
   // Once today's last period ends, the timeline and its lunch follow the same date as Up next.
   const displayDate = next && next.date > today ? next.date : today;
@@ -155,7 +155,8 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
   const meta = [next.class && next.class.name !== next.label ? next.label : null, next.class?.room ? formatRoom(next.class.room) || null : null, next.class?.teacher ?? null].filter(Boolean);
   // Light class colours (amber, lime, yellow) are darkened just enough for white text to reach 4.5:1.
   const base = nowCardBase(color.dot);
-  return <Card className="hero-card rounded-3xl text-white shadow-float ring-0" style={{ background: `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)` }} role="region" aria-label="Next class">
+  const setup = !hasSetup && !next.class && next.kind === 'class';
+  return <Card className={cn('hero-card rounded-3xl text-white shadow-float ring-0', following && 'pb-0')} style={{ background: heroGradient(base) }} role="region" aria-label="Next class">
     <CardContent className="grid gap-5 px-5 py-1 sm:px-7 sm:py-3">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="grid min-w-0 gap-2">
@@ -175,15 +176,36 @@ function NowCard({ next, following, now, today, onSetup, onFixSchedule, privateS
         </div>
       </div>
       {current && <Progress value={(elapsed / total) * 100} aria-label="Period progress" aria-valuetext={`${elapsed} of ${total} minutes`} className="h-2 bg-white/20 *:data-[slot=progress-indicator]:bg-white *:data-[slot=progress-indicator]:transition-[transform] *:data-[slot=progress-indicator]:duration-1000 *:data-[slot=progress-indicator]:ease-linear" />}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[13.5px] font-medium text-white">
-        <span className="inline-flex items-center gap-2">
+      {(!following || setup) && <div className="flex flex-wrap items-center justify-between gap-2 text-[13.5px] font-medium text-white">
+        {!following && <span className="inline-flex items-center gap-2">
           <Icon name="arrowRight" size={14} className="text-white/60" />
-          {following ? <>Then <strong className="font-bold text-white">{following.class?.name ?? following.label}</strong> at <span className="tabular-nums">{formatTime(following.start)}</span>{following.date !== next.date ? ` ${relativeDate(following.date, today)}` : ''}</> : current ? 'Last period of the day' : `${next.cycleDayLabel}`}
-        </span>
-        {!hasSetup && !next.class && next.kind === 'class' && <button type="button" className="rounded-full bg-white/15 px-3 py-1 font-bold text-white ring-1 ring-inset ring-white/25 hover:bg-white/25" onClick={onSetup}>Add your classes</button>}
-      </div>
+          {current ? 'Last period of the day' : next.cycleDayLabel}
+        </span>}
+        {setup && <button type="button" className="rounded-full bg-white/15 px-3 py-1 font-bold text-white ring-1 ring-inset ring-white/25 hover:bg-white/25" onClick={onSetup}>Add your classes</button>}
+      </div>}
     </CardContent>
+    {following && <FollowingBlock period={following} label={current ? 'Next' : 'Then'} sameDay={following.date === next.date} today={today} />}
   </Card>;
+}
+
+const heroGradient = (base: string) => `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)`;
+
+/** The period after the Now card's, as a full-width block in its own class colour along the card's bottom edge. */
+export function FollowingBlock({ period, label, sameDay, today }: { period: NonNullable<ReturnType<typeof nextClass>>; label: string; sameDay: boolean; today: string }) {
+  const name = period.class?.name ?? period.label;
+  const base = nowCardBase(classColor(period.class?.id, period.kind, period.class?.color).dot);
+  const time = sameDay ? formatTime(period.start) : `${relativeDate(period.date, today, { weekday: 'long' })} ${formatTime(period.start)}`;
+  const meta = [period.class?.room ? formatRoom(period.class.room) || null : null, period.class?.teacher ?? null].filter(Boolean);
+  return <div className="grid gap-1 border-t border-white/20 px-5 pt-3 pb-3.5 sm:px-7" style={{ background: heroGradient(base) }} aria-label={`${label}: ${name}`} role="group">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/85">{label}</span>
+      <strong className="min-w-0 text-[15.5px] font-extrabold tracking-[-0.01em] text-white">{name}</strong>
+      <span className="ml-auto rounded-full bg-white/15 px-2.5 py-0.5 text-[13px] font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{time}</span>
+    </div>
+    {meta.length > 0 && <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] font-medium text-white">
+      {meta.map((entry, index) => <span key={entry} className="inline-flex items-center gap-2.5">{index > 0 && <span aria-hidden="true" className="size-1 rounded-full bg-white/50" />}{entry}</span>)}
+    </p>}
+  </div>;
 }
 
 /**
