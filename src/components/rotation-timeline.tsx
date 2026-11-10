@@ -73,7 +73,8 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
         })}
       </ChoiceGroup>
     </div>}
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+    {/* Inset like the timeline's rows (their px-2.5 is room for the hover tile), so the day name lines up with the times. */}
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-2.5">
       <div className="grid min-w-0 gap-0.5">
         <h3 className="flex flex-wrap items-center gap-2 text-[15.5px] font-bold tracking-tight">{day.label}{multi && next && <span className="font-semibold text-muted-foreground">· {relativeDate(next, today, { weekday: 'long' })}</span>}{adjusted && <Chip tone="now">Adjusted</Chip>}</h3>
         <Hint>{periods.length === 0 ? 'No periods' : `${periods.length} periods · ${formatRange(periods[0].start, periods[periods.length - 1].end)}`}</Hint>
@@ -83,6 +84,6 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
         {next && onJump && <Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => onJump(next)}>Full schedule</Button>}
       </div>
     </div>
-    {periods.length > 0 ? <Timeline periods={periods} now={BEFORE_ALL} /> : <p className="py-4 text-sm text-muted-foreground">No periods on this day.</p>}
+    {periods.length > 0 ? <Timeline periods={periods} now={BEFORE_ALL} /> : <p className="px-2.5 py-4 text-sm text-muted-foreground">No periods on this day.</p>}
   </div>;
 }

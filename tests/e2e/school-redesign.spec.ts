@@ -96,6 +96,10 @@ test('the redesigned School page shows one section beside the school card, and t
   await expect(rotation.getByRole('heading', { level: 3 })).toContainText('Day 8');
   await expect(rotation.getByRole('listitem')).toHaveText([/8:00 AM.*9:00 AM.*US History.*D · Room 305 · Mrs\. Lin/, /9:10 AM.*Algebra II/, /10:15 AM.*Lunch/, /10:50 AM.*Chemistry/]);
   await expect(rotation.getByText('Now', { exact: true })).toHaveCount(0);
+  // The day's name starts on the same line as the timeline's times.
+  const headingLeft = (await rotation.getByRole('heading', { level: 3 }).boundingBox())!.x;
+  const timeLeft = (await rotation.getByRole('listitem').first().getByText('8:00 AM').boundingBox())!.x;
+  expect(Math.abs(headingLeft - timeLeft)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath('rotation-desktop.png'), fullPage: true });
 
   await days.getByRole('radio', { name: /^Day 2, next/ }).click();
