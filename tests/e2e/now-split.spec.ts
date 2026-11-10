@@ -236,6 +236,17 @@ test('a beta member picks the line, the block or the split card in Account, and 
 });
 
 for (const width of [390, 1280]) {
+  test(`in the beta the line names the next class between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
+    const card = await open(page, context, '09:04', width, { card: 'classic' });
+    await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
+    const line = card.getByText('Then Lunch at 10:15 AM');
+    await expect(line).toBeVisible();
+    expect(parseFloat(await line.evaluate((element) => getComputedStyle(element.parentElement!).fontSize))).toBeGreaterThanOrEqual(16);
+    await shoot(card, `line-${width}-0904`, testInfo);
+  });
+}
+
+for (const width of [390, 1280]) {
   test(`the block names the next class under the card, between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
     const card = await open(page, context, '08:36', width, { card: 'block' });
     await expect(card.getByRole('heading', { level: 2, name: 'Digital Design' })).toBeVisible();
@@ -271,6 +282,11 @@ test('outside the beta there is no choice in Account, and the card keeps its lin
       const account = visitor.getByRole('dialog', { name: 'Account', exact: true });
       await expect(account.getByText('Accent color', { exact: true }).first()).toBeVisible();
       await expect(account.getByRole('radiogroup', { name: 'Next class on the Now card' })).toHaveCount(0);
+      // Between periods its line still names the cycle day, not the class after the next one.
+      await account.press('Escape');
+      await setTime(visitor, '09:04');
+      await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
+      await expect(card.getByText('Then Lunch at')).toHaveCount(0);
     } finally { await other.close(); }
   }
 });
