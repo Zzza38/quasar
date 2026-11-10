@@ -488,7 +488,10 @@ test('manually placed videos use existing blank space without changing layout', 
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true }]);
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.clock.setFixedTime(new Date('2026-09-17T12:00:00Z'));
+  // The account lookup remounts the mod menu; wait before entering its code.
+  const modsReady = page.waitForResponse(response => response.url().includes('/api/trpc/') && response.url().includes('mods') && response.ok());
   await page.goto('/today');
+  await modsReady;
   await expect(page.locator('[data-slot="sidebar-container"]')).toBeVisible();
   await enterCode(page);
   await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
@@ -525,19 +528,39 @@ test('manually placed videos use existing blank space without changing layout', 
   const snapshot = async (name: string) => {
     const overlaps = await page.evaluate(() => {
       const scope = [...document.querySelectorAll('[role="dialog"]')].find(element => element.getAttribute('data-state') === 'open') ?? document.body;
-      const videos = [...scope.querySelectorAll('[data-attention-slot]')].map(element => ({ rect: element.getBoundingClientRect(), zone: element.getAttribute('data-attention-slot') }));
+      // Bounding boxes include pixels clipped by scroll containers. Compare only
+      // painted regions, so scrolled-out videos cannot overlap the fixed sheet header.
+      const visibleRect = (element: Element, rect = element.getBoundingClientRect()) => {
+        let { left, right, top, bottom } = rect;
+        left = Math.max(left, 0); right = Math.min(right, window.innerWidth);
+        top = Math.max(top, 0); bottom = Math.min(bottom, window.innerHeight);
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          const bounds = parent.getBoundingClientRect();
+          if (style.overflowX !== 'visible') {
+            left = Math.max(left, bounds.left + parent.clientLeft);
+            right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth);
+          }
+          if (style.overflowY !== 'visible') {
+            top = Math.max(top, bounds.top + parent.clientTop);
+            bottom = Math.min(bottom, bounds.top + parent.clientTop + parent.clientHeight);
+          }
+        }
+        return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+      };
+      const videos = [...scope.querySelectorAll('[data-attention-slot]')].map(element => ({ rect: visibleRect(element), zone: element.getAttribute('data-attention-slot') }));
       const obstacles = [...scope.querySelectorAll('button, input, textarea, [data-slot="card"], .app-main li')]
         .filter(element => !element.hasAttribute('data-attention-gap') && !element.closest('[aria-hidden="true"], [inert]') && getComputedStyle(element).visibility !== 'hidden')
-        .map(element => ({ rect: element.getBoundingClientRect(), label: element.outerHTML.slice(0, 160) }));
+        .map(element => ({ rect: visibleRect(element), label: element.outerHTML.slice(0, 160) }));
       const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
       const range = document.createRange();
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         if (!node.textContent?.trim() || !node.parentElement || node.parentElement.closest('script, style, .sr-only, [aria-hidden="true"], [inert]')) continue;
         range.selectNodeContents(node);
         if (getComputedStyle(node.parentElement).visibility === 'hidden') continue;
-        obstacles.push(...[...range.getClientRects()].map(rect => ({ rect, label: node.textContent! })));
+        obstacles.push(...[...range.getClientRects()].map(rect => ({ rect: visibleRect(node.parentElement!, rect), label: node.textContent! })));
       }
-      return videos.flatMap(video => obstacles.filter(item => { const a = video.rect, b = item.rect; return b.width > 0 && b.height > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }).map(item => ({ zone: video.zone, content: item.label, video: video.rect.toJSON(), obstacle: item.rect.toJSON() })));
+      return videos.flatMap(video => obstacles.filter(item => { const a = video.rect, b = item.rect; return a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }).map(item => ({ zone: video.zone, content: item.label, video: video.rect.toJSON(), obstacle: item.rect.toJSON() })));
     });
     expect(overlaps, `Videos cover content on ${name}`).toEqual([]);
     expect(await page.locator('[data-attention-slot]').evaluateAll(elements => elements.every(element => getComputedStyle(element).position === 'static' && element.parentElement?.hasAttribute('data-attention-gap')))).toBe(true);
