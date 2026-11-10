@@ -162,7 +162,13 @@ export class SchoologyService {
         response = await fetcher(url, { headers: { Authorization: schoologyAuthorization(config, token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_DEADLINE_MS) });
       } catch { return fail('SERVICE_UNAVAILABLE', 'Couldn’t reach Schoology. Try again in a minute.'); }
       const location = response.headers.get('location');
-      if (response.status >= 300 && response.status < 400 && location) { url = new URL(location, url).toString(); continue; }
+      if (response.status >= 300 && response.status < 400 && location) {
+        let target: URL;
+        try { target = new URL(location, url); } catch { return fail('SERVICE_UNAVAILABLE', 'Schoology sent an invalid redirect.'); }
+        if (target.origin !== new URL(this.api).origin) return fail('SERVICE_UNAVAILABLE', 'Schoology redirected somewhere unexpected. Try again in a minute.');
+        url = target.toString();
+        continue;
+      }
       return response;
     }
     return fail('SERVICE_UNAVAILABLE', 'Schoology kept redirecting. Try again in a minute.');

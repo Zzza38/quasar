@@ -246,7 +246,7 @@ export function AiSettings() {
       </div>
     </div>
     <PlusBlock online={online} accountId={account.accountId} onChanged={reload} />
-    <Hint>Sorting and Break it down send task titles, notes, due dates and your class names to the AI provider. Saved keys are encrypted and never shown again.</Hint>
+    <Hint>In the AI beta, automatic sorting, duplicate checks and test-and-quiz checks send task titles, notes and due dates to the AI provider, including recently completed tasks for duplicate checks. Sorting and planning also use class names, teachers and your timetable. Manual AI tools send the tasks, photos or pasted text you submit. Automatic sorting can label tasks and duplicate checks can merge matching tasks; you can undo merges. The provider is configured by Quasar unless you add your own key or connect OpenRouter in Account. Saved keys are encrypted and never shown again.</Hint>
     {error && <Hint tone="danger" role="alert">{error}</Hint>}
     {!online && <Hint>Connect to the internet to change AI settings.</Hint>}
     {adding && <AiKeyModal accountId={account.accountId} onClose={() => setAdding(false)} onSaved={(next) => { setStatus(next); setAdding(false); }} />}

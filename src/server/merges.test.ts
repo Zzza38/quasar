@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { TRPCError } from '@trpc/server';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { MergeService } from './merges';
@@ -29,6 +30,30 @@ function fixture() {
 }
 
 describe('Merging tasks', () => {
+  it.each(['deleted', 'changed'])('skips only a %s duplicate group after the model wait', async mutation => {
+    const f = fixture();
+    for (const id of ['a', 'b', 'c', 'd']) f.put(id, { title: 'Lab' });
+    const fetcher = vi.fn<AiFetch>(async () => {
+      if (mutation === 'deleted') f.db.prepare('UPDATE entities SET deleted=1 WHERE owner_id=? AND id=?').run(f.student, 'a');
+      else f.put('a', { title: 'Different assignment' }, 2);
+      return reply({ groups: [{ ids: ['a', 'b'], sure: true, reason: 'Same lab' }, { ids: ['c', 'd'], sure: true, reason: 'Same lab' }] });
+    });
+    const ai = new AiService(f.service, { config: server, fetcher, inBeta: () => true, codex: null });
+    const result = await ai.duplicates(f.student, { auto: false });
+    expect(result.groups.map(group => group.ids)).toEqual([['c', 'd']]);
+    expect(f.db.prepare('SELECT COUNT(*) AS n FROM ai_duplicate_checks WHERE owner_id=?').get(f.student)).toEqual({ n: 4 });
+  });
+
+  it.each([new Error('database failed'), new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'database failed' })])('propagates unrelated duplicate lookup errors: %s', async failure => {
+    const f = fixture();
+    f.put('a', { title: 'Lab' }); f.put('b', { title: 'Lab' });
+    const fetcher = vi.fn<AiFetch>(async () => reply({ groups: [{ ids: ['a', 'b'], sure: true, reason: 'Same lab' }] }));
+    const ai = new AiService(f.service, { config: server, fetcher, inBeta: () => true, codex: null });
+    const lookup = vi.spyOn(MergeService.prototype, 'keepOf').mockImplementation(() => { throw failure; });
+    try { await expect(ai.duplicates(f.student, { auto: false })).rejects.toThrow('database failed'); }
+    finally { lookup.mockRestore(); }
+  });
+
   it('keeps the live calendar import and copies over what only the student’s copy has', () => {
     const mine = { id: 'mine', task: { ...base, title: 'unit 2 test', classId: bio, priority: 'high' as const, notes: 'Study ch 4-5', completed: true, completedAt: '2026-10-28T20:00:00.000Z',
       subtasks: [{ id: '8b0c2f63-8d3f-4c3a-9b8e-3a5b1d2e4f60', title: 'Flashcards', completed: true }] } };

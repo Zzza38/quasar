@@ -39,8 +39,8 @@ export const api = createTRPCClient<AppRouter>({
     condition: (op) => op.path === 'chat.send',
     true: httpLink({ url: '/api/trpc', fetch: timedFetch(REQUEST_TIMEOUT_MS) }),
     false: splitLink({
-      // AI requests (src/server/ai.ts) also wait on a model, for up to 60 s; photo reads and study sets up to 100 s.
-      condition: (op) => op.path === 'scan.schedule' || (op.path.startsWith('ai.') && op.path !== 'ai.status') || op.path === 'photoTasks.read' || op.path === 'study.create',
+      // AI requests also wait on a model: task helpers up to 60 s, plans up to 75 s, photo reads and study sets up to 100 s.
+      condition: (op) => op.path === 'scan.schedule' || (op.path.startsWith('ai.') && op.path !== 'ai.status') || op.path === 'photoTasks.read' || op.path === 'study.create' || op.path === 'plan.make' || op.path === 'plan.estimate',
       true: httpLink({ url: '/api/trpc', fetch: timedFetch(SCAN_TIMEOUT_MS) }),
       false: httpBatchLink({ url: '/api/trpc', fetch: timedFetch(REQUEST_TIMEOUT_MS) }),
     }),

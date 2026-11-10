@@ -155,7 +155,7 @@ function Flashcards({ accountId, set, onProgress }: { accountId: string; set: St
     if (event.key === 'ArrowRight') { event.preventDefault(); mark(true); }
     else if (event.key === 'ArrowLeft') { event.preventDefault(); mark(false); }
   };
-  const down = (event: PointerEvent) => { swipe.current = { x: event.clientX, y: event.clientY, moved: false }; };
+  const down = (event: PointerEvent<HTMLElement>) => { event.currentTarget.setPointerCapture(event.pointerId); swipe.current = { x: event.clientX, y: event.clientY, moved: false }; };
   const move = (event: PointerEvent) => {
     const start = swipe.current;
     if (!start) return;

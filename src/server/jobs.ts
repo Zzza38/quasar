@@ -40,8 +40,10 @@ export function errorSummary(error: unknown): string {
 
 /**
  * Single sequential loop: a slow cycle cannot overlap the following cycle. One cycle runs
- * calendar refresh → class-schedule sync → Schoology class tags → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
+ * calendar refresh → class-schedule sync → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
+ * Schoology runs in a separate lane with at most one pass active, so slow API calls cannot delay reminders.
+ * Stop waits for both lanes before the caller closes the database.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
   calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), schoology: new SchoologyService(new Service(db)), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
@@ -51,6 +53,7 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void>;
+  let schoologyPending: Promise<void> | undefined;
   const push = async (job: Exclude<Job, 'calendar' | 'schedule'>, run: () => Promise<{ failed: number }>) => {
     const { failed } = await run();
     if (failed > 0) options.onFailures?.(job, failed);
@@ -60,8 +63,11 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     if (stopped) return;
     try { await jobs.schedule.refreshDue(); } catch (error) { options.onError?.('schedule', error); }
     if (stopped) return;
-    // Class tags for imported Schoology tasks, right after the calendar refresh that brings new ones in.
-    try { await push('schoology', () => jobs.schoology.tagAll()); } catch (error) { options.onError?.('schoology', error); }
+    if (!schoologyPending) {
+      schoologyPending = push('schoology', () => jobs.schoology.tagAll())
+        .catch(error => { options.onError?.('schoology', error); })
+        .finally(() => { schoologyPending = undefined; });
+    }
     if (stopped) return;
     try { await push('notifications', () => jobs.notifications.deliverDue()); } catch (error) { options.onError?.('notifications', error); }
     if (stopped) return;
@@ -77,5 +83,6 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     stopped = true;
     if (timer) clearTimeout(timer);
     await pending;
+    await schoologyPending;
   } };
 }

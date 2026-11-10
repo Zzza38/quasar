@@ -49,6 +49,25 @@ const header = (fetcher: Mock<SchoologyFetch>, path: string) => {
 };
 
 describe('Connect Schoology', () => {
+  it('follows a relative redirect on the configured API origin with a fresh signature', async () => {
+    const fetcher = schoologyServer({ 'users/me': () => new Response(null, { status: 303, headers: { location: '/v1/users/4242' } }) });
+    const f = fixture({ fetcher, config: { ...config, api: 'https://schoology-proxy.example/v1' } });
+    await f.schoology.start(f.student);
+    await f.schoology.finish(f.student, { oauthToken: 'req-token' });
+    expect(fetcher.mock.calls.every(([url]) => new URL(url).origin === 'https://schoology-proxy.example')).toBe(true);
+    expect(header(fetcher, '/users/me')).not.toBe(header(fetcher, '/users/4242'));
+    expect(header(fetcher, '/users/4242')).toContain('oauth_token="acc-token"');
+  });
+
+  it.each(['https://evil.example/v1/users/4242', 'http://api.schoology.com/v1/users/4242', '//evil.example/users/4242'])(
+    'rejects credential-bearing redirects to %s', async location => {
+      const fetcher = schoologyServer({ 'users/me': () => new Response(null, { status: 303, headers: { location } }) });
+      const f = fixture({ fetcher });
+      await f.schoology.start(f.student);
+      await expect(f.schoology.finish(f.student, { oauthToken: 'req-token' })).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      expect(fetcher.mock.calls.every(([url]) => new URL(url).origin === 'https://api.schoology.com')).toBe(true);
+    });
+
   it('reads its settings and signs requests with PLAINTEXT', () => {
     expect(schoologyConfig({})).toBeNull();
     expect(schoologyConfig({ SCHOOLOGY_CONSUMER_KEY: 'k', SCHOOLOGY_CONSUMER_SECRET: 's' })).toEqual({ key: 'k', secret: 's', host: 'app.schoology.com' });

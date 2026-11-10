@@ -33,25 +33,28 @@ export function ParentSummarySettings({ accountId, online }: { accountId: string
   const [previewing, setPreviewing] = useState(false);
   const [confirmNew, setConfirmNew] = useState(false);
   const [copied, setCopied] = useState(false);
+  const saving = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   useEffect(() => { api.parentSummary.status.query().then(setStatus, () => setStatus(null)); }, []);
   if (!status) return null;
 
-  const run = async <T,>(key: string, call: () => Promise<T>, done: (result: T) => void) => {
+  const run = async <T,>(key: string, call: () => Promise<T>, done: (result: T) => void, rollback?: () => void) => {
+    if (saving.current) return;
+    saving.current = true;
     setPending(key); setError('');
-    try { done(await call()); } catch (err) { setError(errorMessage(err)); }
-    finally { setPending(null); }
+    try { done(await call()); } catch (err) { rollback?.(); setError(errorMessage(err)); }
+    finally { saving.current = false; setPending(null); }
   };
   const withLink = (result: { token: string; status: Status }) => { setStatus(result.status); setLink(`${window.location.origin}/summary/${result.token}`); setCopied(false); };
   const toggle = (on: boolean) => on
     ? run('enable', () => api.parentSummary.enable.mutate({ accountId }), withLink)
     : run('disable', () => api.parentSummary.disable.mutate({ accountId }), (next) => { setStatus(next); setLink(null); });
   const choose = (section: SummarySection, value: boolean) => {
-    if (!status.enabled) return;
+    if (!status.enabled || saving.current) return;
     const sections: SummarySections = { ...status.sections, [section]: value };
     setStatus({ ...status, sections });
-    void run('sections', () => api.parentSummary.setSections.mutate({ accountId, sections }), setStatus);
+    void run('sections', () => api.parentSummary.setSections.mutate({ accountId, sections }), setStatus, () => setStatus(status));
   };
   const copy = async () => {
     if (!link) return;
@@ -82,7 +85,7 @@ export function ParentSummarySettings({ accountId, online }: { accountId: string
       <fieldset className="grid gap-2">
         <legend className="mb-1.5 text-[13px] font-semibold">What the link shows</legend>
         {SECTION_ORDER.map((section) => <div key={section} className="flex items-start gap-2.5">
-          <Checkbox id={`${id}-${section}`} className="mt-0.5" checked={status.sections[section]} disabled={!online || pending === 'enable' || pending === 'disable'}
+          <Checkbox id={`${id}-${section}`} className="mt-0.5" checked={status.sections[section]} disabled={!online || busy}
             onCheckedChange={(value) => choose(section, value === true)} />
           <label htmlFor={`${id}-${section}`} className="cursor-pointer text-[13.5px] leading-snug">{SECTION_LABELS[section]}</label>
         </div>)}

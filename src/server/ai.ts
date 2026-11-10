@@ -17,6 +17,7 @@ import { BillingService, stripeConfig } from './billing';
 import { MergeService, type MergeEntry } from './merges';
 import { SCAN_REASONING, scanConfig, type ScanImage, type ScanReasoning } from './scan';
 import type { Service } from './service';
+import { readEntity } from './entities';
 
 /**
  * AI task helpers (README "AI task helpers"), behind the `ai-tasks` beta:
@@ -354,8 +355,18 @@ export class AiService {
     this.reserve(userId, 'ai.dedup', resolved, { tasks: tasks.length, auto: auto ? 1 : 0 });
     const body = await this.complete(resolved, DUPES_SCHEMA, DUPES_SYSTEM, dupesPrompt(tasks, this.personal(userId), auto ? fresh : null), SORT_DEADLINE_MS);
     const merges = new MergeService(this.service);
-    const groups = interpretDuplicates(body, tasks, auto ? fresh : null).filter(group => !merges.apart(userId, group.ids))
-      .map(group => ({ ...group, keepId: merges.keepOf(userId, group.ids) }));
+    const snapshots = new Map(tasks.map(entry => [entry.id, entry.task]));
+    const groups = interpretDuplicates(body, tasks, auto ? fresh : null).flatMap(group => {
+      // The model answered about these snapshots, not edits made while it was running.
+      if (group.ids.some(id => {
+        const current = readEntity(this.db, userId, id);
+        const parsed = current?.kind === 'task' && !current.deleted ? taskSchema.safeParse(current.data) : null;
+        return !parsed?.success || JSON.stringify(parsed.data) !== JSON.stringify(snapshots.get(id));
+      })) return [];
+      if (merges.apart(userId, group.ids)) return [];
+      try { return [{ ...group, keepId: merges.keepOf(userId, group.ids) }]; }
+      catch (error) { if (error instanceof TRPCError && error.code === 'NOT_FOUND') return []; throw error; }
+    });
     const save = this.db.prepare('INSERT INTO ai_duplicate_checks(owner_id,task_id,content_hash) VALUES(?,?,?) ON CONFLICT(owner_id,task_id) DO UPDATE SET content_hash=excluded.content_hash');
     this.db.transaction(() => { for (const entry of tasks) save.run(userId, entry.id, hash(entry.task)); })();
     if (!auto) return { checked: true, merged: [], groups };
@@ -365,7 +376,7 @@ export class AiService {
       if (!group.sure || !autoMergeable(group.ids.map(id => byId.get(id)!))) { left.push(group); continue; }
       // A task edited or deleted on another device since the list was read fails the merge, and stays a suggestion.
       try { merged.push(merges.merge(userId, { keepId: group.keepId, removeIds: group.ids.filter(id => id !== group.keepId), reason: group.reason }, 'ai')); }
-      catch (error) { if (!(error instanceof TRPCError)) throw error; left.push(group); }
+      catch (error) { if (!(error instanceof TRPCError) || error.code !== 'NOT_FOUND') throw error; left.push(group); }
     }
     return { checked: true, merged, groups: left };
   }

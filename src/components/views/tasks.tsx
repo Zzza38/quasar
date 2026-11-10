@@ -225,8 +225,8 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
         <Field label="Class" htmlFor="task-class"><Select id="task-class" value={draft.classId ?? ''} onChange={(event) => setDraft({ ...draft, classId: event.target.value || null })}><option value="">No class</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>{cls.name}</option>)}{draft.classId && !classes.some((cls) => cls.id === draft.classId) && <option value={draft.classId}>Removed class</option>}</Select></Field>
         <Field label="Priority" htmlFor="task-priority"><Select id="task-priority" value={draft.priority ?? 'normal'} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Task['priority'] })}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></Select></Field>
       </div>
-      {workBeta && <Field label="Work happens" htmlFor="task-work-location" hint={draft.workLocationSource === 'ai' ? 'Labeled by AI. You can change it.' : 'AI labels new tasks when it can tell. Your choice takes priority.'}>
-        <Select id="task-work-location" value={workLocationOf(draft) ?? ''} onChange={event => {
+      {workBeta && <Field label="Work happens" htmlFor="task-work-location" hint={draft.workLocationSource === 'ai' ? 'Labeled by AI. You can change it.' : !draft.workLocation && workLocationOf(draft) === 'in-class' ? 'The title suggests in-class work. Choose a label to save it. Your choice takes priority.' : 'AI labels new tasks when it can tell. Your choice takes priority.'}>
+        <Select id="task-work-location" value={draft.workLocation ?? ''} onChange={event => {
           const { workLocation: _location, workLocationSource: _source, ...rest } = draft;
           setDraft(event.target.value ? { ...rest, workLocation: event.target.value as Task['workLocation'], workLocationSource: 'manual' } : rest);
         }}>

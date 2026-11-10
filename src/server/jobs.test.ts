@@ -5,6 +5,27 @@ import type {Db} from './db';
 const idle=()=>({deliverChat:vi.fn().mockResolvedValue({sent:0,failed:0}),deliverSupport:vi.fn().mockResolvedValue({sent:0,failed:0}),prune:vi.fn()});
 
 describe('background jobs',()=>{
+  it('keeps reminders running across cycles while one Schoology pass is blocked', async () => {
+    vi.useFakeTimers();
+    let finish!: (value: { failed: number }) => void;
+    const tagAll = vi.fn(() => new Promise<{ failed: number }>(resolve => { finish = resolve; }));
+    const deliverDue = vi.fn().mockResolvedValue({ failed: 0 });
+    const { deliverChat, deliverSupport, prune } = idle();
+    try {
+      const worker = startJobs({} as Db, {}, { calendar: { refreshDue: async () => 0 }, schedule: { refreshDue: async () => 0 }, schoology: { tagAll }, notifications: { deliverDue, deliverChat, deliverSupport }, chat: { prune } });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(tagAll).toHaveBeenCalledTimes(1);
+      expect(deliverDue).toHaveBeenCalledTimes(3);
+      expect(deliverChat).toHaveBeenCalledTimes(3);
+      expect(deliverSupport).toHaveBeenCalledTimes(3);
+      let stopped = false;
+      const stopping = worker.stop().then(() => { stopped = true; });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      finish({ failed: 0 });
+      await stopping;
+    } finally { vi.useRealTimers(); }
+  });
   it('runs sequentially without overlap and stops gracefully during an active refresh',async()=>{
     vi.useFakeTimers();
     let finish!:()=>void;
