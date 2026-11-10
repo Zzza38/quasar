@@ -1,22 +1,22 @@
 # Mockups
 
-One current set. Older rounds (phone Messages entry, sidebar count badges, countdown hover, classmates popup, landing) are in git history.
+One current set. Older rounds (School page, phone Messages entry, sidebar count badges, countdown hover, classmates popup, landing) are in git history.
 
-## School page redesign
+## Lunch menu redesign
 
-Second round. The owner dropped the first round's Today board (it repeated the Today tab) and rotation grid (it repeated Classes), and asked for five mixes of the other three: tabs, a side rail, and list plus detail. The page stays about the school, not the student's day. Each mockup is responsive: the sidebar shell at desktop widths, the phone shell with the dock under 1024px.
+The Lunch menu section of the redesigned School page. The owner picked the week list (one row per day previewing a dish from each station; tap a row for the full menu) and asked for the inside of an open day to be redesigned, so this set is five ways to draw that inside. Every one is drawn from the generic menu shape (days, each with notes and stations, each station with dishes), and never assumes which station is the main one or what the stations are called.
 
-Open `school.html?v=1` through `?v=5`:
+Open `lunch.html?v=1` through `?v=5`. Add `&view=phones` for three phone frames side by side, one per sample school, or `&d=fa`, `&d=fw` or `&d=edge` to pick the school in the desktop view.
 
-| `v` | Direction |
-| --- | --------- |
-| 1 | Tabs with a rail: Schedule, Lunch and Changes tabs in the main column, the school card, setup and links in a fixed right rail. Lunch tab shown. |
-| 2 | Expanding list with a rail: grouped rows that open in place, with the same right rail. Proposed changes is open. |
-| 3 | School card as the menu: the school card and a list of sections on the left, the chosen section on the right. Rotation shown. Phones show the left column alone. |
-| 4 | Overview tab: tabs across the top, and the first tab is the whole page as three columns of summary rows. |
-| 5 | Summary tiles as tabs: four tiles that each show a live value and switch the content below. Setup shown. |
+| `v` | Inside an open day |
+| --- | ------------------ |
+| 1 | Lead dish: each station's first dish as a headline, the rest as one quieter line. |
+| 2 | Station tiles: each station is a small tile, packed in columns. |
+| 3 | Dish chips: every dish is a chip under its station. |
+| 4 | Menu card: the station name with a rule beside it, dishes listed under it. |
+| 5 | Ruled table: station on the left, dishes on the right, a hairline between stations. |
 
-The sample data is Monday, November 9, Day 3 of a six-day rotation.
+The sample menus are the week of November 9, 2026: Friends Academy (`fa`, real), a Fort Worth ISD high school (`fw`, real), and a made-up worst case (`edge`: a day with no station names, a nine-station day with a long dish name, a note-only day, an empty day and a weekend day).
 
 ## Serving
 
