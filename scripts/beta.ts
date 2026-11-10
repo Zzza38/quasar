@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import Database from 'better-sqlite3';
+import { removeRetiredBetaMemberships } from '../src/server/beta-memberships';
 import { parseArgs } from 'node:util';
 import { normalizeBetaCode } from '../src/domain/betas';
 import { SHORT_MANUAL_CODE, betaRegistryPath, createBeta, editBeta, makeBetaPrivate, makeBetaPublic, newBetaCode, readBetaRegistry, removeBeta, setBetaOpen, writeBetaRegistry, type BetaRegistry } from '../src/server/beta-registry';
@@ -7,6 +9,7 @@ import { SHORT_MANUAL_CODE, betaRegistryPath, createBeta, editBeta, makeBetaPriv
  * Creates and changes betas (README "Running a beta"). The beta list is betas.json beside the database (or BETAS_PATH),
  * never committed. For the live site, run this in the production checkout; the server picks changes up immediately.
  *
+ *   npm run beta -- cleanup              (delete memberships of previously retired betas)
  *   npm run beta -- list
  *   npm run beta -- create <key> --name "Name" [--description "What to try"] [--max 20] [--code "MY-CODE" | --public]
  *   npm run beta -- edit <key> [--name "…"] [--description "…"] [--max 20 | --max none]
@@ -22,6 +25,7 @@ import { SHORT_MANUAL_CODE, betaRegistryPath, createBeta, editBeta, makeBetaPriv
 if (existsSync('.env.local')) process.loadEnvFile('.env.local');
 
 const USAGE = `Usage:
+  npm run beta -- cleanup              (delete memberships of previously retired betas)
   npm run beta -- list
   npm run beta -- create <key> --name "Name" [--description "What to try"] [--max 20] [--code "MY-CODE" | --public]
   npm run beta -- edit <key> [--name "Name"] [--description "Text"] [--max 20 | --max none]
@@ -49,6 +53,15 @@ function describe(registry: BetaRegistry, key: string): string {
   return `${beta.key}: ${beta.name}\n  ${beta.public ? 'public: anyone joins from Account → Betas' : `code: ${beta.code}`}\n  ${beta.open ? 'open' : 'joining paused'}, ${beta.maxMembers === null ? 'no member limit' : `up to ${beta.maxMembers} members`}${beta.description ? `\n  ${beta.description}` : ''}`;
 }
 
+function cleanup(registry: BetaRegistry): void {
+  const db = new Database(process.env.DATABASE_PATH || './data/quasar.sqlite', { fileMustExist: true });
+  try {
+    db.pragma('busy_timeout = 5000');
+    const removed = removeRetiredBetaMemberships(db, registry);
+    console.log(`Removed ${removed} retired beta memberships.`);
+  } finally { db.close(); }
+}
+
 function main(): void {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -62,6 +75,10 @@ function main(): void {
     console.log(`Beta list: ${path}`);
     console.log(registry.betas.length ? registry.betas.map(beta => describe(registry, beta.key)).join('\n') : 'No betas.');
     if (registry.retired.length) console.log(`Retired keys: ${registry.retired.join(', ')}`);
+    return;
+  }
+  if (command === 'cleanup') {
+    cleanup(registry);
     return;
   }
   if (!key) throw new Error(`"${command}" needs a beta key.\n\n${USAGE}`);
@@ -85,6 +102,7 @@ function main(): void {
     throw new Error(`Unknown command "${command}".\n\n${USAGE}`);
   }
   writeBetaRegistry(next, path);
+  if (command === 'remove') cleanup(next);
   console.log(`Updated ${path}`);
   if (command === 'remove') { console.log(`Removed ${key}. Its key is retired; its members are out. Delete its <Beta>/useBeta code next.`); return; }
   console.log(describe(next, key));

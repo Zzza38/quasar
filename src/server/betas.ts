@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { betaCodeSchema, betaDiagnosticsSchema, betaKeySchema, betaRequestKind, type StoredBetaDiagnostics } from '@/domain/betas';
 import { betaForCode, betaRegistryPath, currentBetaRegistry, type BetaDefinition, type BetaRegistry } from './beta-registry';
 import type { Service } from './service';
+import { removeRetiredBetaMemberships } from './beta-memberships';
 
 /**
  * Betas (README "Running a beta"). Which betas exist, and their codes, come from the beta list beside the database
@@ -46,18 +47,24 @@ function currentBuild(): string {
 }
 
 export class BetaService {
-  /** `registry` is read per call, so a change to the beta list applies to the next request. Tests pass their own. */
-  constructor(private readonly service: Service, private readonly registry: () => BetaRegistry = () => currentBetaRegistry()) {}
+  /** `readRegistry` is read per call, so a change to the beta list applies to the next request. Tests pass their own. */
+  constructor(private readonly service: Service, private readonly readRegistry: () => BetaRegistry = () => currentBetaRegistry()) {}
+  private registry(): BetaRegistry {
+    const registry = this.readRegistry();
+    removeRetiredBetaMemberships(this.db, registry);
+    return registry;
+  }
   private get db() { return this.service.db; }
   private beta(key: string): BetaDefinition | undefined { return this.registry().betas.find(beta => beta.key === key); }
 
   /**
    * The betas the member is in, for the workspace (useBeta reads it on the client). Memberships of a beta that is no
-   * longer in the list are ignored. Shipped features keep working independently of their old memberships.
+   * longer in the list are ignored; retired memberships are deleted for all accounts. Shipped features keep working independently of their old memberships.
    */
   joined(userId: string): JoinedBeta[] {
+    const registry = this.registry();
     const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
-    return rows.flatMap(row => { const beta = this.beta(row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt, public: beta.public === true }] : []; });
+    return rows.flatMap(row => { const beta = registry.betas.find(beta => beta.key === row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt, public: beta.public === true }] : []; });
   }
 
   /** Public betas taking testers that the member hasn't joined, for Account → Betas. */
