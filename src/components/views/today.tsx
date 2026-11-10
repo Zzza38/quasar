@@ -8,6 +8,7 @@ import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoo
 import { heroBase } from '@/lib/color';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
+import { taskLink } from '@/lib/task-link';
 import { useBeta } from '../betas';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
@@ -538,6 +539,7 @@ export function TaskRow({ item, state, showDate = true, centered = false, onComp
   const keyboardRef = useRef(false);
   const metaId = useId();
   const { task } = item;
+  const link = taskLink(task);
   const cls = state.personal.classes.find((entry) => entry.id === task.classId);
   const overdue = isOverdue(task, state.today, clockTime(state.now, state.timeZone));
   const dueToday = task.dueDate === state.today && !overdue;
@@ -567,6 +569,6 @@ export function TaskRow({ item, state, showDate = true, centered = false, onComp
       </button>
       {error && <Hint tone="danger" role="alert">{error}</Hint>}
     </div>
-    {task.imported?.url && <a href={task.imported.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0 text-muted-foreground')} aria-label={`Open link for ${task.title}`} title="Open link"><Icon name="externalLink" /></a>}
+    {link && <a href={link} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0 text-muted-foreground')} aria-label={`Open link for ${task.title}`} title="Open link"><Icon name="externalLink" /></a>}
   </li>;
 }
