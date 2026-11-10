@@ -4,7 +4,7 @@ import { AttentionGap } from '../attention-videos';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
-import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
+import { addDays, classColor, daysBetween, formatMinutes, formatMinutesInWords, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { barTint, heroBase } from '@/lib/color';
 import { nowSplit, type NowSplit } from '@/lib/now-split';
 import { Beta } from '../betas';
@@ -228,7 +228,7 @@ function NowSplitCard({ split, current, upcoming, now }: { split: NowSplit; curr
     <div className="ns-card shadow-float" role="region" aria-label="Next class" data-phase={split.phase} style={style}>
       {current && currentBase && <div className="ns-part ns-seg ns-now" style={{ background: heroGradient(currentBase) }}><SplitPart kind="now" period={current} now={now} /></div>}
       {split.gap > 0 && <div className="ns-part ns-seg ns-gap"><div className="ns-box">
-        <span className="ns-gap-label"><span className="ns-gap-word">{split.gapMinutes > 10 ? 'Break' : 'Passing'}</span><b>{formatMinutes(split.gapMinutes)}</b></span>
+        <span className="ns-gap-label"><span className="ns-gap-word">{split.gapMinutes > 10 ? 'Break' : 'Passing'}</span><b>{formatMinutesInWords(split.gapMinutes)}</b></span>
       </div></div>}
       <div className="ns-part ns-seg ns-next" style={{ background: heroGradient(upcomingBase) }}><SplitPart kind={current ? 'next' : 'only'} period={upcoming} now={now} /></div>
       {current && <div className="ns-bar" role="progressbar" aria-label="Period progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(split.progress)} aria-valuetext={`${elapsed} of ${total} minutes`}>
@@ -287,7 +287,8 @@ function Countdown({ label, shortLabel, target, now, split }: { label: string; s
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
   const seconds = Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000));
-  const compact = formatMinutes(Math.ceil(seconds / 60));
+  // The split card spells hours out: at its sizes "1 h" reads as a typo.
+  const compact = (split ? formatMinutesInWords : formatMinutes)(Math.ceil(seconds / 60));
   const exact = formatSeconds(seconds);
   // Refresh the clock in the same event as the state change so the first precise frame is current.
   const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };

@@ -81,6 +81,20 @@ async function shoot(card: Locator, name: string, testInfo: { outputPath: (name:
   if (process.env.NOW_SPLIT_SHOTS) await card.screenshot({ path: join(process.env.NOW_SPLIT_SHOTS, `${name}.png`) });
 }
 
+/** The words of both classes stay inside their own part of the card. */
+async function expectFits(card: Locator) {
+  for (const part of [card.locator('.ns-seg.ns-now'), card.locator('.ns-seg.ns-next')]) {
+    const outer = await box(part);
+    for (const inner of await part.locator('.ns-name, .ns-count, .ns-meta').all()) {
+      // A line this part's size leaves out has no box.
+      const rect = await inner.boundingBox();
+      if (!rect || !await inner.isVisible()) continue;
+      expect(rect.x + rect.width, 'stays inside its part').toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+      expect(rect.y + rect.height, 'stays inside its part').toBeLessThanOrEqual(outer.y + outer.height + 0.5);
+    }
+  }
+}
+
 for (const width of [390, 1280]) {
   const wide = width > 600;
   /** Length along the split: left to right when the card is wide, top to bottom on a phone. */
@@ -154,15 +168,20 @@ for (const width of [390, 1280]) {
     await expect(card.getByRole('heading', { name: 'Pre-Calculus Honors' })).toBeVisible();
     await expect.poll(async () => along(await box(card.locator('.ns-seg.ns-next'))) / along(await box(card))).toBeCloseTo(0.5 * 30 / 35, 2);
     await shoot(card, `split-${width}-1030`, testInfo);
-    for (const part of [card.locator('.ns-seg.ns-now'), card.locator('.ns-seg.ns-next')]) {
-      const outer = await box(part);
-      for (const inner of await part.locator('.ns-name, .ns-count, .ns-meta').all()) {
-        if (!await inner.isVisible()) continue;
-        const rect = await box(inner);
-        expect(rect.x + rect.width, 'stays inside its part').toBeLessThanOrEqual(outer.x + outer.width + 0.5);
-        expect(rect.y + rect.height, 'stays inside its part').toBeLessThanOrEqual(outer.y + outer.height + 0.5);
-      }
-    }
+    await expectFits(card);
+  });
+
+  test(`an hour or more is spelled out and fits its part at ${width}px`, async ({ page, context }, testInfo) => {
+    const card = await open(page, context, '08:00', width);
+    const now = card.locator('.ns-seg.ns-now'), next = card.locator('.ns-seg.ns-next');
+    await expect(now.getByRole('button', { name: 'Ends in 1 hour' })).toBeVisible();
+    await shoot(card, `split-${width}-0800`, testInfo);
+    // Nine minutes in, the next class has only just enough room for words, and it starts in over an hour.
+    await setTime(page, '08:09');
+    await expect(next.getByRole('button', { name: 'Starts in 1 hr 1 min' })).toBeVisible();
+    await expect.poll(async () => along(await box(next)) / along(await box(card))).toBeCloseTo(0.15 * 60 / 70, 2);
+    await expectFits(card);
+    await shoot(card, `split-${width}-0809`, testInfo);
   });
 }
 
