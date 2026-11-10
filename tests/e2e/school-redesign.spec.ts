@@ -11,7 +11,7 @@ import { exampleSchedule } from '../../src/domain/example';
 
 /**
  * A student in a ten-member school (so changes go through proposals), with four classes on the example rotation
- * and three closures on the calendar. `beta` joins the school-redesign beta.
+ * and three closures on the calendar. `beta` joins the school-hub beta, the key the School redesign is gated on.
  */
 function seed(beta: boolean, menu = false) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -57,7 +57,7 @@ function seed(beta: boolean, menu = false) {
     }
     if (beta) {
       // What `npm run beta -- create` writes, then the student joins with the code.
-      const key = 'school-redesign';
+      const key = 'school-hub';
       const code = `HUB-${id.slice(0, 4)}`;
       const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
       const registry = readBetaRegistry(listPath);

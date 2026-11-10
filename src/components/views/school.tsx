@@ -186,8 +186,12 @@ export function SchoolView({ state }: { state: AppState }) {
   </Beta>;
 }
 
-/** The beta that replaces the School page's single column of cards with the school card, a section list and one section at a time. */
-export const SCHOOL_REDESIGN_BETA = 'school-redesign';
+/**
+ * The beta that replaces the School page's single column of cards with the school card, a section list and one
+ * section at a time. Its first key, `school-redesign`, was retired by a beta clean-up while this was still gated,
+ * and a retired key is never reused (src/server/beta-registry.ts), so the beta continues under this one.
+ */
+export const SCHOOL_REDESIGN_BETA = 'school-hub';
 
 type HubSection = 'rotation' | 'lunch' | 'changes' | 'setup' | 'correction' | 'about';
 
