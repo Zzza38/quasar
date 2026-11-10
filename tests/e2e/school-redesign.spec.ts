@@ -86,6 +86,7 @@ test('the redesigned School page shows one section beside the school card, and t
   await expect(rotation.getByRole('heading', { level: 3 })).toContainText('Day 2');
   await expect(rotation.getByRole('listitem')).toHaveText([/Chemistry/, /English 10/, /Lunch/, /US History/]);
   await expect(rotation.getByRole('button', { name: 'Adjust Day 2' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('rotation-desktop-other-day.png') });
 
   // Closures on back-to-back school days read as one run.
   const comingUp = page.getByRole('region', { name: 'Coming up' });
