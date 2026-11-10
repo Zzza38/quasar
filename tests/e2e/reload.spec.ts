@@ -81,8 +81,13 @@ test('the first visit is rendered by the server: the landing page signed out, th
 });
 
 test('the saved theme is applied before the first paint', async ({ page }) => {
+  // Keep hydration from racing this assertion: the signed-out landing page intentionally
+  // switches to light after mounting. The inline head script must apply the saved theme
+  // without any Next.js runtime, before the browser can paint the page.
+  await page.route('**/_next/static/**/*.js', (route) => route.abort());
   await page.addInitScript(() => { localStorage.setItem('quasar.appearance', 'dark'); });
   await page.goto('/', { waitUntil: 'commit' });
   await page.waitForLoadState('domcontentloaded');
+  expect(await page.evaluate(() => document.documentElement.dataset.hydrated)).toBeUndefined();
   expect(await page.evaluate(() => document.documentElement.dataset.appearance)).toBe('dark');
 });
