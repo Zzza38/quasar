@@ -217,3 +217,27 @@ it('adds image columns even when an older deployment already recorded migration 
     } finally { after.close(); }
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
+
+it('adds the Now card choice off for everyone except members of the beta it came from', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'quasar-now-split-migration-'));
+  const path = join(folder, 'database.sqlite');
+  try {
+    const before = openDatabase(path);
+    before.exec('ALTER TABLE users DROP COLUMN now_split');
+    const add = before.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)');
+    for (const id of ['tester', 'other', 'elsewhere']) add.run(id, id, `${id}@example.com`, 'Student', 'Student Name', new Date().toISOString());
+    const join_ = before.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)');
+    join_.run('now-card-split', 'tester', new Date().toISOString());
+    join_.run('school-hub', 'elsewhere', new Date().toISOString());
+    before.close();
+    const after = openDatabase(path);
+    try {
+      const rows = after.prepare('SELECT id, now_split FROM users ORDER BY id').all();
+      expect(rows).toEqual([{ id: 'elsewhere', now_split: 0 }, { id: 'other', now_split: 0 }, { id: 'tester', now_split: 1 }]);
+      // A later open leaves a choice alone, even for someone still listed as a member.
+      after.prepare('UPDATE users SET now_split=0 WHERE id=?').run('tester');
+    } finally { after.close(); }
+    const again = openDatabase(path);
+    try { expect(again.prepare('SELECT now_split FROM users WHERE id=?').pluck().get('tester')).toBe(0); } finally { again.close(); }
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});

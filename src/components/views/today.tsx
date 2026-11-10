@@ -10,7 +10,6 @@ import { nowSplit, type NowSplit } from '@/lib/now-split';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
-import { Beta } from '../betas';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
@@ -93,7 +92,7 @@ export function TodayView({ state }: { state: AppState }) {
 
     {setupFirst && <SetupChecklist state={state} />}
 
-    <NowCard next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
+    <NowCard splitCard={context.user.nowSplit === true} next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
 
     {!setupFirst && <SetupChecklist state={state} />}
 
@@ -143,7 +142,7 @@ export function nowCardBase(dot: string): string {
   return heroBase(/^#[0-9a-fA-F]{6}$/.test(dot) ? dot : NEUTRAL_HERO);
 }
 
-function NowCard({ next, following, previous, now, today, onSetup, onFixSchedule, privateSchedule, hasSetup, noSchedule }: { next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; previous: ResolvedPeriod | null; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; privateSchedule: boolean; hasSetup: boolean; noSchedule: boolean }) {
+function NowCard({ splitCard, next, following, previous, now, today, onSetup, onFixSchedule, privateSchedule, hasSetup, noSchedule }: { splitCard: boolean; next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; previous: ResolvedPeriod | null; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; privateSchedule: boolean; hasSetup: boolean; noSchedule: boolean }) {
   if (!next) return <Card role="region" aria-label="Next class"><CardContent className="grid gap-2 py-2">
     <Eyebrow>Up next</Eyebrow>
     <h2 className="text-xl">{noSchedule ? 'Your schedule has no periods yet' : 'No upcoming periods'}</h2>
@@ -192,19 +191,18 @@ function NowCard({ next, following, previous, now, today, onSetup, onFixSchedule
       </div>
     </CardContent>
   </Card>;
-  // The split needs two periods of the same day: the one that is on and the one after it, or, between periods, the
-  // one that just ended and the one about to begin. Otherwise, and while the card still asks for classes, it stays whole.
+  // The split is the member's choice (Account → Look). It needs two periods of the same day: the one that is on and the
+  // one after it, or, between periods, the one that just ended and the one about to begin. Otherwise, and while the
+  // card still asks for classes, it stays whole.
+  if (!splitCard) return classic;
   const from = current ? next : previous;
   const upcoming = current ? (following?.date === next.date ? following : null) : next;
   const split = from && upcoming && next.date === today && !addClasses
     ? nowSplit({ start: new Date(from.startAt).getTime(), end: new Date(from.endAt).getTime(), nextStart: new Date(upcoming.startAt).getTime(), now: now.getTime() })
     : null;
   if (!split || !upcoming) return classic;
-  return <Beta id={NOW_SPLIT_BETA} fallback={classic}><NowSplitCard split={split} current={current ? next : null} upcoming={upcoming} now={now} /></Beta>;
+  return <NowSplitCard split={split} current={current ? next : null} upcoming={upcoming} now={now} />;
 }
-
-/** Beta key for the Now card shared by the current class and the next one (NowSplitCard). */
-const NOW_SPLIT_BETA = 'now-card-split';
 
 const heroGradient = (base: string) => `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)`;
 

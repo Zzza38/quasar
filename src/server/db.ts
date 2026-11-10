@@ -801,6 +801,15 @@ function migrate(db: Db): void {
     END`);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
+  // users.now_split: the account shares Today's Now card with the next class (Account → Look; Service.setNowSplit).
+  // Off unless the member turns it on. It began as the now-card-split beta, so that beta's members start with it on.
+  // Checked by column instead of a migration number, so it cannot collide with a numbered migration on another branch.
+  if (!(db.pragma('table_info(users)') as { name: string }[]).some(column => column.name === 'now_split')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN now_split INTEGER NOT NULL DEFAULT 0;
+      UPDATE users SET now_split=1 WHERE id IN (SELECT user_id FROM beta_members WHERE beta_key='now-card-split');
+    `);
+  }
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

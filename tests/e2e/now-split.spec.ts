@@ -2,22 +2,18 @@ import { test, expect } from './fixtures';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 import type { StudentClass } from '../../src/domain/schedule';
 
-const KEY = 'now-card-split';
-
 /**
- * A student with a class in every block of the example schedule, joined to the now-card-split beta unless `beta` is
- * false. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
+ * A student with a class in every block of the example schedule, with "Next class on the Now card" (Account → Look)
+ * turned on unless `split` is false. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
  * Pre-Calculus Honors 10:50-11:50, Eastern time.
  */
-function seed(beta = true) {
+function seed(split = true) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -33,17 +29,7 @@ function seed(beta = true) {
     ];
     service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'),
       data: { grade: '10', classes, assignments: { A: 'art', B: 'bio', C: 'math', D: 'hist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
-    if (beta) {
-      // What `npm run beta -- create` writes, then the student joins with the code.
-      const code = `SPLIT-${id.slice(0, 4)}`;
-      const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-      const registry = readBetaRegistry(listPath);
-      writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((entry) => entry.key !== KEY) }, { key: KEY, name: 'Next class on the Now card', code }), listPath);
-      // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-      const previous = process.env.DATABASE_PATH;
-      process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-      try { new BetaService(service).join(id, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-    }
+    if (split) service.setNowSplit(id, true);
     return id;
   } finally { db.close(); }
 }
@@ -56,11 +42,11 @@ async function authenticate(context: BrowserContext, id: string) {
 /** Eastern daylight time on 2026-09-08, as an instant. */
 const at = (time: string) => new Date(`2026-09-08T${time}:00-04:00`);
 
-async function open(page: Page, context: BrowserContext, time: string, width: number, beta = true) {
+async function open(page: Page, context: BrowserContext, time: string, width: number, split = true) {
   await page.setViewportSize({ width, height: 900 });
   // The grey part has its own shade in the dark theme.
   await page.emulateMedia({ colorScheme: 'dark' });
-  await authenticate(context, seed(beta));
+  await authenticate(context, seed(split));
   await page.clock.setFixedTime(at(time));
   await page.goto('/');
   return page.getByRole('region', { name: 'Next class' });
@@ -165,17 +151,40 @@ for (const width of [390, 1280]) {
   });
 }
 
-test('the last period of the day keeps the card whole, and so does everyone outside the beta', async ({ page, context, browser }) => {
+test('the last period of the day keeps the card whole', async ({ page, context }) => {
   const card = await open(page, context, '11:00', 1280);
   await expect(card.getByText('Then Biology at 8:00 AM Tomorrow')).toBeVisible();
   await expect(page.locator('.ns-card')).toHaveCount(0);
+});
 
-  const other = await browser.newContext();
-  try {
-    const visitor = await other.newPage();
-    const regular = await open(visitor, other, '08:36', 1280, false);
-    await visitor.locator('html[data-hydrated]').waitFor({ state: 'attached' });
-    await expect(regular.getByText('Then Biology at 9:10 AM')).toBeVisible();
-    await expect(visitor.locator('.ns-card')).toHaveCount(0);
-  } finally { await other.close(); }
+test('the card is whole until the student turns the setting on in Account, and whole again when they turn it off', async ({ page, context }, testInfo) => {
+  const card = await open(page, context, '08:36', 1280, false);
+  await page.locator('html[data-hydrated]').waitFor({ state: 'attached' });
+  await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
+  await expect(page.locator('.ns-card')).toHaveCount(0);
+
+  // At this width the sidebar's account button carries the student's name.
+  const openAccount = page.getByRole('button', { name: /^Remy/ });
+  await openAccount.click();
+  const account = page.getByRole('dialog', { name: 'Account', exact: true });
+  const setting = account.getByRole('switch', { name: 'Next class on the Now card' });
+  await expect(setting).not.toBeChecked();
+  await setting.click();
+  await expect(setting).toBeChecked();
+  await shoot(account, 'split-setting', testInfo);
+  await expect(page.locator('.ns-card')).toHaveAttribute('data-phase', 'class');
+  // The open sheet hides the page behind it from role queries, so the card is read by its own markup.
+  await expect(page.locator('.ns-seg.ns-next .ns-name')).toHaveText('Biology');
+
+  // The choice is the account's, so the server draws the split card on the next visit.
+  await page.reload();
+  await expect(page.locator('.ns-card')).toBeVisible();
+  await openAccount.click();
+  await expect(setting).toBeChecked();
+  await setting.click();
+  await expect(setting).not.toBeChecked();
+  await expect(page.locator('.ns-card')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(account).toBeHidden();
+  await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
 });
