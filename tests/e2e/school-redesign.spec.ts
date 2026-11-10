@@ -112,6 +112,14 @@ test('the redesigned School page shows one section beside the school card, and t
   const comingUp = page.getByRole('region', { name: 'Coming up' });
   await expect(comingUp.getByRole('button')).toHaveText([/Mon, Oct 12.*No school/, /Nov 26 – Nov 27.*No school/]);
 
+  // The shared schedule's chips skip what every member knows: that there is a lunch, and the school's time zone.
+  const shared = page.getByRole('region', { name: 'Shared schedule' });
+  await expect(shared).toContainText('10-day rotation');
+  await expect(shared).toContainText('4 class periods');
+  await expect(shared).toContainText('3 exceptions');
+  await expect(shared).not.toContainText('Lunch');
+  await expect(shared).not.toContainText('Eastern Time');
+
   // Choosing a section swaps the right side and is kept in the address.
   await menu.getByRole('button', { name: /^Lunch menu/ }).click();
   await expect(page.getByRole('region', { name: 'Lunch menu' })).toBeVisible();
@@ -207,4 +215,5 @@ test('without the beta the School page keeps its single column of cards', async 
   for (const title of ['How this schedule is managed', 'Your schedule source', 'Shared schedule', 'Rotation', 'Lunch menu', 'Proposed changes', 'School class directory', 'Request a correction'])
     await expect(page.getByRole('region', { name: title })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Rotation' }).locator('button[aria-expanded]')).toHaveCount(10);
+  await expect(page.getByRole('region', { name: 'Shared schedule' })).toContainText('Eastern Time');
 });

@@ -110,7 +110,7 @@ export function SchoolView({ state }: { state: AppState }) {
   </Section>;
   const shared = <Section id="shared-title" title="Shared schedule" icon="layers" description={`Revision ${school.version}`}
     action={!locked ? <Button size="sm" icon="edit" disabled={!online} title={!online ? 'Connect to edit the shared schedule.' : undefined} onClick={() => setEditing(true)}>Edit shared schedule</Button> : undefined}>
-    <ScheduleSummary schedule={sharedSchedule} />
+    <ScheduleSummary schedule={sharedSchedule} brief={redesign} />
     <button type="button" className="inline-flex w-fit items-center gap-1 text-left text-sm font-semibold text-primary hover:underline" aria-expanded={showPreview} onClick={() => setShowPreview(!showPreview)}>{showPreview ? 'Hide preview' : 'Preview on real dates'}<Icon name="chevronDown" size={14} className={cn('transition-transform', showPreview && 'rotate-180')} /></button>
     {showPreview && <Preview value={sharedSchedule} />}
     {!online && !locked && <Hint>Connect to the internet to edit the shared schedule.</Hint>}
