@@ -2,6 +2,8 @@ import { test, expect, hydrating } from './fixtures';
 import { type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { BetaService } from '../../src/server/betas';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
@@ -836,6 +838,54 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
   await expect(week).toContainText('Wednesday quiz');
+});
+
+test('second school day beta separates its tasks without a pill on desktop and mobile', async ({ page, context }, testInfo) => {
+  const schedule = structuredClone(exampleSchedule);
+  schedule.exceptions.push({ date: '2026-11-11', kind: 'closure', advanceCycle: false });
+  const fixture = seed(undefined, true, schedule);
+  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/beta.ts', 'create', 'second-school-day', '--name', 'Second school day', '--public'], {
+    env: { ...process.env, DATABASE_PATH: process.env.E2E_DATABASE_PATH!, BETAS_PATH: '' },
+  });
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db);
+    for (const [title, dueDate] of [
+      ['Individual research planner', '2026-11-12'], ['Computer science test', '2026-11-12'],
+      ['Finish lab notebook', '2026-11-13'], ['AMC 10B competition', '2026-11-13'], ['Chemistry test', '2026-11-16'],
+    ]) service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
+      data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
+    new BetaService(service).enroll(fixture.id, { key: 'second-school-day' });
+  } finally { db.close(); }
+  await authenticate(context, fixture.id);
+  await page.clock.setFixedTime(new Date('2026-11-10T17:00:00Z'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/tasks');
+  const second = page.getByRole('region', { name: /^Friday ·/ });
+  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(second).toContainText('Finish lab notebook');
+    await expect(second).toContainText('AMC 10B competition');
+    await expect(second).not.toContainText('Next school day');
+    await expect(second.getByRole('heading', { level: 2 })).toHaveText('Friday · 2');
+    await expect(week).toContainText('Chemistry test');
+    await expect(week).not.toContainText('Finish lab notebook');
+    await expect(page.locator('[id^="group-"]')).toHaveText([/Thursday · 2Next school day/, /Friday · 2/, /Next 7 days · 1/]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`second-school-day-${width}.png`), fullPage: true });
+  }
+  await second.getByLabel('Mark Finish lab notebook complete', { exact: true }).click();
+  await expect(second.getByRole('heading', { level: 2 })).toHaveText('Friday · 1');
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  await expect(second).not.toContainText('Finish lab notebook');
+  const cleanup = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { new BetaService(new Service(cleanup)).leave(fixture.id, 'second-school-day'); }
+  finally { cleanup.close(); }
+  await page.reload();
+  await expect(second).toHaveCount(0);
+  await expect(week).toContainText('AMC 10B competition');
 });
 
 test('Next 7 days gives each due date its own date column', async ({ page, context }, testInfo) => {

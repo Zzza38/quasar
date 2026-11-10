@@ -41,6 +41,36 @@ describe('nextSchoolDate', () => {
 describe('groupTasks', () => {
   const context = { nowTime: '12:00', schedule: exampleSchedule, personal };
 
+  it('gives the second school day its own weekday section without a pill only in the beta', () => {
+    const tasks = [item('Tomorrow', '2026-09-23'), item('Second', '2026-09-24'), item('Later this week', '2026-09-25')];
+    const options = { ...context, today: '2026-09-22' };
+    expect(titles(groupTasks(tasks, options))).toEqual([['Tomorrow', ['Tomorrow']], ['Next 7 days', ['Second', 'Later this week']]]);
+    const groups = groupTasks(tasks, { ...options, separateSecondSchoolDay: true });
+    expect(titles(groups)).toEqual([['Tomorrow', ['Tomorrow']], ['Thursday', ['Second']], ['Next 7 days', ['Later this week']]]);
+    expect(groups[1]).toMatchObject({ key: 'second-school-day', days: [{ date: '2026-09-24' }] });
+    expect(groups[1].detail).toBeUndefined();
+  });
+
+  it('skips closures and personal days off for the second school day without losing intervening deadlines', () => {
+    const options = { ...context, today: '2026-09-24', separateSecondSchoolDay: true,
+      schedule: schedule({ exceptions: [{ date: '2026-09-28', kind: 'closure', advanceCycle: false }] }),
+      personal: { ...personal, dateOverrides: [{ date: '2026-09-29', closed: true }] } };
+    const tasks = [item('First', '2026-09-25'), item('Weekend', '2026-09-27'), item('Holiday', '2026-09-28'), item('Second', '2026-09-30'), item('After', '2026-10-01')];
+    const groups = groupTasks(tasks, options);
+    expect(titles(groups)).toEqual([['Tomorrow', ['First']], ['Next 7 days', ['Weekend', 'Holiday']], ['Wednesday', ['Second']], ['Next 7 days', ['After']]]);
+    expect(new Set(groups.map(group => group.key)).size).toBe(groups.length);
+    expect(groups.flatMap(group => group.items)).toHaveLength(tasks.length);
+  });
+
+  it('separates the second school day beyond a long break and omits empty sections', () => {
+    const closures = Array.from({ length: 12 }, (_, index) => ({ date: addDays('2026-12-21', index), kind: 'closure' as const, advanceCycle: false }));
+    const options = { ...context, today: '2026-12-18', schedule: schedule({ exceptions: closures }), separateSecondSchoolDay: true };
+    expect(titles(groupTasks([item('Second', '2027-01-05'), item('After', '2027-01-06')], options)))
+      .toEqual([['Tuesday, Jan 5', ['Second']], ['Later', ['After']]]);
+    expect(groupTasks([item('After', '2027-01-06')], options).some(group => group.key === 'second-school-day')).toBe(false);
+    expect(() => groupTasks([], { ...options, today: '2199-12-31' })).not.toThrow();
+  });
+
   it('on a Friday keeps Monday apart from the rest of the week and leaves the weekend on the calendar', () => {
     const groups = groupTasks([
       item('Late', '2026-09-24'),
