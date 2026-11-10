@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { displayPeriodLabel, resolveDayInRange } from '@/domain/schedule';
+import { displayPeriodLabel, resolveDayInRange, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import { addDays, classColor, formatDate, formatRange, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from './app-state';
@@ -16,20 +16,23 @@ function nextLabel(next: string, today: string): string {
   return formatDate(next, { weekday: 'short' });
 }
 
+/** The next date each cycle day falls on, from today, looking up to 90 days ahead. A day that does not come up is absent. */
+export function nextCycleDates(school: Schedule, personal: PersonalSchedule, today: string, cycleDays: number): Map<string, string> {
+  const found = new Map<string, string>();
+  for (let offset = 0; offset < 90 && found.size < cycleDays; offset += 1) {
+    const date = addDays(today, offset);
+    const day = resolveDayInRange(school, date, personal);
+    if (!day) break;
+    if (!day.closed && !found.has(day.cycleDayId)) found.set(day.cycleDayId, date);
+  }
+  return found;
+}
+
 export function RotationOverview({ state, onAdjust, onJump }: { state: AppState; onAdjust: (cycleDayId: string) => void; onJump?: (date: string) => void }) {
   const { schedule: school, personal, today } = state;
   const schedule = effectiveSchedule(school, personal);
   const [open, setOpen] = useState<string | null>(null);
-  const nextDates = useMemo(() => {
-    const found = new Map<string, string>();
-    for (let offset = 0; offset < 90 && found.size < schedule.cycleDays.length; offset += 1) {
-      const date = addDays(today, offset);
-      const day = resolveDayInRange(school, date, personal);
-      if (!day) break;
-      if (!day.closed && !found.has(day.cycleDayId)) found.set(day.cycleDayId, date);
-    }
-    return found;
-  }, [school, personal, today, schedule.cycleDays.length]);
+  const nextDates = useMemo(() => nextCycleDates(school, personal, today, schedule.cycleDays.length), [school, personal, today, schedule.cycleDays.length]);
   const multi = schedule.cycleDays.length > 1;
   return <div className={cn('grid gap-2.5', multi && 'sm:grid-cols-2')}>
     {schedule.cycleDays.map((day, index) => {
