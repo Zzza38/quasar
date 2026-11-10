@@ -2,10 +2,6 @@ import { test, expect, hydrating } from './fixtures';
 import { type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { BetaService } from '../../src/server/betas';
-import { readBetaRegistry } from '../../src/server/beta-registry';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { DirectoryService } from '../../src/server/directory';
@@ -814,7 +810,7 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await page.goto('/tasks');
   const before = page.getByRole('region', { name: /^Before school resumes/ });
   const school = page.getByRole('region', { name: /^Tuesday ·/ });
-  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  const second = page.getByRole('region', { name: /^Wednesday ·/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(before).toContainText('Monday video');
@@ -822,33 +818,30 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
     await expect(before).toContainText('11:59 PM');
     await expect(school).toContainText('Tuesday homework');
     await expect(school).toContainText('Next school day');
-    await expect(week).toContainText('Wednesday quiz');
+    await expect(second).toContainText('Wednesday quiz');
     await expect(page.locator('[id^="group-"]')).toHaveText([
-      /Before school resumes · 1/, /Tuesday · 1Next school day/, /Next 7 days · 1/,
+      /Before school resumes · 1/, /Tuesday · 1Next school day/, /Wednesday · 1/,
     ]);
     expect((await before.boundingBox())!.y).toBeLessThan((await school.boundingBox())!.y);
-    expect((await school.boundingBox())!.y).toBeLessThan((await week.boundingBox())!.y);
+    expect((await school.boundingBox())!.y).toBeLessThan((await second.boundingBox())!.y);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`holiday-deadlines-${width}.png`), fullPage: true });
   }
   await before.getByLabel('Mark Monday video complete', { exact: true }).click();
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
-  await expect(week).toContainText('Wednesday quiz');
+  await expect(second).toContainText('Wednesday quiz');
   await expect(saved(page)).toBeVisible();
   await page.reload();
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
-  await expect(week).toContainText('Wednesday quiz');
+  await expect(second).toContainText('Wednesday quiz');
 });
 
-test('second school day beta separates its tasks without a pill on desktop and mobile', async ({ page, context }, testInfo) => {
+test('second school day separates its tasks without a pill on desktop and mobile', async ({ page, context }, testInfo) => {
   const schedule = structuredClone(exampleSchedule);
   schedule.exceptions.push({ date: '2026-11-11', kind: 'closure', advanceCycle: false });
   const fixture = seed(undefined, true, schedule);
-  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/beta.ts', 'create', 'second-school-day', '--name', 'Second school day', '--public'], {
-    env: { ...process.env, DATABASE_PATH: process.env.E2E_DATABASE_PATH!, BETAS_PATH: '' },
-  });
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db);
@@ -857,8 +850,6 @@ test('second school day beta separates its tasks without a pill on desktop and m
       ['Finish lab notebook', '2026-11-13'], ['AMC 10B competition', '2026-11-13'], ['Chemistry test', '2026-11-16'],
     ]) service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
       data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
-    new BetaService(service, () => readBetaRegistry(join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json')))
-      .enroll(fixture.id, { key: 'second-school-day' });
   } finally { db.close(); }
   await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-11-10T17:00:00Z'));
@@ -883,12 +874,6 @@ test('second school day beta separates its tasks without a pill on desktop and m
   await expect(saved(page)).toBeVisible();
   await page.reload();
   await expect(second).not.toContainText('Finish lab notebook');
-  const cleanup = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try { new BetaService(new Service(cleanup)).leave(fixture.id, 'second-school-day'); }
-  finally { cleanup.close(); }
-  await page.reload();
-  await expect(second).toHaveCount(0);
-  await expect(week).toContainText('AMC 10B competition');
 });
 
 test('Next 7 days gives each due date its own date column', async ({ page, context }, testInfo) => {
@@ -902,12 +887,13 @@ test('Next 7 days gives each due date its own date column', async ({ page, conte
     }
   } finally { db.close(); }
   await authenticate(context, fixture.id);
-  // Tuesday 2026-10-20, so Thursday and Friday both fall in Next 7 days.
+  // Tuesday 2026-10-20: Thursday is the second school day, and Friday stays in Next 7 days.
   await page.clock.setFixedTime(new Date('2026-10-20T16:00:00Z'));
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/tasks');
   const week = page.getByRole('region', { name: /^Next 7 days/ });
-  const thursday = week.getByRole('region', { name: /^Thursday, Oct 22/ });
+  const second = page.getByRole('region', { name: /^Thursday ·/ });
+  const thursday = second.getByRole('region', { name: /^Thursday, Oct 22/ });
   const friday = week.getByRole('region', { name: /^Friday, Oct 23/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -929,7 +915,7 @@ test('Next 7 days gives each due date its own date column', async ({ page, conte
         expect(Math.abs(middle(await day.getByRole('checkbox').first().boundingBox()) - first)).toBeLessThan(2);
       }
       // ...without running into the group's title above it.
-      const title = (await week.getByRole('heading', { level: 2 }).boundingBox())!;
+      const title = (await second.getByRole('heading', { level: 2 }).boundingBox())!;
       expect((await thursday.getByRole('heading').boundingBox())!.y).toBeGreaterThan(title.y + title.height + 4);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

@@ -41,18 +41,17 @@ describe('nextSchoolDate', () => {
 describe('groupTasks', () => {
   const context = { nowTime: '12:00', schedule: exampleSchedule, personal };
 
-  it('gives the second school day its own weekday section without a pill only in the beta', () => {
+  it('gives the second school day its own weekday section without a pill', () => {
     const tasks = [item('Tomorrow', '2026-09-23'), item('Second', '2026-09-24'), item('Later this week', '2026-09-25')];
     const options = { ...context, today: '2026-09-22' };
-    expect(titles(groupTasks(tasks, options))).toEqual([['Tomorrow', ['Tomorrow']], ['Next 7 days', ['Second', 'Later this week']]]);
-    const groups = groupTasks(tasks, { ...options, separateSecondSchoolDay: true });
+    const groups = groupTasks(tasks, options);
     expect(titles(groups)).toEqual([['Tomorrow', ['Tomorrow']], ['Thursday', ['Second']], ['Next 7 days', ['Later this week']]]);
     expect(groups[1]).toMatchObject({ key: 'second-school-day', days: [{ date: '2026-09-24' }] });
     expect(groups[1].detail).toBeUndefined();
   });
 
   it('skips closures and personal days off for the second school day without losing intervening deadlines', () => {
-    const options = { ...context, today: '2026-09-24', separateSecondSchoolDay: true,
+    const options = { ...context, today: '2026-09-24',
       schedule: schedule({ exceptions: [{ date: '2026-09-28', kind: 'closure', advanceCycle: false }] }),
       personal: { ...personal, dateOverrides: [{ date: '2026-09-29', closed: true }] } };
     const tasks = [item('First', '2026-09-25'), item('Weekend', '2026-09-27'), item('Holiday', '2026-09-28'), item('Second', '2026-09-30'), item('After', '2026-10-01')];
@@ -64,7 +63,7 @@ describe('groupTasks', () => {
 
   it('separates the second school day beyond a long break and omits empty sections', () => {
     const closures = Array.from({ length: 12 }, (_, index) => ({ date: addDays('2026-12-21', index), kind: 'closure' as const, advanceCycle: false }));
-    const options = { ...context, today: '2026-12-18', schedule: schedule({ exceptions: closures }), separateSecondSchoolDay: true };
+    const options = { ...context, today: '2026-12-18', schedule: schedule({ exceptions: closures }) };
     expect(titles(groupTasks([item('Second', '2027-01-05'), item('After', '2027-01-06')], options)))
       .toEqual([['Tuesday, Jan 5', ['Second']], ['Later', ['After']]]);
     expect(groupTasks([item('After', '2027-01-06')], options).some(group => group.key === 'second-school-day')).toBe(false);
@@ -90,7 +89,8 @@ describe('groupTasks', () => {
       ['Tomorrow', ['Saturday game']],
       ['Before school resumes', ['Sunday reading']],
       ['Monday', ['Unit 1 HW 4', 'Catcher chapters']],
-      ['Next 7 days', ['Vocab quiz', 'Next Friday']],
+      ['Tuesday', ['Vocab quiz']],
+      ['Next 7 days', ['Next Friday']],
       ['Later', ['Project']],
       ['No due date', ['Someday']],
     ]);
@@ -99,13 +99,13 @@ describe('groupTasks', () => {
 
   it('has no separate group when the next school day is tomorrow', () => {
     const groups = groupTasks([item('HW', '2026-09-23'), item('Essay', '2026-09-24')], { ...context, today: '2026-09-22' });
-    expect(titles(groups)).toEqual([['Tomorrow', ['HW']], ['Next 7 days', ['Essay']]]);
+    expect(titles(groups)).toEqual([['Tomorrow', ['HW']], ['Thursday', ['Essay']]]);
     expect(groups.some((group) => group.key === 'next-school-day')).toBe(false);
   });
 
   it('on a Saturday shows Tomorrow for Sunday and Monday as the next school day', () => {
     const groups = groupTasks([item('Sunday', '2026-09-27'), item('Monday', '2026-09-28'), item('Tuesday', '2026-09-29')], { ...context, today: '2026-09-26' });
-    expect(titles(groups)).toEqual([['Tomorrow', ['Sunday']], ['Monday', ['Monday']], ['Next 7 days', ['Tuesday']]]);
+    expect(titles(groups)).toEqual([['Tomorrow', ['Sunday']], ['Monday', ['Monday']], ['Tuesday', ['Tuesday']]]);
   });
 
   it('treats a holiday like a weekend', () => {
@@ -125,7 +125,7 @@ describe('groupTasks', () => {
     expect(titles(groups)).toEqual([
       ['Before school resumes', ['Monday video']],
       ['Tuesday', ['Tuesday homework']],
-      ['Next 7 days', ['Wednesday quiz']],
+      ['Wednesday', ['Wednesday quiz']],
     ]);
     expect(groups[0].days?.map((day) => day.title)).toEqual(['Monday, Oct 12']);
     expect(groups.flatMap((group) => group.items)).toHaveLength(3);
@@ -143,9 +143,9 @@ describe('groupTasks', () => {
     // Tuesday 2026-10-20: Thursday and Friday work sit under their own day headings.
     const tasks = [item('Quiz retake', '2026-10-22'), item('Project 1', '2026-10-22', '23:59'), item('Unit 2 test', '2026-10-23', '23:59'), item('Monday reading', '2026-10-26')];
     const groups = groupTasks(tasks, { ...context, today: '2026-10-20' });
+    expect(groups.find((group) => group.key === 'second-school-day')?.items.map(item => item.task.title)).toEqual(['Quiz retake', 'Project 1']);
     const week = groups.find((group) => group.key === 'week')!;
     expect(week.days?.map((day) => [day.title, day.items.map((entry) => entry.task.title)])).toEqual([
-      ['Thursday, Oct 22', ['Quiz retake', 'Project 1']],
       ['Friday, Oct 23', ['Unit 2 test']],
       ['Monday, Oct 26', ['Monday reading']],
     ]);
