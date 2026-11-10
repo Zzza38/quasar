@@ -149,13 +149,15 @@ npm run beta -- edit month-grid --name "Month view" --max none
 npm run beta -- remove month-grid                      # ends the beta: it switches off for everyone in it
 ```
 
-`remove` retires the key, and the command refuses to reuse it, so the old members can't end up in a new beta that happens to share the name.
+`remove` deletes every membership for the retired beta and retires the key, and the command refuses to reuse it, so the old members can't end up in a new beta that happens to share the name.
 
 `/admin` → **Betas** is read-only apart from **Remove** under a beta's Members, which takes one person out. It shows each beta's code, status, member count, members and open feedback. Joins, leaves and removals go to the audit log as `beta.*`.
 
+To clean up memberships left by older versions, run `pnpm beta cleanup`. The server also deletes retired memberships when it reads the beta registry. Paused betas and public betas still have members; neither means the feature has shipped to everyone.
+
 ### 5. Ship it to everyone
 
-A beta is done when its PR merges, unless you decide to keep testing it. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
+Every merged change goes to everyone unless the owner explicitly asks to retain its beta after merge. A request to create or test a beta does not carry over past merge. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
 
 ## Staff roles
 
