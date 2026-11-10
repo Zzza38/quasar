@@ -665,6 +665,22 @@ function migrate(db: Db): void {
     `);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(25, datetime('now'))");
+
+  // Migration 26: AI task helpers (src/server/ai.ts). A member's own API key, encrypted like calendar feed URLs
+  // (with its own derived key), and the PKCE state of a "Connect OpenRouter" that has started but not come back.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_credentials (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL, model TEXT NOT NULL, key_encrypted TEXT NOT NULL, key_hint TEXT NOT NULL,
+      via TEXT NOT NULL CHECK(via IN ('key','openrouter')), created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ai_oauth_states (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      state TEXT NOT NULL, verifier TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(26, datetime('now'));
+  `);
+
   // Check the columns too: an earlier deployment may have recorded this version already.
   for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
     if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(column => column.name === 'image')) {
@@ -717,8 +733,8 @@ function migrate(db: Db): void {
       granted_at TEXT NOT NULL
     );
   `);
-  const addColumn = (table: string, column: string) => {
-    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  const addColumn = (table: string, column: string, type = 'TEXT') => {
+    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   };
   for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
     addColumn(table, 'original');
@@ -728,6 +744,173 @@ function migrate(db: Db): void {
   addColumn('global_messages', 'edited_rank');
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'))");
 
+  // Three branches each numbered their first migration 29 (staff roles above, Plus billing below, Schoology after 34).
+  // Every block is IF NOT EXISTS and runs on each boot, so sharing the number only affects schema_migrations bookkeeping.
+  // Migration 29: Quasar AI Plus billing (src/server/billing.ts). The Stripe customer of each account, the
+  // subscriptions Stripe's webhooks reported (`event_created` keeps an older event from undoing a newer one), and the
+  // webhook event IDs already handled, since Stripe may send an event more than once.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS billing_customers (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      customer_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS billing_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      customer_id TEXT NOT NULL, price_id TEXT, status TEXT NOT NULL, current_period_end TEXT,
+      cancel_at_period_end INTEGER NOT NULL DEFAULT 0, event_created INTEGER NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS billing_subscriptions_user ON billing_subscriptions(user_id);
+    CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, received_at TEXT NOT NULL);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'));
+  `);
+
+  // Migration 30: what the AI said each task is (a test, a quiz or neither) for Upcoming tests and quizzes. Keyed by
+  // a hash of the title and notes it saw, so an edited task is checked again. Kept here, not on the task, because
+  // older app versions reject task fields they don't know.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_task_kinds (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, task_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('test','quiz','none')), classified_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id, task_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'));
+  `);
+
+  // Migration 31: merged duplicate tasks (src/server/merges.ts). Each merge keeps the tasks as they were (JSON entities)
+  // so Undo can put them back; pairs the student said are not duplicates (or un-merged) are never merged by the AI
+  // again; and the AI's duplicate check remembers which tasks it has seen, so an unchanged list costs nothing.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_merges (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK(source IN ('ai','manual')), reason TEXT NOT NULL DEFAULT '',
+      kept_id TEXT NOT NULL, kept_before TEXT NOT NULL, kept_version INTEGER NOT NULL, removed TEXT NOT NULL,
+      created_at TEXT NOT NULL, undone_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS task_merges_owner ON task_merges(owner_id, created_at);
+    CREATE TABLE IF NOT EXISTS task_not_duplicates (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, first_id TEXT NOT NULL, second_id TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id, first_id, second_id)
+    );
+    CREATE TABLE IF NOT EXISTS ai_duplicate_checks (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, task_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+      PRIMARY KEY(owner_id, task_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(31, datetime('now'));
+  `);
+
+  // Migration 32: Plan my week and time estimates (src/server/plan.ts). A member's plan is a set of study blocks, each
+  // in a free period or after school and linked to a task, which the student marks done or skips. Estimates are kept
+  // per task with a hash of the title and notes the AI saw, like ai_task_kinds, so an unchanged task isn't asked again.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_plans (
+      owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, start_date TEXT NOT NULL, end_date TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ai_plan_blocks (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, id TEXT NOT NULL,
+      date TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL, slot_kind TEXT NOT NULL CHECK(slot_kind IN ('free','after')), slot_label TEXT NOT NULL,
+      task_id TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('review','work')), minutes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','done','skipped')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS ai_plan_blocks_owner_date ON ai_plan_blocks(owner_id, date);
+    CREATE TABLE IF NOT EXISTS ai_task_estimates (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, task_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL, minutes INTEGER NOT NULL, estimated_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id, task_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(32, datetime('now'));
+  `);
+
+  // Migration 33: study sets (src/server/study.ts), flashcards and a practice quiz the AI made for one test or quiz
+  // task. One set per task; `data` is the cards and questions as JSON, `material` the text the student pasted (so
+  // Regenerate doesn't need it again; photos are never kept), and `progress` the cards marked "got it" and the last score.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS study_sets (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, task_id TEXT NOT NULL,
+      data TEXT NOT NULL, material TEXT NOT NULL DEFAULT '', sources TEXT NOT NULL DEFAULT '{}', progress TEXT NOT NULL DEFAULT '{}',
+      model TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id, task_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(33, datetime('now'));
+  `);
+
+  // Migration 34: the weekly parent summary (src/server/parent-summary.ts). One private link per student, stored as the
+  // SHA-256 of its token only, with the sections the student chose; and when the link was opened (time only), so the
+  // student sees "Last viewed". Both go when the link is turned off or replaced.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS parent_summary_shares (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE, sections TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS parent_summary_views (
+      user_id TEXT NOT NULL REFERENCES parent_summary_shares(user_id) ON DELETE CASCADE, viewed_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS parent_summary_views_user ON parent_summary_views(user_id, viewed_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(34, datetime('now'));
+  `);
+  // Migration 29: "Connect Schoology" (src/server/schoology.ts, schoology-grades beta). A member's Schoology access
+  // token, encrypted with NEXTAUTH_SECRET like calendar links, and the half-finished OAuth handshake. Grades are read
+  // live and never stored.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schoology_connections (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, token_encrypted TEXT NOT NULL,
+      schoology_uid TEXT NOT NULL, name TEXT NOT NULL, connected_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS schoology_oauth_states (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, request_token TEXT NOT NULL,
+      secret_encrypted TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    -- Class tagging for imported Schoology tasks (SchoologyService.tagClasses). Added inside migration 29 rather than
+    -- as a new number because other branches already used 29 and up; every statement here is IF NOT EXISTS.
+    -- schoology_items: which section each assignment or event id belongs to. schoology_sections: a section's titles and
+    -- the member's own choice of class (chosen=1; class_id NULL then means "don't tag"). schoology_task_tags: the
+    -- tasks this put a class on, so a corrected choice can move them.
+    CREATE TABLE IF NOT EXISTS schoology_items (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, item_key TEXT NOT NULL, section_id TEXT NOT NULL,
+      PRIMARY KEY(user_id, item_key)
+    );
+    CREATE TABLE IF NOT EXISTS schoology_sections (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, section_id TEXT NOT NULL,
+      course_title TEXT NOT NULL, section_title TEXT NOT NULL, class_id TEXT, chosen INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(user_id, section_id)
+    );
+    CREATE TABLE IF NOT EXISTS schoology_task_tags (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, entity_id TEXT NOT NULL, section_id TEXT NOT NULL,
+      class_id TEXT NOT NULL, PRIMARY KEY(user_id, entity_id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'));
+  `);
+  // Assignments imported straight from Schoology (SchoologyService.sync): the task each became, the fields last read
+  // from Schoology (so a member's own edits are kept), and the version Quasar last wrote (so an untouched copy can go
+  // when the calendar feed brings the same assignment). schoology_items.submitted: a turn-in was seen and acted on.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schoology_imports (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, assignment_id TEXT NOT NULL, entity_id TEXT NOT NULL,
+      section_id TEXT NOT NULL, source TEXT NOT NULL, written_version INTEGER NOT NULL,
+      PRIMARY KEY(user_id, assignment_id)
+    );
+  `);
+  addColumn('schoology_connections', 'indexed_at', 'TEXT');
+  addColumn('schoology_connections', 'synced_at', 'TEXT');
+  addColumn('schoology_connections', 'import_assignments', 'INTEGER NOT NULL DEFAULT 1');
+  addColumn('schoology_connections', 'auto_complete', 'INTEGER NOT NULL DEFAULT 1');
+  addColumn('schoology_items', 'submitted', 'INTEGER NOT NULL DEFAULT 0');
+  // Grade goals (Classes → Grades, SchoologyService.setGoal): the one thing about grades Quasar stores. Per member
+  // and Schoology section, a goal as JSON ({kind:'letter',letter} or {kind:'percent',percent}) and the assignment the
+  // plan leans on. A member with no row simply has no goal yet. IF NOT EXISTS for the same reason as above.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schoology_grade_goals (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, section_id TEXT NOT NULL,
+      goal TEXT, plan TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(user_id, section_id)
+    );
+  `);
+  // Both successful labels and inconclusive answers survive reloads; unchanged tasks do not spend another sort.
+  db.exec(`CREATE TABLE IF NOT EXISTS ai_sort_checks (
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL, content_hash TEXT NOT NULL, suggestion TEXT NOT NULL, checked_at TEXT NOT NULL,
+    PRIMARY KEY(owner_id, task_id)
+  )`);
   // Migration 30: one school chat per school (docs/CHAT.md §16). The same shape as the global room's tables (with
   // migration 29's moderation columns), keyed by school: everyone whose users.school_id is the school reads and posts there.
   db.exec(`

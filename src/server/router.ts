@@ -7,7 +7,15 @@ import { CalendarService, listSubscriptions, subscribeSchema } from './calendar'
 import { ScheduleFeedService, connectScheduleFeedSchema, previewScheduleFeedSchema } from './schedule-feed';
 import { DirectoryService, directorySaveSchema, directoryRemoveSchema, directoryImportSchema, directoryPublishSchema, directoryConfirmSchema, directoryMergeSchema } from './directory';
 import { ScanService, scanInputSchema } from './scan';
+import { SchoologyService, gradeDetailSchema, gradeGoalInputSchema, gradebookSchema, schoologyFinishSchema, schoologySettingsSchema, schoologySyncSchema, sectionClassSchema } from './schoology';
 import { scanProgress, withScanProgress } from './scan-progress';
+import { BillingService, checkoutSchema, stripeConfig } from './billing';
+import { AiService, aiAssessmentsSchema, aiBreakdownSchema, aiDuplicatesSchema, aiKeySchema, aiSortSchema, openRouterFinishSchema } from './ai';
+import { MergeService, mergeIdSchema, mergeSchema, notDuplicatesSchema } from './merges';
+import { ParentSummaryService, setSummarySectionsSchema } from './parent-summary';
+import { PhotoTaskService, photoTasksSchema } from './photo-tasks';
+import { StudyService, studyCreateSchema, studyProgressSchema, studyTaskSchema } from './study';
+import { PlanService, planEstimateSchema, planMarkSchema } from './plan';
 import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './community';
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { SchoolLogoService, logoProposeSchema, logoSetSchema, logoVoteSchema } from './school-logos';
@@ -104,7 +112,7 @@ const adminScoped = staffScoped('owner');
  */
 const moderatorScoped = accountScoped.use(({ ctx, next }) => { ctx.service.permit(ctx.userId, 'global.moderate'); return next({ ctx }); });
 const clientVersionSchema = z.object({ clientVersion: z.number().int().positive().optional(), personalVersion: z.number().int().positive().optional() });
-const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < 2, legacyFreePeriods: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
+const clientOptions = (input: { clientVersion?: number; personalVersion?: number } | undefined): ClientOptions => ({ legacyTasks: (input?.clientVersion ?? 1) < 2, legacyWorkLocation: (input?.clientVersion ?? 1) < TASK_CLIENT_VERSION, legacyPersonal: (input?.personalVersion ?? 1) < 2, legacyFreePeriods: (input?.personalVersion ?? 1) < PERSONAL_SCHEDULE_CLIENT_VERSION });
 const chat = (service: Service) => new ChatService(service);
 const room = (service: Service) => new GlobalChatService(service);
 const schoolRoom = (service: Service) => new SchoolChatService(service);
@@ -224,6 +232,72 @@ export const appRouter = t.router({
     create: accountScoped.input(proposalCreateSchema).mutation(({ ctx, input }) => new ProposalService(ctx.service).create(ctx.userId, input)),
     vote: accountScoped.input(voteSchema).mutation(({ ctx, input }) => new ProposalService(ctx.service).vote(ctx.userId, input)),
     withdraw: accountScoped.input(z.object({ proposalId: z.uuid() })).mutation(({ ctx, input }) => new ProposalService(ctx.service).withdraw(ctx.userId, input.proposalId)),
+  }),
+  // AI task helpers behind the ai-tasks beta (src/server/ai.ts): suggestions only, plus the member's own key.
+  ai: t.router({
+    status: authenticated.query(({ ctx }) => new AiService(ctx.service).status(ctx.userId)),
+    sort: accountScoped.input(aiSortSchema).mutation(({ ctx, input }) => new AiService(ctx.service).sort(ctx.userId, input)),
+    breakdown: accountScoped.input(aiBreakdownSchema).mutation(({ ctx, input }) => new AiService(ctx.service).breakdown(ctx.userId, input)),
+    assessments: accountScoped.input(aiAssessmentsSchema).mutation(({ ctx, input }) => new AiService(ctx.service).assessments(ctx.userId, input)),
+    duplicates: accountScoped.input(aiDuplicatesSchema).mutation(({ ctx, input }) => new AiService(ctx.service).duplicates(ctx.userId, input)),
+    setKey: accountScoped.input(aiKeySchema).mutation(({ ctx, input }) => new AiService(ctx.service).setKey(ctx.userId, input)),
+    removeKey: accountScoped.mutation(({ ctx }) => new AiService(ctx.service).removeKey(ctx.userId)),
+    openRouterStart: accountScoped.mutation(({ ctx }) => new AiService(ctx.service).openRouterStart(ctx.userId)),
+    openRouterFinish: accountScoped.input(openRouterFinishSchema).mutation(({ ctx, input }) => new AiService(ctx.service).openRouterFinish(ctx.userId, input)),
+  }),
+  // Quasar AI Plus in the ai-tasks beta (src/server/plan.ts): Plan my week, its blocks, and time estimates per task.
+  plan: t.router({
+    get: authenticated.query(({ ctx }) => new PlanService(ctx.service).get(ctx.userId)),
+    make: accountScoped.mutation(({ ctx }) => new PlanService(ctx.service).make(ctx.userId)),
+    mark: accountScoped.input(planMarkSchema).mutation(({ ctx, input }) => new PlanService(ctx.service).mark(ctx.userId, input)),
+    estimate: accountScoped.input(planEstimateSchema).mutation(({ ctx, input }) => new PlanService(ctx.service).estimate(ctx.userId, input)),
+  }),
+  // Merging duplicate tasks (src/server/merges.ts), with the history Undo works from.
+  merges: t.router({
+    history: authenticated.query(({ ctx }) => new MergeService(ctx.service).history(ctx.userId)),
+    merge: accountScoped.input(mergeSchema).mutation(({ ctx, input }) => new MergeService(ctx.service).merge(ctx.userId, input)),
+    undo: accountScoped.input(mergeIdSchema).mutation(({ ctx, input }) => new MergeService(ctx.service).undo(ctx.userId, input)),
+    notDuplicates: accountScoped.input(notDuplicatesSchema).mutation(({ ctx, input }) => new MergeService(ctx.service).notDuplicates(ctx.userId, input)),
+  }),
+  // The weekly parent summary (src/server/parent-summary.ts): only the signed-in student manages their own link.
+  parentSummary: t.router({
+    status: authenticated.query(({ ctx }) => new ParentSummaryService(ctx.service).status(ctx.userId)),
+    enable: accountScoped.mutation(({ ctx }) => new ParentSummaryService(ctx.service).enable(ctx.userId)),
+    regenerate: accountScoped.mutation(({ ctx }) => new ParentSummaryService(ctx.service).regenerate(ctx.userId)),
+    setSections: accountScoped.input(setSummarySectionsSchema).mutation(({ ctx, input }) => new ParentSummaryService(ctx.service).setSections(ctx.userId, input)),
+    disable: accountScoped.mutation(({ ctx }) => new ParentSummaryService(ctx.service).disable(ctx.userId)),
+  }),
+  // Quasar AI Plus (src/server/billing.ts): Stripe Checkout and the billing portal; state arrives by webhook.
+  billing: t.router({
+    status: authenticated.query(({ ctx }) => new BillingService(ctx.service).status(ctx.userId)),
+    checkout: accountScoped.input(checkoutSchema).mutation(({ ctx, input }) => new BillingService(ctx.service).checkout(ctx.userId, input)),
+    portal: accountScoped.mutation(({ ctx }) => new BillingService(ctx.service).portal(ctx.userId)),
+  }),
+  // Plus features in the ai-tasks beta: Photo to tasks (src/server/photo-tasks.ts) only reads, and the student saves
+  // through the task queue; study sets (src/server/study.ts) are kept per task.
+  photoTasks: t.router({ read: accountScoped.input(photoTasksSchema).mutation(({ ctx, input }) => new PhotoTaskService(ctx.service).read(ctx.userId, input)) }),
+  study: t.router({
+    get: accountScoped.input(studyTaskSchema).query(({ ctx, input }) => new StudyService(ctx.service).get(ctx.userId, input.taskId)),
+    create: accountScoped.input(studyCreateSchema).mutation(({ ctx, input }) => new StudyService(ctx.service).create(ctx.userId, input)),
+    progress: accountScoped.input(studyProgressSchema).mutation(({ ctx, input }) => new StudyService(ctx.service).progress(ctx.userId, input)),
+    remove: accountScoped.input(studyTaskSchema).mutation(({ ctx, input }) => { new StudyService(ctx.service).remove(ctx.userId, input.taskId); }),
+  }),
+  // "Connect Schoology" behind the schoology-grades beta (src/server/schoology.ts): OAuth, then a live grade summary.
+  schoology: t.router({
+    // Grade what-if is a Plus feature: locked only when billing is set up and the member isn't Plus.
+    status: authenticated.query(({ ctx }) => new SchoologyService(ctx.service, { plus: (id) => ({ billing: stripeConfig() !== null, member: new BillingService(ctx.service).isPlus(id) }) }).status(ctx.userId)),
+    start: accountScoped.mutation(({ ctx }) => new SchoologyService(ctx.service).start(ctx.userId)),
+    finish: accountScoped.input(schoologyFinishSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).finish(ctx.userId, input)),
+    grades: accountScoped.mutation(({ ctx }) => new SchoologyService(ctx.service).grades(ctx.userId)),
+    disconnect: accountScoped.mutation(({ ctx }) => new SchoologyService(ctx.service).disconnect(ctx.userId)),
+    sync: accountScoped.input(schoologySyncSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).sync(ctx.userId, input)),
+    gradeDetail: accountScoped.input(gradeDetailSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).gradeDetail(ctx.userId, input)),
+    // Classes → Grades: every class's gradebook in one read, and the member's own goal per class.
+    gradebook: accountScoped.input(gradebookSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).gradebook(ctx.userId, input)),
+    setGoal: accountScoped.input(gradeGoalInputSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).setGoal(ctx.userId, input)),
+    setSettings: accountScoped.input(schoologySettingsSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).setSettings(ctx.userId, input)),
+    sections: authenticated.query(({ ctx }) => new SchoologyService(ctx.service).sections(ctx.userId)),
+    setSectionClass: accountScoped.input(sectionClassSchema).mutation(({ ctx, input }) => new SchoologyService(ctx.service).setSectionClass(ctx.userId, input)),
   }),
   /** School logos: members propose and vote, and a vote that passes publishes (src/server/school-logos.ts). */
   schoolLogo: t.router({

@@ -90,6 +90,9 @@ const config: NextConfig = {
       { source: "/", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/(today|schedule|tasks|classes|school|people|messages)", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
       { source: "/admin", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
+      // The weekly parent summary (src/app/summary/[token]): a private link, so it is never cached, never sends the
+      // token on in a Referer, and is never indexed. Later rules win, so this overrides the site-wide Referrer-Policy.
+      { source: "/summary/:path*", headers: [{ key: "Cache-Control", value: "private, no-store" }, { key: "Referrer-Policy", value: "no-referrer" }, { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }] },
       // Every API response but a profile picture or guide screenshot: /api/avatars and /api/guide-images set their own
       // headers (a year for a found image, since its URL never points at another; no-store for a miss or a signed-out
       // request), which a rule here would override.

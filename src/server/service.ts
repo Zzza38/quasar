@@ -62,16 +62,18 @@ export const SYNC_LIMITS = { liveTasks: 5000, dailyMutations: 5000, dailyBytes: 
  * Bundles without sparse personal override support (`legacyPersonal`) or free periods (`legacyFreePeriods`) reload
  * before reading or writing a personal schedule that uses them.
  */
-export type ClientOptions = { legacyTasks?: boolean; legacyPersonal?: boolean; legacyFreePeriods?: boolean };
+export type ClientOptions = { legacyTasks?: boolean; legacyWorkLocation?: boolean; legacyPersonal?: boolean; legacyFreePeriods?: boolean };
 const RELOAD_PERSONAL_MESSAGE = 'Quasar has been updated. Reload the page, or close and reopen the app, to continue.';
-function forClient(entity: Entity, { legacyTasks = false, legacyPersonal = false, legacyFreePeriods = false }: ClientOptions): Entity {
+function forClient(entity: Entity, { legacyTasks = false, legacyWorkLocation = false, legacyPersonal = false, legacyFreePeriods = false }: ClientOptions): Entity {
   const overrides = entity.data.cycleDayOverrides;
   if (legacyPersonal && entity.kind === 'personal' && (entity.data.periods !== undefined || (Array.isArray(overrides) && overrides.some(entry => entry && typeof entry === 'object' && entry.slotChanges !== undefined)))) {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
   }
   if (legacyFreePeriods && entity.kind === 'personal' && entity.data.freePeriods !== undefined) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: RELOAD_PERSONAL_MESSAGE });
-  if (!legacyTasks || entity.kind !== 'task' || !('completedAt' in entity.data)) return entity;
-  const { completedAt: _completedAt, ...data } = entity.data;
+  if (entity.kind !== 'task' || (!legacyTasks && !legacyWorkLocation)) return entity;
+  const data = { ...entity.data };
+  if (legacyTasks) delete data.completedAt;
+  if (legacyWorkLocation) { delete data.workLocation; delete data.workLocationSource; }
   return { ...entity, data };
 }
 function resultForClient(result: SyncResult, options: ClientOptions): SyncResult {
@@ -524,10 +526,16 @@ export class Service {
         // An older client was sent this revision without completedAt, and it shares the device store with newer tabs,
         // so a base without it is accepted from any client. The merge then uses the recorded revision, so the stored
         // stamp is kept rather than read as the client removing it.
-        if (!recorded || (canonical(recorded) !== canonical(input.base) && canonical(forClient(recorded, { legacyTasks: true })) !== canonical(input.base))) fail('BAD_REQUEST', 'The base revision is not recognized. Reload before retrying.');
+        if (!recorded || ![recorded, forClient(recorded, { legacyTasks: true }), forClient(recorded, { legacyWorkLocation: true }), forClient(recorded, { legacyTasks: true, legacyWorkLocation: true })].some(version => canonical(version) === canonical(input.base))) fail('BAD_REQUEST', 'The base revision is not recognized. Reload before retrying.');
         input.base = recorded;
       }
       if (input.data) this.validateData(input.kind, input.data);
+      // Older clients never saw these fields. An unrelated edit must not clear the saved classification.
+      if (input.kind === 'task' && input.data && options.legacyWorkLocation) {
+        for (const key of ['workLocation', 'workLocationSource']) {
+          if (input.base?.data[key] !== undefined) input.data[key] = input.base.data[key];
+        }
+      }
       if (input.kind === 'personal') {
         const normalize = (data: Record<string, unknown>) => {
           const parsed = personalScheduleSchema.parse(data);

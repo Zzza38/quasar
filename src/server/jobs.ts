@@ -4,12 +4,15 @@ import { pruneGlobalChat } from './global-chat';
 import { pruneGroupChat } from './group-chat';
 import { NotificationService } from './notifications';
 import { ScheduleFeedService } from './schedule-feed';
+import { SchoologyService } from './schoology';
+import { Service } from './service';
 import type { Db } from './db';
 
-type Job = 'calendar' | 'schedule' | 'notifications' | 'chat' | 'support';
+type Job = 'calendar' | 'schedule' | 'schoology' | 'notifications' | 'chat' | 'support';
 type Jobs = {
   calendar: Pick<CalendarService, 'refreshDue'>;
   schedule: Pick<ScheduleFeedService, 'refreshDue'>;
+  schoology: Pick<SchoologyService, 'tagAll'>;
   notifications: Pick<NotificationService, 'deliverDue' | 'deliverChat' | 'deliverSupport'>;
   chat: { prune: (now: Date) => void };
 };
@@ -37,11 +40,11 @@ export function errorSummary(error: unknown): string {
 
 /**
  * Single sequential loop: a slow cycle cannot overlap the following cycle. One cycle runs
- * calendar refresh → class-schedule sync → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
+ * calendar refresh → class-schedule sync → Schoology class tags → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
-  calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
+  calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), schoology: new SchoologyService(new Service(db)), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
 }): { stop: () => Promise<void> } {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');
@@ -56,6 +59,9 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     try { await jobs.calendar.refreshDue(); } catch (error) { options.onError?.('calendar', error); }
     if (stopped) return;
     try { await jobs.schedule.refreshDue(); } catch (error) { options.onError?.('schedule', error); }
+    if (stopped) return;
+    // Class tags for imported Schoology tasks, right after the calendar refresh that brings new ones in.
+    try { await push('schoology', () => jobs.schoology.tagAll()); } catch (error) { options.onError?.('schoology', error); }
     if (stopped) return;
     try { await push('notifications', () => jobs.notifications.deliverDue()); } catch (error) { options.onError?.('notifications', error); }
     if (stopped) return;
