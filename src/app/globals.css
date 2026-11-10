@@ -333,6 +333,9 @@ html[data-rgb-mode] body > div:first-of-type {
   /* Chat (docs/CHAT.md §7): a new bubble rises in; the reduced-motion rule above turns it off. No fill mode on purpose:
      a filled transform animation keeps a stacking context (Chrome), which would paint later bubbles over an earlier
      bubble's action sheet. The end state is the element's own style. */
+  .saved-countdown { animation: saved-countdown 3s linear forwards; }
+  @keyframes saved-countdown { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
   /* A countdown digit rolling up as the seconds tick (Roll in views/today.tsx): the previous digit sits just above, so it
      leaves through the top of the clipped number as the new one rises in. */
   /* The countdown outside the countdown-slide beta: a changed digit fades up into place. */

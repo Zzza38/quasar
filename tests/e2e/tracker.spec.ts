@@ -514,6 +514,7 @@ test('sidebar closes without an empty intermediate rail', async ({ page, context
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto('/classes');
   await expect(page.getByRole('button', { name: 'Collapse navigation sidebar' })).toBeVisible();
+  await expect(page.locator('.app-sidebar').getByRole('button', { name: 'Saved. Dismiss notification', exact: true })).toBeVisible();
 
   const frame = await page.evaluate(async () => {
     const sidebar = document.querySelector('.app-sidebar')!;
@@ -527,7 +528,7 @@ test('sidebar closes without an empty intermediate rail', async ({ page, context
       width: sidebar.getBoundingClientRect().width,
       nav: center('[data-slot="sidebar-content"] a svg'),
       logo: center('[data-slot="sidebar-header"] button svg'),
-      status: center('[data-slot="sidebar-footer"] [role="status"] svg'),
+      status: center('[data-slot="sidebar-footer"] [aria-label="Saved. Dismiss notification"] svg'),
     };
   });
   expect(frame.width).toBe(56);
