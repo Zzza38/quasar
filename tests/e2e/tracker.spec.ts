@@ -810,7 +810,7 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
   await page.goto('/tasks');
   const before = page.getByRole('region', { name: /^Before school resumes/ });
   const school = page.getByRole('region', { name: /^Tuesday ·/ });
-  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  const second = page.getByRole('region', { name: /^Wednesday ·/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect(before).toContainText('Monday video');
@@ -818,24 +818,62 @@ test('holiday deadlines appear before the next school day on desktop and mobile'
     await expect(before).toContainText('11:59 PM');
     await expect(school).toContainText('Tuesday homework');
     await expect(school).toContainText('Next school day');
-    await expect(week).toContainText('Wednesday quiz');
+    await expect(second).toContainText('Wednesday quiz');
     await expect(page.locator('[id^="group-"]')).toHaveText([
-      /Before school resumes · 1/, /Tuesday · 1Next school day/, /Next 7 days · 1/,
+      /Before school resumes · 1/, /Tuesday · 1Next school day/, /Wednesday · 1/,
     ]);
     expect((await before.boundingBox())!.y).toBeLessThan((await school.boundingBox())!.y);
-    expect((await school.boundingBox())!.y).toBeLessThan((await week.boundingBox())!.y);
+    expect((await school.boundingBox())!.y).toBeLessThan((await second.boundingBox())!.y);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`holiday-deadlines-${width}.png`), fullPage: true });
   }
   await before.getByLabel('Mark Monday video complete', { exact: true }).click();
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
-  await expect(week).toContainText('Wednesday quiz');
+  await expect(second).toContainText('Wednesday quiz');
   await expect(saved(page)).toBeVisible();
   await page.reload();
   await expect(before).toHaveCount(0);
   await expect(school).toContainText('Tuesday homework');
-  await expect(week).toContainText('Wednesday quiz');
+  await expect(second).toContainText('Wednesday quiz');
+});
+
+test('second school day separates its tasks without a pill on desktop and mobile', async ({ page, context }, testInfo) => {
+  const schedule = structuredClone(exampleSchedule);
+  schedule.exceptions.push({ date: '2026-11-11', kind: 'closure', advanceCycle: false });
+  const fixture = seed(undefined, true, schedule);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    const service = new Service(db);
+    for (const [title, dueDate] of [
+      ['Individual research planner', '2026-11-12'], ['Computer science test', '2026-11-12'],
+      ['Finish lab notebook', '2026-11-13'], ['AMC 10B competition', '2026-11-13'], ['Chemistry test', '2026-11-16'],
+    ]) service.sync(fixture.id, { mutationId: randomUUID(), id: randomUUID(), kind: 'task', base: null,
+      data: { title, dueDate, dueTime: '23:59', classId: null, notes: '', completed: false } });
+  } finally { db.close(); }
+  await authenticate(context, fixture.id);
+  await page.clock.setFixedTime(new Date('2026-11-10T17:00:00Z'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/tasks');
+  const second = page.getByRole('region', { name: /^Friday ·/ });
+  const week = page.getByRole('region', { name: /^Next 7 days/ });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(second).toContainText('Finish lab notebook');
+    await expect(second).toContainText('AMC 10B competition');
+    await expect(second).not.toContainText('Next school day');
+    await expect(second.getByRole('heading', { level: 2 })).toHaveText('Friday · 2');
+    await expect(week).toContainText('Chemistry test');
+    await expect(week).not.toContainText('Finish lab notebook');
+    await expect(page.locator('[id^="group-"]')).toHaveText([/Thursday · 2Next school day/, /Friday · 2/, /Next 7 days · 1/]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`second-school-day-${width}.png`), fullPage: true });
+  }
+  await second.getByLabel('Mark Finish lab notebook complete', { exact: true }).click();
+  await expect(second.getByRole('heading', { level: 2 })).toHaveText('Friday · 1');
+  await expect(saved(page)).toBeVisible();
+  await page.reload();
+  await expect(second).not.toContainText('Finish lab notebook');
 });
 
 test('Next 7 days gives each due date its own date column', async ({ page, context }, testInfo) => {
@@ -849,12 +887,13 @@ test('Next 7 days gives each due date its own date column', async ({ page, conte
     }
   } finally { db.close(); }
   await authenticate(context, fixture.id);
-  // Tuesday 2026-10-20, so Thursday and Friday both fall in Next 7 days.
+  // Tuesday 2026-10-20: Thursday is the second school day, and Friday stays in Next 7 days.
   await page.clock.setFixedTime(new Date('2026-10-20T16:00:00Z'));
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/tasks');
   const week = page.getByRole('region', { name: /^Next 7 days/ });
-  const thursday = week.getByRole('region', { name: /^Thursday, Oct 22/ });
+  const second = page.getByRole('region', { name: /^Thursday ·/ });
+  const thursday = second.getByRole('region', { name: /^Thursday, Oct 22/ });
   const friday = week.getByRole('region', { name: /^Friday, Oct 23/ });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -876,7 +915,7 @@ test('Next 7 days gives each due date its own date column', async ({ page, conte
         expect(Math.abs(middle(await day.getByRole('checkbox').first().boundingBox()) - first)).toBeLessThan(2);
       }
       // ...without running into the group's title above it.
-      const title = (await week.getByRole('heading', { level: 2 }).boundingBox())!;
+      const title = (await second.getByRole('heading', { level: 2 }).boundingBox())!;
       expect((await thursday.getByRole('heading').boundingBox())!.y).toBeGreaterThan(title.y + title.height + 4);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
