@@ -224,8 +224,10 @@ function NowSplitCard({ split, current, upcoming, now }: { split: NowSplit; curr
     '--ns-gap': `${split.gap}%`, '--ns-next': `${split.next}%`, '--ns-progress': `${split.progress}%`,
     '--ns-fill-now': currentBase ? barTint(currentBase) : '#fff', '--ns-fill-next': barTint(upcomingBase),
   } as CSSProperties;
+  // A long name is set smaller, and then so is the other one: both classes are written at one size.
+  const long = [current, upcoming].some((period) => period && (period.class?.name ?? period.label).length > 14);
   return <div className="ns-wrap">
-    <div className="ns-card shadow-float" role="region" aria-label="Next class" data-phase={split.phase} style={style}>
+    <div className="ns-card shadow-float" role="region" aria-label="Next class" data-phase={split.phase} data-long={long ? '' : undefined} style={style}>
       {current && currentBase && <div className="ns-part ns-seg ns-now" style={{ background: heroGradient(currentBase) }}><SplitPart kind="now" period={current} now={now} /></div>}
       {split.gap > 0 && <div className="ns-part ns-seg ns-gap"><div className="ns-box">
         <span className="ns-gap-label"><span className="ns-gap-word">{split.gapMinutes > 10 ? 'Break' : 'Passing'}</span><b>{formatMinutesInWords(split.gapMinutes)}</b></span>
@@ -249,7 +251,7 @@ function SplitPart({ kind, period, now }: { kind: 'now' | 'next' | 'only'; perio
   return <div className="ns-box">
     {/* A part too small for its text still tells a screen reader what is next. */}
     {ahead && <p className="ns-sr">Then {name} at {formatTime(period.start)}{room ? `, ${room}` : ''}</p>}
-    <div className="ns-in" data-long={name.length > 14 ? '' : undefined}>
+    <div className="ns-in">
       <span className="ns-eyebrow">{kind === 'now' ? 'Right now' : kind === 'next' ? 'Next' : 'Up next'}{ahead && <span className="ns-when"> · {formatTime(period.start)}</span>}{ahead && room && <span className="ns-eroom"> · {room}</span>}</span>
       <Name className="ns-name">{name}</Name>
       <p className="ns-meta">
