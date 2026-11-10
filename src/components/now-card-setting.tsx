@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { ErrorText, Toggle } from './primitives';
 
+/** Beta key for the split Now card: members get this switch, and the card it turns on (NowSplitCard in views/today.tsx). */
+export const NOW_SPLIT_BETA = 'now-card-setting';
+
 /**
- * Account → Look: the switch that shares Today's Now card with the next class (NowSplitCard in views/today.tsx). The
- * choice belongs to the account, so it follows the member to every device and needs a connection to change.
+ * Account → Look, for members of the NOW_SPLIT_BETA beta: the switch that shares Today's Now card with the next class.
+ * The choice belongs to the account, so it follows the member to every device and needs a connection to change.
  */
 export function NowCardSetting({ accountId, enabled, online, onChange }: { accountId: string; enabled: boolean; online: boolean; onChange: (enabled: boolean) => Promise<void> }) {
   // The member's choice shows at once and stays until the workspace catches up.

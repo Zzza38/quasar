@@ -7,6 +7,8 @@ import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolve
 import { addDays, classColor, daysBetween, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { barTint, heroBase } from '@/lib/color';
 import { nowSplit, type NowSplit } from '@/lib/now-split';
+import { Beta } from '../betas';
+import { NOW_SPLIT_BETA } from '../now-card-setting';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
@@ -191,7 +193,7 @@ function NowCard({ splitCard, next, following, previous, now, today, onSetup, on
       </div>
     </CardContent>
   </Card>;
-  // The split is the member's choice (Account → Look). It needs two periods of the same day: the one that is on and the
+  // The split is a beta member's choice (Account → Look). It needs two periods of the same day: the one that is on and the
   // one after it, or, between periods, the one that just ended and the one about to begin. Otherwise, and while the
   // card still asks for classes, it stays whole.
   if (!splitCard) return classic;
@@ -201,7 +203,7 @@ function NowCard({ splitCard, next, following, previous, now, today, onSetup, on
     ? nowSplit({ start: new Date(from.startAt).getTime(), end: new Date(from.endAt).getTime(), nextStart: new Date(upcoming.startAt).getTime(), now: now.getTime() })
     : null;
   if (!split || !upcoming) return classic;
-  return <NowSplitCard split={split} current={current ? next : null} upcoming={upcoming} now={now} />;
+  return <Beta id={NOW_SPLIT_BETA} fallback={classic}><NowSplitCard split={split} current={current ? next : null} upcoming={upcoming} now={now} /></Beta>;
 }
 
 const heroGradient = (base: string) => `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)`;
