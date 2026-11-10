@@ -94,9 +94,9 @@ for (const width of [390, 1280]) {
     await expect(now.getByRole('button', { name: 'Ends in 59 min' })).toBeVisible();
     // 8:00 to 9:10 is 70 minutes, 10 of them between the two classes.
     const total = along(await box(card));
-    // The parts glide to a new size, so every measurement waits for them to settle.
+    // The parts glide to a new size (here from the server's clock to the test's), so every measurement waits for them to settle.
     await expect.poll(async () => along(await box(next)) / total).toBeCloseTo(0.025, 2);
-    expect(along(await box(gap)) / total).toBeCloseTo(10 / 70, 2);
+    await expect.poll(async () => along(await box(gap)) / total).toBeCloseTo(10 / 70, 2);
     // Too small for words, so nothing of the next class is drawn, but a screen reader still gets it.
     await expect(next.getByRole('heading', { name: 'Biology' })).toBeHidden();
     await expect(next.getByText('Then Biology at 9:10 AM, Room 214')).toBeAttached();
@@ -112,7 +112,7 @@ for (const width of [390, 1280]) {
     await expect(next.getByRole('button', { name: 'Starts in 34 min' })).toBeVisible();
     // 36 of the period's 60 minutes are gone, so the next class has 60% of what the grey part leaves.
     await expect.poll(async () => along(await box(next)) / total).toBeCloseTo(0.6 * 60 / 70, 2);
-    expect(along(await box(gap)) / total).toBeCloseTo(10 / 70, 2);
+    await expect.poll(async () => along(await box(gap)) / total).toBeCloseTo(10 / 70, 2);
     // The bar runs the length of the card and is 60% full.
     const fill = bar.locator('.ns-fill');
     await expect.poll(async () => along(await box(fill)) / along(await box(bar))).toBeCloseTo(0.6, 2);
