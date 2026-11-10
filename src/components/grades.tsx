@@ -311,7 +311,7 @@ function GoalBox({ cls, scenario, projected, today, onGoal, online, goalNote }: 
     </div>
     <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2.5">
       <Field label="Goal type" htmlFor={`${id}-type`} className="min-w-0">
-        <Select id={`${id}-type`} small disabled={!online} value={goal.kind} onChange={(event) => setKind(event.target.value)}>
+        <Select id={`${id}-type`} className="min-w-0 [&_[data-slot=select-value]]:min-w-0" small disabled={!online} value={goal.kind} onChange={(event) => setKind(event.target.value)}>
           <option value="letter">Letter grade</option>
           <option value="percent">Custom percentage</option>
         </Select>

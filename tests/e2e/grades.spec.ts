@@ -329,7 +329,10 @@ test('schoology-connect beta: connecting, the finish-connecting recovery, errors
   await expect(alerts(page)).toContainText('Schoology didn’t answer. Try again in a minute. Showing the grades from the last check.');
   await expect(cards(page).getByRole('listitem')).toHaveCount(3);
   school.grades = 'ok';
+  const recovered = page.waitForResponse(response => response.url().includes('/api/trpc/schoology.gradebook') && response.request().method() === 'POST');
   await alerts(page).getByRole('button', { name: 'Try again' }).click();
+  expect((await recovered).ok()).toBe(true);
+  await expect(page.getByRole('button', { name: 'Refresh grades' })).toBeEnabled();
   await expect(alerts(page)).toHaveCount(0);
 
   // Schoology refuses the saved token: the connection is dropped and the student is asked to connect again.

@@ -54,7 +54,6 @@ test.afterEach(async () => { await Promise.all(contexts.splice(0).map((context) 
 async function signedIn(browser: Browser, id: string): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   contexts.push(context);
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const token = await encode({ secret: process.env.E2E_AUTH_SECRET!, token: { userId: id, authAt: Date.now() }, maxAge: 3600 });
   await context.addCookies([{ name: 'next-auth.session-token', value: token, domain: 'localhost', path: '/', httpOnly: true, sameSite: 'Lax', expires: Date.now() / 1000 + 3600 }]);
   return hydrating(await context.newPage());
@@ -70,44 +69,38 @@ async function openAccount(page: Page) {
   return page.getByRole('dialog', { name: 'Account', exact: true });
 }
 
-test('parent summary: the student shares chosen sections through a private link, and turning it off kills it', async ({ browser }) => {
+test('parent summary: settings omit sharing, while legacy API links remain private and revocable', async ({ browser }) => {
   test.setTimeout(120_000);
   const f = seed();
   const page = await signedIn(browser, f.id);
+  // Show the real Plus pitch without configuring Stripe or changing server entitlements.
+  await page.route(/\/api\/trpc\/.*billing\.status/, async route => {
+    const response = await route.fetch();
+    const json = await response.json();
+    const billing = { result: { data: { enabled: true, plan: 'free', status: null, renewsAt: null, cancelAtPeriodEnd: false, hasCustomer: false, prices: [] } } };
+    const methods = new URL(route.request().url()).pathname.split('/').pop()!.split(',');
+    if (Array.isArray(json)) json[methods.indexOf('billing.status')] = billing;
+    await route.fulfill({ response, json: Array.isArray(json) ? json : billing });
+  });
   await page.goto('/tasks');
-  let account = await openAccount(page);
-  // Billing is off on the test server, so there is no Plus pitch and the summary is unlocked.
+  const account = await openAccount(page);
+  await expect(account.getByRole('list', { name: 'What Plus adds' })).toContainText('Plan my week');
+  await expect(account.getByRole('list', { name: 'What Plus adds' })).not.toContainText(/parent|summary/i);
+  await expect(account.getByRole('switch', { name: 'Share a weekly summary with a parent' })).toHaveCount(0);
+  await expect(account.getByRole('textbox', { name: 'Summary link' })).toHaveCount(0);
   await expect(account.getByText('A weekly summary for a parent')).toHaveCount(0);
-  const toggle = account.getByRole('switch', { name: 'Share a weekly summary with a parent' });
-  await toggle.scrollIntoViewIfNeeded();
-  await expect(toggle).not.toBeChecked();
-  await toggle.click();
-  const field = account.getByRole('textbox', { name: 'Summary link' });
-  await expect(field).toHaveValue(/\/summary\/[A-Za-z0-9_-]{43}$/);
-  const link = await field.inputValue();
-  // Only the first section starts ticked.
-  await expect(account.getByRole('checkbox', { name: /Tasks due this week/ })).toBeChecked();
-  for (const name of [/How many tasks are overdue/, /Upcoming tests and quizzes/, /What you finished this week/]) await expect(account.getByRole('checkbox', { name })).not.toBeChecked();
-  await account.getByRole('checkbox', { name: /Upcoming tests and quizzes/ }).click();
-  await expect.poll(() => sections(f.id)).toEqual({ dueThisWeek: true, overdue: false, assessments: true, completed: false });
-  await account.getByRole('button', { name: 'Copy' }).click();
-  await expect(account.getByRole('button', { name: 'Copied' })).toBeVisible();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link);
-  await expect(account.getByText('Nobody has opened this link yet.')).toBeVisible();
-  await account.getByRole('group', { name: 'What the link shows' }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: test.info().outputPath('settings-light.png') });
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await page.screenshot({ path: test.info().outputPath('settings-dark.png') });
-  await page.emulateMedia({ colorScheme: 'light' });
+  expect(sections(f.id)).toBeNull();
 
-  // The preview is the parent's page.
-  await account.getByRole('button', { name: 'Preview' }).click();
-  const preview = page.getByRole('dialog', { name: 'What your parent sees' });
-  await expect(preview.getByRole('heading', { name: 'Ada’s week' })).toBeVisible();
-  await expect(preview.getByRole('region', { name: 'Upcoming tests and quizzes' })).toContainText('Unit 3 test');
-  await expect(preview.getByRole('region', { name: 'Overdue' })).toHaveCount(0);
-  await page.screenshot({ path: test.info().outputPath('preview-light.png') });
-  await preview.getByRole('button', { name: 'Done' }).click();
+  // Exercise the legacy API without bringing its removed settings back.
+  const mutate = async (method: string, extra = {}) => page.evaluate(async ({ method, input }) => {
+    const response = await fetch(`/api/trpc/parentSummary.${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    if (!response.ok) throw new Error(await response.text());
+    return (await response.json()).result.data;
+  }, { method, input: { accountId: f.id, ...extra } });
+  const enabled = await mutate('enable');
+  const link = new URL(`/summary/${enabled.token}`, page.url()).href;
+  await mutate('setSections', { sections: { dueThisWeek: true, overdue: false, assessments: true, completed: false } });
+  expect(sections(f.id)).toEqual({ dueThisWeek: true, overdue: false, assessments: true, completed: false });
 
   // A logged-out browser sees only the chosen sections, the first name, and no notes.
   const mom = await parent(browser);
@@ -138,19 +131,9 @@ test('parent summary: the student shares chosen sections through a private link,
   expect(await narrow.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
   await narrow.screenshot({ path: test.info().outputPath('parent-360.png'), fullPage: true });
 
-  // The student sees the views.
-  await page.keyboard.press('Escape');
-  await expect(account).toHaveCount(0);
-  account = await openAccount(page);
-  await expect(account.getByText(/^Last viewed .+ Opened 2 times since this link was made\.$/)).toBeVisible();
-  // The link isn't shown again: the server keeps only its hash.
-  await expect(account.getByRole('textbox', { name: 'Summary link' })).toHaveCount(0);
-
   // A new link kills the old one.
-  await account.getByRole('button', { name: 'Make a new link' }).click();
-  await page.getByRole('dialog', { name: 'Make a new link?' }).getByRole('button', { name: 'Make a new link' }).click();
-  await expect(account.getByRole('textbox', { name: 'Summary link' })).toHaveValue(/\/summary\/[A-Za-z0-9_-]{43}$/);
-  const fresh = await account.getByRole('textbox', { name: 'Summary link' }).inputValue();
+  const regenerated = await mutate('regenerate');
+  const fresh = new URL(`/summary/${regenerated.token}`, page.url()).href;
   expect(fresh).not.toBe(link);
   await mom.goto(link);
   await expect(mom.getByRole('heading', { name: 'This link doesn’t work' })).toBeVisible();
@@ -159,8 +142,7 @@ test('parent summary: the student shares chosen sections through a private link,
   await expect(mom.getByRole('heading', { level: 1, name: 'Ada’s week' })).toBeVisible();
 
   // Turning it off kills the link.
-  await account.getByRole('switch', { name: 'Share a weekly summary with a parent' }).click();
-  await expect(account.getByRole('switch', { name: 'Share a weekly summary with a parent' })).not.toBeChecked();
+  await mutate('disable');
   await expect.poll(() => sections(f.id)).toBeNull();
   await mom.goto(fresh);
   await expect(mom.getByRole('heading', { name: 'This link doesn’t work' })).toBeVisible();
