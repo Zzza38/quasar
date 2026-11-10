@@ -1,13 +1,13 @@
 'use client';
 
 import { useMemo, useState, type CSSProperties } from 'react';
+import { nextCycleDates, skippedCycleDates } from '@/domain/cycle-dates';
 import { REMOVED_PERIOD_LABEL, cycleDaySlots, displayPeriodLabel, type PersonalSchedule, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
 import { formatDate, formatRange, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from './app-state';
 import { effectiveSchedule } from './overrides';
 import { Button, Chip, ChoiceGroup, ChoiceItem, Hint } from './primitives';
-import { nextCycleDates } from './rotation-overview';
 import { Timeline } from './views/today';
 
 /** A moment before every period, so the Today timeline draws a rotation day with no "now" row and nothing faded. */
@@ -36,6 +36,12 @@ export function cycleDayPeriods(schedule: Schedule, day: Schedule['cycleDays'][n
     });
 }
 
+/** "today", "tomorrow", or "on Wednesday, Nov 11", to follow "No school". */
+function dayOff(date: string, today: string): string {
+  const relative = relativeDate(date, today, { weekday: 'long' });
+  return relative === 'Today' || relative === 'Tomorrow' ? relative.toLowerCase() : `on ${relative}`;
+}
+
 /**
  * The rotation drawn like the Today card: pick a day of the cycle, and its periods show as the same timeline rows.
  * It opens on today's cycle day, or on the next school day's when there is no school today.
@@ -44,6 +50,7 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
   const { schedule: school, personal, today } = state;
   const schedule = effectiveSchedule(school, personal);
   const nextDates = useMemo(() => nextCycleDates(school, personal, today, schedule.cycleDays.length), [school, personal, today, schedule.cycleDays.length]);
+  const skips = useMemo(() => skippedCycleDates(school, personal, today, nextDates), [school, personal, today, nextDates]);
   const soonest = useMemo(() => [...nextDates].sort((left, right) => left[1].localeCompare(right[1]))[0]?.[0], [nextDates]);
   const [picked, setPicked] = useState<string | null>(null);
   const day = schedule.cycleDays.find((entry) => entry.id === picked) ?? schedule.cycleDays.find((entry) => entry.id === soonest) ?? schedule.cycleDays[0];
@@ -52,6 +59,7 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
   const count = schedule.cycleDays.length;
   const multi = count > 1;
   const next = nextDates.get(day.id);
+  const skip = skips.get(day.id);
   const adjusted = personal.cycleDayOverrides.some((entry) => entry.cycleDayId === day.id);
   // Phones fit six tiles across; a longer rotation wraps into two even rows.
   const columns = { '--cols': count <= 10 ? count : Math.ceil(count / 2), '--cols-phone': count <= 6 ? count : Math.ceil(count / 2) } as CSSProperties;
@@ -63,12 +71,14 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
           const isToday = date === today;
           return <ChoiceItem key={entry.id} value={entry.id} aria-label={`${entry.label}${date ? `, next ${relativeDate(date, today, { weekday: 'long' })}` : ''}`}
             // The Schedule month grid's cells: today is a grey tile with a short underline under its number, and the
-            // chosen day is a grey outline. No accent fill and no ring inside a ring.
+            // chosen day is a grey outline. No accent fill and no ring inside a ring. The label under the number is the
+            // weekday with the day of the month ("Wed 25"), because the cells are in rotation order and not date order:
+            // a day off can push one cycle day two weeks out while its neighbours meet this week.
             className={cn('group/day grid min-h-[3rem] min-w-0 content-center justify-items-center gap-px rounded-lg px-0.5 pt-1 pb-2 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[3.5rem]',
               'data-[state=on]:inset-ring-[1.5px] data-[state=on]:inset-ring-control-border', isToday ? 'bg-foreground/[0.06] data-[state=on]:bg-foreground/[0.09]' : 'data-[state=off]:hover:bg-muted')}>
             <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums',
               isToday && 'relative font-extrabold after:absolute after:-bottom-px after:left-1/2 after:h-0.5 after:w-3.5 after:-translate-x-1/2 after:rounded-full after:bg-primary')}>{index + 1}</span>
-            <small className="h-[15px] max-w-full truncate text-[10.5px] font-semibold leading-[15px] text-muted-foreground group-data-[state=on]/day:text-foreground">{date ? (isToday ? 'Today' : formatDate(date, { weekday: 'short' }).slice(0, 3)) : ' '}</small>
+            <small className="h-[15px] max-w-full truncate text-[10.5px] font-semibold leading-[15px] text-muted-foreground group-data-[state=on]/day:text-foreground">{date ? (isToday ? 'Today' : `${formatDate(date, { weekday: 'short' }).slice(0, 3)} ${Number(date.slice(8))}`) : ' '}</small>
           </ChoiceItem>;
         })}
       </ChoiceGroup>
@@ -78,6 +88,7 @@ export function RotationTimeline({ state, onAdjust, onJump }: { state: AppState;
       <div className="grid min-w-0 gap-0.5">
         <h3 className="flex flex-wrap items-center gap-2 text-[15.5px] font-bold tracking-tight">{day.label}{multi && next && <span className="font-semibold text-muted-foreground">· {relativeDate(next, today, { weekday: 'long' })}</span>}{adjusted && <Chip tone="now">Adjusted</Chip>}</h3>
         <Hint>{periods.length === 0 ? 'No periods' : `${periods.length} periods · ${formatRange(periods[0].start, periods[periods.length - 1].end)}`}</Hint>
+        {skip && next && <Hint>No school {dayOff(skip, today)}, so {day.label} is skipped until {formatDate(next, { weekday: 'long' })}.</Hint>}
       </div>
       <div className="flex flex-wrap gap-1">
         <Button size="sm" variant="ghost" icon="edit" onClick={() => onAdjust(day.id)}>Adjust {day.label}</Button>

@@ -13,7 +13,7 @@ import { exampleSchedule } from '../../src/domain/example';
 
 /**
  * A student in a ten-member school (so changes go through proposals), with four classes on the example rotation
- * and three closures on the calendar. `beta` joins the school-hub beta, the key the School redesign is gated on.
+ * and four days off on the calendar, one of which (tomorrow) uses up a day of the rotation. `beta` joins the school-hub beta, the key the School redesign is gated on.
  */
 function seed(beta: boolean, menu = false) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -27,7 +27,7 @@ function seed(beta: boolean, menu = false) {
     const id = user('Maya');
     const closure = (date: string) => ({ date, kind: 'closure' as const, advanceCycle: false });
     const name = `Hub High ${id.slice(0, 6)}`;
-    const school = service.createSchool(id, { name, location: 'Boston, MA', schedule: { ...exampleSchedule, exceptions: [closure('2026-10-12'), closure('2026-11-26'), closure('2026-11-27')] } });
+    const school = service.createSchool(id, { name, location: 'Boston, MA', schedule: { ...exampleSchedule, exceptions: [{ date: '2026-09-18', kind: 'closure' as const, advanceCycle: true }, closure('2026-10-12'), closure('2026-11-26'), closure('2026-11-27')] } });
     service.join(id, { schoolId: school.id, choice: 'community', grade: '10' });
     const members = [id];
     for (let index = 0; index < 9; index += 1) { const member = user(`Member ${index}`); members.push(member); service.join(member, { schoolId: school.id, choice: 'community', grade: '10' }); }
@@ -107,7 +107,19 @@ test('the redesigned School page shows one section beside the school card, and t
   expect(Math.abs(headingLeft - timeLeft)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath('rotation-desktop.png'), fullPage: true });
 
+  // The cells are in rotation order, so each names its date and not only a weekday: with no school tomorrow, Day 9 is
+  // skipped and next meets two weeks out, while Day 10 beside it meets on Monday.
+  await expect(days.getByRole('radio', { name: 'Day 8, next Today' })).toHaveText(/^8\s*Today$/);
+  await expect(days.getByRole('radio', { name: /^Day 9, next/ })).toHaveText(/^9\s*Fri 2$/);
+  await expect(days.getByRole('radio', { name: /^Day 10, next/ })).toHaveText(/^10\s*Mon 21$/);
+  await expect(rotation.getByText(/is skipped until/)).toHaveCount(0);
+  await days.getByRole('radio', { name: /^Day 9, next/ }).click();
+  await expect(rotation.getByRole('heading', { level: 3 })).toContainText('Friday, Oct 2');
+  await expect(rotation).toContainText('No school tomorrow, so Day 9 is skipped until Friday, Oct 2.');
+  await page.screenshot({ path: testInfo.outputPath('rotation-desktop-skipped-day.png') });
+
   await days.getByRole('radio', { name: /^Day 2, next/ }).click();
+  await expect(rotation.getByText(/is skipped until/)).toHaveCount(0);
   await expect(rotation.getByRole('heading', { level: 3 })).toContainText('Day 2');
   await expect(rotation.getByRole('listitem')).toHaveText([/Chemistry/, /English 10/, /Lunch/, /US History/]);
   await expect(rotation.getByRole('button', { name: 'Adjust Day 2' })).toBeVisible();
@@ -115,13 +127,13 @@ test('the redesigned School page shows one section beside the school card, and t
 
   // Closures on back-to-back school days read as one run.
   const comingUp = page.getByRole('region', { name: 'Coming up' });
-  await expect(comingUp.getByRole('button')).toHaveText([/Mon, Oct 12.*No school/, /Nov 26 – Nov 27.*No school/]);
+  await expect(comingUp.getByRole('button')).toHaveText([/Sep 18.*No school/, /Mon, Oct 12.*No school/, /Nov 26 – Nov 27.*No school/]);
 
   // The shared schedule's chips skip what every member knows: that there is a lunch, and the school's time zone.
   const shared = page.getByRole('region', { name: 'Shared schedule' });
   await expect(shared).toContainText('10-day rotation');
   await expect(shared).toContainText('4 class periods');
-  await expect(shared).toContainText('3 exceptions');
+  await expect(shared).toContainText('4 exceptions');
   await expect(shared).not.toContainText('Lunch');
   await expect(shared).not.toContainText('Eastern Time');
 

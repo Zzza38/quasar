@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { displayPeriodLabel, resolveDayInRange, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import { addDays, classColor, formatDate, formatRange, relativeDate } from '@/lib/format';
+import { nextCycleDates } from '@/domain/cycle-dates';
+import { displayPeriodLabel } from '@/domain/schedule';
+import { classColor, formatDate, formatRange, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from './app-state';
 import { Icon } from './icon';
@@ -14,18 +15,6 @@ function nextLabel(next: string, today: string): string {
   if (next === today) return 'Today';
   if (relative === 'Tomorrow') return 'Tomorrow';
   return formatDate(next, { weekday: 'short' });
-}
-
-/** The next date each cycle day falls on, from today, looking up to 90 days ahead. A day that does not come up is absent. */
-export function nextCycleDates(school: Schedule, personal: PersonalSchedule, today: string, cycleDays: number): Map<string, string> {
-  const found = new Map<string, string>();
-  for (let offset = 0; offset < 90 && found.size < cycleDays; offset += 1) {
-    const date = addDays(today, offset);
-    const day = resolveDayInRange(school, date, personal);
-    if (!day) break;
-    if (!day.closed && !found.has(day.cycleDayId)) found.set(day.cycleDayId, date);
-  }
-  return found;
 }
 
 export function RotationOverview({ state, onAdjust, onJump }: { state: AppState; onAdjust: (cycleDayId: string) => void; onJump?: (date: string) => void }) {
