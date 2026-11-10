@@ -69,8 +69,24 @@ describe('betas', () => {
     // Removing the beta from the list switches it off for its members, and its code stops working.
     f.save(removeBeta(f.registry(), 'month-grid'));
     expect(f.keys(f.member)).toEqual([]);
+    expect(f.db.prepare('SELECT count(*) n FROM beta_members').get()).toEqual({ n: 0 });
     await expect(f.join(f.other, 'GRID-2026')).rejects.toThrow(WRONG_CODE_MESSAGE);
     await expect(f.caller(f.member).beta.feedback({ accountId: f.member, key: 'month-grid', message: 'After it ended', diagnostics })).rejects.toThrow('not in that beta');
+  });
+
+  it('removes retired memberships for all accounts and preserves active and paused betas', async () => {
+    const f = fixture();
+    f.save(createBeta(f.registry(), { key: 'keep-beta', name: 'Keep beta', code: 'KEEP2026' }));
+    for (const id of [f.member, f.other]) {
+      await f.join(id, 'GRID-2026');
+      await f.join(id, 'KEEP2026');
+    }
+    f.save(setBetaOpen(removeBeta(f.registry(), 'month-grid'), 'keep-beta', false));
+    expect(f.keys(f.member)).toEqual(['keep-beta']);
+    expect(f.db.prepare('SELECT beta_key key FROM beta_members ORDER BY user_id').all()).toEqual([
+      { key: 'keep-beta' }, { key: 'keep-beta' },
+    ]);
+    expect(f.keys(f.other)).toEqual(['keep-beta']);
   });
 
   it('lists open public betas and joins one with a tap, but never a private one', async () => {

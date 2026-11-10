@@ -10,7 +10,7 @@ import { nowSplit, type NowSplit } from '@/lib/now-split';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
-import { Beta, useBeta } from '../betas';
+import { Beta } from '../betas';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
@@ -264,9 +264,6 @@ function SplitPart({ kind, period, now }: { kind: 'now' | 'next' | 'only'; perio
   </div>;
 }
 
-/** Beta key for the clipped, sliding countdown (Countdown below). */
-const COUNTDOWN_SLIDE_BETA = 'countdown-slide';
-
 /**
  * "Ends in 9 min" that reveals seconds ("Ends in 8:23") while hovered, focused or
  * tapped. Minutes round up in both modes (see minutesLeft). Both forms share one grid
@@ -280,7 +277,6 @@ function Countdown({ label, shortLabel, target, now, split }: { label: string; s
   const [pinned, setPinned] = useState(false);
   const [tick, setTick] = useState(now);
   const precise = hover || focus || pinned;
-  const slide = useBeta(COUNTDOWN_SLIDE_BETA);
   // The hidden seconds form keeps time too, so revealing it moves only the characters it already shows.
   useEffect(() => {
     const refresh = () => setTick(Date.now());
@@ -300,16 +296,11 @@ function Countdown({ label, shortLabel, target, now, split }: { label: string; s
     onPointerEnter={(event) => { if (event.pointerType === 'touch') return; setTick(Date.now()); setHover(true); }} onPointerLeave={() => setHover(false)}
     onFocus={(event) => show(setFocus, event.currentTarget.matches(':focus-visible'))()} onBlur={show(setFocus, false)} onClick={show(setPinned, !pinned)}>
     <small aria-hidden="true" className={split ? 'ns-count-label' : 'mr-2 text-[13px] font-bold uppercase tracking-[0.12em] text-white'}>{shortLabel ? <><span className="ns-count-long">{label}</span><span className="ns-count-short">{shortLabel}</span></> : label}</small>
-    {slide
-      ? <>{/* Adjacent lines travel the same distance at the same time, so no blank gap opens between them. */}
-        <span aria-hidden="true" className="pointer-events-none inline-grid justify-items-start overflow-hidden leading-[1.2] [clip-path:inset(0)]">
-          <Cascade text={compact} shown={!precise} away="-translate-y-full" />
-          <Cascade text={exact} shown={precise} away="translate-y-full" />
-        </span></>
-      : <span aria-hidden="true" className="inline-grid justify-items-start">
-        <FadeCascade text={compact} shown={!precise} away="-translate-y-[0.35em]" />
-        <FadeCascade text={exact} shown={precise} away="translate-y-[0.35em]" roll />
-      </span>}
+    {/* Adjacent lines travel the same distance at the same time, so no blank gap opens between them. */}
+    <span aria-hidden="true" className="pointer-events-none inline-grid justify-items-start overflow-hidden leading-[1.2] [clip-path:inset(0)]">
+      <Cascade text={compact} shown={!precise} away="-translate-y-full" />
+      <Cascade text={exact} shown={precise} away="translate-y-full" />
+    </span>
   </button>;
 }
 
@@ -322,17 +313,6 @@ function Cascade({ text, shown, away }: { text: string; shown: boolean; away: st
   return <span className={cn('col-start-1 row-start-1 h-[1.2em] whitespace-pre transition-[translate] duration-[240ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', !shown && away)} data-shown={shown}>
     {chars.map((char, index) => <span key={chars.length - index}
       className="inline-block h-[1.2em] overflow-hidden align-top [clip-path:inset(0)]"><Roll char={char} still={!shown} /></span>)}
-  </span>;
-}
-
-/**
- * The countdown's form outside the countdown-slide beta, a character per span so they can move one after another.
- * With `roll`, a character remounts when it changes, which plays countdown-tick on just that digit.
- */
-function FadeCascade({ text, shown, away, roll }: { text: string; shown: boolean; away: string; roll?: boolean }) {
-  return <span className="col-start-1 row-start-1" data-shown={shown}>
-    {[...text].map((char, index) => <span key={roll ? `${index}${char}` : index} style={{ transitionDelay: `${index * 28}ms` }}
-      className={cn('inline-block transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]', roll && 'countdown-tick', !shown && `${away} opacity-0`)}>{char}</span>)}
   </span>;
 }
 
