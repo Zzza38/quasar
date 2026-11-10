@@ -4,7 +4,7 @@ import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { readEntity, writeEntity } from './entities';
 import { emptyPersonalSchedule } from '@/domain/schedule';
-import { SchoologyService, schoologyAuthorization, schoologyConfig, summarizeGrades, type SchoologyConfig, type SchoologyFetch } from './schoology';
+import { SchoologyService, SCHOOLOGY_MEMBER_DEADLINE_MS, schoologyAuthorization, schoologyConfig, summarizeGrades, type SchoologyConfig, type SchoologyFetch } from './schoology';
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.useRealTimers(); });
@@ -174,6 +174,57 @@ describe('Connect Schoology', () => {
     const result = await schoology.finish(student, { oauthToken: 'req-token' });
     expect(result.classes.map(entry => entry.title)).toEqual(['Art', 'Biology: Section 2', 'Foundations of Wellness', 'Untitled class']);
     expect(schoology.status(student)).toMatchObject({ connected: { name: 'Sam Student' } });
+  });
+
+  it('keeps a valid connection and syncs assignments when the grades endpoint denies permission', async () => {
+    const fetcher = schoologyServer({
+      'users/4242/grades': () => json({}, 403),
+      'sections/11/assignments': () => json({ assignment: [{ id: 876, title: 'Permission-safe assignment', due: '2026-11-11 08:00:00' }] }),
+    });
+    const { student, schoology, db } = fixture({ fetcher, now: () => new Date('2026-11-10T12:00:00Z') });
+    await schoology.start(student);
+    await expect(schoology.finish(student, { oauthToken: 'req-token' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(schoology.grades(student)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(schoology.status(student)).toMatchObject({ connected: { name: 'Sam Student' } });
+    await schoology.sync(student);
+    expect(readEntity(db, student, 'sgy_876')?.data.title).toBe('Permission-safe assignment');
+    expect(schoology.status(student)).toMatchObject({ connected: { name: 'Sam Student' } });
+  });
+
+  it.each(['stop', 'deadline'] as const)('aborts active sync network work on %s', async reason => {
+    const f = fixture();
+    await f.schoology.start(f.student);
+    await f.schoology.finish(f.student, { oauthToken: 'req-token' });
+    const second = randomUUID();
+    f.db.prepare('INSERT INTO users(id,google_sub,email,display_name,created_at) VALUES(?,?,?,?,?)').run(second, second, `${second}@example.com`, 'Second', new Date().toISOString());
+    f.db.prepare(`INSERT INTO schoology_connections(user_id,token_encrypted,schoology_uid,name,connected_at,synced_at,import_assignments,auto_complete) SELECT ?, token_encrypted, schoology_uid, name, connected_at, synced_at, import_assignments, auto_complete FROM schoology_connections WHERE user_id=?`).run(second, f.student);
+    const stop = new AbortController(), deadline = new AbortController();
+    const originalTimeout = AbortSignal.timeout;
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => ms === SCHOOLOGY_MEMBER_DEADLINE_MS ? deadline.signal : originalTimeout(ms));
+    let active = 0, aborted = 0;
+    const requested: string[] = [];
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    f.fetcher.mockImplementation(async (url, init) => {
+      requested.push(url);
+      active++;
+      started();
+      return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => {
+        active--; aborted++; reject(init.signal!.reason);
+      }, { once: true }));
+    });
+    try {
+      const pass = reason === 'stop' ? f.schoology.tagAll(stop.signal) : f.schoology.sync(f.student);
+      const settled = reason === 'stop' ? pass : expect(pass).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      await ready;
+      if (reason === 'stop') stop.abort();
+      else deadline.abort();
+      await settled;
+      expect(active).toBe(0);
+      expect(aborted).toBe(2);
+      expect(requested).toHaveLength(2);
+      expect(f.db.prepare('SELECT COUNT(*) AS count FROM schoology_connections WHERE synced_at IS NOT NULL').get()).toEqual({ count: 1 });
+    } finally { timeout.mockRestore(); }
   });
 
   it('drops the connection when Schoology revokes it', async () => {

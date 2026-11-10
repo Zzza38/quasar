@@ -8,7 +8,7 @@ describe('background jobs',()=>{
   it('keeps reminders running across cycles while one Schoology pass is blocked', async () => {
     vi.useFakeTimers();
     let finish!: (value: { failed: number }) => void;
-    const tagAll = vi.fn(() => new Promise<{ failed: number }>(resolve => { finish = resolve; }));
+    const tagAll = vi.fn((_signal?: AbortSignal) => new Promise<{ failed: number }>(resolve => { finish = resolve; }));
     const deliverDue = vi.fn().mockResolvedValue({ failed: 0 });
     const { deliverChat, deliverSupport, prune } = idle();
     try {
@@ -22,6 +22,8 @@ describe('background jobs',()=>{
       const stopping = worker.stop().then(() => { stopped = true; });
       await Promise.resolve();
       expect(stopped).toBe(false);
+      expect(tagAll.mock.calls[0][0]).toBeInstanceOf(AbortSignal);
+      expect(tagAll.mock.calls[0][0]?.aborted).toBe(true);
       finish({ failed: 0 });
       await stopping;
     } finally { vi.useRealTimers(); }

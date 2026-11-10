@@ -51,6 +51,7 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');
   let stopped = false;
+  const schoologyStop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void>;
   let schoologyPending: Promise<void> | undefined;
@@ -64,7 +65,7 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     try { await jobs.schedule.refreshDue(); } catch (error) { options.onError?.('schedule', error); }
     if (stopped) return;
     if (!schoologyPending) {
-      schoologyPending = push('schoology', () => jobs.schoology.tagAll())
+      schoologyPending = push('schoology', () => jobs.schoology.tagAll(schoologyStop.signal))
         .catch(error => { options.onError?.('schoology', error); })
         .finally(() => { schoologyPending = undefined; });
     }
@@ -81,6 +82,7 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
   pending = cycle();
   return { stop: async () => {
     stopped = true;
+    schoologyStop.abort();
     if (timer) clearTimeout(timer);
     await pending;
     await schoologyPending;

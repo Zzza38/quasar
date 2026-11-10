@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -23,6 +24,9 @@ const API = 'https://api.schoology.com/v1';
 /** How long a started connection may sit on Schoology's approval page. */
 export const SCHOOLOGY_STATE_MS = 15 * 60_000;
 const REQUEST_DEADLINE_MS = 15_000;
+/** Total network budget for one member, including paginated reads and turn-in checks. */
+export const SCHOOLOGY_MEMBER_DEADLINE_MS = 2 * 60_000;
+const syncSignal = new AsyncLocalStorage<AbortSignal>();
 /** Graded sections missing from the member's section list that are looked up by id, per grade load. */
 const MISSING_SECTION_LOOKUPS = 10;
 /** How often the section index may be rebuilt while some imported task's assignment is still unknown. */
@@ -154,13 +158,16 @@ export class SchoologyService {
 
   /** Sends a signed request, re-signing on each redirect (users/me answers 303 and a reused nonce is refused). */
   private async call(url: string, token: Token | null): Promise<Response> {
+    syncSignal.getStore()?.throwIfAborted();
     const config = this.requireConfig();
     const fetcher = this.options.fetcher ?? fetch;
     for (let hop = 0; hop < 3; hop++) {
+      syncSignal.getStore()?.throwIfAborted();
       let response: Response;
       try {
-        response = await fetcher(url, { headers: { Authorization: schoologyAuthorization(config, token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_DEADLINE_MS) });
+        response = await fetcher(url, { headers: { Authorization: schoologyAuthorization(config, token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.any([AbortSignal.timeout(REQUEST_DEADLINE_MS), ...(syncSignal.getStore() ? [syncSignal.getStore()!] : [])]) });
       } catch { return fail('SERVICE_UNAVAILABLE', 'Couldn’t reach Schoology. Try again in a minute.'); }
+      syncSignal.getStore()?.throwIfAborted();
       const location = response.headers.get('location');
       if (response.status >= 300 && response.status < 400 && location) {
         let target: URL;
@@ -186,7 +193,8 @@ export class SchoologyService {
   }
   private async json(userId: string, path: string, token: Token): Promise<unknown> {
     const response = await this.call(`${this.api}/${path}`, token);
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 403) fail('FORBIDDEN', 'Schoology did not permit this request.');
+    if (response.status === 401) {
       this.db.prepare('DELETE FROM schoology_connections WHERE user_id=?').run(userId);
       this.forgetGradebook(userId);
       fail('UNAUTHORIZED', 'Schoology no longer lets Quasar in. Connect it again.');
@@ -271,8 +279,16 @@ export class SchoologyService {
   }
 
   /** The member's grades and every section they're in, including graded sections their section list leaves out. */
-  private async gradesAndSections(userId: string, row: { schoology_uid: string }, token: Token): Promise<{ grades: unknown; sections: RawSection[] }> {
-    const [grades, listed] = await Promise.all([this.json(userId, `users/${row.schoology_uid}/grades`, token), this.json(userId, `users/${row.schoology_uid}/sections`, token)]);
+  private async gradesAndSections(userId: string, row: { schoology_uid: string }, token: Token, allowHiddenGrades = false): Promise<{ grades: unknown; sections: RawSection[] }> {
+    const gradeRead = this.json(userId, `users/${row.schoology_uid}/grades`, token).catch(error => {
+      // Schools can hide grades while still allowing assignment and submission reads.
+      if (allowHiddenGrades && error instanceof TRPCError && error.code === 'FORBIDDEN') return { section: [] };
+      throw error;
+    });
+    // Wait for both reads even when one fails, so shutdown cannot leave the other using the database.
+    const reads = await Promise.allSettled([gradeRead, this.json(userId, `users/${row.schoology_uid}/sections`, token)]);
+    for (const read of reads) if (read.status === 'rejected') throw read.reason;
+    const [grades, listed] = reads.map(read => (read as PromiseFulfilledResult<unknown>).value);
     // A graded section can be missing from the member's section list (a linked sibling section of a listed course),
     // so look those up one by one. A failed lookup just leaves the class untitled.
     const known = new Set(((listed as { section?: { id?: unknown }[] })?.section ?? []).map(section => String(section.id)));
@@ -296,7 +312,9 @@ export class SchoologyService {
     const entries: Record<string, unknown>[] = [];
     let next: string | null = url;
     for (let page = 0; next && page < INDEX_PAGES; page++) {
+      syncSignal.getStore()?.throwIfAborted();
       const response: Response | null = await this.call(next, token).catch(() => null);
+      syncSignal.getStore()?.throwIfAborted();
       if (!response?.ok) break;
       const body = await response.json().catch(() => null) as { links?: { next?: unknown } } & Record<string, unknown> | null;
       entries.push(...((body?.[field] as Record<string, unknown>[] | undefined) ?? []));
@@ -473,7 +491,7 @@ export class SchoologyService {
   private async index(userId: string, row: { schoology_uid: string; token_encrypted: string }): Promise<void> {
     const token = this.token(userId, row);
     const items = new Map<string, string>();
-    for (const id of this.rememberSections(userId, (await this.gradesAndSections(userId, row, token)).sections)) {
+    for (const id of this.rememberSections(userId, (await this.gradesAndSections(userId, row, token, true)).sections)) {
       for (const entry of await this.pages(`${this.api}/sections/${id}/events?limit=200`, 'event', token)) {
         if (/^\d{1,20}$/.test(String(entry.id))) items.set(`event:${entry.id}`, id);
         if (/^\d{1,20}$/.test(String(entry.assignment_id ?? ''))) items.set(`assignment:${entry.assignment_id}`, id);
@@ -482,6 +500,7 @@ export class SchoologyService {
         if (/^\d{1,20}$/.test(String(entry.id))) items.set(`assignment:${entry.id}`, id);
       }
     }
+    syncSignal.getStore()?.throwIfAborted();
     this.rememberItems(userId, items);
     this.db.prepare('UPDATE schoology_connections SET indexed_at=? WHERE user_id=?').run(this.now().toISOString(), userId);
   }
@@ -602,8 +621,15 @@ export class SchoologyService {
    * every SCHOOLOGY_SYNC_EVERY_MS, or a minute apart for the Refresh button), adds the ones the calendar feed doesn't
    * bring as tasks, checks off tasks whose assignment was turned in, then puts classes on untagged imports. Returns
    * how many tasks changed, so the caller knows to sync. Quietly does nothing outside the beta or without a connection.
+   * One member has a two-minute network budget; worker shutdown aborts its requests and waits for this work to settle.
    */
-  async sync(userId: string, raw: z.input<typeof schoologySyncSchema> = {}): Promise<{ changed: number }> {
+  async sync(userId: string, raw: z.input<typeof schoologySyncSchema> = {}, signal?: AbortSignal): Promise<{ changed: number }> {
+    const deadline = AbortSignal.timeout(SCHOOLOGY_MEMBER_DEADLINE_MS);
+    return syncSignal.run(signal ? AbortSignal.any([signal, deadline]) : deadline, () => this.syncMember(userId, raw));
+  }
+
+  private async syncMember(userId: string, raw: z.input<typeof schoologySyncSchema>): Promise<{ changed: number }> {
+    syncSignal.getStore()?.throwIfAborted();
     const { force } = schoologySyncSchema.parse(raw);
     const row = this.connection(userId);
     if (!row || !this.config() || !this.inBeta(userId)) return { changed: 0 };
@@ -614,7 +640,7 @@ export class SchoologyService {
       this.db.prepare('UPDATE schoology_connections SET synced_at=? WHERE user_id=?').run(this.now().toISOString(), userId);
       const token = this.token(userId, row);
       const fetched: Fetched[] = [];
-      const { grades, sections } = await this.gradesAndSections(userId, row, token);
+      const { grades, sections } = await this.gradesAndSections(userId, row, token, true);
       const graded = new Set<string>();
       for (const section of (grades as { section?: { period?: { assignment?: { assignment_id?: unknown; grade?: unknown }[] }[] }[] })?.section ?? []) {
         for (const item of (section.period ?? []).flatMap(period => period.assignment ?? [])) if (item.grade !== null && item.grade !== undefined && item.grade !== '') graded.add(String(item.assignment_id));
@@ -624,10 +650,12 @@ export class SchoologyService {
           if (/^\d{1,20}$/.test(String(assignment.id))) fetched.push({ sectionId, assignment });
         }
       }
+      syncSignal.getStore()?.throwIfAborted();
       this.rememberItems(userId, new Map(fetched.map(entry => [`assignment:${entry.assignment.id}`, entry.sectionId])));
       if (row.import_assignments === 1) changed += this.importAssignments(userId, fetched, graded);
       if (row.auto_complete === 1) changed += await this.checkTurnIns(userId, row.schoology_uid, fetched, token);
     }
+    syncSignal.getStore()?.throwIfAborted();
     changed += (await this.tagClasses(userId)).tagged;
     return { changed };
   }
@@ -721,6 +749,7 @@ export class SchoologyService {
       const { sectionId, assignment } = byId.get(key.slice('assignment:'.length))!;
       const response = await this.call(`${this.api}/sections/${sectionId}/submissions/${assignment.grade_item_id}/${uid}`, token).catch(() => null);
       if (!response?.ok || !turnedIn(await response.json().catch(() => null))) continue;
+      syncSignal.getStore()?.throwIfAborted();
       changed += this.db.transaction(() => {
         this.db.prepare(`INSERT INTO schoology_items(user_id,item_key,section_id,submitted) VALUES(?,?,?,1)
           ON CONFLICT(user_id,item_key) DO UPDATE SET submitted=1`).run(userId, key, sectionId);
@@ -740,10 +769,11 @@ export class SchoologyService {
   }
 
   /** The worker's pass over every connected member (each one quietly skipped outside the beta). */
-  async tagAll(): Promise<{ failed: number }> {
+  async tagAll(signal?: AbortSignal): Promise<{ failed: number }> {
     let failed = 0;
     for (const { user_id: userId } of this.db.prepare('SELECT user_id FROM schoology_connections').all() as { user_id: string }[]) {
-      try { await this.sync(userId); } catch { failed++; }
+      if (signal?.aborted) break;
+      try { await this.sync(userId, {}, signal); } catch { if (!signal?.aborted) failed++; }
     }
     return { failed };
   }

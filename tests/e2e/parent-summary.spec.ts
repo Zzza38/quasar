@@ -16,10 +16,10 @@ import { addDays, instantParts, weekdayOf } from '../../src/lib/format';
  */
 
 const spanish = randomUUID(), biology = randomUUID();
-const today = instantParts(new Date().toISOString(), exampleSchedule.timeZone).date;
-const weekStart = addDays(today, 1 - weekdayOf(today));
 
 function seed() {
+  const today = instantParts(new Date().toISOString(), exampleSchedule.timeZone).date;
+  const weekStart = addDays(today, 1 - weekdayOf(today));
   const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
   const registry = readBetaRegistry(listPath);
   if (!registry.betas.some(beta => beta.key === AI_BETA)) writeBetaRegistry(createBeta(registry, { key: AI_BETA, name: 'AI tasks', code: 'AI-TASKS-E2E' }), listPath);
