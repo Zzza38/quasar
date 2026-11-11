@@ -65,6 +65,7 @@ export function useSchoologyConnection(state: AppState, onConnected: () => void)
     setPending('finish'); setError('');
     try {
       await api.schoology.finish.mutate({ accountId, oauthToken });
+      await state.refresh();
       // Bring in assignments and classes right away instead of waiting for the next pass.
       await api.schoology.sync.mutate({ accountId, force: true }).then(({ changed }) => changed > 0 && state.refresh(), () => undefined);
       await reload();
@@ -91,7 +92,7 @@ export function useSchoologyConnection(state: AppState, onConnected: () => void)
   };
   const disconnect = async () => {
     setPending('disconnect'); setError('');
-    try { setStatus(await api.schoology.disconnect.mutate({ accountId })); }
+    try { setStatus(await api.schoology.disconnect.mutate({ accountId })); await state.refresh(); }
     catch (err) { setError(errorMessage(err)); }
     setPending(null);
   };

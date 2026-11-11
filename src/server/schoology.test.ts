@@ -49,6 +49,19 @@ const header = (fetcher: Mock<SchoologyFetch>, path: string) => {
 };
 
 describe('Connect Schoology', () => {
+  it('reports the current connection only for its workspace account', async () => {
+    const f = fixture();
+    const other = fixture();
+    const service = new Service(f.db, 'owner@example.com');
+    expect(service.workspace(f.student).schoologyConnected).toBe(false);
+    await f.schoology.start(f.student);
+    await f.schoology.finish(f.student, { oauthToken: 'req-token' });
+    expect(service.workspace(f.student).schoologyConnected).toBe(true);
+    expect(new Service(other.db, 'owner@example.com').workspace(other.student).schoologyConnected).toBe(false);
+    f.schoology.disconnect(f.student);
+    expect(service.workspace(f.student).schoologyConnected).toBe(false);
+  });
+
   it('follows a relative redirect on the configured API origin with a fresh signature', async () => {
     const fetcher = schoologyServer({ 'users/me': () => new Response(null, { status: 303, headers: { location: '/v1/users/4242' } }) });
     const f = fixture({ fetcher, config: { ...config, api: 'https://schoology-proxy.example/v1' } });
