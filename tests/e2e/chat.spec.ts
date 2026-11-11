@@ -1136,3 +1136,32 @@ test('chat polish beta: mention, edit, more reactions, search, several images an
   await expect(own.getByRole('button', { name: 'Edit message' })).toHaveCount(0);
   await expect(bobLog.locator('[data-mention]')).toHaveCount(0);
 });
+
+test('chat polish beta: a phone thread undoes the page pan iOS makes for the keyboard, but not for a field in a dialog', async ({ browser }) => {
+  const f = seed({ friends: [['alice', 'bob']], messages: Array.from({ length: 20 }, (_, index) => ['alice', 'bob', `Message ${index}`] as [Name, Name, string]) });
+  const key = 'chat-polish';
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { db.prepare('INSERT OR IGNORE INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.bob, new Date().toISOString()); } finally { db.close(); }
+
+  const page = await phone(browser, f.bob);
+  await page.goto(`/messages?with=${f.alice}`);
+  const composer = page.getByRole('textbox', { name: 'Message Alice' });
+  await expect(composer).toBeVisible();
+  // iOS keeps the layout viewport tall under the keyboard and pans the page; a spacer gives this browser the same room to scroll.
+  await page.evaluate(() => { const spacer = document.createElement('div'); spacer.id = 'pan-room'; spacer.style.height = '600px'; document.body.append(spacer); });
+  await composer.focus();
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await composer.pressSequentially('still here');
+  await page.evaluate(() => window.scrollTo(0, 450));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(composer).toBeFocused();
+
+  // A focused control outside the thread (a dialog's field) keeps whatever pan the browser gave it.
+  await page.evaluate(() => { const outside = document.createElement('button'); outside.id = 'outside-field'; document.body.append(outside); outside.focus(); window.scrollTo(0, 300); });
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+});

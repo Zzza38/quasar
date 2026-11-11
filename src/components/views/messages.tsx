@@ -290,7 +290,7 @@ export function MessagesView({ state }: { state: AppState }) {
   const [threadGeneration, setThreadGeneration] = useState(0);
   const threadClosed = !!withId && closedThread?.userId === withId;
   const inbox = useChatInbox(state, listMounted || threadClosed);
-  useChatViewport(phone && !!openKey);
+  useChatViewport(phone && !!openKey, useBeta(CHAT_POLISH));
   const [notice, setNotice] = useState('');
   const [reporting, setReporting] = useState<ClosedRow | null>(null);
   const [creating, setCreating] = useState(false);

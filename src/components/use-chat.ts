@@ -848,8 +848,14 @@ export type ChatThread = ReturnType<typeof useChatThread>;
 /**
  * While a phone thread is mounted, sets `--chat-h` on <html> to the visual viewport height minus the
  * top bar, so the composer stays above the on-screen keyboard (iOS Safari ignores interactive-widget).
+ *
+ * `pinPage` also holds the page itself at the top. iOS keeps the layout viewport tall under the keyboard, and on
+ * focus (and again while typing) it pans the page up to show the field, which leaves the thread scrolled off screen
+ * even though the column already fits above the keyboard. Only the log scrolls in a phone thread, so any page
+ * offset is undone. A field in a dialog or sheet (rendered outside #main) is left alone: those sit against the
+ * layout viewport and need the pan to clear the keyboard.
  */
-export function useChatViewport(active: boolean): void {
+export function useChatViewport(active: boolean, pinPage = false): void {
   useEffect(() => {
     if (!active || typeof window === 'undefined') return;
     const root = document.documentElement;
@@ -858,16 +864,22 @@ export function useChatViewport(active: boolean): void {
       const topbar = document.querySelector<HTMLElement>('.app-topbar');
       const height = (viewport?.height ?? window.innerHeight) - (topbar?.offsetHeight ?? 0);
       root.style.setProperty('--chat-h', `${Math.max(0, Math.round(height))}px`);
+      if (!pinPage || (window.scrollY <= 0 && (viewport?.offsetTop ?? 0) <= 0)) return;
+      const focused = document.activeElement;
+      if (focused && focused !== document.body && !document.getElementById('main')?.contains(focused)) return;
+      window.scrollTo(0, 0);
     };
     update();
     viewport?.addEventListener('resize', update);
     viewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, { passive: true });
     return () => {
       viewport?.removeEventListener('resize', update);
       viewport?.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update);
       root.style.removeProperty('--chat-h');
     };
-  }, [active]);
+  }, [active, pinPage]);
 }
