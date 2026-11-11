@@ -448,8 +448,8 @@ html[data-rgb-mode] body > div:first-of-type {
       .ns-in { grid-template-columns: minmax(0, 1fr); grid-template-areas: "eyebrow" "name" "meta" "count"; align-content: start; align-items: start; gap: 12px; padding-top: 26px; }
       .ns-next .ns-in { padding-top: 22px; }
       .ns-name { font-size: 34px; line-height: 1.05; letter-spacing: -.03em; }
-      .ns-in[data-long] { gap: 9px; }
-      .ns-in[data-long] .ns-name { font-size: 27px; }
+      .ns-card[data-long] .ns-in { gap: 9px; }
+      .ns-card[data-long] .ns-name { font-size: 27px; }
       .ns-count { display: inline-flex; align-items: baseline; justify-self: start; font-size: 30px; }
       .ns-count-label { margin-right: 8px; font-size: 13px; }
     }
@@ -470,24 +470,27 @@ html[data-rgb-mode] body > div:first-of-type {
       .ns-gap-word { font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; opacity: .8; }
       .ns-gap-label b { color: #fff; letter-spacing: -.02em; }
     }
+    /* Every part is laid out the same way, so the card reads across: the label and the name start at one height at the
+       top, and the countdown sits on one line just above the bar, whatever the part has in between. */
     /* The name, the room and the minutes in a narrow column. */
     @container ns-seg (min-width: 120px) {
       .ns-sr { display: none; }
-      .ns-in { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "eyebrow" "name" "meta" "count"; align-content: center; justify-items: start; gap: 5px; height: 100%; padding: 0 18px 40px; }
+      .ns-in { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto 1fr; grid-template-areas: "eyebrow" "name" "meta" "count"; justify-items: start; gap: 5px; height: 100%; padding: 26px 18px 50px; }
       .ns-when, .ns-eroom, .ns-m, .ns-pill svg { display: none; }
       .ns-name { font-size: 17px; line-height: 1.2; letter-spacing: -.01em; }
       .ns-meta { display: block; font-size: 13px; font-weight: 600; opacity: .9; }
       .ns-m.ns-room { display: inline; }
       .ns-room::before { display: none; }
       .ns-pill { margin: 0; padding: 0; background: none; box-shadow: none; font-size: inherit; font-weight: inherit; white-space: normal; }
-      .ns-count { display: grid; justify-items: start; gap: 3px; margin-top: 3px; font-size: 22px; }
+      .ns-count { display: grid; align-self: end; justify-items: start; gap: 3px; font-size: 22px; }
       .ns-count-label { font-size: 10.5px; }
     }
     @container ns-seg (min-width: 280px) {
-      .ns-in { gap: 8px; padding: 0 28px 40px; }
+      .ns-in { gap: 6px; padding: 26px 28px 50px; }
       .ns-when { display: inline; }
-      .ns-name { -webkit-line-clamp: 3; font-size: 34px; line-height: 1.05; letter-spacing: -.03em; }
-      .ns-in[data-long] .ns-name { font-size: 26px; }
+      .ns-name { font-size: 34px; line-height: 1.05; letter-spacing: -.03em; }
+      /* One long name sets the size for both, so the two classes are never written at different sizes. */
+      .ns-card[data-long] .ns-name { font-size: 26px; }
       .ns-meta { display: flex; font-size: 14px; font-weight: 500; opacity: 1; }
       .ns-m, .ns-pill svg { display: inline-flex; }
       .ns-m-teacher, .ns-next .ns-m { display: none; }
@@ -496,18 +499,19 @@ html[data-rgb-mode] body > div:first-of-type {
       .ns-m.ns-room { display: inline-flex; }
       .ns-m.ns-room::before { display: block; }
       .ns-pill { margin-right: 2px; padding: 6px 12px; background: rgb(255 255 255 / .15); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .2); font-size: 14px; font-weight: 700; white-space: nowrap; }
-      .ns-count { display: inline-flex; align-items: baseline; margin-top: 4px; font-size: 26px; }
+      .ns-count { display: inline-flex; align-items: baseline; font-size: 26px; }
       .ns-count-label { margin-right: 8px; font-size: 12px; }
     }
     @container ns-seg (min-width: 740px) {
-      .ns-in { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "eyebrow count" "name count" "meta count"; gap: 8px 24px; }
-      .ns-name, .ns-in[data-long] .ns-name { font-size: 40px; }
+      .ns-name { -webkit-line-clamp: 1; font-size: 40px; }
+      .ns-card[data-long] .ns-name { font-size: 32px; }
       .ns-m-teacher, .ns-next .ns-m { display: inline-flex; }
       .ns-next .ns-m-teacher::before { display: block; }
-      .ns-count { align-self: center; margin: 0; font-size: 38px; }
+      .ns-count { font-size: 38px; }
       .ns-count-label { font-size: 13px; }
     }
-    .ns-card[data-phase="passing"] .ns-in { padding-bottom: 0; }
+    /* Between periods there is no bar to sit above. */
+    .ns-card[data-phase="passing"] .ns-in { padding-bottom: 28px; }
   }
 }
 

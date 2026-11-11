@@ -24,6 +24,7 @@ import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, Se
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
+import { NOW_CARD_STYLES } from '@/lib/now-split';
 import { BetaService, betaEnrollSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
 import { staffAccess, type StaffPermission } from '@/domain/staff';
 /**
@@ -126,8 +127,8 @@ export const appRouter = t.router({
   }),
   profile: t.router({
     save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input)),
-    // Account → Look: the split Now card.
-    nowSplit: accountScoped.input(z.object({ enabled: z.boolean() })).mutation(({ ctx, input }) => ctx.service.setNowSplit(ctx.userId, input.enabled)),
+    // Account → Look: how the Now card shows the next class.
+    nowCard: accountScoped.input(z.object({ style: z.enum(NOW_CARD_STYLES) })).mutation(({ ctx, input }) => ctx.service.setNowCard(ctx.userId, input.style)),
   }),
   // Profile pictures (docs/CHAT.md §13): an uploaded picture, or back to the Google picture or initials.
   avatar: t.router({

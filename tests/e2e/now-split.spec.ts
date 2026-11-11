@@ -7,13 +7,14 @@ import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 import type { StudentClass } from '../../src/domain/schedule';
+import type { NowCardStyle } from '../../src/lib/now-split';
 
 /**
- * A student with a class in every block of the example schedule, with "Next class on the Now card" (Account → Look)
- * turned on unless `split` is false. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
+ * A student with a class in every block of the example schedule. `card` is their choice for "Next class on the Now
+ * card" (Account → Look), or null for an account that never chose. Tuesday 2026-09-08 is Day 1: Digital Design 8:00-9:00, Biology 9:10-10:10, Lunch 10:15-10:45 and
  * Pre-Calculus Honors 10:50-11:50, Eastern time.
  */
-function seed(split = true) {
+function seed({ card = 'split' }: { card?: NowCardStyle | null } = {}) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -29,7 +30,7 @@ function seed(split = true) {
     ];
     service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base: service.entity(id, 'personal'),
       data: { grade: '10', classes, assignments: { A: 'art', B: 'bio', C: 'math', D: 'hist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null } });
-    if (split) service.setNowSplit(id, true);
+    if (card) service.setNowCard(id, card);
     return id;
   } finally { db.close(); }
 }
@@ -42,11 +43,11 @@ async function authenticate(context: BrowserContext, id: string) {
 /** Eastern daylight time on 2026-09-08, as an instant. */
 const at = (time: string) => new Date(`2026-09-08T${time}:00-04:00`);
 
-async function open(page: Page, context: BrowserContext, time: string, width: number, split = true) {
+async function open(page: Page, context: BrowserContext, time: string, width: number, account: { card?: NowCardStyle | null } = {}) {
   await page.setViewportSize({ width, height: 900 });
   // The grey part has its own shade in the dark theme.
   await page.emulateMedia({ colorScheme: 'dark' });
-  await authenticate(context, seed(split));
+  await authenticate(context, seed(account));
   await page.clock.setFixedTime(at(time));
   await page.goto('/');
   return page.getByRole('region', { name: 'Next class' });
@@ -64,6 +65,20 @@ async function setTime(page: Page, time: string) {
 async function shoot(card: Locator, name: string, testInfo: { outputPath: (name: string) => string }) {
   await card.screenshot({ path: testInfo.outputPath(`${name}.png`) });
   if (process.env.NOW_SPLIT_SHOTS) await card.screenshot({ path: join(process.env.NOW_SPLIT_SHOTS, `${name}.png`) });
+}
+
+/** The words of both classes stay inside their own part of the card. */
+async function expectFits(card: Locator) {
+  for (const part of [card.locator('.ns-seg.ns-now'), card.locator('.ns-seg.ns-next')]) {
+    const outer = await box(part);
+    for (const inner of await part.locator('.ns-name, .ns-count, .ns-meta').all()) {
+      // A line this part's size leaves out has no box.
+      const rect = await inner.boundingBox();
+      if (!rect || !await inner.isVisible()) continue;
+      expect(rect.x + rect.width, 'stays inside its part').toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+      expect(rect.y + rect.height, 'stays inside its part').toBeLessThanOrEqual(outer.y + outer.height + 0.5);
+    }
+  }
 }
 
 for (const width of [390, 1280]) {
@@ -139,15 +154,20 @@ for (const width of [390, 1280]) {
     await expect(card.getByRole('heading', { name: 'Pre-Calculus Honors' })).toBeVisible();
     await expect.poll(async () => along(await box(card.locator('.ns-seg.ns-next'))) / along(await box(card))).toBeCloseTo(0.5 * 30 / 35, 2);
     await shoot(card, `split-${width}-1030`, testInfo);
-    for (const part of [card.locator('.ns-seg.ns-now'), card.locator('.ns-seg.ns-next')]) {
-      const outer = await box(part);
-      for (const inner of await part.locator('.ns-name, .ns-count, .ns-meta').all()) {
-        if (!await inner.isVisible()) continue;
-        const rect = await box(inner);
-        expect(rect.x + rect.width, 'stays inside its part').toBeLessThanOrEqual(outer.x + outer.width + 0.5);
-        expect(rect.y + rect.height, 'stays inside its part').toBeLessThanOrEqual(outer.y + outer.height + 0.5);
-      }
-    }
+    await expectFits(card);
+  });
+
+  test(`an hour or more is spelled out and fits its part at ${width}px`, async ({ page, context }, testInfo) => {
+    const card = await open(page, context, '08:00', width);
+    const now = card.locator('.ns-seg.ns-now'), next = card.locator('.ns-seg.ns-next');
+    await expect(now.getByRole('button', { name: 'Ends in 1 hour' })).toBeVisible();
+    await shoot(card, `split-${width}-0800`, testInfo);
+    // Nine minutes in, the next class has only just enough room for words, and it starts in over an hour.
+    await setTime(page, '08:09');
+    await expect(next.getByRole('button', { name: 'Starts in 1 hr 1 min' })).toBeVisible();
+    await expect.poll(async () => along(await box(next)) / along(await box(card))).toBeCloseTo(0.15 * 60 / 70, 2);
+    await expectFits(card);
+    await shoot(card, `split-${width}-0809`, testInfo);
   });
 }
 
@@ -157,8 +177,8 @@ test('the last period of the day keeps the card whole', async ({ page, context }
   await expect(page.locator('.ns-card')).toHaveCount(0);
 });
 
-test('the card is whole until the student turns the setting on in Account, and whole again when they turn it off', async ({ page, context }, testInfo) => {
-  const card = await open(page, context, '08:36', 1280, false);
+test('a student picks the line, the block or the split card in Account, and the choice follows the account', async ({ page, context }, testInfo) => {
+  const card = await open(page, context, '08:36', 1280, { card: 'classic' });
   await page.locator('html[data-hydrated]').waitFor({ state: 'attached' });
   await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
   await expect(page.locator('.ns-card')).toHaveCount(0);
@@ -167,24 +187,79 @@ test('the card is whole until the student turns the setting on in Account, and w
   const openAccount = page.getByRole('button', { name: /^Remy/ });
   await openAccount.click();
   const account = page.getByRole('dialog', { name: 'Account', exact: true });
-  const setting = account.getByRole('switch', { name: 'Next class on the Now card' });
-  await expect(setting).not.toBeChecked();
-  await setting.click();
-  await expect(setting).toBeChecked();
-  await shoot(account, 'split-setting', testInfo);
-  await expect(page.locator('.ns-card')).toHaveAttribute('data-phase', 'class');
+  const setting = account.getByRole('radiogroup', { name: 'Next class on the Now card' });
+  const choice = (name: string) => setting.getByRole('radio', { name, exact: true });
+  await expect(choice('Line')).toBeChecked();
+
   // The open sheet hides the page behind it from role queries, so the card is read by its own markup.
+  const block = page.locator('[role="group"][aria-label="Next: Biology"]');
+  await choice('Block').click();
+  await expect(choice('Block')).toBeChecked();
+  await expect(block).toContainText('9:10 AM');
+  await expect(block).toContainText('Room 214');
+  await expect(block).toContainText('Mr. Okafor');
+  await expect(page.locator('.ns-card')).toHaveCount(0);
+  await shoot(account, 'split-setting', testInfo);
+
+  await choice('Split').click();
+  await expect(choice('Split')).toBeChecked();
+  await expect(page.locator('.ns-card')).toHaveAttribute('data-phase', 'class');
   await expect(page.locator('.ns-seg.ns-next .ns-name')).toHaveText('Biology');
+  await expect(block).toHaveCount(0);
 
   // The choice is the account's, so the server draws the split card on the next visit.
   await page.reload();
   await expect(page.locator('.ns-card')).toBeVisible();
   await openAccount.click();
-  await expect(setting).toBeChecked();
-  await setting.click();
-  await expect(setting).not.toBeChecked();
+  await expect(choice('Split')).toBeChecked();
+  await choice('Line').click();
+  await expect(choice('Line')).toBeChecked();
   await expect(page.locator('.ns-card')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(account).toBeHidden();
   await expect(card.getByText('Then Biology at 9:10 AM')).toBeVisible();
+});
+
+for (const width of [390, 1280]) {
+  test(`the line names the next class between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
+    const card = await open(page, context, '09:04', width, { card: 'classic' });
+    await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
+    const line = card.getByText('Then Lunch at 10:15 AM');
+    await expect(line).toBeVisible();
+    expect(parseFloat(await line.evaluate((element) => getComputedStyle(element.parentElement!).fontSize))).toBeGreaterThanOrEqual(16);
+    await shoot(card, `line-${width}-0904`, testInfo);
+  });
+}
+
+for (const width of [390, 1280]) {
+  test(`the block names the next class under the card, between periods too, at ${width}px`, async ({ page, context }, testInfo) => {
+    const card = await open(page, context, '08:36', width, { card: 'block' });
+    await expect(card.getByRole('heading', { level: 2, name: 'Digital Design' })).toBeVisible();
+    const next = card.getByRole('group', { name: 'Next: Biology' });
+    await expect(next).toContainText('9:10 AM');
+    // It takes the line's place, and reaches the card's bottom and side edges.
+    await expect(card.getByText('Then Biology at')).toHaveCount(0);
+    const [outer, inner] = [await box(card), await box(next)];
+    expect(Math.abs(outer.x - inner.x)).toBeLessThan(1);
+    expect(Math.abs(outer.width - inner.width)).toBeLessThan(1);
+    expect(Math.abs(outer.y + outer.height - inner.y - inner.height)).toBeLessThan(1);
+    await shoot(card, `block-${width}-0836`, testInfo);
+
+    // Between periods the card is the class about to start, and the block the one after it.
+    await setTime(page, '09:04');
+    await expect(card.getByRole('heading', { level: 2, name: 'Biology' })).toBeVisible();
+    await expect(card.getByRole('group', { name: 'Then: Lunch' })).toContainText('10:15 AM');
+    await shoot(card, `block-${width}-0904`, testInfo);
+  });
+}
+
+test('an account that never chose gets the block, and Account shows it chosen', async ({ page, context }) => {
+  const card = await open(page, context, '08:36', 1280, { card: null });
+  await page.locator('html[data-hydrated]').waitFor({ state: 'attached' });
+  await expect(card.getByRole('group', { name: 'Next: Biology' })).toContainText('9:10 AM');
+  await expect(card.getByText('Then Biology at')).toHaveCount(0);
+  await expect(page.locator('.ns-card')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Remy/ }).click();
+  const account = page.getByRole('dialog', { name: 'Account', exact: true });
+  await expect(account.getByRole('radiogroup', { name: 'Next class on the Now card' }).getByRole('radio', { name: 'Block', exact: true })).toBeChecked();
 });

@@ -840,13 +840,23 @@ function migrate(db: Db): void {
     UPDATE school_logo_proposals SET status='open', closed_at=NULL WHERE status='awaiting-support';
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(35, datetime('now'));
   `);
-  // users.now_split: the account shares Today's Now card with the next class (Account → Look; Service.setNowSplit).
-  // Off unless the member turns it on. It began as the now-card-split beta, so that beta's members start with it on.
+  // users.now_split was the Now card style while it was in the now-card-split and now-card-setting betas: 0 a line,
+  // 1 the split card, 2 a block, with the line as the default. Builds from that time still read and write it.
   // Checked by column instead of a migration number, so it cannot collide with a numbered migration on another branch.
-  if (!(db.pragma('table_info(users)') as { name: string }[]).some(column => column.name === 'now_split')) {
+  const userColumns = () => (db.pragma('table_info(users)') as { name: string }[]).map(column => column.name);
+  if (!userColumns().includes('now_split')) {
     db.exec(`
       ALTER TABLE users ADD COLUMN now_split INTEGER NOT NULL DEFAULT 0;
       UPDATE users SET now_split=1 WHERE id IN (SELECT user_id FROM beta_members WHERE beta_key='now-card-split');
+    `);
+  }
+  // users.now_card: how the account's Now card shows the next class (Account → Look; Service.setNowCard), with the
+  // same numbers, and the block as the default. During the beta only its members could choose, and none chose the
+  // line, so everyone on the line moves to the block; a beta member's split or block stays.
+  if (!userColumns().includes('now_card')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN now_card INTEGER NOT NULL DEFAULT 2;
+      UPDATE users SET now_card=CASE now_split WHEN 1 THEN 1 ELSE 2 END;
     `);
   }
 }

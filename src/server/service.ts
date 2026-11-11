@@ -19,14 +19,20 @@ import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
 import { ROLE_PERMISSIONS, isStaffRole, staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
 import { adminSignInAllowed } from '@/lib/admin-session';
+import { NOW_CARD_STYLES, type NowCardStyle } from '@/lib/now-split';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
 
 /** `avatar` is the picture URL other members see (docs/CHAT.md §13): an uploaded picture, else the Google picture, else null for initials. */
 export type User = { id: string; email: string; displayName: string; fullName: string; schoolId: string | null; suggestedNames: { displayName: string; fullName: string }; avatar: string | null;
   /** Which picture the account shows, for the account sheet's picture controls. */
   avatarSource: 'upload' | 'google' | 'none'; hasGooglePicture: boolean;
-  /** Account → Look: Today's Now card is shared with the next class (NowSplitCard) instead of staying whole. */
+  /** Account → Look: how Today's Now card shows the next class (src/lib/now-split.ts). */
+  nowCard: NowCardStyle;
+  /** `nowCard === 'split'`, for a tab still running the build from when this was an on/off switch. */
   nowSplit: boolean };
+/** users.now_card holds the card style as a number, as users.now_split did, whose column began as the split card's on/off switch. */
+const NOW_CARD_COLUMN: Record<NowCardStyle, number> = { classic: 0, split: 1, block: 2 };
+const nowCardOf = (stored: number): NowCardStyle => NOW_CARD_STYLES.find(style => NOW_CARD_COLUMN[style] === stored) ?? 'block';
 /** A support sanction the student can see and appeal (§14). */
 export type Ban = { schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean };
 export type Sanctions = { bans: Ban[]; pause: { until: string | null; reason: string; appealed: boolean } | null };
@@ -39,7 +45,7 @@ export const schoolLogoUrl = (schoolId: string, version: number | null | undefin
 /** The published logo's version for school row `s`, for schoolFromRow; NULL when the school has no logo. */
 const LOGO_VERSION = '(SELECT l.version FROM school_logos l WHERE l.school_id=s.id AND l.image IS NOT NULL) logo_version';
 type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null;
-  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null; now_split: number };
+  google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null; now_card: number };
 /** Uploaded pictures are small: the client resizes to 256 px and encodes as JPEG or WebP before sending (§13). */
 export const AVATAR_MAX_BYTES = 200_000;
 export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -186,7 +192,7 @@ export class Service {
     const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined;
     if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
     return { id: row.id, email: row.email, displayName: row.display_name, fullName: row.full_name, schoolId: row.school_id, suggestedNames: suggestNames(row.google_name ?? '', row.email),
-      avatar: avatarUrl(row), avatarSource: row.avatar_hidden ? 'none' : row.avatar_version ? 'upload' : usableGooglePicture(row.google_picture) ? 'google' : 'none', hasGooglePicture: usableGooglePicture(row.google_picture), nowSplit: row.now_split === 1 };
+      avatar: avatarUrl(row), avatarSource: row.avatar_hidden ? 'none' : row.avatar_version ? 'upload' : usableGooglePicture(row.google_picture) ? 'google' : 'none', hasGooglePicture: usableGooglePicture(row.google_picture), nowCard: nowCardOf(row.now_card), nowSplit: nowCardOf(row.now_card) === 'split' };
   }
   /* ---------- Profile pictures (docs/CHAT.md §13) ---------- */
 
@@ -326,10 +332,11 @@ export class Service {
     this.db.prepare('UPDATE users SET display_name=?,full_name=? WHERE id=?').run(names.displayName, names.fullName, id);
     return this.user(id);
   }
-  /** Account → Look: share Today's Now card with the next class, or keep it whole. Account-wide, like the names. */
-  setNowSplit(id: string, enabled: boolean): User {
+  /** Account → Look: how Today's Now card shows the next class. Account-wide, like the names. */
+  setNowCard(id: string, style: NowCardStyle): User {
     this.user(id);
-    this.db.prepare('UPDATE users SET now_split=? WHERE id=?').run(Number(enabled), id);
+    // now_split too, so a build from the beta, or a rollback to one, still shows the same card.
+    this.db.prepare('UPDATE users SET now_card=?, now_split=? WHERE id=?').run(NOW_CARD_COLUMN[style], NOW_CARD_COLUMN[style], id);
     return this.user(id);
   }
   schools(query = '', limit = 100): School[] {
