@@ -6,6 +6,7 @@ import { addDays, formatDate, formatRange, monthGrid, monthOf, relativeDate, sam
 import { cn } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState } from '../app-state';
 import { Icon } from '../icon';
+import { editSchedule, ScheduleLockButton } from '../schedule-lock';
 import { DateAdjustmentSheet, effectiveSchedule } from '../overrides';
 import { Button, Chip, Hint, IconButton, Input, PageHeader, Section } from '../primitives';
 import { Card, CardContent } from '../ui/card';
@@ -55,7 +56,8 @@ export function ScheduleView({ state }: { state: AppState }) {
   const due = useMemo(() => date < today ? [] : sortByDue(taskItems(state.snapshot.entities).filter((item) => !item.task.imported && !item.task.completed && item.task.dueDate === date)), [state.snapshot.entities, date, today]);
   const dueCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of taskItems(state.snapshot.entities)) if (!item.task.imported && !item.task.completed && item.task.dueDate && item.task.dueDate >= today) counts.set(item.task.dueDate, (counts.get(item.task.dueDate) ?? 0) + 1);
+    // Imported assignments count too; the day lists them under "From your calendars".
+    for (const item of taskItems(state.snapshot.entities)) if (!item.task.completed && item.task.dueDate && item.task.dueDate >= today) counts.set(item.task.dueDate, (counts.get(item.task.dueDate) ?? 0) + 1);
     return counts;
   }, [state.snapshot.entities, today]);
   const dueTitle = `Due ${isRelative ? relative.toLowerCase() : formatDate(date, { weekday: 'long' })}`;
@@ -64,7 +66,7 @@ export function ScheduleView({ state }: { state: AppState }) {
   const issueText = selected ? describeDayIssues(selected.issues).join(' ') : '';
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
-    <PageHeader title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'} />
+    <PageHeader actions={<ScheduleLockButton state={state} />} title="Schedule" eyebrow={rotation ? `${schedule.cycleDays.length}-day rotation` : 'Daily bell schedule'} />
 
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(21rem,2fr)_minmax(0,3fr)]">
       {/* Less side padding on phones: seven columns need the width. Sticky on wide screens so paging and the day stay side by side. */}
@@ -90,13 +92,16 @@ export function ScheduleView({ state }: { state: AppState }) {
             const label = `${formatDate(entry, { weekday: 'long' })}: ${!day ? 'outside the supported dates' : day.closed ? 'no school' : rotation ? day.cycleDayLabel : `${day.periods.length} periods`}${dueCount ? `, ${dueCount} due` : ''}${adjusted.has(entry) ? ', adjusted by you' : ''}`;
             return <button key={entry} type="button" aria-pressed={active} aria-label={label} onClick={() => pickDate(entry)}
               className={cn('relative grid min-h-[3rem] content-center justify-items-center gap-px rounded-lg px-0.5 pt-1 pb-2 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-[3.5rem]',
-                active ? 'bg-primary-soft text-primary-soft-foreground inset-ring inset-ring-primary/60' : 'hover:bg-muted', !inMonth && 'opacity-40', inMonth && closed && !active && 'text-muted-foreground')}>
-              {/* Today is the one filled number; the selected day is the tinted cell. Together they still read as one shape. */}
-              <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums', isToday && 'bg-primary text-primary-foreground')}>{Number(entry.slice(8))}</span>
+                isToday && (active ? 'bg-foreground/[0.09]' : 'bg-foreground/[0.06]'), active ? 'inset-ring-[1.5px] inset-ring-control-border' : !isToday && 'hover:bg-muted',
+                !inMonth && 'opacity-40', inMonth && closed && !active && !isToday && 'text-muted-foreground')}>
+              {/* Today is a grey tile with a short underline under its number; the selected day is a grey outline. */}
+              <span className={cn('grid size-6 place-items-center rounded-full text-[13.5px] font-bold tabular-nums',
+                isToday && 'relative font-extrabold after:absolute after:-bottom-px after:left-1/2 after:h-0.5 after:w-3.5 after:-translate-x-1/2 after:rounded-full after:bg-primary')}>{Number(entry.slice(8))}</span>
               {/* Phones drop the word so "Day 10" fits in a 48px column; "A"/"B" style labels show unchanged. */}
               <small className={cn('h-[15px] max-w-full truncate text-[10.5px] font-semibold leading-[15px]', !active && 'text-muted-foreground')}><span className="max-sm:hidden">{caption}</span><span className="sm:hidden">{caption.replace(/^Day\s+/i, '')}</span></small>
-              {dueCount ? <span aria-hidden="true" className="absolute bottom-1 size-1.5 rounded-full bg-primary" /> : null}
-              {adjusted.has(entry) && <Icon name="edit" size={9} aria-hidden="true" className="absolute top-1 right-1 text-muted-foreground" />}
+              {/* Days with work due get a bracket in the top-right corner, concentric with the cell's 14px radius (3px in, 11px radius), with round caps. */}
+              {dueCount ? <span aria-hidden="true" className="absolute top-[3px] right-[3px] size-3.5 rounded-tr-[11px] border-t-2 border-r-2 border-primary before:absolute before:-top-0.5 before:-left-px before:size-0.5 before:rounded-full before:bg-primary after:absolute after:-right-0.5 after:-bottom-px after:size-0.5 after:rounded-full after:bg-primary" /> : null}
+              {adjusted.has(entry) && <Icon name="edit" size={9} aria-hidden="true" className="absolute top-1 left-1 text-muted-foreground" />}
             </button>;
           })}
         </div>
@@ -107,7 +112,7 @@ export function ScheduleView({ state }: { state: AppState }) {
         </div>
       </CardContent></Card>
 
-      <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => setAdjustDate(date)}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
+      <Section id="day-title" action={<Button size="sm" icon="edit" onClick={() => editSchedule(state, () => setAdjustDate(date))}>{override ? 'Edit adjustment' : 'Adjust this day'}</Button>}
         title={<>{isRelative ? relative : relativeDate(date, today, { weekday: 'long' })}{isRelative ? <span className="font-medium text-muted-foreground"> · {formatDate(date, { weekday: 'long' })}</span> : ''}</>}
         description={<span className="flex flex-wrap gap-1.5 pt-1">
           {selected?.closed ? <Chip icon="coffee">No school</Chip> : selected ? <Chip tone="accent" icon="layers">{selected.cycleDayLabel}</Chip> : null}
@@ -117,7 +122,7 @@ export function ScheduleView({ state }: { state: AppState }) {
         </span>}>
         {selected?.closed && <p className="py-2 text-sm text-muted-foreground">No periods on this date.</p>}
         {selected && !selected.closed && selected.periods.length === 0 && <p className="py-2 text-sm text-muted-foreground">No periods on this day.</p>}
-        {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, date, period)} onPeriodSelect={state.personalValid ? setChangePeriod : undefined} />}
+        {selected && selected.periods.length > 0 && <Timeline periods={selected.periods} now={now} timeZone={state.timeZone} tag={(period) => classmatesTag(state, date, period)} onPeriodSelect={state.personalValid ? (period) => editSchedule(state, () => setChangePeriod(period)) : undefined} />}
         {/* Under the timeline, as on Today: the classes are what this card is for. */}
         {selected && !selected.closed && <LunchDay state={state} date={date} />}
         {issueText && <Hint tone="danger">{issueText}{override && selected?.issues.some((issue) => issue.reason === 'shift-outside-day') ? ' Edit the adjustment to fix this.' : ''}</Hint>}

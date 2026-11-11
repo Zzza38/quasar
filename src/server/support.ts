@@ -5,12 +5,18 @@ import { stampCompletion, taskSchema, type Task } from '@/domain/task';
 import type { Entity } from '@/domain/sync';
 import { CalendarService, listSubscriptions, type FeedSubscription } from './calendar';
 import { CommunityService } from './community';
+import { seedSchoolMember } from './global-chat';
 import { namesSchema, reservedDisplayName, type Service } from './service';
 import { readEntity, writeEntity } from './entities';
+import { Reveal } from './moderation';
 
 /**
- * The owner's user console (/admin → People). One member's account, school, classes, tasks and social graph, and
- * the edits support can make to them. Every read of a member and every write is written to audit_log.
+ * The user console (/admin → People). One member's account, school, classes, tasks and social graph, and the edits
+ * support can make to them. Every read of a member and every write is written to audit_log. Staff roles
+ * (src/domain/staff.ts) reach only some of it: their permission is checked per method, they never act on the owner,
+ * other staff or themselves (Service.guardTarget), and their copy of a record leaves out tasks, calendar feeds and
+ * the address and browser on audit rows. Edits to a member's profile, classes, tasks, feeds and friendships, and
+ * moving a member between schools, stay with the owner.
  *
  * What it never returns: one-to-one chat text (chat_messages.body, reports.evidence). Chats appear as metadata
  * only (who, how many messages, when); the only path from chat text to the owner stays admin.showEvidence on a
@@ -94,9 +100,13 @@ export class SupportService {
     if (!row) return fail('NOT_FOUND', 'Member not found.');
     return row;
   }
-  /** Whether the owner is pinned by Google account ID (OWNER_GOOGLE_SUB), and the owner's ID to pin it with. */
-  security(adminId: string): { pinned: boolean; googleSub: string } {
-    this.service.admin(adminId);
+  /**
+   * For the owner, whether the owner is pinned by Google account ID (OWNER_GOOGLE_SUB) and the ID to pin it with.
+   * Other staff get nulls: the console only needs the session's end time (added in the router) for them.
+   */
+  security(adminId: string): { pinned: boolean | null; googleSub: string | null } {
+    this.service.requireStaff(adminId);
+    if (!this.service.isAdmin(adminId)) return { pinned: null, googleSub: null };
     const row = this.db.prepare('SELECT google_sub FROM users WHERE id=?').get(adminId) as { google_sub: string };
     return { pinned: !!this.service.ownerSub.trim(), googleSub: row.google_sub };
   }
@@ -109,7 +119,7 @@ export class SupportService {
 
   /** Members matching an email, a name or an exact ID, optionally at one school; newest accounts first. */
   search(adminId: string, raw: z.input<typeof userSearchSchema>): SupportUserRow[] {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.search');
     const input = userSearchSchema.parse(raw);
     const rows = this.db.prepare(`SELECT u.id, u.email, u.display_name displayName, u.full_name fullName, u.created_at createdAt, u.school_id schoolId, s.name schoolName,
         EXISTS (SELECT 1 FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) verified,
@@ -130,8 +140,9 @@ export class SupportService {
    * the console reloads the record after each edit).
    */
   view(adminId: string, raw: z.input<typeof supportViewSchema>) {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.view');
     const { userId, reason } = supportViewSchema.parse(raw);
+    this.service.guardTarget(adminId, userId);
     return this.db.transaction(() => {
       const user = this.row(userId);
       const since = new Date(Date.now() - VIEW_AUDIT_WINDOW_MS).toISOString();
@@ -139,19 +150,25 @@ export class SupportService {
       const recent = this.db.prepare(`SELECT 1 FROM audit_log WHERE actor_id=? AND action='support.viewUser' AND created_at>? AND json_extract(detail,'$.userId')=? AND json_extract(detail,'$.reason')=?
         AND ip IS ? AND user_agent IS ?`).get(adminId, since, userId, reason, this.service.request?.ip ?? null, this.service.request?.userAgent ?? null);
       if (!recent) this.audit(adminId, 'support.viewUser', user.school_id, { userId, reason });
-      return this.record(user);
+      return this.record(user, adminId);
     }).immediate();
   }
 
-  private record(user: UserRow) {
+  /**
+   * The owner's copy is `full`. Other staff get no tasks or feeds, audit rows without address and browser, and no
+   * reports, friendships, chats or blocks whose other side is a staff account (Service.canTarget).
+   */
+  private record(user: UserRow, viewerId: string) {
     const userId = user.id;
+    const full = this.service.isAdmin(viewerId);
+    const visible = <T extends { userId?: string; otherId?: string }>(rows: T[]): T[] => full ? rows : rows.filter(row => this.service.canTarget(viewerId, row.userId ?? row.otherId!));
     const school = user.school_id ? this.service.school(user.school_id) : null;
     const verification = user.school_id ? this.db.prepare('SELECT method, verified_at verifiedAt FROM school_verifications WHERE user_id=? AND school_id=?').get(userId, user.school_id) as { method: 'domain' | 'support'; verifiedAt: string } | undefined : undefined;
     const personalEntity = this.service.entity(userId, 'personal');
     const personalParsed = personalEntity && !personalEntity.deleted ? personalScheduleSchema.safeParse(personalEntity.data) : null;
     const personal: PersonalSchedule = personalParsed?.success ? personalParsed.data : emptyPersonalSchedule();
     const taskRows = this.db.prepare("SELECT * FROM entities WHERE owner_id=? AND kind='task' AND deleted=0 ORDER BY id").all(userId) as { id: string; kind: 'task'; version: number; data: string; deleted: number }[];
-    const tasks = taskRows.map(row => toTask({ id: row.id, kind: row.kind, version: row.version, data: JSON.parse(row.data), deleted: false }));
+    const tasks = full ? taskRows.map(row => toTask({ id: row.id, kind: row.kind, version: row.version, data: JSON.parse(row.data), deleted: false })) : [];
     const deletedTasks = (this.db.prepare("SELECT count(*) n FROM entities WHERE owner_id=? AND kind='task' AND deleted=1").get(userId) as { n: number }).n;
     const peer = 'u.id AS userId, u.display_name AS displayName, u.email';
     const friendships = this.db.prepare(`SELECT ${peer}, f.status, f.requester_id=? AS outgoing, f.created_at createdAt, f.responded_at respondedAt
@@ -165,9 +182,16 @@ export class SupportService {
         (SELECT count(*) FROM chat_messages c WHERE c.thread_id=t.id AND c.sender_id<>@user) received
       FROM chat_threads t JOIN users u ON u.id = CASE WHEN t.user_low=@user THEN t.user_high ELSE t.user_low END
       WHERE t.user_low=@user OR t.user_high=@user ORDER BY t.last_message_at DESC NULLS LAST LIMIT ${LIST_LIMIT}`).all({ user: userId }) as (SupportPeer & { createdAt: string; lastMessageAt: string | null; sent: number; received: number })[];
-    // The global room is public to every member, so its text is shown like any member sees it.
-    const globalMessages = this.db.prepare(`SELECT id, seq, body, created_at createdAt, edited_at editedAt, deleted_at deletedAt, deleted_by deletedBy, reason
-      FROM global_messages WHERE sender_id=? ORDER BY seq DESC LIMIT ${LIST_LIMIT}`).all(userId) as { id: string; seq: number; body: string; createdAt: string; editedAt: string | null; deletedAt: string | null; deletedBy: 'sender' | 'owner' | null; reason: string | null }[];
+    // The global room is public to every member, so its text is shown like any member sees it. A removed post's text
+    // follows the moderation tiers (src/server/moderation.ts): `textHidden` says the viewer's tier may not read it.
+    const reveal = new Reveal(this.service, viewerId);
+    const globalMessages = (this.db.prepare(`SELECT id, seq, body, created_at createdAt, edited_at editedAt, deleted_at deletedAt, deleted_by deletedBy, reason, sender_id, image, deleted_rank
+      FROM global_messages WHERE sender_id=? ORDER BY seq DESC LIMIT ${LIST_LIMIT}`).all(userId) as { id: string; seq: number; body: string; createdAt: string; editedAt: string | null; deletedAt: string | null; deletedBy: 'sender' | 'owner' | null; reason: string | null; sender_id: string; image: string | null; deleted_rank: string | null }[])
+      .map(({ sender_id, image, deleted_rank, ...post }) => {
+        if (!post.deletedAt) return { ...post, textHidden: false };
+        const kept = reveal.removed({ seq: post.seq, sender_id, body: post.body, image, deleted_at: post.deletedAt, deleted_by: post.deletedBy, deleted_rank }, 'global');
+        return { ...post, body: kept?.body ?? '', textHidden: !kept && (!!post.body || !!image) };
+      });
     const reportColumns = `r.id, r.reason, r.category, r.created_at createdAt, r.resolved_at resolvedAt, r.outcome, r.thread_id IS NOT NULL isChat, s.name schoolName`;
     const reportsAbout = this.db.prepare(`SELECT ${reportColumns}, u.id otherId, u.display_name otherName FROM reports r JOIN users u ON u.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
       WHERE r.reported_id=? ORDER BY r.created_at DESC LIMIT ${LIST_LIMIT}`).all(userId) as ReportRow[];
@@ -182,20 +206,22 @@ export class SupportService {
       WHERE p.proposer_id=? ORDER BY p.created_at DESC LIMIT ${LIST_LIMIT}`).all(userId) as { id: string; summary: string; status: string; createdAt: string; schoolName: string }[];
     const pause = this.db.prepare('SELECT until, reason, created_at createdAt FROM chat_pauses WHERE user_id=? AND (until IS NULL OR until>?)').get(userId, now()) as { until: string | null; reason: string; createdAt: string } | undefined;
     const browsers = (this.db.prepare('SELECT count(*) n FROM push_subscriptions WHERE owner_id=?').get(userId) as { n: number }).n;
-    const feeds: FeedSubscription[] = listSubscriptions(this.db, userId);
+    const feeds: FeedSubscription[] = full ? listSubscriptions(this.db, userId) : [];
     return {
       account: { id: userId, email: user.email, googleName: user.google_name, displayName: user.display_name, fullName: user.full_name, createdAt: user.created_at,
-        chatPush: user.chat_push !== 0, isOwner: this.service.isAdmin(userId), suspended: user.suspended_at ? { at: user.suspended_at, reason: user.suspended_reason ?? '' } : null, browsers },
+        chatPush: user.chat_push !== 0, isOwner: this.service.isAdmin(userId), staff: this.service.staffRank(userId), suspended: user.suspended_at ? { at: user.suspended_at, reason: user.suspended_reason ?? '' } : null, browsers },
       school: school ? { id: school.id, name: school.name, location: school.location, version: school.version, reviewedVersion: user.reviewed_version, schedule: school.schedule,
         verification: verification ?? null, verificationPending: !verification && !!this.db.prepare('SELECT 1 FROM verification_requests WHERE user_id=? AND school_id=? AND resolved_at IS NULL').get(userId, school.id) } : null,
       personal: { version: personalEntity && !personalEntity.deleted ? personalEntity.version : 0, data: personal, valid: personalParsed ? personalParsed.success : true },
+      // `taskCount` is shown in place of the list when it is left out (`full` is false).
+      full, taskCount: taskRows.length,
       tasks: tasks.filter((task): task is SupportTask => task !== null), unreadableTasks: tasks.filter(task => task === null).length, deletedTasks,
-      friendships: friendships.map(row => ({ ...row, outgoing: !!row.outgoing })),
-      blocks: blocks.map(row => ({ ...row, byThem: !!row.byThem })),
-      chats, globalMessages, pause: pause ?? null,
-      reportsAbout: reportsAbout.map(reportFromRow), reportsBy: reportsBy.map(reportFromRow),
+      friendships: visible(friendships).map(row => ({ ...row, outgoing: !!row.outgoing })),
+      blocks: visible(blocks).map(row => ({ ...row, byThem: !!row.byThem })),
+      chats: visible(chats), globalMessages, pause: pause ?? null,
+      reportsAbout: visible(reportsAbout).map(reportFromRow), reportsBy: visible(reportsBy).map(reportFromRow),
       supportRequests, verificationRequests, bans, proposals, feeds,
-      activity: this.auditRows({ userId }),
+      activity: full ? this.auditRows({ userId }) : this.auditRows({ userId }).map(row => ({ ...row, ip: null, userAgent: null })),
     };
   }
 
@@ -238,9 +264,10 @@ export class SupportService {
   }
   /** Suspended accounts are signed out everywhere and every API call refuses them until support lifts it. */
   setSuspended(adminId: string, raw: z.input<typeof suspendSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.suspend');
     const input = suspendSchema.parse(raw);
     this.notOwner(input.userId);
+    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
       const user = this.row(input.userId);
       if (input.suspended) this.db.prepare('UPDATE users SET suspended_at=?, suspended_reason=?, session_epoch=session_epoch+1 WHERE id=?').run(now(), input.reason, input.userId);
@@ -253,8 +280,9 @@ export class SupportService {
    * owner's own account too, as the response to a session the owner does not recognize; it ends this one as well.
    */
   signOutEverywhere(adminId: string, raw: z.input<typeof reasonedUserSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.sessions');
     const input = reasonedUserSchema.parse(raw);
+    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
       const user = this.row(input.userId);
       this.db.prepare('UPDATE users SET session_epoch=session_epoch+1 WHERE id=?').run(input.userId);
@@ -263,8 +291,9 @@ export class SupportService {
   }
   /** Forgets every browser enrolled for reminders; the member can enable them again on each device. */
   removeBrowsers(adminId: string, raw: z.input<typeof reasonedUserSchema>): number {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.sessions');
     const input = reasonedUserSchema.parse(raw);
+    this.service.guardTarget(adminId, input.userId);
     return this.db.transaction(() => {
       const user = this.row(input.userId);
       const { changes } = this.db.prepare('DELETE FROM push_subscriptions WHERE owner_id=?').run(input.userId);
@@ -293,6 +322,7 @@ export class SupportService {
         const school = this.service.school(input.schoolId);
         if (this.community.isBanned(input.userId, school.id)) fail('CONFLICT', 'Support removed this member from that school. Lift the removal first.');
         this.db.prepare('UPDATE users SET school_id=?, reviewed_version=? WHERE id=?').run(school.id, school.version, input.userId);
+        seedSchoolMember(this.db, input.userId, school.id);
         this.db.prepare('UPDATE schools SET member_locked=1 WHERE id=? AND (SELECT count(*) FROM users WHERE school_id=?) >= 10').run(school.id, school.id);
         const existing = readEntity(this.db, input.userId, 'personal');
         const personal = existing && !existing.deleted ? personalScheduleSchema.safeParse(existing.data) : null;
@@ -308,8 +338,9 @@ export class SupportService {
     if (input.schoolId) this.community.onJoin(input.userId, input.schoolId);
   }
   setVerified(adminId: string, raw: z.input<typeof verificationSetSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'verification');
     const input = verificationSetSchema.parse(raw);
+    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
       const user = this.row(input.userId);
       if (!user.school_id) fail('BAD_REQUEST', 'This member has no school to be verified at.');
@@ -328,8 +359,9 @@ export class SupportService {
   }
   /** Lifts a support removal, so the member may join that school again. It does not rejoin them. */
   unban(adminId: string, raw: z.input<typeof unbanSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.remove');
     const input = unbanSchema.parse(raw);
+    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
       this.row(input.userId);
       const { changes } = this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(input.userId, input.schoolId);
@@ -425,7 +457,7 @@ export class SupportService {
   /* ---------- Schools ---------- */
 
   renameSchool(adminId: string, raw: z.input<typeof schoolDetailsSchema>): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'schools.edit');
     const input = schoolDetailsSchema.parse(raw);
     this.db.transaction(() => {
       const school = this.service.school(input.schoolId);

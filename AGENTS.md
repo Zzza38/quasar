@@ -12,11 +12,27 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Every time you launch a dev or branch preview server, first create a fresh copy of the production database and use that copy as the server's `DATABASE_PATH`. This includes previews served through Tailscale and branch previews run with `next start`.
 
-Read the production database path from `/srv/NAS/Private/school-schedule-tracker/.env.local`. Use SQLite's backup API to create a consistent snapshot, including committed data still in the WAL. Do not copy the live database file with `cp`.
+Read the production database path from `/srv/NAS/Private/GitHub/quasar/.env.local`. Use SQLite's backup API to create a consistent snapshot, including committed data still in the WAL. Do not copy the live database file with `cp`.
 
 Keep the copy in the dev checkout's ignored `data/` directory. Stop any dev server using the destination before replacing it. Never point a dev server at the production database or overwrite the production database. If the production database is unavailable, report the blocker instead of launching with an empty database.
 
 Production snapshots contain private account data. Bind preview servers to loopback and expose them only on the owner's private Tailscale network, with the app's Google sign-in and account authorization checks intact. Keep snapshot files at mode `0600`; never commit them or include them in CI artifacts. When retiring a preview, stop its server and remove its snapshots, archived copies, and SQLite companion files from the dev checkout. Production database copies are not authorized for public preview links.
+
+# Betas are created with `npm run beta`
+
+To put a change in beta, wrap it in `<Beta id="key">` or `useBeta('key')` from `src/components/betas.tsx`, then create the beta with `npm run beta -- create <key> --name "Name" [--description "…"] [--max N] [--code "…" | --public]` (see README "Running a beta" and `npm run beta -- --help`). Never create or change betas any other way: not from `/admin`, not by writing `betas.json` by hand, not in a migration.
+
+Betas are private unless the owner asks for a public one. A private beta is joined with its code; without `--code` a code is generated. A public beta (`--public`) has no code: members see it in Account → Betas and join with a tap. `npm run beta -- public <key>` and `npm run beta -- private <key>` switch an existing beta; members stay in.
+
+## The beta workflow
+
+1. **Every change ships as a beta.** After you make a user-facing change, gate it and create a beta for it, unless the owner says it goes to everyone. A fix to something already in a beta stays in that beta. Docs, tests and build changes have nothing to gate.
+2. **Every beta goes on production.** Creating a beta means deploying the gated code to the live site and running `npm run beta -- create` in the production checkout. A beta that exists only on a preview server is not a beta. Deploy first, then create the beta, so its code never points at a build that lacks it.
+3. **Every merged change is available to everyone unless the owner explicitly requests otherwise.** Before merging, remove every beta gate associated with the change and keep the shipped code path. After the merged code is live, run `npm run beta -- remove <key>` in the production checkout and delete all memberships for that retired beta. A request to create or test a beta does not authorize keeping it after merge. Keep a gate and its beta after merge only when the owner explicitly asks to retain that beta.
+4. **Preserve unmerged code.** Before removing a beta gate or code path, verify that the specific change is being merged. Only graduate the beta associated with that change. Do not remove other betas, their implementations, or their old fallback code while those changes remain unmerged. While a beta is still being tested, keep the old code working for accounts outside it. Sharing a checkout or deployment does not mean another beta has merged.
+5. **Commit beta implementations.** Whenever you add a beta, commit its implementation, gates, and related tracked files so other agents can identify and continue the work. Do not leave an added beta only as uncommitted changes. Keep unrelated work out of the commit, and never commit the private beta registry or join codes.
+
+The beta list (`betas.json` beside the database, or `BETAS_PATH`) holds the join codes, so it is gitignored. Never commit it or copy its codes into the repository, a PR or CI. A beta for the live site is created by running the command in the production checkout, `/srv/NAS/Private/GitHub/quasar`, and it takes effect immediately; a preview server's list sits beside its database snapshot in the dev checkout. Report the code the command prints to the owner, who can also read it on `/admin` → Betas.
 
 # UI rule: every form control is shadcn/ui
 

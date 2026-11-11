@@ -13,6 +13,9 @@ const MOCK_PORT = Number(new URL(process.env.SCAN_API_URL ?? 'http://127.0.0.1:3
 let mock: Server;
 const requests: Array<{ model: string; images: string[]; prompt: string }> = [];
 let directoryId = '';
+/** When set, the mock model first asks for a close-up and takes its time on each answer, like a real reasoning model. */
+let slowZoom = false;
+const ZOOM_DELAY_MS = 2_500;
 
 test.beforeAll(async () => {
   mock = createServer((req, res) => {
@@ -21,22 +24,32 @@ test.beforeAll(async () => {
     req.on('end', () => {
       const body = JSON.parse(raw);
       const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+      const followUp = body.messages.length > 2;
+      if (slowZoom && !followUp) {
+        const call = { id: 'zoom-1', type: 'function', function: { name: 'look_closer', arguments: JSON.stringify({ photo: 2, left: 0, top: 0, width: 0.4, height: 0.4, enhance: true }) } };
+        setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: null, reasoning: '**Checking the second picture**\n\nThe top-left block names are small, so I will zoom in before reading them.', tool_calls: [call] } }] })); }, ZOOM_DELAY_MS);
+      }
       // Record every photo part so the test can check a multi-photo scan arrives as one request.
-      requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
+      if (!followUp) requests.push({ model: body.model, images: parts.filter(part => part.type === 'image_url').map(part => part.image_url!.url), prompt: parts[0].text! });
       const rows = [
         { className: 'Algebra II', periodIds: ['A', 'C'], directoryId, days: ['Day 1', 'Day 3'] },
         { className: 'World History', teacher: 'Mr. Adeyemi', room: '118', periodLabel: 'B' },
         { className: 'Study Hall', periodLabel: 'Flex' },
+        // A free block printed as "Unassigned" is a free period, not a class.
+        { className: 'Unassigned', periodIds: ['D'] },
       ];
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }));
+      if (slowZoom && !followUp) return;
+      setTimeout(() => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rows }) } }] }));
+      }, slowZoom ? ZOOM_DELAY_MS : 0);
     });
   });
   await new Promise<void>(resolve => mock.listen(MOCK_PORT, '127.0.0.1', resolve));
 });
 test.afterAll(async () => { await new Promise<void>(resolve => mock.close(() => resolve())); });
 
-function seed() {
+function seed(assignments: Record<string, string> = {}, classes: Array<{ id: string; name: string }> = []) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const id = randomUUID();
@@ -45,6 +58,9 @@ function seed() {
     const service = new Service(db, 'browser-owner@example.com');
     const school = service.createSchool(id, { name: `Scan High ${id.slice(0, 6)}`, location: 'Boston, MA', schedule: exampleSchedule });
     service.join(id, { schoolId: school.id, choice: 'community', grade: '9' });
+    const base = service.entity(id, 'personal')!;
+    service.sync(id, { mutationId: randomUUID(), id: 'personal', kind: 'personal', base,
+      data: { ...base.data, scheduleLocked: false, classes, assignments } });
     directoryId = new DirectoryService(service).save(id, { schoolId: school.id, details: { name: 'Algebra II', teacher: 'Ms. Ortiz', room: '204', grades: ['9'] } }).id;
     return { id, school };
   } finally { db.close(); }
@@ -86,9 +102,23 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(dialog.getByText('Up to three pages or photos are read. Keep the pages that show your classes.')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Remove photo 1' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Remove photo 2' })).toBeVisible();
+  slowZoom = true;
   await dialog.getByRole('button', { name: 'Read schedule' }).click();
 
+  // While the model reads, the sheet shows what the scan is doing instead of a bare spinner.
+  const steps = dialog.getByRole('list', { name: 'Scan progress' }).getByRole('listitem');
+  await expect(steps.filter({ hasText: 'Reading the timetable' })).toBeVisible();
+  await expect(dialog.getByText('A scan can take up to two minutes.')).toBeVisible();
+  await expect(steps.filter({ hasText: 'Looking closer at hard-to-read parts' })).toContainText('1 close-up so far');
+  await expect(dialog.getByRole('list', { name: 'Close-ups the scanner took' })).toHaveText('Picture 2, top left, sharpened');
+  // The model's own summary of its thinking, flattened to one line.
+  await expect(dialog.getByText('What the scanner is thinking')).toBeVisible();
+  await expect(dialog.getByText('Checking the second picture The top-left block names are small, so I will zoom in before reading them.', { exact: true })).toBeVisible();
+  await dialog.screenshot({ path: testInfo.outputPath('scan-progress.png') });
+
   await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  slowZoom = false;
+  await expect(dialog.getByRole('list', { name: 'Scan progress' })).toHaveCount(0);
   expect(requests).toHaveLength(1);
   expect(requests[0].model).toBe('mock-vision');
   expect(requests[0].images).toHaveLength(2);
@@ -104,11 +134,17 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await expect(rows.nth(0).getByText('From the school directory')).toBeVisible();
   await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B']);
   await expect(rows.nth(2).getByText('Could not match “Flex” to a period')).toBeVisible();
+  const free = dialog.getByRole('group', { name: 'Free periods' }).getByRole('button');
+  await expect(free).toHaveText(['D']);
+  await expect(free).toHaveAttribute('aria-pressed', 'true');
   // Drop Algebra from C, and place History on D as well.
   await periods(0).filter({ hasText: /^C$/ }).click();
   await periods(1).filter({ hasText: /^D$/ }).click();
   await expect(periods(0).and(page.locator('[aria-pressed="true"]'))).toHaveText(['A']);
   await expect(periods(1).and(page.locator('[aria-pressed="true"]'))).toHaveText(['B', 'D']);
+  // A class picked for D outranks the free period.
+  await expect(free).toBeDisabled();
+  await expect(free).toHaveAttribute('aria-pressed', 'false');
   await page.screenshot({ path: testInfo.outputPath('scan-review.png'), fullPage: true });
 
   // Fix a misread room and leave study hall out.
@@ -127,8 +163,39 @@ test('scans a two-photo timetable, lets the student review it, and places the cl
   await page.screenshot({ path: testInfo.outputPath('scan-placed.png'), fullPage: true });
 });
 
-test('reads a schedule PDF: renders its pages and sends its text for exact names', async ({ page, context }) => {
+test('leaves a period printed as Unassigned free, clearing the class saved there', async ({ page, context }, testInfo) => {
+  const fixture = seed({ D: 'art' }, [{ id: 'art', name: 'Art' }]); await authenticate(context, fixture.id);
+  await page.goto('/classes');
+  const PNG = await page.screenshot({ type: 'png' });
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'timetable.png', mimeType: 'image/png', buffer: PNG });
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  const rows = dialog.getByRole('list', { name: 'Classes read from the photo' }).getByRole('listitem');
+  await expect(rows).toHaveCount(3);
+  for (const [index, name] of ['Algebra II', 'World History', 'Study Hall'].entries()) await expect(rows.nth(index).getByLabel('Class')).toHaveValue(name);
+  await expect(dialog.getByRole('group', { name: 'Free periods' }).getByRole('button')).toHaveText(['D']);
+  await expect(dialog.getByText('Clears Art from D.')).toBeVisible();
+  await dialog.getByText('Clears Art from D.').scrollIntoViewIfNeeded();
+  await dialog.screenshot({ path: testInfo.outputPath('scan-free-period.png') });
+  await rows.nth(2).getByLabel('Include').uncheck();
+  await dialog.getByRole('button', { name: 'Add 2 classes' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ }).first()).toBeVisible();
+  const cards = page.getByRole('list', { name: 'Your classes' }).getByRole('listitem');
+  await expect(cards.filter({ hasText: 'Art' })).toBeVisible();
+  await expect(cards.filter({ hasText: 'Art' }).getByText('D', { exact: true })).toHaveCount(0);
+  await expect(cards.filter({ hasText: 'Unassigned' })).toHaveCount(0);
+});
+
+test('reads a schedule PDF without newer browser APIs: renders its pages and sends its text for exact names', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
+  // Older Safari versions lack these APIs. Exercise the real PDF renderer rather than a mocked decoder.
+  await page.addInitScript(() => {
+    Reflect.deleteProperty(Map.prototype, 'getOrInsertComputed');
+    Reflect.deleteProperty(Uint8Array.prototype, 'toBase64');
+  });
   // A real two-page PDF, printed by Chromium from a small timetable page.
   const maker = await context.newPage();
   await maker.setContent(`<h1>10-Day Schedule</h1><table border="1"><tr><th>Block</th><th>Day 1</th><th>Day 2</th></tr>
@@ -157,6 +224,29 @@ test('reads a schedule PDF: renders its pages and sends its text for exact names
   expect(sent.prompt).toContain('Advisory meets in room 12.');
 });
 
+
+test('reads a PDF where ReadableStream is not async-iterable, as in older Safari', async ({ page, context }) => {
+  const fixture = seed(); await authenticate(context, fixture.id);
+  // Older Safari has no ReadableStream[Symbol.asyncIterator], which pdf.js's getTextContent() needs for its `for await`.
+  await page.addInitScript(() => {
+    Reflect.deleteProperty(ReadableStream.prototype, Symbol.asyncIterator);
+    Reflect.deleteProperty(ReadableStream.prototype, 'values');
+  });
+  const maker = await context.newPage();
+  await maker.setContent('<h1>10-Day Schedule</h1><p>Algebra II (Ms. Ortiz, 204)</p>');
+  const pdf = await maker.pdf({ format: 'Letter' });
+  await maker.close();
+  await page.goto('/classes');
+  await page.getByRole('button', { name: 'Import schedule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Choose a schedule PDF or picture').setInputFiles({ name: 'schedule.pdf', mimeType: 'application/pdf', buffer: pdf });
+  await expect(dialog.getByRole('img', { name: 'Page 1 of schedule.pdf' })).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  const before = requests.length;
+  await dialog.getByRole('button', { name: 'Read schedule' }).click();
+  await expect(dialog.getByText('3 classes were found.')).toBeVisible();
+  expect(requests[before].prompt).toContain('Algebra II (Ms. Ortiz, 204)');
+});
 
 test('keeps the text of same-named PDFs apart and reads only the pages it shows', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);

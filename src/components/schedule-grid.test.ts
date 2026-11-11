@@ -18,3 +18,63 @@ describe('ScheduleGrid', () => {
     expect(html).not.toContain('per-gone-7');
   });
 });
+
+
+describe('school-following timetable controls', () => {
+  it('keeps bell-time editing and class placement available without rotation structure controls', () => {
+    const html = renderToStaticMarkup(createElement(ScheduleGrid, { value: exampleSchedule, personal: examplePersonalSchedule, personalClassesOnly: true, allowStructure: false, onChange: noop, onEditDay: noop, onRemoveDay: noop }));
+    expect(html).toContain('Edit times');
+    expect(html).not.toMatch(/aria-label="Day \d+ name"/);
+    expect(html).not.toMatch(/aria-label="Remove Day /);
+  });
+
+  it('retains structure management in a private schedule', () => {
+    const html = renderToStaticMarkup(createElement(ScheduleGrid, { value: exampleSchedule, allowStructure: true, onChange: noop, onEditDay: noop, onRemoveDay: noop }));
+    expect(html).toContain('aria-label="Day 1 name"');
+    expect(html).toContain('aria-label="Remove Day ');
+  });
+});
+
+describe('disabled timetable', () => {
+  const personal = { ...examplePersonalSchedule, assignments: { A: 'algebra' } };
+  const render = (disabled?: boolean) => renderToStaticMarkup(createElement(ScheduleGrid, {
+    value: exampleSchedule, personal, personalClassesOnly: true, disabled,
+    onAssign: async () => {}, onChange: noop, onEditDay: noop, onRemoveDay: noop,
+  }));
+  const control = (html: string, label: string) => {
+    const found = html.match(/<(?:button|input)\b[^>]*>/g)?.find(tag => tag.includes(`aria-label="${label}"`));
+    expect(found, `Missing control ${label}`).toBeDefined();
+    return found!;
+  };
+  const editTimes = (html: string) => html.match(/<button\b[^>]*>Edit times<span[^>]*> for Day 1<\/span><\/button>/)?.[0];
+
+  it('locks every rendered time and structure control', () => {
+    const html = render(true);
+    expect(control(html, 'Day 1 name')).toContain('disabled=""');
+    expect(control(html, 'Remove Day 1')).toContain('disabled=""');
+    expect(editTimes(html)).toContain('disabled=""');
+    expect(control(html, 'Resize Day 1 A start')).toContain('disabled=""');
+    expect(control(html, 'Resize Day 1 A end')).toContain('disabled=""');
+    expect(control(html, 'Remove time block from Day 1 9:10–10:10 AM')).toContain('disabled=""');
+    expect(control(html, 'Place Lunch')).toContain('disabled=""');
+    expect(control(html, 'Place in Day 1 at 1:00 PM')).toContain('disabled=""');
+  });
+
+  it('also disables class selection, existing block targets, and class removal', () => {
+    const html = render(true);
+    expect(control(html, 'Place Algebra')).toContain('disabled=""');
+    expect(control(html, 'Day 1, 8:00–9:00 AM: Algebra')).toContain('disabled=""');
+    expect(control(html, 'Day 1, 9:10–10:10 AM: B')).toContain('disabled=""');
+    expect(control(html, 'Remove class from Day 1 8:00–9:00 AM')).toContain('disabled=""');
+  });
+
+  it('preserves existing unlocked behavior when the prop is omitted', () => {
+    const html = render();
+    expect(control(html, 'Day 1 name')).not.toContain('disabled=""');
+    expect(editTimes(html)).not.toContain('disabled=""');
+    expect(control(html, 'Resize Day 1 A end')).not.toContain('disabled=""');
+    expect(control(html, 'Remove time block from Day 1 9:10–10:10 AM')).not.toContain('disabled=""');
+    expect(control(html, 'Place Lunch')).not.toContain('disabled=""');
+  });
+
+});

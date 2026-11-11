@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { FIRST_DATE, LAST_DATE } from '@/domain/schedule';
 import { taskSchema, type Task } from '@/domain/task';
@@ -8,7 +8,7 @@ import { addDays, classColor, formatTime, formatTimeZone, reminderLabel } from '
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
-import { DATED_GROUPS, groupTasks, type TaskGroupKey } from '../task-groups';
+import { groupTasks, type TaskGroupKey } from '../task-groups';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
 import { Button, Callout, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Select, Spacer, Textarea } from '../primitives';
@@ -47,7 +47,7 @@ export function withoutBlankSubtasks(task: Task): Task {
   return task.subtasks ? { ...task, subtasks: task.subtasks.filter((item) => item.title.trim() !== '') } : task;
 }
 
-const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'before-school': 'bg-success', 'next-school-day': 'bg-warning', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
+const GROUP_TONES: Record<TaskGroupKey, string> = { overdue: 'bg-destructive', today: 'bg-primary', tomorrow: 'bg-now', 'before-school': 'bg-success', 'next-school-day': 'bg-warning', 'second-school-day': 'bg-success', 'before-second-school-day': 'bg-success', week: 'bg-success', later: 'bg-muted-foreground/60', undated: 'bg-muted-foreground/40' };
 
 export function TasksView({ state }: { state: AppState }) {
   const items = useMemo(() => taskItems(state.snapshot.entities), [state.snapshot.entities]);
@@ -103,7 +103,22 @@ export function TasksView({ state }: { state: AppState }) {
           {group.title} <span className="font-semibold text-muted-foreground/70">· {group.items.length}</span>
           {group.detail && <span className="ml-1 rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-bold normal-case tracking-normal text-foreground/80">{group.detail}</span>}
         </h2>
-        <ul className="grid gap-0.5">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={!DATED_GROUPS.has(group.key)} />)}</ul>
+        {group.days ? <div className="grid gap-2 sm:gap-4 sm:pt-1">{group.days.map((day) => <section key={day.date} aria-labelledby={`day-${group.key}-${day.date}`} style={{ '--day-rows': day.items.length } as CSSProperties}
+          className="grid sm:grid-cols-[3.5rem_minmax(0,1fr)] sm:grid-rows-[repeat(var(--day-rows),auto)] sm:gap-y-0.5">
+          {/* An agenda column: the date block sits beside the day's rows, so the rows drop their date chips like Today's do. The list is a
+              row subgrid, so the block centers on the first task, and that task's checkbox centers on its title and details too.
+              On phones the block becomes a line above the rows, lined up with the task titles. */}
+          <h3 id={`day-${group.key}-${day.date}`} className="flex items-baseline gap-1.5 pl-11 pt-2 sm:col-start-1 sm:row-start-1 sm:flex-col sm:items-center sm:gap-0.5 sm:self-center sm:pl-0 sm:pt-0">
+            <span className="sr-only">{day.title}</span>
+            {/* Overdue rows lose their red date chip here, so the date block carries the red instead. */}
+            <span aria-hidden="true" className={cn('text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground', group.key === 'overdue' && 'text-destructive')}>{day.weekday}</span>
+            <span aria-hidden="true" className={cn('text-[13px] font-semibold tabular-nums text-foreground sm:text-[22px] sm:leading-none', group.key === 'overdue' && 'text-destructive')}>{day.day}</span>
+            <span aria-hidden="true" className={cn('text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70', group.key === 'overdue' && 'text-destructive/70')}>{day.month}</span>
+          </h3>
+          <ul className="grid gap-0.5 sm:col-start-2 sm:row-span-(--day-rows) sm:row-start-1 sm:grid-rows-subgrid">{day.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false} centered />)}</ul>
+        </section>)}</div>
+          // No due date keeps its checkboxes in line with the dated groups above it.
+          : <ul className="grid gap-0.5 sm:pl-14">{group.items.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} centered />)}</ul>}
       </CardContent>
     </Card>)}
     {completed.length > 0 && <Card className="gap-1 py-3">
@@ -121,6 +136,11 @@ export function TasksView({ state }: { state: AppState }) {
       onSave={async (task) => { await state.saveTask(editing === 'new' || !editing ? crypto.randomUUID() : editing, task); setEditing(null); }}
       onDelete={editing && editing !== 'new' ? async () => { await state.saveTask(editing, null); setEditing(null); } : undefined} />
   </div>;
+}
+
+/** A trailing icon on native date/time inputs, matching the chevron on selects. */
+function Dated({ icon, children }: { icon: 'calendar' | 'clock'; children: React.ReactNode }) {
+  return <div className="relative">{children}<Icon name={icon} className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" /></div>;
 }
 
 function FormGroup({ title, children }: { title: string; children: React.ReactNode }) {
@@ -154,12 +174,12 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
   const reminderZone = formatTimeZone(draft.reminder?.timeZone ?? newReminderZone);
   return <Modal open={open} onClose={onClose} dirty={dirty} busy={pending} title={isNew ? 'New task' : 'Edit task'}
     footer={<>{onDelete && !deleted && <Button variant="danger" disabled={pending || changed} onClick={() => setDeleting(true)}>Delete</Button>}<Spacer /><Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button><Button variant="primary" form="task-form" type="submit" busy={pending} disabled={changed || !draft.title.trim()}>{isNew || deleted ? 'Add task' : 'Save'}</Button></>}>
-    <form id="task-form" className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (!changed) void run(() => onSave(taskSchema.parse(withoutBlankSubtasks({ ...draft, title: draft.title.trim() })))); }}>
+    <form id="task-form" className="grid gap-4 task-form-fit" onSubmit={(event) => { event.preventDefault(); if (!changed) void run(() => onSave(taskSchema.parse(withoutBlankSubtasks({ ...draft, title: draft.title.trim() })))); }}>
       <Field label="Task" htmlFor="task-title"><Input id="task-title" autoFocus={isNew} required maxLength={300} value={draft.title} placeholder="What needs to get done?" className="h-12 text-[17px] font-semibold" onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>
       <FormGroup title="When">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Due date" htmlFor="task-date"><Input id="task-date" type="date" min={FIRST_DATE} max={LAST_DATE} value={draft.dueDate ?? ''} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value || null, dueTime: event.target.value ? draft.dueTime : null, recurrence: event.target.value ? (draft.recurrence ? { ...draft.recurrence, anchorDate: event.target.value } : draft.recurrence) : null, reminder: event.target.value ? draft.reminder : null })} /></Field>
-          <Field label="Due time" htmlFor="task-time" hint={!draft.dueDate ? 'Pick a date first' : undefined}><Input id="task-time" type="time" disabled={!draft.dueDate} value={draft.dueTime ?? ''} onChange={(event) => setDraft({ ...draft, dueTime: event.target.value || null })} /></Field>
+          <Field label="Due date" htmlFor="task-date"><Dated icon="calendar"><Input id="task-date" className="pr-9" type="date" min={FIRST_DATE} max={LAST_DATE} value={draft.dueDate ?? ''} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value || null, dueTime: event.target.value ? draft.dueTime : null, recurrence: event.target.value ? (draft.recurrence ? { ...draft.recurrence, anchorDate: event.target.value } : draft.recurrence) : null, reminder: event.target.value ? draft.reminder : null })} /></Dated></Field>
+          <Field label="Due time" htmlFor="task-time" hint={!draft.dueDate ? 'Pick a date first' : undefined}><Dated icon="clock"><Input id="task-time" className="pr-9" type="time" disabled={!draft.dueDate} value={draft.dueTime ?? ''} onChange={(event) => setDraft({ ...draft, dueTime: event.target.value || null })} /></Dated></Field>
         </div>
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick due dates">
           {quick.map((entry) => {
@@ -175,14 +195,14 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
       </div>
       {draft.imported && <Callout tone="neutral" icon="calendar" actions={draft.imported.url ? <a href={draft.imported.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}><Icon name="externalLink" />Open link</a> : undefined}>Imported calendar event{draft.imported.sourceRemoved ? ' · Removed from its source; your task is kept.' : '. Calendar updates keep your completion and checklist.'}</Callout>}
       <fieldset className="grid gap-2 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04]"><legend className="sr-only">Checklist</legend>
-        <div className="flex items-center justify-between gap-2"><Eyebrow>Checklist{draft.subtasks?.length ? ` · ${draft.subtasks.filter((entry) => entry.completed).length}/${draft.subtasks.length}` : ''}</Eyebrow>
-          <Button size="sm" variant="ghost" icon="plus" disabled={(draft.subtasks?.length ?? 0) >= 100} onClick={() => setDraft({ ...draft, subtasks: [...(draft.subtasks ?? []), { id: crypto.randomUUID(), title: '', completed: false }] })}>Add checklist item</Button></div>
+        <div className="flex items-center justify-between gap-3"><div className="grid min-w-0 gap-1"><Eyebrow>Checklist{draft.subtasks?.length ? ` · ${draft.subtasks.filter((entry) => entry.completed).length}/${draft.subtasks.length}` : ''}</Eyebrow>
+          {!draft.subtasks?.length && <Hint>Break the task into steps you can tick off.</Hint>}</div>
+          <Button size="sm" variant="ghost" icon="plus" className="shrink-0" disabled={(draft.subtasks?.length ?? 0) >= 100} onClick={() => setDraft({ ...draft, subtasks: [...(draft.subtasks ?? []), { id: crypto.randomUUID(), title: '', completed: false }] })}>Add checklist item</Button></div>
         {(draft.subtasks ?? []).map((item, index) => <div key={item.id} className="flex items-center gap-2">
           <Checkbox className="size-5 rounded-full [&_svg]:size-3.5" checked={item.completed} aria-label={`Complete checklist item ${index + 1}`} onCheckedChange={(checked) => setDraft({ ...draft, subtasks: draft.subtasks!.map(entry => entry.id === item.id ? { ...entry, completed: checked === true } : entry) })} />
           <Input small aria-label={`Checklist item ${index + 1}`} maxLength={300} value={item.title} placeholder="Step" className={cn('h-9', item.completed && 'line-through text-muted-foreground')} onChange={(event) => setDraft({ ...draft, subtasks: draft.subtasks!.map(entry => entry.id === item.id ? { ...entry, title: event.target.value } : entry) })} />
           <Button size="sm" variant="ghost" icon="x" aria-label={`Remove checklist item ${index + 1}`} onClick={() => setDraft({ ...draft, subtasks: draft.subtasks!.filter(entry => entry.id !== item.id) })} />
         </div>)}
-        {!draft.subtasks?.length && <Hint>Break the task into steps you can tick off.</Hint>}
       </fieldset>
       <FormGroup title="Repeat and remind">
         {!draft.imported && <Field label="Repeat" htmlFor="task-repeat" hint={!draft.dueDate ? 'Pick a due date first' : 'Completing this task creates the next occurrence after syncing.'}><Select id="task-repeat" disabled={!draft.dueDate} value={draft.recurrence?.frequency ?? ''} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value ? { frequency: event.target.value as NonNullable<Task['recurrence']>['frequency'], interval: draft.recurrence?.interval ?? 1, until: draft.recurrence?.until ?? null, anchorDate: draft.dueDate! } : null })}><option value="">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></Select></Field>}

@@ -22,7 +22,7 @@ export function nextSchoolDate(schedule: Schedule, personal: PersonalSchedule, f
   return null;
 }
 
-export type TaskGroupKey = 'overdue' | 'today' | 'tomorrow' | 'before-school' | 'next-school-day' | 'week' | 'later' | 'undated';
+export type TaskGroupKey = 'overdue' | 'today' | 'tomorrow' | 'before-school' | 'next-school-day' | 'second-school-day' | 'before-second-school-day' | 'week' | 'later' | 'undated';
 
 export interface TaskGroup {
   key: TaskGroupKey;
@@ -30,10 +30,36 @@ export interface TaskGroup {
   /** A second, quieter label; only the next-school-day group has one. */
   detail?: string;
   items: TaskItem[];
+  /** Per-day sections for the groups that span several days within the week, in date order. */
+  days?: TaskDay[];
 }
 
-/** Groups whose rows need no date chip: the heading already says when. */
-export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorrow', 'next-school-day']);
+export interface TaskDay {
+  date: string;
+  /** "Thursday, Oct 22", the accessible name */
+  title: string;
+  /** The parts of the date block beside the day's rows: "Thu", "22", "Oct". */
+  weekday: string;
+  day: string;
+  month: string;
+  items: TaskItem[];
+}
+
+/** Every group with due dates splits into one section per date, so Thursday's work does not run into Friday's. */
+const UNDATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['undated']);
+
+/** Splits a group's items by due date, in date order; items keep their incoming order within each day. */
+export function splitByDay(items: TaskItem[]): TaskDay[] {
+  const days = new Map<string, TaskItem[]>();
+  for (const item of items) {
+    const date = item.task.dueDate!;
+    days.set(date, [...(days.get(date) ?? []), item]);
+  }
+  return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, dayItems]) => {
+    const [month, day] = formatDate(date).split(' ');
+    return { date, title: formatDate(date, { weekday: 'long' }), weekday: formatDate(date, { weekday: 'short' }).split(',')[0], day, month, items: dayItems };
+  });
+}
 
 /**
  * The Tasks page groups, in display order, with empty groups dropped. Open tasks fall into Overdue, Today,
@@ -42,7 +68,9 @@ export const DATED_GROUPS: ReadonlySet<TaskGroupKey> = new Set(['today', 'tomorr
  * rest of the week. Work due on days off before school resumes goes ahead of that group, with date chips.
  * When a break pushes the next school day past the week window, Next 7 days comes first, then any remaining
  * work before school resumes, then the next school day and Later. Groups stay in date order.
- * Items keep their incoming order within each group.
+ * The following school date gets its own group without a detail label.
+ * Items keep their incoming order within each group. Every group except No due date also carries one section
+ * per due date.
  */
 export function groupTasks(items: TaskItem[], context: { today: string; nowTime: string; schedule: Schedule; personal: PersonalSchedule }): TaskGroup[] {
   const { today, nowTime } = context;
@@ -81,5 +109,20 @@ export function groupTasks(items: TaskItem[], context: { today: string; nowTime:
     { key: 'later', title: 'Later', items: between(separate ? Math.max(8, schoolDelta + 1) : 8, Number.POSITIVE_INFINITY) },
     { key: 'undated', title: 'No due date', items: items.filter((item) => !item.task.dueDate) },
   ];
-  return groups.filter((group): group is TaskGroup => group !== null && group.items.length > 0);
+  const populated = groups.filter((group): group is TaskGroup => group !== null && group.items.length > 0);
+  const secondSchool = school ? nextSchoolDate(context.schedule, context.personal, school) : null;
+  // Split the containing group so deadlines on intervening days off keep their chronological position.
+  const separated = secondSchool ? populated.flatMap((group): TaskGroup[] => {
+    const secondItems = group.items.filter((item) => item.task.dueDate === secondSchool);
+    if (!secondItems.length) return [group];
+    const before = group.items.filter((item) => item.task.dueDate! < secondSchool);
+    const after = group.items.filter((item) => item.task.dueDate! > secondSchool);
+    return [
+      ...(before.length ? [{ ...group, key: 'before-second-school-day' as const, items: before }] : []),
+      { key: 'second-school-day', title: daysBetween(today, secondSchool) <= 6 ? formatDate(secondSchool, { weekday: 'long' }).split(',')[0] : formatDate(secondSchool, { weekday: 'long' }), items: secondItems },
+      ...(after.length ? [{ ...group, items: after }] : []),
+    ];
+  }) : populated;
+  return separated
+    .map((group) => !UNDATED_GROUPS.has(group.key) ? { ...group, days: splitByDay(group.items) } : group);
 }

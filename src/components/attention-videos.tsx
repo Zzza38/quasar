@@ -22,6 +22,9 @@ const TILES: Record<string, { count: number; direction: 'rows' | 'columns' }> = 
   'school-directory': { count: 2, direction: 'rows' },
   'account-look': { count: 2, direction: 'columns' },
 };
+// Tiles alternate between these muted clips, offset per zone so single-tile zones differ too.
+const SOURCES = ['/mods/attention-span.mp4', '/mods/slime-asmr.mp4'];
+const sourceFor = (zone: string, index: number) => SOURCES[([...zone].reduce((sum, char) => sum + char.charCodeAt(0), 0) + index) % SOURCES.length]!;
 const GAP = 8;
 const MIN_HEIGHT = 32;
 const playbackListeners = new Set<() => void>();
@@ -47,12 +50,13 @@ function watchPlayback(listener: () => void) {
   };
 }
 
-function AttentionVideo({ zone }: { zone: string }) {
+function AttentionVideo({ zone, index }: { zone: string; index: number }) {
   const reducedMotion = useReducedMotion();
   const reduced = useRef(reducedMotion);
   const ref = useRef<HTMLVideoElement>(null);
   const visible = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  const source = sourceFor(zone, index);
   const playback = (element: HTMLVideoElement) => {
     if (visible.current && !document.hidden && (!dialogRoot || dialogRoot.contains(element))) {
       setLoaded(true);
@@ -90,7 +94,7 @@ function AttentionVideo({ zone }: { zone: string }) {
   }, []);
 
   return <video ref={element => { ref.current = element; if (element) { element.muted = true; element.defaultMuted = true; } }}
-    data-attention-slot={zone} src={loaded ? '/mods/attention-span.mp4' : undefined} muted loop playsInline preload="metadata" disablePictureInPicture
+    data-attention-slot={zone} src={loaded ? source : undefined} muted loop playsInline preload="metadata" disablePictureInPicture
     className="pointer-events-none block h-full min-h-0 w-full min-w-0 rounded-lg object-cover"
     onLoadedMetadata={event => {
       const element = event.currentTarget;
@@ -131,7 +135,7 @@ export function AttentionGap({ zone, className, as: Tag = 'div', minWidth = 96, 
       style={{ width: size.width, height: availableHeight, marginTop: top, gap: GAP,
         gridTemplateColumns: tiles.direction === 'columns' ? `repeat(${count}, minmax(0, 1fr))` : 'minmax(0, 1fr)',
         gridTemplateRows: tiles.direction === 'rows' ? `repeat(${count}, minmax(0, 1fr))` : 'minmax(0, 1fr)' }}>
-      {Array.from({ length: count }, (_, index) => <AttentionVideo key={index} zone={zone} />)}
+      {Array.from({ length: count }, (_, index) => <AttentionVideo key={index} zone={zone} index={index} />)}
     </div>}
   </Tag>;
 }

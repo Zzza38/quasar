@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { censorSlurs } from './chat-filter';
+import { censorSlurs, joinsIntoSlur, slurRanges } from './chat-filter';
 
 /**
  * Phase-4 chat rules shared by the client and the server (docs/CHAT.md §3.3, §3.6, §5).
@@ -7,7 +7,8 @@ import { censorSlurs } from './chat-filter';
  * values (see the message helpers below), so editing CHAT is enough to change a limit.
  */
 export const CHAT = {
-  maxLength: 1000, perMinute: 20, perDay: 500, newChatsPerDay: 20,
+  imageMaxBytes: 1_000_000, imageMaxDimension: 1600,
+  maxLength: 1000, reactionsPerMinute: 60, perMinute: 20, perDay: 500, newChatsPerDay: 20,
   page: 50, maxChanges: 200, evidence: 30, evidenceBefore: 15, evidenceAfter: 14,
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
@@ -50,8 +51,8 @@ export const COMPOSER_MAX_LENGTH = CHAT.maxLength + 100;
 /** Kept a fixed-shape union (the constant's annotation stops it widening to string) so no caller can return echoed input. */
 export type BodyError = 'Write a message first.' | typeof TOO_LONG_MESSAGE;
 /** Fixed-string problem for a normalized body, or null. Used by the composer (disable Send) and by ChatService. */
-export function bodyError(normalized: string): BodyError | null {
-  if (!normalized.replace(ZERO_WIDTH, '').trim()) return 'Write a message first.';
+export function bodyError(normalized: string, hasImage = false): BodyError | null {
+  if (!hasImage && !normalized.replace(ZERO_WIDTH, '').trim()) return 'Write a message first.';
   if (normalized.length > CHAT.maxLength) return TOO_LONG_MESSAGE;
   return null;
 }
@@ -85,11 +86,124 @@ export function linkParts(text: string): Array<{ text: string; href?: string }> 
 /**
  * The stored form of a message (§11): slurs censored to asterisks everywhere except inside the https links that
  * linkParts finds, which are kept whole so their address still works. A slur-shaped path segment or host label
- * ("…/wiki/Coon_Rapids") is only hidden where the link is shown, by censoredLinkParts.
+ * ("…/wiki/Coon_Rapids") is only hidden where the link is shown, by censoredLinkParts. A second pass reads the text
+ * without its markdown markers, the way the bubble shows it, so a slur split by styling ("n**igg**er",
+ * "ni~~gg~~er", "nig`g`er") is censored too. A run of lines holding one word each is read as one word down the
+ * bubble, so "nig\nger" is caught while "got wet\nback home" is not, and so is a word broken across a line inside
+ * a sentence ("hey ni\ngga dude"; see joinsIntoSlur).
  */
 export function censorBody(text: string): string {
-  return linkParts(text).map(part => (part.href ? part.text : censorSlurs(part.text))).join('');
+  return censorBodyMasks(text).body;
 }
+
+/**
+ * What the server stores for a message (§11): `body`, normalized and censored, which is all any member is sent, and
+ * `original`, the text as sent when the filter changed it, kept for the owner (src/server/moderation.ts).
+ */
+export function messageText(raw: unknown): { body: string; original: string | null } {
+  const sent = normalizeBody(typeof raw === 'string' ? raw : '');
+  const body = censorBody(sent);
+  return { body, original: body === sent ? null : sent };
+}
+
+/** One run of asterisks in a censored body: where it starts (a code point index), how long it is, and what it hid. */
+export type CensorMask = { at: number; stars: number; original: string };
+/** A code point of a body as it is censored: from and to are the original code points it stands for. */
+type Unit = { ch: string; from: number; to: number; masked: boolean };
+
+/**
+ * censorBody, also saying what each run of asterisks hid. Every pass works on code points that remember where in the
+ * original they came from, so a slur a later pass widens (one split by markdown or across lines) is still one mask.
+ */
+export function censorBodyMasks(text: string): { body: string; masks: CensorMask[] } {
+  const points = Array.from(text);
+  let offset = 0;
+  const units = linkParts(text).flatMap((part) => {
+    const own = Array.from(part.text).map((ch, index): Unit => ({ ch, from: offset + index, to: offset + index, masked: false }));
+    offset += own.length;
+    if (part.href) return own;
+    const censored = censorUnits(censorUnits(own), MARKDOWN_MARKER);
+    const stacked = replaceUnits(censored, STACKED_WORDS, lines => censorUnits(lines, STACKED_GAP));
+    return replaceUnits(stacked, BROKEN_WORD, (pair, match) => (joinsIntoSlur(match[1]!.replace(MARKDOWN_MARKERS, ''), match[2]!.replace(MARKDOWN_MARKERS, '')) ? censorUnits(pair, STACKED_GAP) : pair));
+  });
+  const masks: CensorMask[] = [];
+  let open: { at: number; stars: number; from: number; to: number } | null = null;
+  const close = () => { if (open) masks.push({ at: open.at, stars: open.stars, original: points.slice(open.from, open.to + 1).join('') }); open = null; };
+  units.forEach((unit, index) => {
+    if (!unit.masked) { close(); return; }
+    // Asterisks next to each other belong to one mask when what they hid overlaps.
+    if (open && unit.from <= open.to) { open.stars += 1; open.to = Math.max(open.to, unit.to); return; }
+    close();
+    open = { at: index, stars: 1, from: unit.from, to: unit.to };
+  });
+  close();
+  return { body: units.map(unit => unit.ch).join(''), masks };
+}
+
+/** Stands in for mask `index` in revealableText's output: private-use characters, so markdown parsing leaves them be. */
+export const MASK_PATTERN = /\uE000(\d+)\uE001/g;
+
+/**
+ * The owner's view of a message that was censored (src/server/moderation.ts): the censored body with each mask swapped
+ * for a MASK_PATTERN marker, ready for parseMarkdown, and the masks, so the bubble can show asterisks that reveal the
+ * original on hover.
+ */
+export function revealableText(original: string): { text: string; masks: CensorMask[] } {
+  const { body, masks } = censorBodyMasks(original);
+  const points = Array.from(body);
+  const out: string[] = [];
+  let cursor = 0;
+  masks.forEach((mask, index) => {
+    out.push(...points.slice(cursor, mask.at), `\uE000${index}\uE001`);
+    cursor = mask.at + mask.stars;
+  });
+  out.push(...points.slice(cursor));
+  return { text: out.join(''), masks };
+}
+
+/** censorSlurs on code points that remember their origin; each asterisk stands for the whole original slur. */
+function censorUnits(units: Unit[], ignore?: RegExp): Unit[] {
+  const ranges = slurRanges(units.map(unit => unit.ch).join(''), ignore ? { ignore } : {});
+  if (!ranges.length) return units;
+  const out: Unit[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    out.push(...units.slice(cursor, range.from));
+    const from = units[range.from]!.from;
+    const to = Math.max(...units.slice(range.from, range.to + 1).map(unit => unit.to));
+    for (let star = 0; star < range.stars; star += 1) out.push({ ch: '*', from, to, masked: true });
+    cursor = range.to + 1;
+  }
+  out.push(...units.slice(cursor));
+  return out;
+}
+
+/** String.replace with a global pattern and a callback, on code points that remember their origin. */
+function replaceUnits(units: Unit[], pattern: RegExp, replace: (slice: Unit[], match: RegExpMatchArray) => Unit[]): Unit[] {
+  const text = units.map(unit => unit.ch).join('');
+  const at = new Map<number, number>();
+  let offset = 0;
+  units.forEach((unit, index) => { at.set(offset, index); offset += unit.ch.length; });
+  at.set(offset, units.length);
+  const out: Unit[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = at.get(match.index!);
+    const end = at.get(match.index! + match[0].length);
+    if (start === undefined || end === undefined) continue;
+    out.push(...units.slice(cursor, start), ...replace(units.slice(start, end), match));
+    cursor = end;
+  }
+  out.push(...units.slice(cursor));
+  return out;
+}
+const MARKDOWN_MARKER = /[*_~`]/;
+/** Two or more lines in a row that hold one word each. */
+const STACKED_WORDS = /(?<![^\n])[^\S\n]*\S+[^\S\n]*(?:\n[^\S\n]*\S+[^\S\n]*)+(?![^\n])/g;
+const STACKED_GAP = /[\s*_~`]/;
+const MARKDOWN_MARKERS = /[*_~`]/g;
+/** The last word of a line and the first word of the next. */
+const BROKEN_WORD = /(?<!\S)(\S+)[^\S\n]*\n[^\S\n]*(\S+)(?!\S)/g;
 
 /**
  * linkParts for display: every run's visible text is censored, a link's too, but a link's href keeps the real
@@ -117,3 +231,11 @@ export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: s
   spam: { label: 'Spam or scam', short: 'Spam' },
   other: { label: 'Something else', short: 'Other' },
 };
+
+/** The tapbacks available in every chat, in display order. */
+export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'] as const;
+export type Reaction = typeof REACTIONS[number];
+export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
+export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
+export const chatImageSchema = z.string().max(Math.ceil(CHAT.imageMaxBytes * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
+export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[] };

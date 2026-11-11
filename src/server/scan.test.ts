@@ -4,7 +4,7 @@ import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { DirectoryService } from './directory';
 import sharp from 'sharp';
-import { ScanService, closeUp, scanConfig, scanInputSchema, MAX_CLOSE_UPS, MAX_SCAN_IMAGES, MAX_ZOOM_ROUNDS, SCAN_DAILY_LIMIT, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
+import { ScanService, closeUp, reasoningThought, scanConfig, scanInputSchema, MAX_CLOSE_UPS, MAX_SCAN_IMAGES, MAX_ZOOM_ROUNDS, SCAN_DAILY_LIMIT, SCAN_HOURLY_LIMIT, type ScanFetch } from './scan';
 import { exampleSchedule } from '@/domain/example';
 
 const databases: Db[] = [];
@@ -118,6 +118,25 @@ describe('timetable scanning', () => {
     expect('temperature' in body).toBe(false);
   });
 
+  it('asks OpenRouter for a summary of the thinking on beta scans only, keeping reasoning_effort otherwise', async () => {
+    const fetcher = vi.fn<ScanFetch>().mockImplementation(async () => answer([]));
+    const f = fixture(fetcher);
+    const scan = new ScanService(f.service, { ...config, url: 'https://openrouter.ai/api/v1', reasoning: 'low' }, f.fetcher);
+    await scan.scan(f.student, image);
+    const plain = bodyOf(f.fetcher, 0);
+    expect(plain.reasoning_effort).toBe('low');
+    expect(plain.reasoning).toBeUndefined();
+    await scan.scan(f.student, image, () => {});
+    const beta = bodyOf(f.fetcher, 1);
+    expect(beta.reasoning).toEqual({ effort: 'low', summary: 'auto' });
+    expect(beta.reasoning_effort).toBeUndefined();
+    // Another provider keeps reasoning_effort even on a beta scan.
+    const other = new ScanService(f.service, { ...config, reasoning: 'low' }, f.fetcher);
+    await other.scan(f.student, image, () => {});
+    expect(bodyOf(f.fetcher, 2).reasoning_effort).toBe('low');
+    expect(bodyOf(f.fetcher, 2).reasoning).toBeUndefined();
+  });
+
   it('sends a temperature only when SCAN_MODEL_TEMPERATURE sets one', async () => {
     const env = { SCAN_API_URL: 'https://api.example/v1', SCAN_MODEL: 'm' };
     expect(scanConfig(env)).not.toHaveProperty('temperature');
@@ -150,6 +169,25 @@ describe('timetable scanning', () => {
       { name: 'History', teacher: undefined, room: undefined, periodIds: [], periodLabel: 'Block Z', directoryId: undefined, days: [] },
     ]);
     expect(result.notes).toEqual(['Skipped a line the scanner could not read.']);
+  });
+
+  it('treats unassigned periods as free, never as a class, unless a class meets there on another day', async () => {
+    const f = fixture();
+    const [p1, p2, p3, p4] = exampleSchedule.periods.filter(period => period.kind === 'class');
+    f.fetcher.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      rows: [
+        { className: 'Algebra II', periodIds: [p1.id] },
+        { className: 'Unassigned', periodIds: [p2.id, p1.id] },
+        { className: 'free period', periodLabel: p3.label },
+      ],
+      freePeriodIds: [p4.id, 'no-such-period', 7],
+    }) } }] }), { status: 200 }));
+    const result = await f.scan.scan(f.student, image);
+    expect(result.rows.map(row => row.name)).toEqual(['Algebra II']);
+    expect(result.freePeriodIds).toEqual([p2.id, p3.id, p4.id]);
+    const prompt = JSON.parse(f.fetcher.mock.calls[0][1].body as string).messages[0].content as string;
+    expect(prompt).toContain('"Unassigned"');
+    expect(prompt).toContain('freePeriodIds');
   });
 
   it('keeps one row per class with every period it meets in', async () => {
@@ -415,6 +453,49 @@ describe('close-ups and unclear photos', () => {
     const parts = messages[5].content as Array<{ type: string; image_url?: { url: string } }>;
     expect(parts.filter(part => part.type === 'image_url')).toHaveLength(1);
     expect(parts.find(part => part.image_url)?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it('reports each step, with the close-ups it made, so the browser can show the scan moving', async () => {
+    const fetcher = vi.fn<ScanFetch>()
+      .mockResolvedValueOnce(reply({ content: null, tool_calls: [look('a', { photo: 1, left: 0.5, top: 0, width: 0.5, height: 0.5, enhance: true }), look('b', { photo: 2, left: 0, top: 0, width: 1, height: 1 })] }))
+      .mockResolvedValueOnce(answer([{ className: 'Art', periodIds: [firstPeriod.id] }]));
+    const f = fixture(fetcher);
+    const report = vi.fn();
+    await f.scan.scan(f.student, { images: [await picture()] }, report);
+    expect(report.mock.calls.map(([progress]) => progress)).toEqual([
+      { stage: 'reading', round: 0, closeUps: [] },
+      { stage: 'zooming', round: 0, closeUps: [] },
+      // The call naming a missing photo made no close-up, so it is not reported.
+      { stage: 'reading', round: 1, closeUps: [{ photo: 1, left: 0.5, top: 0, width: 0.5, height: 0.5, enhance: true }] },
+      { stage: 'checking', round: 0, closeUps: [] },
+    ]);
+  });
+
+  it('reports the model’s thinking with each step, and keeps it while the close-ups are read', async () => {
+    const fetcher = vi.fn<ScanFetch>()
+      .mockResolvedValueOnce(reply({ content: null, reasoning: '**Checking the left column**\n\nThe Monday names are blurry, so I will zoom in.', tool_calls: [look('a', { photo: 1, left: 0, top: 0, width: 0.5, height: 1 })] }))
+      .mockResolvedValueOnce(reply({ content: JSON.stringify({ rows: [{ className: 'Art', periodIds: [firstPeriod.id] }] }), reasoning: 'Now it reads Art.' }));
+    const f = fixture(fetcher);
+    const report = vi.fn();
+    await f.scan.scan(f.student, { images: [await picture()] }, report);
+    const thoughts = report.mock.calls.map(([progress]) => [progress.stage, progress.round, progress.thought]);
+    expect(thoughts).toEqual([
+      ['reading', 0, undefined],
+      ['zooming', 0, 'Checking the left column The Monday names are blurry, so I will zoom in.'],
+      ['reading', 1, 'Checking the left column The Monday names are blurry, so I will zoom in.'],
+      ['checking', 0, undefined],
+    ]);
+  });
+
+  it('flattens the model’s thinking to one line and keeps the end of a long one', () => {
+    expect(reasoningThought({ reasoning: '**Reading**\n\n  the  timetable ' })).toBe('Reading the timetable');
+    expect(reasoningThought({ reasoning_content: 'DeepSeek thinks here.' })).toBe('DeepSeek thinks here.');
+    expect(reasoningThought({ reasoning: null })).toBeUndefined();
+    expect(reasoningThought({ reasoning: '   ' })).toBeUndefined();
+    const long = reasoningThought({ reasoning: `${'word '.repeat(80)}so next I will zoom into Friday.` })!;
+    expect(long.startsWith('…')).toBe(true);
+    expect(long.endsWith('so next I will zoom into Friday.')).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(181);
   });
 
   it('stops offering close-ups after the round and close-up limits', async () => {

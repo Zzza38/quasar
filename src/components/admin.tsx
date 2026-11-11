@@ -10,6 +10,8 @@ import { REPORT_CATEGORIES } from '@/domain/chat';
 import { browserTimeZone, formatDate, formatTime, instantParts, pluralize } from '@/lib/format';
 import { Icon } from './icon';
 import { describeIssues, ScheduleEditor, ScheduleSummary } from './schedule-editor';
+import { SchoolExceptions } from './school-exceptions';
+import { applySchoolDefaultEdits, schoolExceptionGroups } from '@/domain/school-exceptions';
 import { Brand, CenteredNotice } from './shell';
 import { Button, Callout, Chip, Field, Hint, Input, Modal, PageHeader, Panel, Section, Select, Spacer, StatTile, Textarea, Toggle } from './primitives';
 import { Button as ShadButton } from './ui/button';
@@ -17,6 +19,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AuditLogSection, MemberRecord, OpenMemberModal, PeopleSection, type MemberTarget } from './admin-users';
 import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
+import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
+import { GuideAdmin, SchoolGuideSheet } from './admin-guides';
+import { guideName } from '@/domain/setup-guides';
+import { BetaProvider, type JoinedBeta } from './betas';
+import { STAFF_LABELS, hasPermission, type StaffAccess, type StaffPermission } from '@/domain/staff';
 
 type Request = RouterOutput['admin']['requests'][number];
 type VerificationRequest = RouterOutput['admin']['verificationRequests'][number];
@@ -24,10 +31,16 @@ type Report = RouterOutput['admin']['reports'][number];
 type PendingProposal = RouterOutput['admin']['proposals'][number];
 type ChatPauseRow = RouterOutput['admin']['chatPauses'][number];
 type BanRow = RouterOutput['admin']['bans'][number];
-/** What a support request is: a correction request or feedback, or an appeal against a pause or a removal (docs/CHAT.md §14). */
-function requestKind(kind: Request['kind']): { label: string; appeal: 'pause' | 'ban' } | null {
+/**
+ * What a support request is: a correction request or feedback, an appeal against a pause or a removal (docs/CHAT.md
+ * §14), feedback about a beta (src/server/betas.ts), or spellings students linked in the class directory
+ * (src/server/directory.ts).
+ */
+function requestKind(kind: Request['kind']): { label: string; appeal?: 'pause' | 'ban' } | null {
   if (kind === 'appeal:pause') return { label: 'Appeal: messaging pause', appeal: 'pause' };
   if (kind === 'appeal:ban') return { label: 'Appeal: removal from school', appeal: 'ban' };
+  if (kind.startsWith('beta:')) return { label: `Beta feedback: ${kind.slice('beta:'.length)}` };
+  if (kind === 'directory:merge') return { label: 'Class merge' };
   return null;
 }
 type EvidenceItem = RouterOutput['admin']['showEvidence']['items'][number];
@@ -35,7 +48,7 @@ type Security = RouterOutput['admin']['security'];
 type PauseTarget = { userId: string; name: string };
 const TAB_CLASS = 'rounded-lg px-3.5 font-semibold data-active:bg-card data-active:shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:data-active:bg-secondary';
 
-/** True when the server refused an owner tool because the owner's Google sign-in is too old (src/lib/admin-session.ts). */
+/** True when the server refused a support tool because the Google sign-in is too old (src/lib/admin-session.ts). */
 function needsSignIn(error: unknown): boolean {
   return error instanceof Error && error.message === ADMIN_REAUTH_MESSAGE;
 }
@@ -54,8 +67,20 @@ function formatInstant(iso: string): string {
   return `${formatDate(date, { weekday: 'short' })}, ${formatTime(time)}`;
 }
 
-/** What the server knows about the request's session (src/app/admin/page.tsx), so the page paints its verdict at once. */
-export type AdminBoot = { accountId: string | null; isAdmin: boolean; adminReady: boolean };
+/**
+ * What the server knows about the request's session (src/app/admin/page.tsx), so the page paints its verdict at once.
+ * `staff` is the account's role and permissions (src/domain/staff.ts); `isAdmin` is the owner alone.
+ */
+export type AdminBoot = { accountId: string | null; isAdmin: boolean; staff: StaffAccess | null; adminReady: boolean; betas: JoinedBeta[] };
+
+/** What each staff role does here, under the page title. */
+const ROLE_DESCRIPTIONS: Record<StaffAccess['role'], string> = {
+  owner: 'Handle requests and reports, manage any member’s account, classes and tasks, and review shared schedules.',
+  administrator: 'Handle requests, verification, reports, pauses, removals and suspensions, open member records, and review shared schedules.',
+  moderator: 'Handle reports and their appeals, pause messaging, remove members from a school, and moderate Global chat.',
+  support: 'Answer correction requests and feedback, verify students, open member records, and sign members out when an account is at risk.',
+  'schedule-editor': 'Answer correction requests, publish passed proposals, and fix shared school schedules, class directories and lunch menus.',
+};
 
 export function Admin({ initial }: { initial?: AdminBoot }) {
   const [schools, setSchools] = useState<School[]>([]);
@@ -74,8 +99,10 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [hiding, setHiding] = useState<string | null>(null);
   const [pauseTarget, setPauseTarget] = useState<PauseTarget | null>(null);
   const [allowed, setAllowed] = useState(!!initial?.adminReady);
-  // The owner is signed in, but not recently enough for the owner tools: the page offers a fresh Google sign-in.
-  const [reauth, setReauth] = useState(!!initial?.isAdmin && !initial.adminReady);
+  // Staff are signed in, but not recently enough for the support tools: the page offers a fresh Google sign-in.
+  const [reauth, setReauth] = useState(!!initial?.staff && !initial.adminReady);
+  // The role decides which sections, tabs and buttons appear. The server checks every call again.
+  const [access, setAccess] = useState<StaffAccess | null>(initial?.staff ?? null);
   const [security, setSecurity] = useState<Security | null>(null);
   const [tab, setTab] = useState('inbox');
   // Opening a member asks for a reason once per member per page load (it goes into the audit log with the view).
@@ -85,6 +112,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   // Bumped when a change made outside the open record (a messaging pause) should reload it.
   const [memberKey, setMemberKey] = useState(0);
   const [signedIn, setSignedIn] = useState(!!initial?.accountId);
+  // The staff member's own betas, so beta UI inside the support tools (the school review) follows their enrollment.
+  const [betas, setBetas] = useState<JoinedBeta[]>(initial?.betas ?? []);
   const [loading, setLoading] = useState(true);
   // Whether the page knows who is asking: from the server render, or after the first session check.
   const [decided, setDecided] = useState(!!initial);
@@ -93,12 +122,13 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [directorySchool, setDirectorySchool] = useState<string | null>(null);
+  const [guideSchool, setGuideSchool] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
-    // Losing owner access drops everything support loaded, including student proofs and report snapshots.
+    // Losing staff access drops everything support loaded, including student proofs and report snapshots.
     const revoke = () => {
       setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setPauses([]); setBans([]); setEvidence({});
-      setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); reasons.current.clear();
+      setSecurity(null); setMember(null); setOpeningMember(null); setPauseTarget(null); setSelected(null); setDirectorySchool(null); setGuideSchool(null); reasons.current.clear();
     };
     setLoading(true); setError(''); setFailed(false);
     try {
@@ -106,9 +136,15 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       const nextAccount = session?.user.id ?? null;
       if (accountRef.current !== nextAccount) setEvidence({});
       accountRef.current = nextAccount; setAccountId(nextAccount);
-      setReauth(!!session?.isAdmin && !session.adminReady);
+      setReauth(!!session?.staff && !session.adminReady);
+      setBetas(session?.betas ?? []);
+      setAccess(session?.staff ?? null);
       if (!session?.adminReady) { revoke(); return; }
-      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(), api.admin.verificationRequests.query(), api.admin.reports.query(), api.admin.proposals.query(), api.admin.chatPauses.query(), api.admin.security.query(), api.admin.bans.query()]);
+      // Only the lists this role may read are asked for; the rest stay empty.
+      const may = (permission: StaffPermission) => hasPermission(session.staff, permission);
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(),
+        may('verification') ? api.admin.verificationRequests.query() : [], may('reports') ? api.admin.reports.query() : [], may('proposals') ? api.admin.proposals.query() : [],
+        may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : []]);
       setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
@@ -123,6 +159,12 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     finally { setLoading(false); setDecided(true); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  // A section that loads its own data (Betas) hands refusals back here, so losing access clears the whole page.
+  const accessLost = useCallback(async (err: unknown) => {
+    if (!needsSignIn(err) && !isAccessDenied(err)) return false;
+    await refresh();
+    return true;
+  }, [refresh]);
   // When the support session runs out, everything loaded leaves the screen at once rather than at the next click.
   useEffect(() => {
     if (!security || security.until === null) return;
@@ -146,11 +188,11 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     </CenteredNotice>;
   }
   if (!allowed) {
-    return <CenteredNotice title={failed ? 'Support tools could not load' : signedIn ? 'Owner access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
+    return <CenteredNotice title={failed ? 'Support tools could not load' : signedIn ? 'Staff access required' : 'Sign in to continue'} action={<div className="grid justify-items-center gap-2">
       {!signedIn && !failed && <Button variant="primary" onClick={() => void signIn('google', { callbackUrl: '/admin' })}><GoogleLogo />Continue with Google</Button>}
       <div className="flex gap-2"><Button size="sm" onClick={() => void refresh()}>Retry</Button><Button size="sm" variant="ghost" onClick={() => window.location.assign('/')}>Back to my schedule</Button></div>
     </div>}>
-      {error || (signedIn ? 'This page is available to the project owner.' : 'Sign in with the owner account to review school schedules.')}
+      {error || (signedIn ? 'This page is available to Quasar staff.' : 'Sign in with a staff account to use the support tools.')}
     </CenteredNotice>;
   }
 
@@ -167,6 +209,9 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     if (failure) setError(errorMessage(failure));
   };
   const openCount = requests.length + verifications.length + reports.length + proposals.length;
+  const may = (permission: StaffPermission) => hasPermission(access, permission);
+  const owner = access?.role === 'owner';
+  const role = access?.role ?? 'owner';
   const showEvidence = async (reportId: string) => {
     if (!accountId) return;
     setError(''); setOpening(reportId);
@@ -185,32 +230,35 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     } catch (err) { setError(errorMessage(err)); }
     finally { setHiding(null); }
   };
-  return <div className="app-canvas min-h-dvh">
+  return <BetaProvider accountId={accountId ?? ''} betas={betas} online refresh={refresh}><div className="app-canvas min-h-dvh">
     <header className="glass sticky top-0 z-30 border-b border-foreground/[0.06]">
       <div className="mx-auto flex h-14 w-full max-w-[1120px] items-center justify-between gap-3 px-4 lg:px-8">
-        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">Support</Chip>{security && security.until !== null && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
+        <div className="flex min-w-0 items-center gap-3"><Brand compact href="/" className="sm:hidden" /><Brand href="/" className="max-sm:hidden" /><Chip tone="accent" icon="inbox">{owner ? 'Support' : STAFF_LABELS[role]}</Chip>{security && security.until !== null && <span className="max-md:hidden"><Chip tone="outline" icon="lock">Until {formatTime(instantParts(new Date(security.until).toISOString(), browserTimeZone()).time)}</Chip></span>}</div>
         <div className="flex shrink-0 items-center gap-2"><Button size="sm" variant="ghost" icon="refresh" busy={loading} className="max-sm:size-8 max-sm:px-0 pointer-coarse:max-sm:size-11" onClick={() => void refresh()}><span className="max-sm:sr-only">Refresh</span></Button><ShadButton asChild variant="outline" size="sm" className="rounded-lg font-semibold"><a href="/">My schedule</a></ShadButton></div>
       </div>
     </header>
     <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
-      <PageHeader title="Support" eyebrow="Owner tools" description="Handle requests and reports, manage any member’s account, classes and tasks, and review shared schedules. Everything you open or change is written to the audit log." />
+      <PageHeader title="Support" eyebrow={owner ? 'Owner tools' : `${STAFF_LABELS[role]} tools`} description={`${ROLE_DESCRIPTIONS[role]} Everything you open or change is written to the audit log${owner ? '' : ' with your address and browser, and the owner reviews it'}.`} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatTile icon="inbox" tone={openCount ? 'now' : 'success'} value={openCount} label="open items" />
         <StatTile icon="school" tone="accent" value={schools.length} label="schools" />
         <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
       </div>
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
-      {security && !security.pinned && <Callout tone="warning" icon="lock" title="Pin the owner account">
+      {security && security.pinned === false && <Callout tone="warning" icon="lock" title="Pin the owner account">
         The owner is recognized by email alone. Add <code className="break-all font-mono text-[13px]">OWNER_GOOGLE_SUB={security.googleSub}</code> to the server’s .env.local and restart, so only this Google account can open these tools even if the address is ever given to someone else.
       </Callout>}
-      <Tabs value={tab} onValueChange={setTab} className="gap-5">
+      {/* min-w-0: without it the tab row widens the page on phones instead of scrolling inside its wrapper. */}
+      <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-5">
       <div className="overflow-x-auto"><TabsList aria-label="Support section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
         <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
-        <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>
-        <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>
-        <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>
+        {may('members.search') && <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>}
+        {may('schools.edit') && <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>}
+        {may('schools.edit') && <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>}
+        {owner && <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>}
+        {owner && <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>}
       </TabsList></div>
-      <TabsContent value="schools" className="grid gap-5">
+      {may('schools.edit') && <TabsContent value="schools" className="grid gap-5">
       <Section id="schools-title" title="Schools" icon="school" description={`${pluralize(schools.length, 'school')} · ${approved} approved`} action={<div className="relative min-w-[180px]"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input small className="max-w-[240px] pl-8" aria-label="Filter schools" placeholder="Filter by name or town" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>}>
         {visible.length === 0 && <Hint>No schools match.</Hint>}
         {visible.length > 0 && <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/[0.06]"><Table>
@@ -218,44 +266,47 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
           <TableBody>{visible.map((entry) => <TableRow key={entry.id}>
             <TableCell className="whitespace-normal"><strong className="text-sm font-bold">{entry.name}</strong><Hint>{entry.location}</Hint></TableCell>
             <TableCell className="tabular-nums">{entry.memberCount}</TableCell>
-            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}</div></TableCell>
+            <TableCell><div className="flex flex-wrap gap-1">{entry.approved ? <Chip tone="success" icon="check">Approved</Chip> : <Chip tone="warning">Unreviewed</Chip>}{entry.supportLocked && <Chip icon="lock">Support locked</Chip>}{entry.memberLocked && <Chip icon="users">Member lock</Chip>}{entry.feedPlatforms.map((platform) => <Chip key={`calendar-${platform}`} tone="outline" icon="calendar">{guideName('calendar', platform, undefined)}</Chip>)}{entry.schedulePlatforms.map((platform) => <Chip key={`schedule-${platform}`} tone="outline" icon="clock">{guideName('schedule', platform, undefined)}</Chip>)}</div></TableCell>
             <TableCell className="tabular-nums">{entry.version}</TableCell>
-            <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
+            <TableCell className="text-right"><div className="inline-flex gap-1.5"><Button size="sm" onClick={() => setDirectorySchool(entry.id)} aria-label={`Class directory for ${entry.name}`}>Classes</Button><Button size="sm" onClick={() => setGuideSchool(entry.id)} aria-label={`Setup guide for ${entry.name}`}>Setup</Button><Button size="sm" variant="soft" onClick={() => setSelected(entry.id)} aria-label={`Review ${entry.name}`}>Review</Button></div></TableCell>
           </TableRow>)}</TableBody>
         </Table></div>}
       </Section>
-      </TabsContent>
+      </TabsContent>}
 
       <TabsContent value="inbox" className="grid gap-5">
-      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, and appeals against a messaging pause or a removal.'}>
+      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, appeals against a messaging pause or a removal, and feedback on betas they joined.'}>
         {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => {
           const appeal = requestKind(request.kind);
           return <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-            {appeal && <div><Chip tone="warning" icon="flag">{appeal.label}</Chip></div>}
+            {appeal && <div><Chip tone={appeal.appeal ? 'warning' : 'accent'} icon={appeal.appeal ? 'flag' : 'sparkle'}>{appeal.label}</Chip></div>}
             <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{appeal ? request.displayName || request.email : request.schoolName ?? 'No school yet'}</strong> <Hint className="inline">({request.email}{appeal && request.schoolName ? ` · ${request.schoolName}` : ''})</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
             <p className="whitespace-pre-wrap text-sm">{request.message}</p>
+            {request.diagnostics && <BetaDiagnosticsDetails diagnostics={request.diagnostics} />}
+            {request.merge && <MergeReview merge={request.merge} disabled={!accountId}
+              onDecide={(decision, name) => { if (accountId) void act(() => api.admin.resolveMerge.mutate({ accountId, requestId: request.id, decision, name })); }} />}
             <div className="flex flex-wrap gap-2">
-              {!appeal && request.schoolId && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
-              {appeal?.appeal === 'pause' && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: request.userId })); }}>Lift pause</Button>}
-              {appeal?.appeal === 'ban' && request.schoolId && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: request.userId, schoolId: request.schoolId! })); }}>Lift removal</Button>}
-              <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName || request.email })}>Open member</Button>
-              <Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>{appeal ? 'Keep as is' : 'Mark resolved'}</Button>
+              {(!appeal || request.merge) && request.schoolId && may('schools.edit') && <Button size="sm" icon="edit" onClick={() => setSelected(request.schoolId)}>Review school</Button>}
+              {appeal?.appeal === 'pause' && may('chat.pause') && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: request.userId })); }}>Lift pause</Button>}
+              {appeal?.appeal === 'ban' && request.schoolId && may('members.remove') && <Button size="sm" icon="unlock" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: request.userId, schoolId: request.schoolId! })); }}>Lift removal</Button>}
+              {may('members.view') && <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName || request.email })}>Open member</Button>}
+              <Button size="sm" variant="ghost" icon="check" disabled={!accountId} onClick={() => { if (accountId) void act(() => api.admin.resolveRequest.mutate({ accountId, id: request.id })); }}>{appeal?.appeal ? 'Keep as is' : 'Mark resolved'}</Button>
             </div>
           </li>;
         })}</ul>}
       </Section>
 
-      <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
+      {may('verification') && <Section id="verifications-title" title="Verification requests" icon="checkCircle" description={verifications.length ? `${pluralize(verifications.length, 'student')} waiting for a decision. Approve only with convincing proof of enrollment.` : 'Students without a school email send proof from their People view.'}>
         {!loading && verifications.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing to verify</Hint>}
         {verifications.length > 0 && <ul className="grid gap-2">{verifications.map((request) => <li key={request.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{request.displayName}</strong> <Hint className="inline">({request.fullName} · {request.email})</Hint><Hint>{request.schoolName}</Hint></span><Hint>{formatDate(instantParts(request.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <p className="whitespace-pre-wrap text-sm">{request.proof}</p>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button><Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName })}>Open member</Button></div>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: true }))}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideVerification.mutate({ id: request.id, approve: false }))}>Decline</Button>{may('members.view') && <Button size="sm" onClick={() => openMember({ userId: request.userId, name: request.displayName })}>Open member</Button>}</div>
         </li>)}</ul>}
-      </Section>
+      </Section>}
 
-      <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, closes their verification request, ends all of their friendships and chats (at any school) and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
+      {may('reports') && <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, closes their verification request, ends all of their friendships and chats (at any school) and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
         {!loading && reports.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open reports</Hint>}
         {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => {
           const items = evidence[report.id];
@@ -276,6 +327,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
                 </div>
                 {/* Plain text only: no links, no markup. */}
                 <p className="whitespace-pre-wrap break-words text-sm">{item.body}</p>
+                {item.image && <img src={item.image} alt="Reported attachment" className="max-h-80 max-w-full rounded-lg object-contain" />}
                 {item.deletedBy !== 'support' && <div><Button size="sm" variant="ghost" busy={hiding === key} disabled={hiding !== null && hiding !== key} onClick={() => void hideMessage(report.id, item.seq)}>Hide message</Button></div>}
               </li>;
             })}</ol>}
@@ -284,54 +336,58 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
                 ? <Button size="sm" variant="soft" icon="x" onClick={() => closeEvidence(report.id)}>Close messages</Button>
                 : <Button size="sm" variant="soft" icon="message" busy={opening === report.id} disabled={!accountId} onClick={() => void showEvidence(report.id)}>Show messages ({report.evidenceCount})</Button>)}
               <Button size="sm" variant="ghost" icon="check" onClick={() => void act(() => api.admin.resolveReport.mutate({ id: report.id, outcome: 'dismissed' }))}>Dismiss</Button>
-              <Button size="sm" onClick={() => openMember({ userId: report.reportedId, name: report.reportedName })}>Open member</Button>
-              <Button size="sm" icon="lock" disabled={!accountId} onClick={() => setPauseTarget({ userId: report.reportedId, name: report.reportedName })}>Pause messaging</Button>
-              {report.schoolId && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason. The student sees it and can appeal.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
+              {may('members.view') && <Button size="sm" onClick={() => openMember({ userId: report.reportedId, name: report.reportedName })}>Open member</Button>}
+              {may('chat.pause') && <Button size="sm" icon="lock" disabled={!accountId} onClick={() => setPauseTarget({ userId: report.reportedId, name: report.reportedName })}>Pause messaging</Button>}
+              {report.schoolId && may('members.remove') && <Button size="sm" variant="danger" onClick={() => { const reason = prompt(`Remove ${report.reportedName} from ${report.schoolName}? Enter the reason. The student sees it and can appeal.`); if (reason?.trim()) void act(() => api.admin.removeMember.mutate({ userId: report.reportedId, schoolId: report.schoolId!, reason: reason.trim() })); }}>Remove from school</Button>}
             </div>
           </li>;
         })}</ul>}
-      </Section>
+      </Section>}
 
-      <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages. They see the reason and can appeal.">
+      {may('chat.pause') && <Section id="paused-title" title="Paused members" icon="lock" description="These accounts can read their chats but cannot send messages. They see the reason and can appeal.">
         {!loading && pauses.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is paused.</Hint>}
         {pauses.length > 0 && <ul className="grid gap-2">{pauses.map((pause) => <li key={pause.userId} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="min-w-0"><p className="text-sm"><strong className="font-bold">{pause.displayName}</strong> · until {pause.until ? formatInstant(pause.until) : 'lifted'}</p><Hint>{pause.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {pause.reason}</Hint></div>
           <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift pause for ${pause.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftChatPause.mutate({ accountId, userId: pause.userId })); }}>Lift pause</Button>
         </li>)}</ul>}
-      </Section>
+      </Section>}
 
-      <Section id="removed-title" title="Removed members" icon="ban" description="Students removed from a school. They see the reason on the school step, can appeal, and can join another school. Lifting a removal lets them rejoin.">
+      {may('members.remove') && <Section id="removed-title" title="Removed members" icon="ban" description="Students removed from a school. They see the reason on the school step, can appeal, and can join another school. Lifting a removal lets them rejoin.">
         {!loading && bans.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nobody is removed.</Hint>}
         {bans.length > 0 && <ul className="grid gap-2">{bans.map((ban) => <li key={`${ban.userId}:${ban.schoolId}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="min-w-0 grid gap-1"><p className="text-sm"><strong className="font-bold">{ban.displayName}</strong> · removed from {ban.schoolName} on {formatDate(instantParts(ban.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</p><Hint>{ban.email}</Hint><Hint className="whitespace-pre-wrap break-words">Reason: {ban.reason}</Hint>{ban.appealed && <div><Chip tone="warning" icon="flag">Appeal pending</Chip></div>}</div>
           <Button size="sm" icon="unlock" disabled={!accountId} aria-label={`Lift removal for ${ban.displayName}`} onClick={() => { if (accountId) void act(() => api.admin.liftBan.mutate({ accountId, userId: ban.userId, schoolId: ban.schoolId })); }}>Lift removal</Button>
         </li>)}</ul>}
-      </Section>
+      </Section>}
 
-      <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
+      {may('proposals') && <Section id="proposals-title" title="Passed proposals awaiting support" icon="users" description={proposals.length ? 'These votes passed on support-locked schools. Publishing keeps the approval and lock; students review the change as a new revision.' : 'Votes that pass on a support-locked school appear here for publication.'}>
         {!loading && proposals.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Nothing waiting</Hint>}
         {proposals.length > 0 && <ul className="grid gap-2">{proposals.map((proposal) => <li key={proposal.id} className="grid gap-2 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
           <div className="flex flex-wrap items-start justify-between gap-3"><span><strong className="text-sm font-bold">{proposal.summary}</strong><Hint>{schools.find((entry) => entry.id === proposal.schoolId)?.name ?? proposal.schoolId} · proposed by {proposal.proposerName} · {proposal.votesFor} for, {proposal.votesAgainst} against · based on revision {proposal.baseVersion}</Hint></span><Hint>{formatDate(instantParts(proposal.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></div>
           <Panel><ScheduleSummary schedule={proposal.schedule} /></Panel>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button><Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button></div>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="primary" icon="check" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: true }))}>Publish revision</Button><Button size="sm" variant="ghost" onClick={() => void act(() => api.admin.decideProposal.mutate({ id: proposal.id, publish: false }))}>Decline</Button>{may('schools.edit') && <Button size="sm" onClick={() => setSelected(proposal.schoolId)}>Review school</Button>}</div>
         </li>)}</ul>}
-      </Section>
+      </Section>}
       </TabsContent>
-      <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} onOpen={openMember} /></TabsContent>
-      <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>
+      {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
+      {may('schools.edit') && <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
+      {owner && <TabsContent value="betas" className="grid gap-5">{tab === 'betas' && <BetaAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
+      {owner && <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>}
       </Tabs>
     </main>
     {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
-    {school && <ReviewSheet key={school.id} school={school} onClose={() => setSelected(null)} onSaved={refresh} />}
+    {guideSchool && accountId && schools.some((entry) => entry.id === guideSchool) && <SchoolGuideSheet key={guideSchool} school={schools.find((entry) => entry.id === guideSchool)!} accountId={accountId} onClose={() => setGuideSchool(null)} onSaved={refresh} />}
+    {school && <ReviewSheet key={school.id} school={school} canSetDomains={may('verification')} onClose={() => setSelected(null)} onSaved={refresh} />}
     {openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
       onOpen={(reason) => { reasons.current.set(openingMember.userId, reason); setMember({ ...openingMember, reason }); setOpeningMember(null); }} />}
-    {member && accountId && <MemberRecord key={member.userId} accountId={accountId} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
+    {member && accountId && access && <MemberRecord key={member.userId} accountId={accountId} access={access} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
       onClose={() => setMember(null)} onOpenMember={openMember} onPause={setPauseTarget} onChanged={refresh} />}
     {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={async () => { await refresh(); setMemberKey((key) => key + 1); }} />}
-  </div>;
+  </div></BetaProvider>;
 }
 
-function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: () => void; onSaved: () => Promise<void> }) {
+/** `canSetDomains`: email domains verify students, so only roles with verification may change them (Service.updateSchool). */
+function ReviewSheet({ school, canSetDomains, onClose, onSaved }: { school: School; canSetDomains: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState<Schedule>(() => structuredClone(school.schedule));
   const [approved, setApproved] = useState(school.approved);
   const [supportLocked, setSupportLocked] = useState(school.supportLocked);
@@ -345,7 +401,10 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
   return <Modal open onClose={onClose} dirty={dirty} busy={pending} wide title={`Review ${school.name}`} description={`${school.location} · ${pluralize(school.memberCount, 'member')} · revision ${school.version}. Saving publishes a new revision; students keep their personal settings and review the change.`}
     footer={<><Button variant="ghost" onClick={onClose} disabled={pending}>Done</Button><Spacer />{saved && <span className="flex items-center gap-1 text-sm font-semibold text-success" role="status"><Icon name="check" size={16} />Published</span>}<Button variant="primary" busy={pending} disabled={issues.length > 0 || !dirty} onClick={async () => {
       setPending(true); setError(''); setSaved(false);
-      try { await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), approved, supportLocked, emailDomains: domainList }); setSaved(true); await onSaved(); }
+      try {
+        const updated = await api.admin.update.mutate({ schoolId: school.id, expectedVersion: school.version, schedule: scheduleSchema.parse(draft), exceptionGradesExplicit: true, approved, supportLocked, emailDomains: domainList });
+        setDraft(updated.schedule); setSaved(true); await onSaved();
+      }
       catch (err) { setError(errorMessage(err)); } finally { setPending(false); }
     }}>Save school revision</Button></>}>
     <Panel className="grid gap-3">
@@ -354,10 +413,9 @@ function ReviewSheet({ school, onClose, onSaved }: { school: School; onClose: ()
         <Toggle label="Approved default schedule" checked={approved} onChange={setApproved} description="New members get this schedule by default." />
         <Toggle label="Lock shared edits to support" checked={supportLocked} onChange={setSupportLocked} description={school.memberLocked ? 'The 10-member editing lock is also in effect.' : 'Members can no longer publish revisions.'} />
       </div>
-      <Field label="School email domains" htmlFor="school-domains" hint="Students who sign in with a Google address on one of these domains are verified automatically, including current members the next time they open Quasar. Separate several with commas."><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} onChange={(event) => setDomains(event.target.value)} /></Field>
+      <Field label="School email domains" htmlFor="school-domains" hint={canSetDomains ? 'Students who sign in with a Google address on one of these domains are verified automatically, including current members the next time they open Quasar. Separate several with commas.' : 'These verify students automatically, so changing them needs the verification permission.'}><Input id="school-domains" placeholder="students.example.org, example.org" value={domains} disabled={!canSetDomains} onChange={(event) => setDomains(event.target.value)} /></Field>
     </Panel>
-    <p className="text-sm text-muted-foreground">Closures saved here apply to every grade unless it has a separate exception for that date. Each grade keeps its own rotation and bell times.</p>
-    <ScheduleEditor value={draft} onChange={setDraft} initialSection="preview" />
+    <ScheduleEditor value={draft} onChange={next => setDraft(applySchoolDefaultEdits(draft, next))} disabled={pending} initialSection="preview" exceptionEditor={{ count: schoolExceptionGroups(draft).length, content: <SchoolExceptions value={draft} onChange={setDraft} disabled={pending} /> }} />
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
   </Modal>;
 }
@@ -395,4 +453,29 @@ function PauseSheet({ target, accountId, onClose, onPaused }: { target: PauseTar
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     </div>
   </Modal>;
+}
+
+type Merge = NonNullable<Request['merge']>;
+const describeClass = (form: { name: string; teacher?: string; room?: string }) => [form.teacher, form.room].filter(Boolean).join(' · ');
+
+/**
+ * A class merge: the entry, the spellings students linked to it, and any duplicate entries. Merge keeps them as one
+ * class under the chosen name and moves the duplicates' students over; Keep separate unlinks the spellings for good.
+ */
+function MergeReview({ merge, disabled, onDecide }: { merge: Merge; disabled: boolean; onDecide: (decision: 'merge' | 'separate', name?: string) => void }) {
+  const names = [...new Set([merge.entry?.name, ...merge.aliases.map(alias => alias.name), ...merge.duplicates.flatMap(entry => [entry.name, ...(entry.aliases ?? []).map(alias => alias.name)])].filter((name): name is string => !!name))];
+  const [name, setName] = useState(merge.entry?.name ?? '');
+  if (!merge.entry) return <Hint>The directory class was removed, so there is nothing left to merge. Mark this resolved.</Hint>;
+  return <Panel className="grid gap-3 bg-card">
+    <ul className="grid gap-1.5 text-sm">
+      <li><strong className="font-bold">{merge.entry.name}</strong> <Hint className="inline">{[describeClass(merge.entry), pluralize(merge.entry.linked, 'linked class', 'linked classes')].filter(Boolean).join(' · ')}</Hint></li>
+      {merge.aliases.map(alias => <li key={`${alias.name}|${alias.teacher ?? ''}|${alias.room ?? ''}`} className="flex items-baseline gap-1.5"><Icon name="users" size={13} className="shrink-0 text-muted-foreground" /><span>Linked as “{alias.name}”</span>{describeClass(alias) && <Hint className="inline">{describeClass(alias)}</Hint>}</li>)}
+      {merge.duplicates.map(entry => <li key={entry.id} className="flex items-baseline gap-1.5"><Icon name="copy" size={13} className="shrink-0 text-muted-foreground" /><span>Duplicate entry “{entry.name}”</span><Hint className="inline">{[describeClass(entry), pluralize(entry.linked, 'linked class', 'linked classes')].filter(Boolean).join(' · ')}</Hint></li>)}
+    </ul>
+    <div className="flex flex-wrap items-end gap-2">
+      {names.length > 1 && <Field label="Name to keep" htmlFor={`merge-name-${merge.entry.id}`} className="min-w-[220px] flex-1"><Select id={`merge-name-${merge.entry.id}`} small value={name} onChange={event => setName(event.target.value)}>{names.map(option => <option key={option} value={option}>{option}</option>)}</Select></Field>}
+      <Button size="sm" variant="primary" icon="check" disabled={disabled} onClick={() => onDecide('merge', name || undefined)}>Merge</Button>
+      <Button size="sm" disabled={disabled} onClick={() => onDecide('separate')}>Keep separate</Button>
+    </div>
+  </Panel>;
 }

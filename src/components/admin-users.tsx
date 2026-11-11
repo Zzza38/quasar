@@ -12,11 +12,14 @@ import { ColorPicker } from './ui/color-picker';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { AdminMods } from './admin-mods';
+import { STAFF_LABELS, hasPermission, type StaffAccess, type StaffPermission } from '@/domain/staff';
 
 /**
- * The owner's user console (/admin → People): find any member, open their whole record, and change it. The server
- * side is src/server/support.ts. One-to-one chats appear as metadata only; their text reaches support only through
- * a report (docs/CHAT.md). Every open and every change is written to the audit log with the owner's reason.
+ * The user console (/admin → People): find any member, open their whole record, and change it. The server side is
+ * src/server/support.ts. One-to-one chats appear as metadata only; their text reaches support only through a report
+ * (docs/CHAT.md). Every open and every change is written to the audit log with the reason given. Staff roles
+ * (src/domain/staff.ts) see the actions their permissions allow; the profile, classes, tasks, feeds, friendships and
+ * school moves are the owner's to change, so staff see those read-only or not at all.
  */
 
 type SearchRow = RouterOutput['admin']['users']['search'][number];
@@ -77,7 +80,7 @@ export function OpenMemberModal({ target, onOpen, onClose }: { target: MemberTar
 
 /* ---------- Search ---------- */
 
-export function PeopleSection({ schools, onOpen }: { schools: School[]; onOpen: (target: MemberTarget) => void }) {
+export function PeopleSection({ schools, canOpen = true, onOpen }: { schools: School[]; canOpen?: boolean; onOpen: (target: MemberTarget) => void }) {
   const [query, setQuery] = useState('');
   const [schoolId, setSchoolId] = useState('');
   const [rows, setRows] = useState<SearchRow[] | null>(null);
@@ -111,7 +114,7 @@ export function PeopleSection({ schools, onOpen }: { schools: School[]; onOpen: 
         <TableCell className="whitespace-normal text-sm">{row.schoolName ?? <span className="text-muted-foreground">None</span>}</TableCell>
         <TableCell><div className="flex flex-wrap gap-1">{row.verified && <Chip tone="success" icon="check">Verified</Chip>}{row.suspended && <Chip tone="danger" icon="lock">Suspended</Chip>}{row.paused && <Chip tone="warning" icon="lock">Paused</Chip>}{row.openReports > 0 && <Chip tone="danger" icon="alert">{pluralize(row.openReports, 'report')}</Chip>}</div></TableCell>
         <TableCell className="text-sm tabular-nums">{shortDate(row.createdAt)}</TableCell>
-        <TableCell className="text-right"><Button size="sm" variant="soft" onClick={() => onOpen({ userId: row.id, name: row.displayName || row.email })} aria-label={`Open ${row.displayName || row.email}`}>Open</Button></TableCell>
+        <TableCell className="text-right">{canOpen && <Button size="sm" variant="soft" onClick={() => onOpen({ userId: row.id, name: row.displayName || row.email })} aria-label={`Open ${row.displayName || row.email}`}>Open</Button>}</TableCell>
       </TableRow>)}</TableBody>
     </Table></div>}
   </Section>;
@@ -126,7 +129,8 @@ const ACTION_LABELS: Record<string, string> = {
   'support.feed.enable': 'Resumed a calendar feed', 'support.feed.disable': 'Paused a calendar feed', 'support.feed.remove': 'Removed a calendar feed', 'support.renameSchool': 'Renamed a school',
   'support.resolveRequest': 'Resolved a support request', 'report.resolve': 'Closed a report', 'reports.view': 'Opened report messages', 'verification.approve': 'Approved verification', 'verification.decline': 'Declined verification',
   'proposal.decline': 'Declined a proposal', 'member.remove': 'Removed from school', 'chat.pause': 'Paused messaging', 'chat.resume': 'Lifted a messaging pause', 'chat.redact': 'Hid a chat message',
-  'global.delete': 'Removed a Global chat message', 'global.edit': 'Edited a Global chat message', 'admin.denied': 'Tried an owner tool (refused)', 'school.create': 'Created a school', 'school.join': 'Joined a school',
+  'global.delete': 'Removed a Global chat message', 'global.edit': 'Edited a Global chat message', 'schoolChat.delete': 'Removed a school chat message', 'schoolChat.edit': 'Edited a school chat message', 'admin.denied': 'Tried a support tool (refused)',
+  'staff.grant': 'Granted a staff role', 'staff.revoke': 'Revoked a staff role', 'member.restore': 'Lifted a removal', 'school.create': 'Created a school', 'school.join': 'Joined a school',
   'school.update': 'Edited the school schedule', 'school.adminUpdate': 'Published a school revision', 'school.proposalApplied': 'Applied a proposal', 'school.menu': 'Changed the lunch menu', 'menu.lookup': 'Looked up a lunch menu',
   'directory.create': 'Added a directory class', 'directory.update': 'Edited a directory class', 'directory.remove': 'Removed a directory class', 'calendar.add': 'Added a calendar feed', 'schedule.scan': 'Scanned a timetable',
 };
@@ -189,8 +193,8 @@ export function AuditLogSection({ onOpenMember }: { onOpenMember: (target: Membe
 
 type Ask = { title: string; description: ReactNode; confirm: string; tone?: 'primary' | 'danger'; run: (reason: string) => Promise<unknown> };
 
-export function MemberRecord({ accountId, target, reason, schools, refreshKey, onClose, onOpenMember, onPause, onChanged }: {
-  accountId: string; target: MemberTarget; reason: string; schools: School[]; refreshKey: number; onClose: () => void;
+export function MemberRecord({ accountId, access, target, reason, schools, refreshKey, onClose, onOpenMember, onPause, onChanged }: {
+  accountId: string; access: StaffAccess; target: MemberTarget; reason: string; schools: School[]; refreshKey: number; onClose: () => void;
   onOpenMember: (target: MemberTarget) => void; onPause: (target: PauseRequest) => void; onChanged: () => Promise<void>;
 }) {
   const [record, setRecord] = useState<SupportRecord | null>(null);
@@ -218,6 +222,8 @@ export function MemberRecord({ accountId, target, reason, schools, refreshKey, o
   };
   const confirmWithReason = (next: Ask) => setAsk(next);
   const userId = target.userId;
+  const owner = access.role === 'owner';
+  const may = (permission: StaffPermission) => hasPermission(access, permission);
   const account = record?.account;
   const name = account?.displayName || account?.email || target.name;
   return <>
@@ -231,39 +237,39 @@ export function MemberRecord({ accountId, target, reason, schools, refreshKey, o
             <TabsTrigger value="overview" className={TAB_CLASS}>Account</TabsTrigger>
             <TabsTrigger value="school" className={TAB_CLASS}>School</TabsTrigger>
             <TabsTrigger value="classes" className={TAB_CLASS}>Classes · {record.personal.data.classes.length}</TabsTrigger>
-            <TabsTrigger value="tasks" className={TAB_CLASS}>Tasks · {record.tasks.length}</TabsTrigger>
+            {record.full && <TabsTrigger value="tasks" className={TAB_CLASS}>Tasks · {record.tasks.length}</TabsTrigger>}
             <TabsTrigger value="social" className={TAB_CLASS}>Friends & chats</TabsTrigger>
             <TabsTrigger value="posts" className={TAB_CLASS}>Global posts · {record.globalMessages.length}</TabsTrigger>
             <TabsTrigger value="history" className={TAB_CLASS}>Reports & requests</TabsTrigger>
             <TabsTrigger value="activity" className={TAB_CLASS}>Activity</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="overview"><AccountTab key={`${record.account.displayName}\u0000${record.account.fullName}\u0000${record.account.chatPush}`} record={record} busy={busy} onPause={() => onPause({ userId, name })}
+        <TabsContent value="overview"><AccountTab key={`${record.account.displayName}\u0000${record.account.fullName}\u0000${record.account.chatPush}`} record={record} busy={busy} owner={owner} may={may} onPause={() => onPause({ userId, name })}
           onSave={(input) => run(() => api.admin.users.updateAccount.mutate({ accountId, userId, ...input }))}
           onLiftPause={() => void run(() => api.admin.liftChatPause.mutate({ accountId, userId }))}
           ask={confirmWithReason} actions={{
             suspend: (suspended, why) => api.admin.users.suspend.mutate({ accountId, userId, suspended, reason: why }),
             signOut: (why) => api.admin.users.signOut.mutate({ accountId, userId, reason: why }),
             removeBrowsers: (why) => api.admin.users.removeBrowsers.mutate({ accountId, userId, reason: why }),
-          }} /><AdminMods key={userId} accountId={accountId} userId={userId} onAccessChange={onChanged} /></TabsContent>
-        <TabsContent value="school"><SchoolTab record={record} schools={schools} busy={busy} ask={confirmWithReason}
+          }} />{owner && <AdminMods key={userId} accountId={accountId} userId={userId} onAccessChange={onChanged} />}</TabsContent>
+        <TabsContent value="school"><SchoolTab record={record} schools={schools} busy={busy} owner={owner} may={may} ask={confirmWithReason}
           onVerify={(verified) => void run(() => api.admin.users.setVerified.mutate({ accountId, userId, verified }))}
           actions={{
             move: (schoolId, keepPrivateTimetable, why) => api.admin.users.moveSchool.mutate({ accountId, userId, schoolId, keepPrivateTimetable, reason: why }),
             remove: (schoolId, why) => api.admin.removeMember.mutate({ userId, schoolId, reason: why }),
             unban: (schoolId, why) => api.admin.users.unban.mutate({ accountId, userId, schoolId, reason: why }),
           }} /></TabsContent>
-        <TabsContent value="classes"><ClassesTab key={record.personal.version} record={record} busy={busy}
+        <TabsContent value="classes"><ClassesTab key={record.personal.version} record={record} busy={busy} readOnly={!owner}
           onSave={(data) => run(() => api.admin.users.savePersonal.mutate({ accountId, userId, expectedVersion: record.personal.version, data }))} /></TabsContent>
-        <TabsContent value="tasks"><TasksTab record={record} busy={busy} run={run} accountId={accountId} /></TabsContent>
-        <TabsContent value="social"><SocialTab record={record} busy={busy} onOpenMember={onOpenMember}
-          onRemove={(other) => confirmWithReason({ title: `End ${name}’s friendship with ${other.displayName}?`, tone: 'danger', confirm: 'End friendship',
+        {record.full && <TabsContent value="tasks"><TasksTab record={record} busy={busy} run={run} accountId={accountId} /></TabsContent>}
+        <TabsContent value="social"><SocialTab record={record} busy={busy} onOpenMember={may('members.view') ? onOpenMember : undefined}
+          onRemove={owner ? (other) => confirmWithReason({ title: `End ${name}’s friendship with ${other.displayName}?`, tone: 'danger', confirm: 'End friendship',
             description: 'The pair stop sharing classes and their chat closes for both. Either of them can send a new request later.',
-            run: (why) => api.admin.users.removeFriendship.mutate({ accountId, userId, otherId: other.userId, reason: why }) })} /></TabsContent>
-        <TabsContent value="posts"><PostsTab posts={record.globalMessages} busy={busy} accountId={accountId} run={run} /></TabsContent>
+            run: (why) => api.admin.users.removeFriendship.mutate({ accountId, userId, otherId: other.userId, reason: why }) }) : undefined} /></TabsContent>
+        <TabsContent value="posts"><PostsTab posts={record.globalMessages} busy={busy} accountId={accountId} run={run} canModerate={may('global.moderate')} /></TabsContent>
         <TabsContent value="history"><HistoryTab record={record} busy={busy} onOpenMember={onOpenMember}
-          onResolve={(requestId) => void run(() => api.admin.resolveRequest.mutate({ accountId, id: requestId }))} /></TabsContent>
-        <TabsContent value="activity"><div className="grid gap-3"><Hint>Rows this member wrote, and owner actions about them (newest 100).</Hint><AuditTable entries={record.activity} subjectId={userId} onOpenMember={onOpenMember} /></div></TabsContent>
+          onResolve={may('requests') || may('schools.edit') ? (requestId) => void run(() => api.admin.resolveRequest.mutate({ accountId, id: requestId })) : undefined} /></TabsContent>
+        <TabsContent value="activity"><div className="grid gap-3"><Hint>Rows this member wrote, and staff actions about them (newest 100).</Hint><AuditTable entries={record.activity} subjectId={userId} onOpenMember={onOpenMember} /></div></TabsContent>
       </Tabs>}
     </Modal>
     {ask && <ReasonModal title={ask.title} description={ask.description} confirm={ask.confirm} tone={ask.tone}
@@ -275,8 +281,8 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="grid gap-0.5"><span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span><span className="break-all text-sm">{children}</span></div>;
 }
 
-function AccountTab({ record, busy, onSave, onPause, onLiftPause, ask, actions }: {
-  record: SupportRecord; busy: boolean; onSave: (input: { displayName: string; fullName: string; chatPush: boolean }) => Promise<boolean>;
+function AccountTab({ record, busy, owner, may, onSave, onPause, onLiftPause, ask, actions }: {
+  record: SupportRecord; busy: boolean; owner: boolean; may: (permission: StaffPermission) => boolean; onSave: (input: { displayName: string; fullName: string; chatPush: boolean }) => Promise<boolean>;
   onPause: () => void; onLiftPause: () => void; ask: (next: Ask) => void;
   actions: { suspend: (suspended: boolean, reason: string) => Promise<unknown>; signOut: (reason: string) => Promise<unknown>; removeBrowsers: (reason: string) => Promise<unknown> };
 }) {
@@ -288,6 +294,7 @@ function AccountTab({ record, busy, onSave, onPause, onLiftPause, ask, actions }
   return <div className="grid gap-4">
     <div className="flex flex-wrap gap-1.5">
       {account.isOwner && <Chip tone="accent" icon="star">Owner</Chip>}
+      {account.staff && account.staff !== 'owner' && <Chip tone="accent" icon="star">{STAFF_LABELS[account.staff]}</Chip>}
       {account.suspended && <Chip tone="danger" icon="lock">Suspended {shortDate(account.suspended.at)}</Chip>}
       {pause && <Chip tone="warning" icon="lock">{pause.until ? `Messaging paused until ${formatInstant(pause.until)}` : 'Messaging paused until lifted'}</Chip>}
     </div>
@@ -298,11 +305,11 @@ function AccountTab({ record, busy, onSave, onPause, onLiftPause, ask, actions }
       <Fact label="Account ID">{account.id}</Fact>
       <Fact label="Joined">{formatInstant(account.createdAt)}</Fact>
       <Fact label="Reminder browsers">{account.browsers}</Fact>
-      <Fact label="Calendar feeds">{record.feeds.length}</Fact>
+      {record.full && <Fact label="Calendar feeds">{record.feeds.length}</Fact>}
       <Fact label="Friends">{record.friendships.filter((entry) => entry.status === 'accepted').length}</Fact>
       <Fact label="Chats">{record.chats.length}</Fact>
     </Panel>
-    <Panel className="grid gap-3">
+    {owner && <Panel className="grid gap-3">
       <strong className="text-sm font-bold">Profile</strong>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Display name" htmlFor="member-display"><Input id="member-display" maxLength={80} value={displayName} disabled={busy} onChange={(event) => setDisplayName(event.target.value)} /></Field>
@@ -311,29 +318,29 @@ function AccountTab({ record, busy, onSave, onPause, onLiftPause, ask, actions }
       <Toggle label="Chat notifications" checked={chatPush} disabled={busy} onChange={setChatPush} description="Push notifications for new chat messages on their enrolled browsers." />
       <Hint>Their email comes from Google and is refreshed each time they sign in, so it can’t be edited here.</Hint>
       <div><Button variant="primary" busy={busy} disabled={!dirty || !displayName.trim() || !fullName.trim()} onClick={() => void onSave({ displayName, fullName, chatPush })}>Save profile</Button></div>
-    </Panel>
-    <Panel className="grid gap-3">
+    </Panel>}
+    {(may('chat.pause') || may('members.sessions') || may('members.suspend')) && <Panel className="grid gap-3">
       <strong className="text-sm font-bold">Access</strong>
       <div className="flex flex-wrap gap-2">
-        {pause ? <Button size="sm" icon="unlock" disabled={busy} onClick={onLiftPause}>Lift messaging pause</Button> : <Button size="sm" icon="lock" disabled={busy} onClick={onPause}>Pause messaging</Button>}
-        <Button size="sm" icon="logout" disabled={busy} onClick={() => ask({ title: 'Sign out everywhere?', confirm: 'Sign out everywhere', run: actions.signOut,
+        {may('chat.pause') && (pause ? <Button size="sm" icon="unlock" disabled={busy} onClick={onLiftPause}>Lift messaging pause</Button> : <Button size="sm" icon="lock" disabled={busy} onClick={onPause}>Pause messaging</Button>)}
+        {may('members.sessions') && <Button size="sm" icon="logout" disabled={busy} onClick={() => ask({ title: 'Sign out everywhere?', confirm: 'Sign out everywhere', run: actions.signOut,
           description: account.isOwner ? 'Every session of your owner account ends, this one included, and you sign in again with Google. Use it if the audit log shows activity you don’t recognize.'
-            : 'Every device signed in to this account is signed out at its next request. Changes waiting on a device stay there and upload after they sign in again.' })}>Sign out everywhere</Button>
+            : 'Every device signed in to this account is signed out at its next request. Changes waiting on a device stay there and upload after they sign in again.' })}>Sign out everywhere</Button>}
         {!account.isOwner && <>
-          <Button size="sm" icon="bellOff" disabled={busy || account.browsers === 0} onClick={() => ask({ title: 'Forget reminder browsers?', confirm: 'Forget browsers', run: actions.removeBrowsers,
-            description: `${pluralize(account.browsers, 'browser')} stop getting reminders and chat notifications until they are enabled again on each device.` })}>Forget browsers</Button>
-          {account.suspended
+          {may('members.sessions') && <Button size="sm" icon="bellOff" disabled={busy || account.browsers === 0} onClick={() => ask({ title: 'Forget reminder browsers?', confirm: 'Forget browsers', run: actions.removeBrowsers,
+            description: `${pluralize(account.browsers, 'browser')} stop getting reminders and chat notifications until they are enabled again on each device.` })}>Forget browsers</Button>}
+          {may('members.suspend') && (account.suspended
             ? <Button size="sm" icon="unlock" disabled={busy} onClick={() => ask({ title: 'Lift the suspension?', confirm: 'Lift suspension', run: (why) => actions.suspend(false, why), description: 'They can sign in and use Quasar again.' })}>Lift suspension</Button>
             : <Button size="sm" variant="danger" icon="lock" disabled={busy} onClick={() => ask({ title: 'Suspend this account?', tone: 'danger', confirm: 'Suspend', run: (why) => actions.suspend(true, why),
-              description: 'They are signed out everywhere and cannot sign in or use Quasar until you lift it. Their data stays as it is.' })}>Suspend account</Button>}
+              description: 'They are signed out everywhere and cannot sign in or use Quasar until you lift it. Their data stays as it is.' })}>Suspend account</Button>)}
         </>}
       </div>
-    </Panel>
+    </Panel>}
   </div>;
 }
 
-function SchoolTab({ record, schools, busy, ask, onVerify, actions }: {
-  record: SupportRecord; schools: School[]; busy: boolean; ask: (next: Ask) => void; onVerify: (verified: boolean) => void;
+function SchoolTab({ record, schools, busy, owner, may, ask, onVerify, actions }: {
+  record: SupportRecord; schools: School[]; busy: boolean; owner: boolean; may: (permission: StaffPermission) => boolean; ask: (next: Ask) => void; onVerify: (verified: boolean) => void;
   actions: { move: (schoolId: string | null, keepPrivateTimetable: boolean, reason: string) => Promise<unknown>; remove: (schoolId: string, reason: string) => Promise<unknown>; unban: (schoolId: string, reason: string) => Promise<unknown> };
 }) {
   const { school } = record;
@@ -353,13 +360,13 @@ function SchoolTab({ record, schools, busy, ask, onVerify, actions }: {
           <div className="flex flex-wrap gap-1.5">{school.verification ? <Chip tone="success" icon="check">Verified by {school.verification.method === 'domain' ? 'email domain' : 'support'} · {shortDate(school.verification.verifiedAt)}</Chip> : <Chip tone="warning">{school.verificationPending ? 'Verification pending' : 'Not verified'}</Chip>}</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {school.verification ? <Button size="sm" disabled={busy} onClick={() => onVerify(false)}>Remove verification</Button> : <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => onVerify(true)}>Verify at {school.name}</Button>}
-          <Button size="sm" variant="danger" disabled={busy} onClick={() => ask({ title: `Remove from ${school.name}?`, tone: 'danger', confirm: 'Remove from school', run: (why) => actions.remove(school.id, why),
-            description: 'They leave the school and cannot rejoin until you lift the removal. Their verification there ends, every friendship they have ends (at any school), which closes all of their chats, and their open reports close.' })}>Remove from school</Button>
+          {may('verification') && (school.verification ? <Button size="sm" disabled={busy} onClick={() => onVerify(false)}>Remove verification</Button> : <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => onVerify(true)}>Verify at {school.name}</Button>)}
+          {may('members.remove') && <Button size="sm" variant="danger" disabled={busy} onClick={() => ask({ title: `Remove from ${school.name}?`, tone: 'danger', confirm: 'Remove from school', run: (why) => actions.remove(school.id, why),
+            description: 'They leave the school and cannot rejoin until you lift the removal. Their verification there ends, every friendship they have ends (at any school), which closes all of their chats, and their open reports close.' })}>Remove from school</Button>}
         </div>
       </> : <Hint>Not in a school.</Hint>}
     </Panel>
-    <Panel className="grid gap-3">
+    {owner && <Panel className="grid gap-3">
       <strong className="text-sm font-bold">Move to another school</strong>
       <Hint>No ban and no lost friendships: like joining, their classes stay, open proposals at the old school are withdrawn, and a matching email domain verifies them at the new one.</Hint>
       {privateTimetable && target && target.id !== school?.id && <Toggle label="Keep their private timetable" checked={keepPrivate} disabled={busy} onChange={setKeepPrivate}
@@ -372,10 +379,10 @@ function SchoolTab({ record, schools, busy, ask, onVerify, actions }: {
         <Button disabled={busy || destination === (school?.id ?? '')} onClick={() => ask({ title: target ? `Move to ${target.name}?` : 'Take them out of their school?', confirm: 'Move', run: (why) => actions.move(destination || null, keepPrivate, why),
           description: moveDescription })}>Move</Button>
       </div>
-    </Panel>
+    </Panel>}
     {record.bans.length > 0 && <Panel className="grid gap-2"><strong className="text-sm font-bold">Removed from</strong>
       {record.bans.map((ban) => <div key={ban.schoolId} className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p className="text-sm font-semibold">{ban.schoolName} · {shortDate(ban.createdAt)}</p><Hint className="whitespace-pre-wrap break-words">Reason: {ban.reason}</Hint></div>
-        <Button size="sm" disabled={busy} onClick={() => ask({ title: `Lift the removal from ${ban.schoolName}?`, confirm: 'Lift removal', run: (why) => actions.unban(ban.schoolId, why), description: 'They may join that school again. This does not rejoin them.' })}>Lift removal</Button></div>)}
+        {may('members.remove') && <Button size="sm" disabled={busy} onClick={() => ask({ title: `Lift the removal from ${ban.schoolName}?`, confirm: 'Lift removal', run: (why) => actions.unban(ban.schoolId, why), description: 'They may join that school again. This does not rejoin them.' })}>Lift removal</Button>}</div>)}
     </Panel>}
     {record.verificationRequests.length > 0 && <Panel className="grid gap-2"><strong className="text-sm font-bold">Verification requests</strong>
       {record.verificationRequests.map((request) => <div key={request.id} className="grid gap-1 border-t border-foreground/[0.06] pt-2 first:border-0 first:pt-0"><p className="text-sm font-semibold">{request.schoolName} · {shortDate(request.createdAt)} · {request.resolvedAt ? request.decision ?? 'closed' : 'open'}</p><p className="whitespace-pre-wrap break-words text-sm">{request.proof}</p></div>)}
@@ -390,7 +397,9 @@ function SchoolTab({ record, schools, busy, ask, onVerify, actions }: {
 
 const NO_COLOR = '#6b7280';
 
-function ClassesTab({ record, busy, onSave }: { record: SupportRecord; busy: boolean; onSave: (data: PersonalSchedule) => Promise<boolean> }) {
+/** `readOnly`: staff other than the owner see the member's classes but can't change them. */
+function ClassesTab({ record, busy: saving, readOnly, onSave }: { record: SupportRecord; busy: boolean; readOnly: boolean; onSave: (data: PersonalSchedule) => Promise<boolean> }) {
+  const busy = saving || readOnly;
   const saved = record.personal.data as PersonalSchedule;
   const [draft, setDraft] = useState<PersonalSchedule>(() => structuredClone(saved));
   const [coloring, setColoring] = useState<StudentClass | null>(null);
@@ -451,11 +460,11 @@ function ClassesTab({ record, busy, onSave }: { record: SupportRecord; busy: boo
       </div>
     </Panel>
     {issues.length > 0 && <Callout tone="danger" icon="alert" role="alert">{issues.join(' ')}</Callout>}
-    <div className="flex flex-wrap gap-2">
-      <Button variant="primary" busy={busy} disabled={!dirty || issues.length > 0} onClick={() => void onSave(parsed.data!)}>Save classes</Button>
+    {readOnly ? <Hint>Only the owner can change a member’s classes.</Hint> : <div className="flex flex-wrap gap-2">
+      <Button variant="primary" busy={saving} disabled={!dirty || issues.length > 0} onClick={() => void onSave(parsed.data!)}>Save classes</Button>
       <Button variant="ghost" disabled={!dirty || busy} onClick={() => setDraft(structuredClone(saved))}>Undo changes</Button>
       <Hint className="self-center">Their devices pick this up on their next sync, merged with any offline edits.</Hint>
-    </div>
+    </div>}
     {coloring && <ColorModal cls={coloring} onClose={() => setColoring(null)} onPick={(color) => { updateClass(coloring.id, { color }); setColoring(null); }} />}
   </div>;
 }
@@ -536,9 +545,11 @@ function TaskModal({ task, onClose, onSave }: { task: SupportTask; onClose: () =
 
 const FRIEND_STATES = { accepted: 'Friends', outgoing: 'Request sent', incoming: 'Request received' } as const;
 
-function SocialTab({ record, busy, onOpenMember, onRemove }: { record: SupportRecord; busy: boolean; onOpenMember: (target: MemberTarget) => void; onRemove: (other: { userId: string; displayName: string }) => void }) {
-  const open = (peer: { userId: string; displayName: string; email: string }) => onOpenMember({ userId: peer.userId, name: peer.displayName || peer.email });
-  const person = (peer: { userId: string; displayName: string; email: string }) => <button type="button" className="text-left text-sm font-semibold underline-offset-2 hover:underline" onClick={() => open(peer)}>{peer.displayName || 'No name'}<Hint className="break-all font-normal">{peer.email}</Hint></button>;
+/** Without `onOpenMember` names are plain text; without `onRemove` (staff other than the owner) friendships are read-only. */
+function SocialTab({ record, busy, onOpenMember, onRemove }: { record: SupportRecord; busy: boolean; onOpenMember?: (target: MemberTarget) => void; onRemove?: (other: { userId: string; displayName: string }) => void }) {
+  const person = (peer: { userId: string; displayName: string; email: string }) => onOpenMember
+    ? <button type="button" className="text-left text-sm font-semibold underline-offset-2 hover:underline" onClick={() => onOpenMember({ userId: peer.userId, name: peer.displayName || peer.email })}>{peer.displayName || 'No name'}<Hint className="break-all font-normal">{peer.email}</Hint></button>
+    : <span className="text-left text-sm font-semibold">{peer.displayName || 'No name'}<Hint className="break-all font-normal">{peer.email}</Hint></span>;
   return <div className="grid gap-4">
     <Section title="Friends and requests" icon="users">
       {record.friendships.length === 0 ? <Hint>No friends or requests.</Hint> : <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/[0.06]"><Table>
@@ -547,7 +558,7 @@ function SocialTab({ record, busy, onOpenMember, onRemove }: { record: SupportRe
           <TableCell className="whitespace-normal">{person(row)}</TableCell>
           <TableCell className="text-sm">{FRIEND_STATES[row.status === 'accepted' ? 'accepted' : row.outgoing ? 'outgoing' : 'incoming']}</TableCell>
           <TableCell className="text-sm">{shortDate(row.respondedAt ?? row.createdAt)}</TableCell>
-          <TableCell className="text-right"><Button size="sm" variant="ghost" disabled={busy} onClick={() => onRemove(row)}>{row.status === 'accepted' ? 'End friendship' : 'Drop request'}</Button></TableCell>
+          <TableCell className="text-right">{onRemove && <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRemove(row)}>{row.status === 'accepted' ? 'End friendship' : 'Drop request'}</Button>}</TableCell>
         </TableRow>)}</TableBody>
       </Table></div>}
     </Section>
@@ -567,7 +578,7 @@ function SocialTab({ record, busy, onOpenMember, onRemove }: { record: SupportRe
   </div>;
 }
 
-function PostsTab({ posts, busy, accountId, run }: { posts: GlobalPost[]; busy: boolean; accountId: string; run: (action: () => Promise<unknown>) => Promise<boolean> }) {
+function PostsTab({ posts, busy, accountId, run, canModerate }: { posts: GlobalPost[]; busy: boolean; accountId: string; run: (action: () => Promise<unknown>) => Promise<boolean>; canModerate: boolean }) {
   const [editing, setEditing] = useState<GlobalPost | null>(null);
   const [removing, setRemoving] = useState<GlobalPost | null>(null);
   const [body, setBody] = useState('');
@@ -577,11 +588,11 @@ function PostsTab({ posts, busy, accountId, run }: { posts: GlobalPost[]; busy: 
     {posts.length === 0 && <Hint>No Global chat posts.</Hint>}
     <ul className="grid gap-2">{posts.map((post) => <li key={post.seq} className={ROW_CLASS}>
       <div className="flex flex-wrap items-center gap-1.5 text-[13px]"><span className="text-muted-foreground">{formatInstant(post.createdAt)}</span>
-        {post.deletedBy === 'owner' && <Chip tone="warning">Removed by you</Chip>}{post.deletedBy === 'sender' && <Chip tone="outline">Deleted by them</Chip>}{post.editedAt && !post.deletedAt && <Chip>Edited</Chip>}</div>
+        {post.deletedBy === 'owner' && <Chip tone="warning">Removed by a moderator</Chip>}{post.deletedBy === 'sender' && <Chip tone="outline">Deleted by them</Chip>}{post.editedAt && !post.deletedAt && <Chip>Edited</Chip>}</div>
       {/* Plain text only: no links, no markup. */}
-      {post.deletedAt ? (post.body ? <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground line-through">{post.body}</p> : <Hint>Text removed after 30 days.</Hint>) : <p className="whitespace-pre-wrap break-words text-sm">{post.body}</p>}
+      {post.deletedAt ? (post.body ? <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground line-through">{post.body}</p> : <Hint>{post.textHidden ? 'Removed by a higher tier, so its text is hidden from you.' : 'Text removed after 30 days.'}</Hint>) : <p className="whitespace-pre-wrap break-words text-sm">{post.body}</p>}
       {post.reason && <Hint>Reason: {post.reason}</Hint>}
-      {!post.deletedAt && <div className="flex gap-2"><Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={() => { setEditing(post); setBody(post.body); setReason(''); }}>Edit</Button><Button size="sm" variant="ghost" icon="trash" disabled={busy} onClick={() => { setRemoving(post); setReason(''); }}>Remove</Button></div>}
+      {canModerate && !post.deletedAt && <div className="flex gap-2"><Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={() => { setEditing(post); setBody(post.body); setReason(''); }}>Edit</Button><Button size="sm" variant="ghost" icon="trash" disabled={busy} onClick={() => { setRemoving(post); setReason(''); }}>Remove</Button></div>}
     </li>)}</ul>
     {editing && <Modal open onClose={() => setEditing(null)} busy={busy} dirty={body !== editing.body} title="Edit message" description="Everyone in Global chat sees the new text marked as edited, with your reason."
       footer={<><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Spacer /><Button variant="primary" busy={busy} disabled={!body.trim() || body === editing.body} onClick={async () => { if (await run(() => api.admin.users.editGlobal.mutate({ accountId, messageId: editing.id, body, reason: reason.trim() }))) setEditing(null); }}>Save</Button></>}>
@@ -599,7 +610,7 @@ function categoryLabel(category: string | null): string | null {
   return category && category in REPORT_CATEGORIES ? REPORT_CATEGORIES[category as ReportCategory].short : null;
 }
 
-function HistoryTab({ record, busy, onOpenMember, onResolve }: { record: SupportRecord; busy: boolean; onOpenMember: (target: MemberTarget) => void; onResolve: (requestId: string) => void }) {
+function HistoryTab({ record, busy, onOpenMember, onResolve }: { record: SupportRecord; busy: boolean; onOpenMember: (target: MemberTarget) => void; onResolve?: (requestId: string) => void }) {
   const reports = (title: string, rows: SupportRecord['reportsAbout'], other: string) => <Section title={title} icon="alert">
     {rows.length === 0 ? <Hint>None.</Hint> : <ul className="grid gap-2">{rows.map((report) => <li key={report.id} className={ROW_CLASS}>
       <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
@@ -615,7 +626,7 @@ function HistoryTab({ record, busy, onOpenMember, onResolve }: { record: Support
     {reports('Reports they sent', record.reportsBy, 'about')}
     <Section title="Support requests and feedback" icon="inbox">
       {record.supportRequests.length === 0 ? <Hint>None.</Hint> : <ul className="grid gap-2">{record.supportRequests.map((request) => <li key={request.id} className={ROW_CLASS}>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]"><span className="text-muted-foreground">{formatInstant(request.createdAt)}{request.schoolName ? ` · ${request.schoolName}` : ''}</span>{request.resolvedAt ? <Chip tone="outline">Resolved {shortDate(request.resolvedAt)}</Chip> : <Button size="sm" variant="ghost" icon="check" disabled={busy} onClick={() => onResolve(request.id)}>Mark resolved</Button>}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]"><span className="text-muted-foreground">{formatInstant(request.createdAt)}{request.schoolName ? ` · ${request.schoolName}` : ''}</span>{request.resolvedAt ? <Chip tone="outline">Resolved {shortDate(request.resolvedAt)}</Chip> : onResolve ? <Button size="sm" variant="ghost" icon="check" disabled={busy} onClick={() => onResolve(request.id)}>Mark resolved</Button> : <Chip tone="danger">Open</Chip>}</div>
         <p className="whitespace-pre-wrap break-words text-sm">{request.message}</p>
       </li>)}</ul>}
     </Section>

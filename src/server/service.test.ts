@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { openDatabase, type Db } from './db';
 import { MAX_SCHOOL_SCHEDULE_CHARS, namesSchema, reservedDisplayName, Service, SYNC_LIMITS } from './service';
 import { appRouter } from './router';
-import { emptyPersonalSchedule, GRADES, resolveDay, type Schedule } from '@/domain/schedule';
+import { cycleDaySlots, emptyPersonalSchedule, GRADES, personalScheduleSchema, resolveDay, type Schedule } from '@/domain/schedule';
 import type { Entity, Mutation } from '@/domain/sync';
+import { setSchoolExceptionForGrades } from '@/domain/school-exceptions';
 
 const schedule: Schedule = {
   version: 1, timeZone: 'America/New_York',
@@ -34,6 +35,43 @@ it('publishes, changes and removes admin closures for every grade without changi
   }
   school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...school.schedule, exceptions: [] }, approved: true, supportLocked: false }, true);
   for (const grade of GRADES) expect(resolveDay(school.schedule, '2026-10-12', { ...emptyPersonalSchedule(), grade }).closed).toBe(false);
+});
+
+it('publishes replacement and cycle reset exceptions for grade-selected members', () => {
+  const f = fixture();
+  const cycleDays = [...schedule.cycleDays, { ...schedule.cycleDays[0], id: '2', label: 'Day 2' }];
+  const base = { ...schedule, cycleDays };
+  const variant = { ...base, cycleDays: cycleDays.map(day => ({ ...day, label: `Grade 9 ${day.label}` })) };
+  let school = f.service.updateSchool(f.owner, { schoolId: f.school.id, expectedVersion: 1, schedule: { ...base, gradeSchedules: { '9': variant } }, approved: true, supportLocked: false }, true);
+  const personal = { ...emptyPersonalSchedule(), grade: '9' as const };
+  const publish = (exceptions: Schedule['exceptions']) => {
+    const { gradeSchedules: _variants, ...draft } = school.schedule;
+    school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: { ...draft, exceptions }, approved: true, supportLocked: false }, true);
+  };
+  publish([{ date: '2026-10-12', kind: 'replacement', advanceCycle: false, slots: [{ id: 'late-a', periodId: 'A', start: '10:00', end: '11:00' }] }]);
+  expect(resolveDay(school.schedule, '2026-10-12', personal).periods.map(period => period.start)).toEqual(['10:00']);
+  publish([{ date: '2026-10-12', kind: 'reset', advanceCycle: true, cycleDayId: '2' }]);
+  expect(resolveDay(school.schedule, '2026-10-12', personal).cycleDayLabel).toBe('Grade 9 Day 2');
+  expect(resolveDay(school.schedule, '2026-10-13', personal).cycleDayId).toBe('1');
+  publish([]);
+  expect(school.schedule.gradeSchedules?.['9']).toEqual(variant);
+  const stored = f.db.prepare('SELECT schedule FROM school_revisions WHERE school_id=? AND version=?').get(school.id, school.version) as { schedule: string };
+  expect(JSON.parse(stored.schedule)).toEqual(school.schedule);
+});
+
+it('persists narrowing an all-grade exception to selected grades without changing their timetables', () => {
+  const f = fixture();
+  const closure = { date: '2026-10-12', kind: 'closure' as const, advanceCycle: false };
+  const variant = { ...schedule, exceptions: [closure], cycleDays: schedule.cycleDays.map(day => ({ ...day, label: 'Grade 9' })) };
+  let school = f.service.updateSchool(f.owner, { schoolId: f.school.id, expectedVersion: 1, schedule: { ...schedule, exceptions: [closure], gradeSchedules: { '9': variant } }, approved: true, supportLocked: false }, true);
+  const draft = setSchoolExceptionForGrades(school.schedule, closure, closure, ['9']);
+  school = f.service.updateSchool(f.owner, { schoolId: school.id, expectedVersion: school.version, schedule: draft, approved: true, supportLocked: false, exceptionGradesExplicit: true }, true);
+  const saved = f.service.school(school.id).schedule;
+  for (const grade of GRADES) expect(resolveDay(saved, closure.date, { ...emptyPersonalSchedule(), grade }).closed).toBe(grade === '9');
+  expect(resolveDay(saved, closure.date).closed).toBe(false);
+  expect(saved.gradeSchedules?.['9']).toEqual(variant);
+  const revision = f.db.prepare('SELECT schedule FROM school_revisions WHERE school_id=? AND version=?').get(school.id, school.version) as { schedule: string };
+  expect(JSON.parse(revision.schedule)).toEqual(saved);
 });
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
@@ -107,11 +145,14 @@ describe('school membership and owner authorization', () => {
     const changed={...schedule,periods:[{id:'L',label:'Lunch',kind:'lunch' as const}],cycleDays:[{...schedule.cycleDays[0],slots:[{id:'l1',periodId:'L',start:'12:30',end:'13:00'}]}]};
     f.service.updateSchool(f.owner,{schoolId:f.school.id,expectedVersion:1,schedule:changed,approved:true,supportLocked:true},true);
     const workspace=f.service.workspace(f.student);
-    expect(workspace.entities.find(e=>e.id==='personal')?.data).toMatchObject(data);
+    const saved = personalScheduleSchema.parse(workspace.entities.find(e=>e.id==='personal')?.data);
+    expect(saved).toMatchObject({ classes:data.classes, assignments:data.assignments, customSchedule:null });
+    expect(cycleDaySlots(changed.cycleDays[0], saved)).toEqual(data.cycleDayOverrides[0].slots);
+    expect(saved.cycleDayOverrides[0].slotChanges?.l1).toMatchObject({ start:'12:15', end:'12:45' });
     expect(workspace.review).toMatchObject({previous:schedule,current:changed,version:2});
     f.service.acknowledge(f.student,2);
     expect(f.service.workspace(f.student).review).toBeNull();
-    expect(f.service.entity(f.student,'personal')?.data).toMatchObject(data);
+    expect(f.service.entity(f.student,'personal')?.data).toEqual(saved);
   });
   it('revokes approval when a member edits an approved, unlocked schedule', () => {
     const f=fixture(); f.service.join(f.student,{schoolId:f.school.id,choice:'community'});
@@ -136,7 +177,7 @@ describe('school membership and owner authorization', () => {
     expect(f.service.requests(f.owner)).toHaveLength(1);
     const request=f.service.requests(f.owner)[0];
     expect(request).not.toHaveProperty('fullName');
-    expect(()=>f.service.requests(f.student)).toThrow('Owner');
+    expect(()=>f.service.requests(f.student)).toThrow('Staff access');
     f.service.resolveRequest(f.owner,request.id);
     expect(f.service.requests(f.owner)).toHaveLength(0);
   });
@@ -167,6 +208,24 @@ describe('account binding', () => {
     await caller.school.join({accountId:f.student,schoolId:f.school.id,choice:'community',grade:'9'});
     expect(f.service.user(f.student).schoolId).toBe(f.school.id);
     expect((await caller.profile.save({accountId:f.student,displayName:'Maya',fullName:'Maya Chen'})).displayName).toBe('Maya');
+  });
+  it('shows the block until the student chooses another Now card style, for their own account only', async () => {
+    const f=fixture();
+    const caller=appRouter.createCaller({service:f.service,userId:f.student});
+    expect(f.service.workspace(f.student).user).toMatchObject({nowCard:'block',nowSplit:false});
+    expect(await caller.profile.nowCard({accountId:f.student,style:'split'})).toMatchObject({nowCard:'split',nowSplit:true});
+    expect(f.service.workspace(f.student).user.nowCard).toBe('split');
+    expect(await caller.profile.nowCard({accountId:f.student,style:'block'})).toMatchObject({nowCard:'block',nowSplit:false});
+    // A request composed as another account is refused, so nobody's choice is changed for them.
+    await expect(caller.profile.nowCard({accountId:f.owner,style:'split'})).rejects.toMatchObject({code:'UNAUTHORIZED'});
+    expect(f.service.user(f.owner).nowCard).toBe('block');
+    await expect(caller.profile.nowCard({accountId:f.student,style:'huge' as 'split'})).rejects.toMatchObject({code:'BAD_REQUEST'});
+    expect((await caller.profile.nowCard({accountId:f.student,style:'classic'})).nowCard).toBe('classic');
+    // The beta's column follows, for a build from the beta.
+    expect(f.db.prepare('SELECT now_split FROM users WHERE id=?').pluck().get(f.student)).toBe(0);
+    // A number no style has, from a newer build's column, reads as the default.
+    f.db.prepare('UPDATE users SET now_card=9 WHERE id=?').run(f.student);
+    expect(f.service.user(f.student).nowCard).toBe('block');
   });
 });
 

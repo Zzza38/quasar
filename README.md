@@ -1,5 +1,7 @@
 # Quasar
 
+Production domain: `https://getquasarapp.com`. The [domain move runbook](docs/DOMAIN_MOVE.md) covers cutover and the notice at the previous address.
+
 Phases 1 to 4 of [PLAN.md](PLAN.md): a personal school schedule and task tracker with a school community, friends-only one-to-one chat and one public Global chat room. The UI is a phone-first app with seven views (Today, Schedule, Tasks, Classes, School, People, Messages) at their own paths, structured editors for every schedule concept, and an always-visible sync status. [UI_REDESIGN.md](UI_REDESIGN.md) records the screen inventory and design decisions.
 
 Built with Next.js App Router, TypeScript, Tailwind CSS with [shadcn/ui](https://ui.shadcn.com) (Radix primitives, lucide icons), tRPC, Google OAuth through NextAuth, SQLite, and IndexedDB. There is no demo login or production authentication bypass.
@@ -37,6 +39,8 @@ npm run test:e2e
 
 Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existing Chromium binary. The build and development commands use Webpack; the container enables Next's standalone output with `QUASAR_STANDALONE=1`.
 
+CI splits browser tests across four isolated runners with `--shard=1/4` through `--shard=4/4`. With `CI=1`, Playwright splits individual tests across shards, including tests in the same spec file. Each runner still uses one worker so tests do not concurrently change its shared database or beta registry, or compete for the mock-provider port. Failed shards upload separately named trace artifacts.
+
 ## Implemented scope
 
 - Google sign-in, an onboarding wizard for names and school search/creation (schedule templates plus a structured editor with live date preview), and an explicit approved / community / private schedule choice.
@@ -51,7 +55,7 @@ Shared-school editing and joining require a connection. Saved personal classes, 
 
 Phase 3 adds the People view: school verification (automatic by school email domain, or by support review of a proof), a member directory with verified-only full names, friend requests, friends' classes and today's timetable, blocking and reporting. Locked schools get schedule-change voting in the School view, and the support admin page gains verification requests, member reports, passed proposals awaiting publication, and per-school email domains.
 
-Phase 4 adds Messages: one-to-one chat between accepted friends, specified in [docs/CHAT.md](docs/CHAT.md), plus one public **Global chat** room ([CHAT.md §11](docs/CHAT.md#11-global-chat-migration-7)) that every member with names entered can read and post in, across schools. The owner moderates the room directly (edit or remove any message with a reason everyone sees, audited), it has no block or report button of its own, but a block made in People or a one-to-one chat hides the blocked member's room messages from the blocker (one way), and each member can mute it. Slurs are censored to asterisks in both kinds of chat. On phones it opens from an icon in the top bar; on desktop it is a sidebar item. Chat is online only and polls for new messages; nothing about it is stored on the device except the unread count. Removing a friend or blocking closes the chat for both people at once and leaves a report-only row for 30 days. Reports freeze up to 30 messages from that chat, and the owner sees one-to-one messages only by opening the report, which is logged. The admin page gains Show messages, Hide message, timed messaging pauses and a Paused members section. Chat pushes say only "You have new messages.", wait 60 s, are capped at one per 10 minutes and 20 a day, and stay quiet from 22:00 to 07:00. Turn them off under Account → Notifications → Message notifications. The background worker also deletes old chat data on the schedule in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Phase 4 adds Messages: one-to-one chat between accepted friends, specified in [docs/CHAT.md](docs/CHAT.md), plus one public **Global chat** room ([CHAT.md §11](docs/CHAT.md#11-global-chat-migration-7)) that every member with names entered can read and post in, across schools. The owner moderates the room directly (edit or remove any message with a reason everyone sees, audited), it has no block or report button of its own, but a block made in People or a one-to-one chat hides the blocked member's room messages from the blocker (one way), and each member can mute it. Slurs are censored to asterisks in both kinds of chat. On phones it opens from the dock's People tab (Chats / Friends, and it opens on Chats while anything is unread); on desktop it is a sidebar item. School likewise sits under Classes in the phone dock. Chat is online only and polls for new messages; nothing about it is stored on the device except the unread count. Removing a friend or blocking closes the chat for both people at once and leaves a report-only row for 30 days. Reports freeze up to 30 messages from that chat, and the owner sees one-to-one messages only by opening the report, which is logged. The admin page gains Show messages, Hide message, timed messaging pauses and a Paused members section. Chat pushes say only "You have new messages.", wait 60 s, are capped at one per 10 minutes and 20 a day, and stay quiet from 22:00 to 07:00. Turn them off under Account → Notifications → Message notifications. The background worker also deletes old chat data on the schedule in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Phase 2 adds private iCal subscriptions in Schedule, imported calendar items in Tasks and Schedule, task priorities and checklists, recurring tasks, and opt-in browser push reminders. The new controls use the existing cards, sheets, form fields and status indicators. Member directories, friends, chat and voting came later, in phases 3 and 4 above; phase 2 itself exposed no other student's name or schedule.
 
@@ -71,7 +75,121 @@ The current private installation has its worker and VAPID keys configured. Local
 
 ## Timetable photo scanning
 
-Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory. The model can ask the server for up to six enlarged close-ups of parts of the photos (contrast-enhanced or rotated if it wants) before it answers, and it says the photo is too unclear instead of guessing; rows it is not sure of are flagged for the student to check. The student confirms or edits every row before anything is saved. A row keeps the model's directory match only when the printed name could be that class: the same words in any order, or a shortened name at the same level ("AP Chem" for "AP Chemistry"), never a different number, honors or AP level. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY`, `SCAN_MODEL_REASONING`, `SCAN_MODEL_TEMPERATURE`, `SCAN_MODEL_VARIANT` (on OpenRouter `:floor`, the cheapest provider, by default) and `SCAN_ZOOM` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`.
+Students can add classes from photos of a printed or on-screen timetable (Classes → Scan timetable). A scan may carry up to three photos, for example both halves of a timetable. The browser downsizes each photo, the server sends them to any OpenAI-compatible vision model along with the school's period IDs and the grade-filtered class directory. The model can ask the server for up to six enlarged close-ups of parts of the photos (contrast-enhanced or rotated if it wants) before it answers, and it says the photo is too unclear instead of guessing; rows it is not sure of are flagged for the student to check. The student confirms or edits every row before anything is saved. A row keeps the model's directory match only when the printed name could be that class: the same words in any order, or a shortened name at the same level ("AP Chem" for "AP Chemistry"), never a different number, honors or AP level. Photos are not stored. Configure `SCAN_API_URL`, `SCAN_MODEL` and optionally `SCAN_API_KEY`, `SCAN_MODEL_REASONING`, `SCAN_MODEL_TEMPERATURE`, `SCAN_MODEL_VARIANT` (on OpenRouter `:floor`, the cheapest provider, by default) and `SCAN_ZOOM` as described in `.env.example`; the feature stays hidden until both the URL and model are set. Examples: OpenAI `gpt-6-luna`, DeepSeek `deepseek-chat`, OpenRouter (`https://openrouter.ai/api/v1`) `openai/gpt-6-luna`, or a local Ollama `qwen3-vl:8b`. Each account may run 10 scans per hour and 30 per day. The quotas count scans, not photos, so a three-photo scan uses one. Each scan is recorded in `audit_log` as `schedule.scan`. While a scan runs the student sees its steps, a timer and each close-up the model asks for: the browser sends a random `progressId` with the scan and polls `scan.progress` once a second, and the server keeps that state in memory only until the scan ends. On OpenRouter the scan also asks for a summary of the model's thinking (OpenAI models hide the thinking itself), shown as a one-line "What the scanner is thinking".
+
+## School schedule following
+
+Personal timetables follow shared school bell times. A recurring correction can be for the school or only for the student. Personal adjustments save changed slot fields, inherit untouched school times, and clear when the school adopts them. Matching adjustments from at least three other classmates in the same grade can suggest a school proposal. Full private timetable controls live under advanced settings and warn that school corrections will no longer reach that timetable.
+
+A personal schedule without a saved lock preference starts locked. **Unlock schedule** requires confirmation before editing classes, assignments, or timetable settings. **Lock schedule** protects all of them again. The choice syncs with the account and survives reloads. Homework tasks stay editable.
+
+Schedule following is available to everyone and does not depend on beta enrollment. Removing the former `schedule-following` beta does not disable it or replace saved adjustments. Existing queued edits and retry payloads keep their original revisions. Older clients that cannot read sparse adjustments receive a reload message before an incompatible write commits.
+
+## Running a beta
+
+A beta lets chosen members try a change on the real site (https://getquasarapp.com) before everyone gets it. There is no separate beta URL or build: the beta code ships in the normal production build behind a per-account flag. A member joins in Account → Betas, and the flagged code turns on for them on every device. Everyone else keeps the current version.
+
+A beta is private or public. A **private** beta is joined by typing its code, so only people you give the code to get in. A **public** beta has no code: it is listed in Account → Betas and anyone can join it with a tap. Betas are private unless you ask for public.
+
+Betas are created with a command, not from `/admin`. The command edits the beta list, `betas.json`, which sits beside the database (`data/betas.json` locally, the data volume in Docker) or at `BETAS_PATH`. The list holds the join codes in plain text, so it is gitignored and never committed. The server re-reads it whenever it changes: creating, pausing or removing a beta takes effect immediately, without a deploy or restart.
+
+### 1. Put the change behind a flag
+
+Pick a key: lowercase letters, numbers and dashes, such as `month-grid`. Wrap the new UI in `<Beta>` from `src/components/betas.tsx`, with the current UI as the fallback:
+
+```tsx
+import { Beta, useBeta } from '@/components/betas';
+
+<Beta id="month-grid" fallback={<WeekSchedule state={state} />}>
+  <MonthGrid state={state} />
+</Beta>
+```
+
+For logic rather than a whole component, branch on `useBeta('month-grid')`, which returns true only for members in that beta. If you need the flag on the server, `new BetaService(service).joined(userId)` in `src/server/betas.ts` lists the member's betas.
+
+`<Beta>` also catches crashes. If the beta UI throws, the member sees the fallback with a notice that offers **Leave beta** and **Report it**, not a broken page.
+
+Keep beta changes additive. All members share one database, so any migration a beta needs runs for everyone as soon as it deploys. Add columns and tables. Don't rename or drop anything a non-beta code path still reads.
+
+Keep the old code working for accounts outside the beta while the change remains unmerged. Commit every added beta's implementation, gates, and related tracked files so other agents can identify and continue the work. Do not leave beta implementations only as uncommitted changes, include unrelated work in their commits, or commit the private beta registry or join codes.
+
+Merge and deploy as usual. Until the beta exists in the list, nobody is in it, so the deploy changes nothing for anyone.
+
+### 2. Create the beta
+
+Run the command in the checkout whose server should have the beta. For the live site that is the production checkout, `/srv/NAS/Private/GitHub/quasar`: the command loads `.env.local` there, so it edits the same list the live server reads.
+
+```sh
+npm run beta -- create month-grid --name "Month grid" --description "Try the month view in Schedule." --max 30
+```
+
+`--name` and `--description` are what members see in Account. `--max` caps how many people can join, so a leaked code (or a popular public beta) can't pull in the whole school. Add `--public` to list the beta in Account → Betas with no code; everything below about codes is for private betas. Leave out `--code` and the command generates one that is easy to read out, like `TQJKH-VMQWP`. Pass `--code "GRID-2026"` to choose your own: 4 to 64 letters and numbers, where case, spaces and dashes don't matter (`GRID-2026` and `grid 2026` are the same code). The command warns about codes under 8 characters, since those are easy to guess.
+
+The command prints the code. `/admin` → **Betas** also shows every private beta's code with a Copy button, so you can look it up any time.
+
+### 3. Testers join, leave and send feedback
+
+- **Join.** Account → Betas → type the code → Join, or tap Join next to a public beta. Five wrong codes in ten minutes locks the account out of joining for the rest of that window.
+- **Leave.** The **Leave beta** button next to each beta. No code needed. Opening `https://getquasarapp.com/?beta=off` (any view path works too) leaves every beta before the page renders, so it still works if a beta breaks the app badly enough that Account won't open.
+- **Feedback.** **Send feedback** next to the beta. The report attaches the page path, screen size, theme, online status, the member's betas, their browser and the last five client errors on the page. The tester sees all of it under "Sent with your feedback" before sending. The server adds its build ID.
+
+Feedback lands in `/admin` → Inbox with a "Beta feedback: <key>" chip and a Diagnostics section. It counts toward the same five-open-requests limit as other support requests.
+
+### 4. Manage it
+
+```sh
+npm run beta -- list                                   # every beta, its code and status, and where the list is
+npm run beta -- pause month-grid                       # the code stops working; members already in stay in
+npm run beta -- open month-grid                        # the code works again
+npm run beta -- new-code month-grid                    # a fresh generated code; members stay in
+npm run beta -- new-code month-grid --code "GRID-2027" # or one you choose
+npm run beta -- public month-grid                      # listed in Account → Betas, no code; members stay in
+npm run beta -- private month-grid                     # back to a (new) code; members stay in
+npm run beta -- edit month-grid --name "Month view" --max none
+npm run beta -- remove month-grid                      # ends the beta: it switches off for everyone in it
+```
+
+`remove` deletes every membership for the retired beta and retires the key, and the command refuses to reuse it, so the old members can't end up in a new beta that happens to share the name.
+
+`/admin` → **Betas** is read-only apart from **Remove** under a beta's Members, which takes one person out. It shows each beta's code, status, member count, members and open feedback. Joins, leaves and removals go to the audit log as `beta.*`.
+
+To clean up memberships left by older versions, run `pnpm beta cleanup`. The server also deletes retired memberships when it reads the beta registry. Paused betas and public betas still have members; neither means the feature has shipped to everyone.
+
+### 5. Ship it to everyone
+
+Every merged change goes to everyone unless the owner explicitly asks to retain its beta after merge. A request to create or test a beta does not carry over past merge. Before merging, delete the `<Beta>`/`useBeta` branch in the PR and keep the new code path. Merge and deploy, then run `npm run beta -- remove <key>` in the production checkout. To abandon a beta instead, delete the new code path and remove it the same way.
+
+Before removing a gate or code path, verify that the specific change is being merged. Only graduate that change's beta. Preserve other unmerged betas, their implementations, and their old fallback code, even when they share the same checkout or deployment. Deploying a beta does not mean it has merged.
+
+## Staff roles
+
+The owner is the account in `OWNER_EMAIL` (pinned by `OWNER_GOOGLE_SUB`). Other people can help run Quasar with a staff role. Each role is a fixed set of permissions, defined in `src/domain/staff.ts`:
+
+| Role | Can do |
+| --- | --- |
+| `administrator` | Everything below, plus suspending accounts |
+| `moderator` | Reports and their chat messages, messaging pauses, removals from a school, Global chat moderation, and the appeals against pauses and removals |
+| `support` | Correction requests and beta feedback, verification, member search, opening a member's record, signing a member out and forgetting their browsers |
+| `schedule-editor` | Correction requests, passed proposals, shared school timetables and names, and every school's class directory and lunch menu. Changing a school's email domains needs verification, because domains verify students |
+
+These stay with the owner: the whole audit log, betas, mod overrides, editing a member's profile, classes, tasks, feeds and friendships, and moving a member to another school. Staff see a member's record without tasks or feeds, and without the address and browser on audit rows.
+
+Staff never act on the owner, on other staff or on themselves. Only the owner sees reports that involve staff, whether as reporter, reported member or a sender in a group report's messages, and only the owner sees requests, removals or record entries about staff. Staff need a Google sign-in from the last two hours, like the owner, for the console and for editing other schools' directories and menus. Their actions go to the audit log and journald with their address and browser. In Global chat, staff messages carry a role badge, and a moderation note names the role ("Removed by a moderator").
+
+Chat text that moderation took out is shown by tier: member, then moderator, administrator and owner. Support and schedule editors count as members here. Only the server censors and removes. A member is never sent what was taken out. The server keeps the rest for those allowed to read it (`src/server/moderation.ts`):
+
+- **Slurs.** The message is stored censored, plus the text as sent. Only the owner gets that copy. In the bubble, the owner sees the censored word's asterisks, and hovering or focusing them shows the word.
+- **Removed messages.** Moderators and up see a removed message's text and photo inside its dashed outline when whoever removed it ranks at their tier or below. A member's own deletion counts as a member's. A moderator sees what members and moderators removed, an administrator also sees what administrators removed, and the owner sees everything. Members never see removed text. The text is cleared after 30 days like any deleted text.
+- **Edits.** A Global chat edit keeps the sender's text from before the first edit, under "See original", for the editor's tier and up. The rank kept is the highest that has edited, so a moderator's later edit can't show moderators what an administrator took out. A member's own edit would show to everyone, but members can't edit messages yet.
+
+Roles are granted with a command, never from `/admin`. No role can grant roles in the app, administrator included. Run it in the production checkout for the live site. A change applies at the account's next request, with no deploy or restart. The account must have signed in once, and every change goes to the audit log under the owner as `staff.grant` or `staff.revoke`.
+
+```sh
+npm run staff -- roles                                  # every role and its permissions
+npm run staff -- list                                   # current staff
+npm run staff -- grant friend@example.com administrator # or an account ID; replaces any role they had
+npm run staff -- revoke friend@example.com
+```
 
 ## Continuous integration
 

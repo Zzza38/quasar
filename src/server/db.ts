@@ -508,13 +508,318 @@ function migrate(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_mod_overrides (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy')),
+      mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
       state TEXT NOT NULL CHECK(state IN ('default','on','off')),
       updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
       PRIMARY KEY(user_id, mod)
     );
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
   `);
+  // Migration 21: the Spin mod joins the account policy. SQLite cannot widen a CHECK in place, so a table created
+  // before 'spin' existed is rebuilt around its rows; a fresh database already has the wider constraint.
+  const policySql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_mod_overrides'").get() as { sql: string }).sql;
+  if (!policySql.includes("'spin'")) {
+    db.exec(`
+      CREATE TABLE user_mod_overrides_next (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mod TEXT NOT NULL CHECK(mod IN ('rgb','attention','backwards','shy','spin')),
+        state TEXT NOT NULL CHECK(state IN ('default','on','off')),
+        updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+        PRIMARY KEY(user_id, mod)
+      );
+      INSERT INTO user_mod_overrides_next SELECT user_id, mod, state, updated_at, updated_by FROM user_mod_overrides;
+      DROP TABLE user_mod_overrides;
+      ALTER TABLE user_mod_overrides_next RENAME TO user_mod_overrides;
+    `);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'))");
+
+  // Migration 22: replies and tapbacks for all three chat kinds (docs/CHAT.md §15).
+  for (const [messages, reactions, parent, key] of [
+    ['chat_messages', 'chat_reactions', 'chat_threads', 'thread_id'],
+    ['chat_group_messages', 'chat_group_reactions', 'chat_groups', 'group_id'],
+    ['global_messages', 'global_reactions', 'global_chat', null],
+  ] as const) {
+    if (!(db.pragma(`table_info(${messages})`) as { name: string }[]).some(column => column.name === 'reply_to_seq')) {
+      db.exec(`ALTER TABLE ${messages} ADD COLUMN reply_to_seq INTEGER`);
+    }
+    const scope = key ? `id=OLD.${key}` : 'id=1';
+    const sameThread = key ? `AND ${key}=OLD.${key}` : '';
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS ${messages}_reply ON ${messages}(reply_to_seq);
+      CREATE TABLE IF NOT EXISTS ${reactions} (
+        message_seq INTEGER NOT NULL REFERENCES ${messages}(seq) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+        PRIMARY KEY(message_seq, user_id)
+      );
+      CREATE TRIGGER IF NOT EXISTS ${messages}_reply_changed AFTER UPDATE OF body, deleted_at ON ${messages}
+      WHEN NEW.body<>OLD.body OR NEW.deleted_at IS NOT OLD.deleted_at BEGIN
+        UPDATE ${messages} SET revision=max(revision, NEW.revision) WHERE reply_to_seq=NEW.seq ${sameThread};
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${messages}_reply_removed AFTER DELETE ON ${messages}
+      WHEN EXISTS(SELECT 1 FROM ${messages} WHERE reply_to_seq=OLD.seq ${sameThread})
+        AND EXISTS(SELECT 1 FROM ${parent} WHERE ${scope}) BEGIN
+        UPDATE ${parent} SET revision=revision+1 WHERE ${scope};
+        UPDATE ${messages} SET revision=(SELECT revision FROM ${parent} WHERE ${scope})
+          WHERE reply_to_seq=OLD.seq ${sameThread};
+      END;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_reaction_changes (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_reaction_changes_user_time ON chat_reaction_changes(user_id, created_at);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
+  `);
+
+  // Migration 23: durable visibility reset thresholds, shared by every tab and server process. Migration 29 widened the
+  // kinds to 'school'. SQLite cannot widen a CHECK in place, so an older table is rebuilt around its rows; the block
+  // triggers that write to it are dropped first and recreated just below.
+  const resetsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_visibility_resets'").get() as { sql: string } | undefined;
+  if (resetsTable && !resetsTable.sql.includes("'school'")) {
+    db.exec(`
+      DROP TRIGGER IF EXISTS blocks_chat_insert;
+      DROP TRIGGER IF EXISTS blocks_chat_delete;
+      CREATE TABLE chat_visibility_resets_next (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('global','group','school')),
+        scope TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        PRIMARY KEY(user_id, kind, scope)
+      );
+      INSERT INTO chat_visibility_resets_next SELECT user_id, kind, scope, revision FROM chat_visibility_resets;
+      DROP TABLE chat_visibility_resets;
+      ALTER TABLE chat_visibility_resets_next RENAME TO chat_visibility_resets;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_visibility_resets (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('global','group','school')),
+      scope TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      PRIMARY KEY(user_id, kind, scope)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'));
+  `);
+  for (const [operation, row] of [['INSERT', 'NEW'], ['DELETE', 'OLD']] as const) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS blocks_chat_${operation.toLowerCase()} AFTER ${operation} ON blocks BEGIN
+      UPDATE global_chat SET revision=revision+1 WHERE id=1;
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        VALUES(${row}.blocker_id,'global','global',(SELECT revision FROM global_chat WHERE id=1))
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE global_messages SET revision=(SELECT revision FROM global_chat WHERE id=1)
+        WHERE sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM global_messages WHERE sender_id=${row}.blocked_id);
+      UPDATE chat_groups SET revision=revision+1 WHERE id IN
+        (SELECT group_id FROM chat_group_members WHERE user_id=${row}.blocker_id AND left_at IS NULL);
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        SELECT ${row}.blocker_id,'group',g.id,g.revision FROM chat_groups g
+          JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=${row}.blocker_id AND m.left_at IS NULL
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE chat_group_messages SET revision=(SELECT revision FROM chat_groups WHERE id=group_id)
+        WHERE group_id IN (SELECT group_id FROM chat_group_members WHERE user_id=${row}.blocker_id AND left_at IS NULL)
+          AND (sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM chat_group_messages WHERE sender_id=${row}.blocked_id));
+    END`);
+  }
+
+  // Migration 24: betas (src/server/betas.ts). A member who types a beta's code joins it, and code behind
+  // useBeta()/<Beta> turns on for them. Leaving needs no code. (Migration 25 moved the betas themselves out of the
+  // database.) Beta feedback is a support request of kind 'beta:<key>' whose
+  // `detail` is the diagnostics JSON the member saw before sending.
+  if (!(db.pragma('table_info(support_requests)') as {name: string}[]).some(column => column.name === 'detail')) db.exec('ALTER TABLE support_requests ADD COLUMN detail TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS betas (
+      key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      code_hash TEXT NOT NULL UNIQUE, open INTEGER NOT NULL DEFAULT 1, max_members INTEGER,
+      created_at TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS beta_members (
+      beta_key TEXT NOT NULL REFERENCES betas(key) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY(beta_key, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(24, datetime('now'));
+  `);
+
+  // Migration 25: betas are defined in the beta list beside the database (src/server/beta-registry.ts), not in a
+  // table. beta_members is rebuilt without its foreign key to betas (members of a beta no longer in the list are
+  // ignored), and the betas table is dropped. No beta was created in production before this.
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='betas'").get()) {
+    db.exec(`
+      CREATE TABLE beta_members_next (
+        beta_key TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY(beta_key, user_id)
+      );
+      INSERT INTO beta_members_next SELECT beta_key, user_id, joined_at FROM beta_members;
+      DROP TABLE beta_members;
+      DROP TABLE betas;
+      ALTER TABLE beta_members_next RENAME TO beta_members;
+      CREATE INDEX IF NOT EXISTS beta_members_user ON beta_members(user_id);
+    `);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(25, datetime('now'))");
+  // Check the columns too: an earlier deployment may have recorded this version already.
+  for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
+    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(column => column.name === 'image')) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN image TEXT`);
+    }
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(26, datetime('now'))");
+
+  // Migration 27: calendar-link guides (src/server/setup-guides.ts). `feed_platforms` is the school's comma-separated
+  // platforms, '' when support has not picked any. A feed_guides row with school_id '' rewrites a platform's guide for
+  // every school; one with a school id rewrites it for that school only. Screenshots live in feed_guide_images.
+  if (!(db.pragma('table_info(schools)') as { name: string }[]).some(column => column.name === 'feed_platforms')) {
+    db.exec("ALTER TABLE schools ADD COLUMN feed_platforms TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feed_guides (
+      school_id TEXT NOT NULL, platform TEXT NOT NULL, guide TEXT NOT NULL,
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY(school_id, platform)
+    );
+    CREATE TABLE IF NOT EXISTS feed_guide_images (
+      id TEXT PRIMARY KEY, image BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(27, datetime('now'));
+  `);
+
+  // Migration 28: class-schedule guides (src/server/setup-guides.ts), stored like migration 27's calendar guides and
+  // sharing its screenshots. Only adds, so a build from before it still runs on a database that has it.
+  if (!(db.pragma('table_info(schools)') as { name: string }[]).some(column => column.name === 'schedule_platforms')) {
+    db.exec("ALTER TABLE schools ADD COLUMN schedule_platforms TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_guides (
+      school_id TEXT NOT NULL, platform TEXT NOT NULL, guide TEXT NOT NULL,
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL REFERENCES users(id),
+      PRIMARY KEY(school_id, platform)
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(28, datetime('now'));
+  `);
+
+  // Migration 29: staff roles (src/server/staff.ts), granted only with `npm run staff`. The owner is never a row here;
+  // it stays OWNER_EMAIL. Every message table also keeps what moderation needs to show text to the tiers that may read
+  // it (src/domain/staff.ts): `original` is the text as sent when the slur filter changed it (the owner reads it),
+  // `deleted_rank` the moderation rank of whoever removed the message (null for a member), and in Global chat
+  // `edited_from` the sender's text before the first edit and `edited_rank` the highest rank that edited it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS staff_roles (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('administrator','moderator','support','schedule-editor')),
+      granted_at TEXT NOT NULL
+    );
+  `);
+  const addColumn = (table: string, column: string) => {
+    if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  };
+  for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
+    addColumn(table, 'original');
+    addColumn(table, 'deleted_rank');
+  }
+  addColumn('global_messages', 'edited_from');
+  addColumn('global_messages', 'edited_rank');
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(29, datetime('now'))");
+
+  // Migration 30: one school chat per school (docs/CHAT.md §16). The same shape as the global room's tables (with
+  // migration 29's moderation columns), keyed by school: everyone whose users.school_id is the school reads and posts there.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS school_chats (
+      id TEXT PRIMARY KEY REFERENCES schools(id),
+      revision INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS school_messages (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      school_id TEXT NOT NULL REFERENCES school_chats(id),
+      sender_id TEXT NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      image TEXT,
+      created_at TEXT NOT NULL,
+      edited_at TEXT,
+      deleted_at TEXT,
+      deleted_by TEXT CHECK (deleted_by IN ('sender','owner')),
+      reason TEXT,
+      revision INTEGER NOT NULL,
+      reply_to_seq INTEGER,
+      original TEXT,
+      deleted_rank TEXT,
+      edited_from TEXT,
+      edited_rank TEXT,
+      UNIQUE(sender_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS school_messages_school_seq ON school_messages(school_id, seq);
+    CREATE INDEX IF NOT EXISTS school_messages_revision ON school_messages(school_id, revision);
+    CREATE INDEX IF NOT EXISTS school_messages_sender_time ON school_messages(sender_id, created_at);
+    CREATE INDEX IF NOT EXISTS school_messages_created ON school_messages(created_at);
+    CREATE INDEX IF NOT EXISTS school_messages_reply ON school_messages(reply_to_seq);
+    CREATE TABLE IF NOT EXISTS school_members (
+      school_id TEXT NOT NULL REFERENCES school_chats(id),
+      user_id TEXT NOT NULL REFERENCES users(id),
+      last_read_seq INTEGER NOT NULL DEFAULT 0,
+      notified_seq INTEGER NOT NULL DEFAULT 0,
+      muted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(school_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS school_reactions (
+      message_seq INTEGER NOT NULL REFERENCES school_messages(seq) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL CHECK(emoji IN ('❤️','👍','👎','😂','‼️','❓')),
+      PRIMARY KEY(message_seq, user_id)
+    );
+    CREATE TRIGGER IF NOT EXISTS school_messages_reply_changed AFTER UPDATE OF body, deleted_at ON school_messages
+    WHEN NEW.body<>OLD.body OR NEW.deleted_at IS NOT OLD.deleted_at BEGIN
+      UPDATE school_messages SET revision=max(revision, NEW.revision) WHERE reply_to_seq=NEW.seq AND school_id=OLD.school_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS school_messages_reply_removed AFTER DELETE ON school_messages
+    WHEN EXISTS(SELECT 1 FROM school_messages WHERE reply_to_seq=OLD.seq AND school_id=OLD.school_id)
+      AND EXISTS(SELECT 1 FROM school_chats WHERE id=OLD.school_id) BEGIN
+      UPDATE school_chats SET revision=revision+1 WHERE id=OLD.school_id;
+      UPDATE school_messages SET revision=(SELECT revision FROM school_chats WHERE id=OLD.school_id)
+        WHERE reply_to_seq=OLD.seq AND school_id=OLD.school_id;
+    END;
+  `);
+  // A block or unblock resets the blocker's view of their own school's room, as migration 23 does for the global room.
+  for (const [operation, row] of [['INSERT', 'NEW'], ['DELETE', 'OLD']] as const) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS blocks_school_chat_${operation.toLowerCase()} AFTER ${operation} ON blocks
+      WHEN EXISTS(SELECT 1 FROM school_chats s JOIN users u ON u.school_id=s.id WHERE u.id=${row}.blocker_id) BEGIN
+      UPDATE school_chats SET revision=revision+1 WHERE id=(SELECT school_id FROM users WHERE id=${row}.blocker_id);
+      INSERT INTO chat_visibility_resets(user_id,kind,scope,revision)
+        SELECT ${row}.blocker_id,'school',s.id,s.revision FROM school_chats s JOIN users u ON u.school_id=s.id WHERE u.id=${row}.blocker_id
+        ON CONFLICT(user_id,kind,scope) DO UPDATE SET revision=excluded.revision;
+      UPDATE school_messages SET revision=(SELECT revision FROM school_chats WHERE id=school_messages.school_id)
+        WHERE school_id=(SELECT school_id FROM users WHERE id=${row}.blocker_id)
+          AND (sender_id=${row}.blocked_id OR reply_to_seq IN (SELECT seq FROM school_messages WHERE sender_id=${row}.blocked_id));
+    END`);
+  }
+  db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
+  // users.now_split was the Now card style while it was in the now-card-split and now-card-setting betas: 0 a line,
+  // 1 the split card, 2 a block, with the line as the default. Builds from that time still read and write it.
+  // Checked by column instead of a migration number, so it cannot collide with a numbered migration on another branch.
+  const userColumns = () => (db.pragma('table_info(users)') as { name: string }[]).map(column => column.name);
+  if (!userColumns().includes('now_split')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN now_split INTEGER NOT NULL DEFAULT 0;
+      UPDATE users SET now_split=1 WHERE id IN (SELECT user_id FROM beta_members WHERE beta_key='now-card-split');
+    `);
+  }
+  // users.now_card: how the account's Now card shows the next class (Account → Look; Service.setNowCard), with the
+  // same numbers, and the block as the default. During the beta only its members could choose, and none chose the
+  // line, so everyone on the line moves to the block; a beta member's split or block stays.
+  if (!userColumns().includes('now_card')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN now_card INTEGER NOT NULL DEFAULT 2;
+      UPDATE users SET now_card=CASE now_split WHEN 1 THEN 1 ELSE 2 END;
+    `);
+  }
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

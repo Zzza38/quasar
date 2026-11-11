@@ -8,7 +8,8 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api, errorMessage, isTransportFailure, isUnauthorized, type RouterOutput } from '@/client/api';
-import { CHAT } from '@/domain/chat';
+import { CHAT, type MessageReply, type Reaction } from '@/domain/chat';
+import { connectChatEvents, type ChatEvent } from '@/client/chat-events';
 import type { AppState } from './app-state';
 
 type ChatRouter = RouterOutput['chat'];
@@ -20,6 +21,8 @@ export type ChatThreadResult = ChatRouter['thread'];
 export type GlobalThreadResult = GlobalRouter['thread'];
 export type GroupThreadResult = GroupRouter['thread'];
 export type GlobalSummary = ChatInbox['global'];
+/** The member's school room row (docs/CHAT.md §16); null without a school. */
+export type SchoolSummary = NonNullable<ChatInbox['school']>;
 export type GroupSummary = ChatInbox['groups'][number];
 export type ChatPeer = ChatThreadResult['peer'];
 export type GlobalRoom = GlobalThreadResult['room'];
@@ -31,17 +34,36 @@ export type ChatPause = NonNullable<ChatThreadResult['pause']>;
 /** A message in any kind of thread. Global and group messages also carry their sender (and, in the room, an edit stamp). */
 export type ChatMessage = ChatThreadResult['messages'][number] | GlobalThreadResult['messages'][number] | GroupThreadResult['messages'][number];
 export type GlobalMessage = GlobalThreadResult['messages'][number];
-/** Which conversation a thread hook drives: one friend, a friend group (§12), or the global room (§11). */
-export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string };
+/** Which conversation a thread hook drives: one friend, a friend group (§12), the global room (§11) or the member's school room (§16). */
+export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string } | { kind: 'school'; schoolId: string };
 export const GLOBAL_TARGET: ChatTarget = { kind: 'global' };
-const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : 'global');
+const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : target.kind === 'school' ? `school:${target.schoolId}` : 'global');
 
 /** Window event that asks every mounted chat poller to poll now (Tracker fires it on a service-worker CHAT_ACTIVITY message). */
 export const CHAT_ACTIVITY_EVENT = 'quasar:chat-activity';
 
 const THREAD_POLL_MS = 4_000;
 const INBOX_POLL_MS = 10_000;
+/** With the event stream connected, polling is only a safety net, so it runs at these slower intervals. */
+const LIVE_THREAD_POLL_MS = 15_000;
+const LIVE_INBOX_POLL_MS = 30_000;
 const MAX_POLL_MS = 30_000;
+
+/** How often a thread or the inbox polls by itself: slow while the event stream is connected, the usual rate otherwise. */
+export function pollInterval(kind: 'thread' | 'inbox', live: boolean): number {
+  if (kind === 'thread') return live ? LIVE_THREAD_POLL_MS : THREAD_POLL_MS;
+  return live ? LIVE_INBOX_POLL_MS : INBOX_POLL_MS;
+}
+
+/** Whether a stream event concerns a thread hook's conversation. */
+export function eventMatches(event: ChatEvent, target: ChatTarget): boolean {
+  if (target.kind === 'peer') return event.kind === 'peer' && event.key === target.userId;
+  if (target.kind === 'group') return event.kind === 'group' && event.key === target.groupId;
+  if (target.kind === 'school') return event.kind === 'school' && event.key === target.schoolId;
+  return event.kind === 'global';
+}
+/** The server's fixed NOT_FOUND for someone no longer in the school room (they switched or left the school). */
+const SCHOOL_CLOSED = 'You are not in this school chat.';
 const SEND_TIMEOUT_MS = 15_000;
 const SEND_RETRY_MS = 2_000;
 
@@ -49,6 +71,9 @@ const SEND_RETRY_MS = 2_000;
 export type Outgoing = {
   clientId: string;
   body: string;
+  image?: string;
+  /** The quoted message (docs/CHAT.md §15), kept so the pending bubble shows the quote before the server confirms it. */
+  reply: MessageReply | null;
   status: 'pending' | 'failed';
   /** The server's fixed message, when there is one. Network failures have none. */
   error?: string;
@@ -65,6 +90,8 @@ export interface ThreadMemory {
   accountId: string;
   target: ChatTarget;
   draft: string;
+  /** The message the next send quotes (docs/CHAT.md §15); it survives switching threads like the draft. */
+  reply: MessageReply | null;
   outgoing: Outgoing[];
   /** Server messages from successful sends, waiting for the mounted thread to merge them. */
   delivered: ChatMessage[];
@@ -98,7 +125,7 @@ export function threadMemory(accountId: string, target: ChatTarget): ThreadMemor
   const key = `${accountId}:${targetKey(target)}`;
   let entry = memory.threads.get(key);
   if (!entry) {
-    entry = { key, accountId, target, draft: '', outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
+    entry = { key, accountId, target, draft: '', reply: null, outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
     memory.threads.set(key, entry);
   }
   return entry;
@@ -153,11 +180,14 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
   for (let attempt = 0; ; attempt += 1) {
     try {
       const options = { signal: timeoutSignal(SEND_TIMEOUT_MS) };
+      const replyTo = item.reply?.seq;
       const result = entry.target.kind === 'peer'
-        ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body }, options)
+        ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
         : entry.target.kind === 'group'
-          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body }, options)
-          : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body }, options);
+          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
+          : entry.target.kind === 'school'
+            ? await api.schoolChat.send.mutate({ accountId: entry.accountId, schoolId: entry.target.schoolId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
+            : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -197,6 +227,9 @@ export async function pump(entry: ThreadMemory): Promise<void> {
       });
       if (failure.code === 'NOT_FOUND') entry.closed = true;
       if (failure.code === 'FORBIDDEN') entry.pollRequested = true; // Picks up the pause so the composer explains it.
+      // A lost response is a network failure whose message the server may have stored: a poll now reconciles it, instead
+      // of waiting for the fallback interval (the event stream never tells a sender about their own send).
+      if (failure.network) entry.pollRequested = true;
       if (failure.code === 'UNAUTHORIZED') void entry.refresh?.();
       setOutgoing(entry, next);
     }
@@ -218,15 +251,15 @@ export function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
 }
 
 /** Queues a new message behind any unsent ones and starts sending when nothing ahead of it failed. */
-export function enqueue(entry: ThreadMemory, body: string) {
+export function enqueue(entry: ThreadMemory, body: string, reply: MessageReply | null = null, image?: string) {
   // Only Retry (or reconnecting, for network failures) resends a failed message, so a new message never
   // sends one the student left at "Not sent.". To keep the order, the new message waits behind them as
   // failed too, and Retry sends them all in order. It joins the automatic reconnect retry only when
   // everything ahead of it failed for network reasons, so it can never overtake a rate-limited message.
   const blocking = entry.outgoing.filter((item) => item.status === 'failed' && item.retryable);
   const item: Outgoing = blocking.length
-    ? { clientId: crypto.randomUUID(), body, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
-    : { clientId: crypto.randomUUID(), body, status: 'pending', retryable: true, network: false };
+    ? { clientId: crypto.randomUUID(), body, image, reply, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
+    : { clientId: crypto.randomUUID(), body, image, reply, status: 'pending', retryable: true, network: false };
   setOutgoing(entry, [...entry.outgoing, item]);
   if (item.status === 'pending') void pump(entry);
 }
@@ -245,6 +278,54 @@ export function reconcile(entry: ThreadMemory, messages: ChatMessage[]) {
   if (!entry.outgoing.length) return;
   const stored = new Set(messages.filter((message) => message.fromMe).map((message) => message.id));
   if (entry.outgoing.some((item) => stored.has(item.clientId))) setOutgoing(entry, entry.outgoing.filter((item) => !stored.has(item.clientId)));
+}
+
+/* ---------- Event stream (one connection per signed-in account while any chat hook is mounted) ---------- */
+
+type StreamListener = { onEvent: (event: ChatEvent) => void; onState: (connected: boolean) => void };
+const stream: { accountId: string | null; disconnect: (() => void) | null; connected: boolean; listeners: Set<StreamListener> } = { accountId: null, disconnect: null, connected: false, listeners: new Set() };
+
+function openStream(accountId: string) {
+  if (stream.accountId === accountId && stream.disconnect) return;
+  stream.disconnect?.();
+  stream.accountId = accountId;
+  stream.connected = false;
+  stream.disconnect = connectChatEvents(
+    (event) => { for (const listener of [...stream.listeners]) listener.onEvent(event); },
+    (connected) => { if (stream.connected === connected) return; stream.connected = connected; for (const listener of [...stream.listeners]) listener.onState(connected); },
+  );
+}
+function closeStream() {
+  stream.disconnect?.();
+  stream.disconnect = null;
+  stream.accountId = null;
+  stream.connected = false;
+}
+
+/**
+ * Subscribes a mounted chat hook to the account's event stream (docs/CHAT.md §16): `onEvent` runs for every event,
+ * `onConnect` whenever the stream (re)connects, and the returned flag says whether it is connected right now, so
+ * pollers can slow down. Events are not replayed, so a hook polls in full on every connect to catch up on whatever
+ * happened while the stream was down. The stream opens with the first subscriber and closes with the last; another
+ * account's subscriber replaces the connection.
+ */
+function useChatStream(accountId: string, enabled: boolean, onEvent: (event: ChatEvent) => void, onConnect: () => void): boolean {
+  const [live, setLive] = useState(false);
+  const onEventRef = useRef(onEvent);
+  const onConnectRef = useRef(onConnect);
+  useEffect(() => { onEventRef.current = onEvent; onConnectRef.current = onConnect; });
+  useEffect(() => {
+    if (!enabled) { setLive(false); return; }
+    openStream(accountId);
+    const listener: StreamListener = { onEvent: (event) => onEventRef.current(event), onState: (connected) => { setLive(connected); if (connected) onConnectRef.current(); } };
+    stream.listeners.add(listener);
+    setLive(stream.connected);
+    return () => {
+      stream.listeners.delete(listener);
+      if (stream.listeners.size === 0) closeStream();
+    };
+  }, [accountId, enabled]);
+  return live;
 }
 
 /* ---------- Polling ---------- */
@@ -353,7 +434,11 @@ export function useChatInbox(state: AppState, active = true) {
     }
   }, [accountId]);
 
-  const { pollNow, failures } = usePoller(`inbox:${accountId}`, active, state.online, INBOX_POLL_MS, fetchInbox);
+  const pollRef = useRef<() => void>(() => undefined);
+  // Any chat event can change a row, a preview or the badge, so the inbox refreshes on every one.
+  const live = useChatStream(accountId, active, () => pollRef.current(), () => pollRef.current());
+  const { pollNow, failures } = usePoller(`inbox:${accountId}`, active, state.online, pollInterval('inbox', live), fetchInbox);
+  useEffect(() => { pollRef.current = pollNow; }, [pollNow]);
   useEffect(() => { setInbox(null); setError(''); }, [accountId]);
 
   const reload = useCallback(() => {
@@ -367,19 +452,24 @@ export function useChatInbox(state: AppState, active = true) {
     loading: state.online && !inbox && !error,
     /** Two or more polls in a row failed. */
     reconnecting: failures >= 2,
+    /** The event stream is connected, so changes arrive as they happen and polling is only a safety net. */
+    live,
     reload,
   };
 }
 
 /* ---------- Thread ---------- */
 
-type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; group: GroupInfo | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null; receipts: Receipt[] };
-type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; group?: GroupInfo; receipts: Receipt[]; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
+/** A school room's school (docs/CHAT.md §16). */
+export type SchoolInfo = { id: string; name: string };
+export type ThreadData = { peer: ChatPeer | null; room: GlobalRoom | null; group: GroupInfo | null; school?: SchoolInfo | null; messages: ChatMessage[]; hasEarlier: boolean; muted: boolean; pause: ChatPause | null; receipts: Receipt[] };
+export type ThreadPage = { peer: ChatPeer | null; room?: GlobalRoom; group?: GroupInfo; school?: SchoolInfo; receipts: Receipt[]; messages: ChatMessage[]; revision: number; lastReadSeq: number; hasEarlier: boolean; reset: boolean; muted: boolean; pause: ChatPause | null };
 
 /** The thread query for any target. All three endpoints answer with the same page shape. */
 function queryThread(accountId: string, target: ChatTarget, cursor: { after?: number; before?: number }, signal?: AbortSignal): Promise<ThreadPage> {
   if (target.kind === 'peer') return api.chat.thread.query({ accountId, userId: target.userId, ...cursor }, { signal });
   if (target.kind === 'group') return api.group.thread.query({ accountId, groupId: target.groupId, ...cursor }, { signal });
+  if (target.kind === 'school') return api.schoolChat.thread.query({ accountId, schoolId: target.schoolId, ...cursor }, { signal });
   return api.global.thread.query({ accountId, ...cursor }, { signal });
 }
 export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
@@ -388,6 +478,11 @@ export type ThreadStatus = 'loading' | 'ready' | 'error' | 'closed';
  * Applies changed messages: each replaces the local one with the same seq or is inserted in seq
  * order. With earlier pages still unloaded, a change older than the oldest loaded message is
  * dropped; it arrives fresh with its page.
+ *
+ * Newest revision wins. Every path that writes a row into the thread (poll pages, send, react, delete and edit
+ * results, confirmed sends) goes through here, so a mutation response that lands after a later poll (a slow
+ * react answered after the deletion poll, say) cannot put an older version of the row back; the poll's cursor
+ * has moved past that change, so nothing later would repair it. An equal revision keeps the row already shown.
  */
 export function mergeMessages(current: ChatMessage[], changes: ChatMessage[], hasEarlier: boolean): ChatMessage[] {
   if (!changes.length) return current;
@@ -395,9 +490,26 @@ export function mergeMessages(current: ChatMessage[], changes: ChatMessage[], ha
   const bySeq = new Map(current.map((message) => [message.seq, message]));
   for (const message of changes) {
     if (hasEarlier && lowest !== null && message.seq < lowest) continue;
+    const existing = bySeq.get(message.seq);
+    if (existing && existing.revision >= message.revision) continue;
     bySeq.set(message.seq, message);
   }
   return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
+}
+
+/**
+ * The thread state after a poll. A full page (the first load, or a `reset` page: more than CHAT.maxChanges
+ * changes, a cursor past the server's revision, or a block that changed what the viewer may see) replaces every
+ * loaded row outright, quotes and reactions included, so rows that are no longer visible disappear; an incremental
+ * page merges by seq. `muted` is passed in because a mute toggled while the poll was out wins over its older value.
+ */
+export function applyThreadPage(previous: ThreadData | null, result: ThreadPage, full: boolean, muted: boolean): ThreadData {
+  const room = result.room ?? null;
+  const group = result.group ?? null;
+  const receipts = result.receipts ?? [];
+  const school = result.school ?? null;
+  if (full || !previous) return { peer: result.peer, room, group, school, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
+  return { peer: result.peer, room, group, school, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
 }
 
 /**
@@ -421,6 +533,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const entry = threadMemory(accountId, target);
   const userId = target.kind === 'peer' ? target.userId : null;
   const groupId = target.kind === 'group' ? target.groupId : null;
+  const schoolId = target.kind === 'school' ? target.schoolId : null;
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
   const onChangeRef = useRef(options.onChange);
@@ -451,15 +564,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (signal.aborted) return 'ok';
       const full = after === null || result.reset;
       cursor.current = result.revision;
-      setData((previous) => {
-        // A mute toggled while this poll was out wins over the poll's older value.
-        const muted = previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted;
-        const room = result.room ?? null;
-        const group = result.group ?? null;
-        const receipts = result.receipts ?? [];
-        if (full || !previous) return { peer: result.peer, room, group, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
-        return { peer: result.peer, room, group, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
-      });
+      // A mute toggled while this poll was out wins over the poll's older value.
+      setData((previous) => applyThreadPage(previous, result, full, previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted));
       setLastReadSeq((previous) => Math.max(previous, result.lastReadSeq));
       setInitialReadSeq((previous) => previous ?? result.lastReadSeq);
       setStatus('ready');
@@ -476,7 +582,11 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     }
   }, [accountId, entry]);
 
-  const { pollNow, failures } = usePoller(entry.key, status !== 'closed', state.online, THREAD_POLL_MS, poll);
+  const pollRef = useRef<() => void>(() => undefined);
+  // An event for this conversation (a send, delete, reaction, receipt or typing signal) polls it at once.
+  const live = useChatStream(accountId, status !== 'closed', (event) => { if (eventMatches(event, entry.target)) pollRef.current(); }, () => pollRef.current());
+  const { pollNow, failures } = usePoller(entry.key, status !== 'closed', state.online, pollInterval('thread', live), poll);
+  useEffect(() => { pollRef.current = pollNow; }, [pollNow]);
 
   // Listen to the module memory: merge confirmed sends, poll after a send, close on "This chat is closed.".
   useEffect(() => {
@@ -524,7 +634,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     readRequested.current = seq;
     try {
       // Both answer with the server-stamped badge count, so the badge updates even while the list is unmounted (phones).
-      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : groupId ? await api.group.read.mutate({ accountId, groupId, seq }) : await api.global.read.mutate({ accountId, seq });
+      const result = userId ? await api.chat.read.mutate({ accountId, userId, seq }) : groupId ? await api.group.read.mutate({ accountId, groupId, seq })
+        : schoolId ? await api.schoolChat.read.mutate({ accountId, schoolId, seq }) : await api.global.read.mutate({ accountId, seq });
       latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
@@ -533,12 +644,13 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (errorCode(err) === 'NOT_FOUND') setStatus('closed');
       else if (isUnauthorized(err)) void latest.current.refresh();
     }
-  }, [accountId, userId, groupId]);
+  }, [accountId, userId, groupId, schoolId]);
 
   const setMuted = useCallback(async (muted: boolean) => {
     muteVersion.current += 1;
     try {
-      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted }) : await api.global.mute.mutate({ accountId, muted });
+      const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted })
+        : schoolId ? await api.schoolChat.mute.mutate({ accountId, schoolId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
       setData((previous) => previous && { ...previous, muted: result.muted });
       // Muted chats are left out of the badge (§3.4), so the new count comes back with the answer.
@@ -549,26 +661,28 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-  }, [accountId, userId, groupId]);
+  }, [accountId, userId, groupId, schoolId]);
 
-  /** `reason` is the owner's note, shown to everyone; it only applies to global messages the owner removes. */
+  /** `reason` is the owner's note, shown to everyone; it only applies to room messages the owner removes. */
   const deleteMessage = useCallback(async (messageId: string, reason = '') => {
+    let result: { message: ChatMessage };
     try {
-      if (userId) await api.chat.delete.mutate({ accountId, userId, messageId });
-      else if (groupId) await api.group.delete.mutate({ accountId, groupId, messageId });
-      else await api.global.delete.mutate({ accountId, messageId, reason });
+      result = userId ? await api.chat.delete.mutate({ accountId, userId, messageId })
+        : groupId ? await api.group.delete.mutate({ accountId, groupId, messageId })
+          : schoolId ? await api.schoolChat.delete.mutate({ accountId, schoolId, messageId, reason })
+            : await api.global.delete.mutate({ accountId, messageId, reason });
     } catch (err) {
-      // A private chat that vanished is closed; a global or group message that vanished is simply gone, and the poll shows that.
-      if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.'))) { setStatus('closed'); return; }
+      // A private chat that vanished is closed; a room or group message that vanished is simply gone, and the poll shows that.
+      // Leaving the group or the school closes those.
+      if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.') || (schoolId && errorMessage(err) === SCHOOL_CLOSED))) { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    // The owner's (or a group admin's) removal of someone else's message shows with its note once the poll lands.
-    setData((previous) => previous && { ...previous, messages: previous.messages.map((message): ChatMessage => (message.id === messageId
-      ? { ...message, body: null, deletedBy: message.fromMe ? 'sender' : groupId ? 'admin' : 'owner', ...(message.fromMe || userId || groupId ? {} : { reason }) } as ChatMessage : message)) });
+    // The answer is the deleted row (with the owner's note and its new revision), merged like any other change.
+    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
-  }, [accountId, userId, groupId, pollNow]);
+  }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
    * The typing signal (§13): `true` while the draft is being typed, renewed every CHAT.typingRenewMs so the server's
@@ -593,23 +707,49 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   // Leaving the thread with a live signal turns it off, so nobody sees "typing" for a closed tab.
   useEffect(() => () => { if (typingOn.current) { typingOn.current = false; const cancel = userId ? api.chat.typing.mutate({ accountId, userId, typing: false }) : groupId ? api.group.typing.mutate({ accountId, groupId, typing: false }) : null; cancel?.catch(() => undefined); } }, [accountId, userId, groupId]);
 
-  /** Owner only, global room only: replaces a message's text. The server applies the same body rules and filter. */
+  /** Owner only, rooms only: replaces a message's text. The server applies the same body rules and filter. */
   const editMessage = useCallback(async (messageId: string, body: string, reason = '') => {
-    if (userId) throw new Error('Only global chat messages can be edited.');
+    if (userId || groupId) throw new Error('Only room messages can be edited.');
     let result: { message: GlobalMessage };
     try {
-      result = await api.global.edit.mutate({ accountId, messageId, body, reason });
+      result = schoolId ? await api.schoolChat.edit.mutate({ accountId, schoolId, messageId, body, reason }) : await api.global.edit.mutate({ accountId, messageId, body, reason });
     } catch (err) {
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    setData((previous) => previous && { ...previous, messages: previous.messages.map((message) => (message.id === messageId ? result.message : message)) });
+    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
-  }, [accountId, userId, pollNow]);
+  }, [accountId, userId, groupId, schoolId, pollNow]);
 
-  // A send clears the signal on the server too, so the flag only needs resetting here.
-  const send = useCallback((body: string) => { typingOn.current = false; enqueue(entry, body); }, [entry]);
+  /**
+   * A tapback (docs/CHAT.md §15): the same emoji again removes it, another replaces it, null removes it. The answer is
+   * the whole message with the viewer's new reaction summary, merged by seq like a confirmed send. A NOT_FOUND
+   * (the message was deleted or hidden meanwhile) is shown by the caller; the poll it asks for brings the deleted row.
+   */
+  const react = useCallback(async (seq: number, emoji: Reaction | null) => {
+    let result: { message: ChatMessage };
+    try {
+      result = userId ? await api.chat.react.mutate({ accountId, userId, seq, emoji }) : groupId ? await api.group.react.mutate({ accountId, groupId, seq, emoji })
+        : schoolId ? await api.schoolChat.react.mutate({ accountId, schoolId, seq, emoji }) : await api.global.react.mutate({ accountId, seq, emoji });
+    } catch (err) {
+      if (errorCode(err) === 'NOT_FOUND') pollNow();
+      if (isUnauthorized(err)) void latest.current.refresh();
+      throw err;
+    }
+    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
+  }, [accountId, userId, groupId, schoolId, pollNow]);
+
+  /**
+   * The message the composer quotes next; lives beside the draft in the thread's memory. Only its seq matters to the
+   * send: the strip and the pending bubble draw the quote from the live row (chat-ui's liveQuote), so a target deleted
+   * or hidden meanwhile shows "Message unavailable" rather than this snapshot, which only stands in while the row is
+   * not loaded.
+   */
+  const setReply = useCallback((reply: MessageReply | null) => { entry.reply = reply; emit(entry); }, [entry]);
+
+  // A send clears the signal on the server too, so the flag only needs resetting here. It also consumes the reply target.
+  const send = useCallback((body: string, image?: string) => { typingOn.current = false; const reply = entry.reply; entry.reply = null; enqueue(entry, body, reply, image); }, [entry]);
   const retry = useCallback(() => { if (requeue(entry, false)) void pump(entry); }, [entry]);
   const discard = useCallback((clientId: string) => setOutgoing(entry, entry.outgoing.filter((item) => item.clientId !== clientId)), [entry]);
   const saveDraft = useCallback((text: string) => { entry.draft = text; }, [entry]);
@@ -621,8 +761,10 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     /** Load error for the first page (the thread shows it with Try again). */
     error,
     peer: data?.peer ?? null,
-    /** The global room's details; null otherwise. */
+    /** The room's details (global or school); null otherwise. */
     room: data?.room ?? null,
+    /** The school room's school; null otherwise. */
+    school: data?.school ?? null,
     /** The friend group's details (name, members, the viewer's role); null otherwise. */
     group: data?.group ?? null,
     /** The other members' delivery and read markers and typing signals (§13); empty in the room. */
@@ -635,11 +777,17 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     initialReadSeq,
     /** Two or more polls in a row failed. */
     reconnecting: failures >= 2,
+    /** The event stream is connected (see useChatInbox). */
+    live,
     outgoing: entry.outgoing.filter((item) => !shown.has(item.clientId)),
     /** The draft kept in memory for this chat; the composer owns the live value. */
     initialDraft: entry.draft,
     saveDraft,
+    /** The message the next send quotes, or null. */
+    reply: entry.reply,
+    setReply,
     send,
+    react,
     retry,
     discard,
     loadEarlier,

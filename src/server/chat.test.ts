@@ -393,11 +393,11 @@ describe('8. delete and cursors', () => {
     const id = randomUUID();
     const sent = await f.caller(f.alice).chat.send({ accountId: f.alice, userId: f.bob, clientId: id, body: 'regret' });
     expect(Object.keys(sent)).toEqual(['message']);
-    expect(sent.message).not.toHaveProperty('revision');
+    expect(sent.message.revision).toBeTypeOf('number');
     fails(() => f.chat.delete(f.bob, f.alice, id), 'NOT_FOUND', CLOSED);
     const before = f.chat.thread(f.bob, f.alice).revision;
-    expect(f.chat.delete(f.alice, f.bob, id)).toEqual({ deleted: true });
-    expect(f.chat.delete(f.alice, f.bob, id)).toEqual({ deleted: true });
+    expect(f.chat.delete(f.alice, f.bob, id)).toMatchObject({ deleted: true });
+    expect(f.chat.delete(f.alice, f.bob, id)).toMatchObject({ deleted: true });
     for (const [viewer, other] of [[f.alice, f.bob], [f.bob, f.alice]] as const) {
       expect(f.chat.thread(viewer, other).messages[0]).toMatchObject({ id, body: null, deletedBy: 'sender' });
     }
@@ -518,11 +518,12 @@ describe('9. reports', () => {
 describe('10. what the owner can see', () => {
   it('pins the admin procedure list', () => {
     expect(Object.keys(appRouter._def.procedures).filter(key => key.startsWith('admin.')).sort()).toEqual([
-      'schools', 'update', 'requests', 'resolveRequest', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
+      'schools', 'update', 'requests', 'resolveRequest', 'resolveMerge', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
       'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses', 'bans', 'liftBan',
       'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
       'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
+      'betas.list', 'betas.removeMember', 'guides', 'saveGuide', 'setGuidePlatforms', 'uploadGuideImage',
     ].map(name => `admin.${name}`).sort());
   });
   it('shows chat text only through an audited report snapshot', async () => {
@@ -705,4 +706,200 @@ describe('15. migration', () => {
       db.close();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+});
+
+
+describe('peer replies and reactions', () => {
+  function setup() {
+    const f = fixture();
+    f.befriend(f.alice, f.bob);
+    const send = (from: string, body: string, replyTo?: number, id = randomUUID()) => f.chat.send(from, from === f.alice ? f.bob : f.alice, id, body, replyTo).message;
+    const thread = (viewer = f.alice, after?: number) => f.chat.thread(viewer, viewer === f.alice ? f.bob : f.alice, { after });
+    const react = (viewer: string, seq: number, emoji: Parameters<typeof f.chat.react>[3]) => f.chat.react(viewer, viewer === f.alice ? f.bob : f.alice, seq, emoji);
+    const remove = (id: string) => f.chat.delete(f.alice, f.bob, id);
+    return { ...f, send, thread, react, remove };
+  }
+
+  it('resolves quotes at read time, censors and truncates previews, and preserves retries', () => {
+    const f = setup();
+    const target = f.send(f.alice, '**hello**   world\n' + 'x'.repeat(150));
+    const id = randomUUID();
+    const reply = f.send(f.bob, 'reply', target.seq, id);
+    const expected = { seq: target.seq, fromMe: false, senderName: 'Alice', preview: ('hello world ' + 'x'.repeat(150)).slice(0, 140) };
+    expect(reply.replyTo).toEqual(expected);
+    expect(f.thread(f.bob).messages.find(m => m.seq === reply.seq)?.replyTo).toEqual(expected);
+    expect(f.thread().messages.find(m => m.seq === reply.seq)?.replyTo?.fromMe).toBe(true);
+    expect(f.send(f.bob, 'reply', target.seq, id).seq).toBe(reply.seq);
+    fails(() => f.send(f.bob, 'reply', undefined, id), 'BAD_REQUEST');
+    const revision = f.thread().revision;
+    f.remove(target.id);
+    expect(f.thread(f.bob).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.thread(f.alice, revision).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.send(f.bob, 'still a valid quote', target.seq).replyTo?.preview).toBeNull();
+    expect(f.send(f.bob, 'reply', target.seq, id).seq).toBe(reply.seq);
+  });
+
+  it('rejects unavailable quote targets', () => {
+    const f = setup();
+    fails(() => f.send(f.alice, 'reply', 999999), 'BAD_REQUEST', 'That message is no longer available.');
+    f.befriend(f.alice, f.cara);
+    const elsewhere = f.chat.send(f.alice, f.cara, randomUUID(), 'other thread').message;
+    fails(() => f.send(f.alice, 'reply', elsewhere.seq), 'BAD_REQUEST', 'That message is no longer available.');
+  });
+
+  it('toggles, replaces and removes one reaction per user, including on own messages', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    expect(message.reactions).toEqual([]);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toEqual([]);
+    f.react(f.alice, message.seq, '👍');
+    expect(f.react(f.alice, message.seq, '😂').message.reactions).toEqual([{ emoji: '😂', count: 1, mine: true }]);
+    f.react(f.bob, message.seq, '😂');
+    expect(f.thread().messages[0]?.reactions).toEqual([{ emoji: '😂', count: 2, mine: true }]);
+    expect(f.react(f.alice, message.seq, null).message.reactions).toEqual([{ emoji: '😂', count: 1, mine: false }]);
+    f.react(f.alice, message.seq, '❤️');
+    expect(f.thread().messages[0]?.reactions.map(r => r.emoji)).toEqual(['❤️', '😂']);
+    f.react(f.alice, message.seq, null);
+    f.react(f.bob, message.seq, null);
+    expect(f.thread().messages[0]?.reactions).toEqual([]);
+  });
+
+  it('delivers reaction changes through the previous revision cursor without unread or activity changes', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    const before = f.thread(f.bob);
+    const activity = f.db.prepare('SELECT created_at FROM chat_messages WHERE seq=?').get(message.seq);
+    f.react(f.bob, message.seq, '👍');
+    const poll = f.thread(f.alice, before.revision);
+    expect(poll.revision).toBeGreaterThan(before.revision);
+    expect(poll.messages).toHaveLength(1);
+    expect(poll.messages[0]).toMatchObject({ seq: message.seq, reactions: [{ emoji: '👍', count: 1, mine: false }] });
+    expect(f.thread(f.bob).lastReadSeq).toBe(before.lastReadSeq);
+    expect(f.db.prepare('SELECT created_at FROM chat_messages WHERE seq=?').get(message.seq)).toEqual(activity);
+    expect(f.thread(f.alice, poll.revision).messages).toEqual([]);
+  });
+
+  it('rejects invalid emoji, missing and deleted messages, and paused senders', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    fails(() => f.react(f.alice, message.seq, '🔥' as never), 'BAD_REQUEST');
+    fails(() => f.react(f.alice, 999999, '👍'), 'NOT_FOUND');
+    f.remove(message.id);
+    fails(() => f.react(f.bob, message.seq, '👍'), 'NOT_FOUND');
+    const live = f.send(f.alice, 'still here');
+    f.db.prepare('INSERT INTO chat_pauses(user_id,actor_id,until,reason,created_at) VALUES(?,?,NULL,?,?)').run(f.bob, f.owner, 'Testing pause', f.clock.now.toISOString());
+    fails(() => f.react(f.bob, live.seq, '👍'), 'FORBIDDEN');
+  });
+
+  it('limits reaction changes to 60 per rolling minute across all chats', () => {
+    const f = setup();
+    const message = f.send(f.alice, 'hello');
+    for (let i = 0; i < 60; i++) f.react(f.alice, message.seq, '👍');
+    fails(() => f.react(f.alice, message.seq, '👍'), 'TOO_MANY_REQUESTS');
+    f.tick(60001);
+    expect(f.react(f.alice, message.seq, '👍').message.reactions).toHaveLength(1);
+  });
+
+  it('removes reaction rows with retained messages and censors quotes after hard deletion', () => {
+    const f = setup();
+    const target = f.send(f.alice, 'old');
+    const reply = f.send(f.bob, 'reply', target.seq);
+    f.react(f.alice, target.seq, '👍');
+    const revision = f.thread().revision;
+    f.db.prepare('DELETE FROM chat_messages WHERE seq=?').run(target.seq);
+    expect(f.db.prepare('SELECT * FROM chat_reactions').all()).toEqual([]);
+    expect(f.thread(f.alice, revision).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
+    expect(f.db.pragma('foreign_key_check')).toEqual([]);
+  });
+});
+
+it('shares the reaction budget across private, group and Global messages and preserves closed-chat errors', async () => {
+  const f = fixture();
+  f.befriend(f.alice, f.bob);
+  const { GlobalChatService } = await import('./global-chat');
+  const { GroupChatService } = await import('./group-chat');
+  const room = new GlobalChatService(f.service, () => f.clock.now);
+  const groups = new GroupChatService(f.service, () => f.clock.now);
+  const peer = f.send(f.alice, f.bob, 'private');
+  const group = groups.create(f.alice, { name: 'Budget', memberIds: [f.bob] });
+  const grouped = groups.send(f.alice, group.id, randomUUID(), 'group').message;
+  const global = room.send(f.alice, randomUUID(), 'global').message;
+  for (let i = 0; i < 20; i++) {
+    f.chat.react(f.alice, f.bob, peer.seq, '👍');
+    groups.react(f.alice, group.id, grouped.seq, '👍');
+    room.react(f.alice, global.seq, '👍');
+  }
+  fails(() => room.react(f.alice, global.seq, '👍'), 'TOO_MANY_REQUESTS');
+  f.tick(60001);
+  expect(room.react(f.alice, global.seq, '👍').message.reactions).toHaveLength(1);
+  f.community.remove(f.alice, f.bob);
+  fails(() => f.chat.react(f.alice, f.bob, peer.seq, '👍'), 'NOT_FOUND', CLOSED);
+});
+
+it('cascades a thread with quotes and reactions, and resends quotes hidden by support', () => {
+  const f = fixture();
+  f.befriend(f.alice, f.bob);
+  const target = f.send(f.alice, f.bob, 'target');
+  const quote = f.chat.send(f.bob, f.alice, randomUUID(), 'quote', target.seq).message;
+  f.chat.react(f.bob, f.alice, target.seq, '👍');
+  f.chat.report(f.bob, f.alice, { category: 'other', block: false, seq: target.seq });
+  const reportId = (f.db.prepare('SELECT id FROM reports').get() as { id: string }).id;
+  expect(f.chat.showEvidence(f.owner, reportId).items).toHaveLength(2);
+  const revision = f.chat.thread(f.bob, f.alice).revision;
+  f.chat.redactMessage(f.owner, reportId, target.seq);
+  const changes = f.chat.thread(f.bob, f.alice, { after: revision }).messages;
+  expect(changes.find(m => m.seq === quote.seq)?.replyTo?.preview).toBeNull();
+  fails(() => f.chat.react(f.bob, f.alice, target.seq, '👍'), 'NOT_FOUND');
+  f.db.prepare('DELETE FROM chat_threads').run();
+  expect(f.db.prepare('SELECT * FROM chat_messages').all()).toEqual([]);
+  expect(f.db.prepare('SELECT * FROM chat_reactions').all()).toEqual([]);
+  expect(f.db.pragma('foreign_key_check')).toEqual([]);
+});
+
+describe('image attachments', () => {
+  it('sends image-only messages through RPC, retries once, freezes reports and revokes reads', async () => {
+    const { default: sharp } = await import('sharp');
+    const { readChatImage } = await import('./chat-images');
+    const f = fixture(); f.befriend(f.alice, f.bob);
+    const image = (await sharp({ create: { width: 32, height: 24, channels: 3, background: '#3478ab' } }).png().toBuffer()).toString('base64');
+    const input = { accountId: f.alice, userId: f.bob, clientId: randomUUID(), body: '', image };
+    const sent = (await f.caller(f.alice).chat.send(input)).message;
+    expect(sent.image).toBe(`/api/chat/images/peer/${sent.seq}`);
+    expect((await f.caller(f.alice).chat.send(input)).message.seq).toBe(sent.seq);
+    expect(f.chat.inbox(f.bob).rows.find(row => row.state === 'open' && row.peer.id === f.alice)).toMatchObject({ lastMessage: { preview: 'Photo' } });
+    const bytes = readChatImage(f.service, f.bob, 'peer', sent.seq)!;
+    expect((await sharp(bytes).metadata()).format).toBe('webp');
+    expect(readChatImage(f.service, f.outsider, 'peer', sent.seq)).toBeNull();
+    expect(f.chat.send(f.bob, f.alice, randomUUID(), 'Nice', sent.seq).message.replyTo?.preview).toBe('Photo');
+    f.chat.report(f.bob, f.alice, { category: 'other', note: '', block: false, seq: sent.seq });
+    const report = f.db.prepare('SELECT id FROM reports WHERE reported_id=?').get(f.alice) as { id: string };
+    f.chat.delete(f.alice, f.bob, sent.id);
+    expect(readChatImage(f.service, f.bob, 'peer', sent.seq)).toBeNull();
+    expect(f.chat.showEvidence(f.owner, report.id).items.find(item => item.seq === sent.seq)?.image).toBe(`data:image/webp;base64,${bytes.toString('base64')}`);
+    f.tick(31 * DAY); pruneChat(f.db, f.clock.now);
+    expect(f.db.prepare('SELECT image FROM chat_messages WHERE id=?').get(sent.id)).toEqual({ image: null });
+    const second = f.chat.send(f.alice, f.bob, randomUUID(), 'caption', undefined, bytes.toString('base64')).message;
+    f.community.block(f.bob, f.alice, true);
+    expect(() => readChatImage(f.service, f.alice, 'peer', second.seq)).toThrow(CLOSED);
+  });
+
+  it('rejects fake images, oversized payloads and captions past the text limit', async () => {
+    const { prepareChatImage } = await import('./chat-images');
+    await expect(prepareChatImage(Buffer.from('<svg/>').toString('base64'))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(prepareChatImage(Buffer.alloc(1_000_001).toString('base64'))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const f = fixture(); f.befriend(f.alice, f.bob);
+    expect(() => f.chat.send(f.alice, f.bob, randomUUID(), 'x'.repeat(1001), undefined, 'a')).toThrow('Messages can be up to');
+  });
+});
+
+it('keeps peer images separate when senders reuse a client ID', async () => {
+  const { readChatImage } = await import('./chat-images');
+  const f = fixture(); f.befriend(f.alice, f.bob);
+  const id = randomUUID();
+  const a = f.chat.send(f.alice, f.bob, id, '', undefined, 'YWJj').message;
+  const b = f.chat.send(f.bob, f.alice, id, '', undefined, 'ZGVm').message;
+  expect(a.image).not.toBe(b.image);
+  expect(readChatImage(f.service, f.alice, 'peer', a.seq)?.toString()).toBe('abc');
+  expect(readChatImage(f.service, f.alice, 'peer', b.seq)?.toString()).toBe('def');
 });

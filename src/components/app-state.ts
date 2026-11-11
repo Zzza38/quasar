@@ -1,9 +1,10 @@
 import type { Workspace } from '@/client/api';
 import type { WorkspaceSnapshot } from '@/client/offline';
-import { personalScheduleSchema, type PersonalSchedule, type Schedule } from '@/domain/schedule';
+import { personalScheduleSchema, withoutAssignedFreePeriods, type PersonalSchedule, type Schedule } from '@/domain/schedule';
 import type { Entity } from '@/domain/sync';
 import { repairTaskDates, taskSchema, type Task } from '@/domain/task';
 import { instantParts } from '@/lib/format';
+import type { DirectoryLink } from './directory-links';
 
 export type WorkspaceContext = Omit<Workspace, 'entities'>;
 export type WorkspaceClassmates = WorkspaceContext['community']['classmates'];
@@ -24,9 +25,12 @@ export function persistedContext(workspace: Workspace | WorkspaceContext): Works
  * being read as the current shape and crashing a render. 2 is the first stamped version. The build before it saved
  * the context without a version; that copy is read as version 2 when it has `user.suggestedNames` (see cachedContext).
  * 3 adds `user.avatar` and the picture source (docs/CHAT.md §13) and `sanctions` (§14). 4 adds `scheduleFeed`, the
- * connected class schedule (src/server/schedule-feed.ts).
+ * connected class schedule (src/server/schedule-feed.ts). 5 adds `betas`, the betas the account joined (src/server/betas.ts).
+ * 6 adds `community.classDirectory`, the school directory classmates are matched through (classMatcher).
+ * `staff` (the account's staff role, src/domain/staff.ts) came later without a bump: readers treat a missing one as
+ * no role, and the owner is still recognized by `isAdmin`, so a version 6 copy stays usable offline.
  */
-export const CONTEXT_VERSION = 4;
+export const CONTEXT_VERSION = 6;
 
 /** The record written to the device store: persistedContext stamped with CONTEXT_VERSION. */
 export function storedContext(workspace: Workspace | WorkspaceContext): Record<string, unknown> {
@@ -70,15 +74,15 @@ export function withClassmates(context: WorkspaceContext, classmates: WorkspaceC
   return { ...context, community: { ...context.community, classmates } };
 }
 export type View = 'today' | 'schedule' | 'tasks' | 'classes' | 'school' | 'people' | 'messages';
-/** Every routable view. `dock: false` keeps a view out of the six-tab phone dock (it has its own top-bar link). */
-export const VIEWS: Array<{ id: View; label: string; dock?: boolean }> = [
+/** Every routable view, in sidebar order. The phone dock groups them differently (phone-dock.tsx). */
+export const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'classes', label: 'Classes' },
   { id: 'school', label: 'School' },
   { id: 'people', label: 'People' },
-  { id: 'messages', label: 'Messages', dock: false },
+  { id: 'messages', label: 'Messages' },
 ];
 
 export interface TaskItem { id: string; task: Task; entity: Entity }
@@ -115,12 +119,12 @@ export function isOverdue(task: Task, today: string, nowTime: string): boolean {
 }
 
 /**
- * Where "Wrong time?" links go. With a private schedule the times shown come from that copy, which school
- * corrections do not change, so the student edits it (Classes opens the sheet); otherwise the school's times.
+ * Where "Wrong time?" links go. Private schedules open their editor; school followers choose a shared
+ * correction or personal adjustment.
  */
 export function openBellTimes(state: Pick<AppState, 'personal' | 'navigate'>): void {
   if (state.personal.customSchedule) state.navigate('classes', { private: 'open' });
-  else state.navigate('school', { fix: 'times' });
+  else state.navigate('classes', { bell: 'open' });
 }
 
 export const UNREADABLE_PERSONAL = 'Retry sync before changing your saved schedule.';
@@ -129,12 +133,12 @@ export const UNREADABLE_PERSONAL = 'Retry sync before changing your saved schedu
  * The one way the app writes the personal schedule. When the saved copy could not be read on this
  * device, views see an empty fallback; saving that fallback (plus one edit) would replace the
  * student's classes, assignments and overrides on the server, so every save is refused until a
- * sync makes the saved copy readable again.
+ * sync makes the saved copy readable again. A period that gets a class stops being marked free.
  */
 export function personalSaver(readable: boolean, save: (personal: PersonalSchedule) => Promise<void>): (personal: PersonalSchedule) => Promise<void> {
   return async (personal) => {
     if (!readable) throw new Error(UNREADABLE_PERSONAL);
-    await save(personalScheduleSchema.parse(personal));
+    await save(withoutAssignedFreePeriods(personalScheduleSchema.parse(personal)));
   };
 }
 
@@ -144,6 +148,7 @@ export interface AppState {
   snapshot: WorkspaceSnapshot;
   personal: PersonalSchedule;
   personalValid: boolean;
+  requestScheduleEdit?: (edit: () => void) => Promise<void>;
   /** The school's schedule; `personal.customSchedule` is applied by the domain functions automatically. */
   schedule: Schedule;
   timeZone: string;
@@ -152,6 +157,10 @@ export interface AppState {
   online: boolean;
   saveTask: (id: string, task: Task | null) => Promise<void>;
   savePersonal: (personal: PersonalSchedule) => Promise<void>;
+  /** Saves without the schedule lock prompt; only for a change the student just confirmed in its own dialog (FreePeriodPrompt). */
+  saveConfirmed: (personal: PersonalSchedule) => Promise<void>;
+  /** Points classes at school directory entries without the schedule lock prompt (see directory-links.ts). */
+  linkClasses: (links: DirectoryLink[]) => Promise<void>;
   /** Reloads the workspace from the server; resolves false when that failed (the error is shown by the shell). */
   refresh: () => Promise<boolean>;
   /** `replace` swaps the current history entry (for stripping one-shot params) and keeps the scroll position. */

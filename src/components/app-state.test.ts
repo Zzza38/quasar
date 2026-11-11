@@ -30,7 +30,7 @@ describe('personalSaver', () => {
 });
 
 describe('persistedContext', () => {
-  const classmates = [{ id: 'friend-1', displayName: 'Maya Marker', personal: { ...emptyPersonalSchedule(), classes: [{ id: 'biology', name: 'zebra biology marker' }], assignments: { A: 'biology' } } }];
+  const classmates = [{ id: 'friend-1', displayName: 'Maya Marker', avatar: null, personal: { ...emptyPersonalSchedule(), classes: [{ id: 'biology', name: 'zebra biology marker' }], assignments: { A: 'biology' } } }];
   const workspace = {
     user: { id: 'me' }, school: null, entities: [{ id: 'task-1' }], review: null, isAdmin: false, subscriptions: [], importConflicts: [],
     community: { verification: { status: 'verified', method: 'domain' }, incomingRequests: 1, friendCount: 1, classmates, unreadChats: 0, unreadAt: '2026-09-01T00:00:00.000Z', chatPush: true },
@@ -108,10 +108,14 @@ describe('isOverdue', () => {
 });
 
 describe('openBellTimes', () => {
-  it('sends students with a private schedule to it, since school corrections do not change what they see', () => {
+  it('opens the shared-or-personal choice for everyone following school', () => {
     const navigate = vi.fn();
     openBellTimes({ personal: emptyPersonalSchedule(), navigate });
-    expect(navigate).toHaveBeenLastCalledWith('school', { fix: 'times' });
+    expect(navigate).toHaveBeenLastCalledWith('classes', { bell: 'open' });
+  });
+
+  it('sends students with a private schedule to it, since school corrections do not change what they see', () => {
+    const navigate = vi.fn();
     openBellTimes({ personal: { ...emptyPersonalSchedule(), customSchedule: exampleSchedule }, navigate });
     expect(navigate).toHaveBeenLastCalledWith('classes', { private: 'open' });
   });

@@ -14,6 +14,9 @@ import { FeedStep } from './onboarding-feed';
 import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
+import { BetaProvider } from './betas';
+import { nowCardStyle } from './now-card-setting';
+import type { NowCardStyle } from '@/lib/now-split';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
 import { useWorkspace, type InitialBoot } from './use-workspace';
@@ -23,11 +26,13 @@ import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
-import { PeopleView } from './views/people';
+import { PeopleView } from './views/people-now';
 import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
 import { GradePicker } from './grade-picker';
 import { CalendarFeeds } from './calendar-feeds';
+import { useScheduleLock, withDefaultScheduleLock } from './schedule-lock';
+import { useDirectoryLinks } from './directory-links';
 
 /* ---------- Path routing: Today at "/", every other view at "/<view>", rendered by the server ---------- */
 
@@ -139,12 +144,16 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   const personalEntity = snapshot?.entities.find((entity) => entity.kind === 'personal' && entity.id === 'personal' && !entity.deleted);
   const parsedPersonal = useMemo(() => personalScheduleSchema.safeParse(personalEntity?.data ?? emptyPersonalSchedule()), [personalEntity]);
-  const personal: PersonalSchedule = parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule();
+  const personal: PersonalSchedule = useMemo(() => withDefaultScheduleLock(parsedPersonal.success ? parsedPersonal.data : emptyPersonalSchedule()), [parsedPersonal]);
   const openTasks = useMemo(() => snapshot ? taskItems(snapshot.entities).filter((item) => !item.task.completed).length : 0, [snapshot]);
   // Finishing a setup step bumps this so its flag (in this device's storage) is re-read during render.
   const [, rereadSetup] = useState(0);
   const userId = context?.user.id;
 
+  const saveUnlocked = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
+  const scheduleLock = useScheduleLock(userId, personal, saveUnlocked);
+  const linkClasses = useDirectoryLinks({ accountId: userId ?? '', schoolId: context?.school?.id, personal, readable: parsedPersonal.success && !!personalEntity, online: session.online,
+    save: saveUnlocked });
   const chatUnread = useChatUnread(userId, context?.community);
   // Unsent chat messages and drafts live only in memory; a finished sign-out or a lost session forgets them.
   // Not when sign-out starts: it can still fail and leave the student signed in, with their unsent text kept.
@@ -191,7 +200,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   const sessionNotice = session.error ? <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout> : null;
   const logoutDialog = <LogoutDialog session={session} />;
   // Refuses every write while the saved personal schedule is unreadable, so its empty fallback never replaces it.
-  const savePersonal = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
+  const savePersonal = scheduleLock.savePersonal;
 
   // Every signed-in screen is keyed by account, so a switch to another account never keeps the previous one's
   // wizard drafts, prefilled names or screen state.
@@ -212,12 +221,12 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   const setupFeed = hydrated && feedStep.pending(accountId);
   if (setupClasses) {
     return <Fragment key={accountKey}><ClassesStep userId={context.user.id} schoolId={school.id} schedule={schedule} personal={personal} online={session.online} disabled={!parsedPersonal.success}
-      onSave={savePersonal} notice={sessionNotice}
+      onSave={savePersonal} guides={context.scheduleGuides} notice={sessionNotice}
       onDone={() => { classesStep.finish(accountId); feedStep.begin(accountId); rereadSetup((version) => version + 1); }}
-      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
+      footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}{scheduleLock.dialog}</Fragment>;
   }
   if (setupFeed) {
-    return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} onSubscribed={session.initialize}
+    return <Fragment key={accountKey}><FeedStep userId={context.user.id} online={session.online} timeZone={timeZone} subscriptions={context.subscriptions ?? []} guides={context.feedGuides} onSubscribed={session.initialize}
       onDone={() => { feedStep.finish(accountId); rereadSetup((version) => version + 1); }} notice={sessionNotice}
       footer={<SignOutButton email={context.user.email} onClick={session.requestLogout} disabled={session.logout.pending || !session.online} />} />{logoutDialog}</Fragment>;
   }
@@ -226,6 +235,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     snapshot,
     personal,
     personalValid: parsedPersonal.success,
+    requestScheduleEdit: scheduleLock.requestEdit,
     schedule: scheduleForGrade(school.schedule, personal.grade),
     timeZone,
     now,
@@ -233,6 +243,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     online: session.online,
     saveTask: (id: string, task: Task | null) => session.save('task', id, task),
     savePersonal,
+    saveConfirmed: saveUnlocked,
+    linkClasses,
     refresh: session.initialize,
     navigate: route.navigate,
     params: route.params,
@@ -241,14 +253,22 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   };
   const onMessages = route.view === 'messages';
   // A phone thread fills the screen above the keyboard; Shell hides the dock (desktop never shows one).
-  const immersive = onMessages && (route.params.has('with') || route.params.has('group') || route.params.get('room') === 'global');
+  const room = route.params.get('room');
+  const immersive = onMessages && (route.params.has('with') || route.params.has('group') || room === 'global' || room === 'school');
   const onChatPush = async (enabled: boolean) => {
     await api.chat.setPush.mutate({ accountId, enabled });
     await session.synchronize();
   };
+  const onNowCard = async (style: NowCardStyle) => {
+    await api.profile.nowCard.mutate({ accountId, style });
+    await session.synchronize();
+  };
 
-  return <Shell key={accountKey} session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
+  // A context saved by a build before betas existed has none (see CONTEXT_VERSION).
+  return <BetaProvider key={accountKey} accountId={accountId} betas={context.betas ?? []} online={session.online} refresh={session.initialize}>
+    <Shell session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
+    nowCard={nowCardStyle(context.user)} onNowCard={onNowCard}
     gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}
     calendarSettings={(openAdd) => <CalendarFeeds state={state} openAdd={openAdd} />}>
     {/* The grade prompt would crowd the chat column; it shows again on every other view. */}
@@ -264,6 +284,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
         onAcknowledge={async () => { await api.school.acknowledge.mutate({ accountId, version: context.review!.version }); await session.initialize(); }}
         onOpenClasses={() => route.navigate('classes')} />}
     </div>
+    {scheduleLock.dialog}
     {route.view === 'today' && <TodayView state={state} />}
     {route.view === 'schedule' && <ScheduleView state={state} />}
     {route.view === 'tasks' && <TasksView state={state} />}
@@ -271,5 +292,5 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     {route.view === 'school' && <SchoolView state={state} />}
     {route.view === 'people' && <PeopleView state={state} />}
     {route.view === 'messages' && <MessagesView state={state} />}
-  </Shell>;
+  </Shell></BetaProvider>;
 }

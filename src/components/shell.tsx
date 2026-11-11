@@ -10,9 +10,13 @@ import { viewPath } from '@/lib/routes';
 import { SITE_TITLE } from '@/server/site';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
+import { NowCardSetting } from './now-card-setting';
+import type { NowCardStyle } from '@/lib/now-split';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
+import { BetasButton } from './betas';
+import { DockCountDescriptions, DockGroupSwitch, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
@@ -24,10 +28,8 @@ import { OPEN_ACCOUNT_EVENT } from './setup-checklist';
 
 const VIEW_ICONS: Record<View, IconName> = { today: 'home', schedule: 'calendar', tasks: 'tasks', classes: 'book', school: 'school', people: 'users', messages: 'message' };
 const NAV_KEY = 'quasar.navigationCollapsed';
-/** Ids of the hidden count descriptions the Tasks, People and Messages links point at with aria-describedby. */
+/** Ids of the hidden count descriptions the sidebar's Tasks, People and Messages links point at with aria-describedby. */
 const COUNT_IDS: Partial<Record<View, string>> = { tasks: 'nav-task-count', people: 'nav-request-count', messages: 'nav-chat-count' };
-/** The pill every nav badge uses: the dock, the top-bar Messages link. */
-const BADGE_PILL = 'grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-card';
 
 function badgeText(count: number): string {
   return count > 99 ? '99+' : String(count);
@@ -100,6 +102,14 @@ const STATUS_TONES = {
 } as const;
 
 export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = false, labelClassName, className }: { sync: SyncState; online: boolean; onRetry: () => void; onConflicts: () => void; iconOnly?: boolean; labelClassName?: string; className?: string }) {
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    setDismissed(false);
+    if (sync.kind !== 'saved') return;
+    const timer = window.setTimeout(() => setDismissed(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [sync.kind]);
+  if (sync.kind === 'saved' && dismissed) return null;
   const tone = sync.kind === 'saved' ? 'success' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'danger' : sync.kind === 'offline' ? 'neutral' : 'accent';
   const icon: IconName = sync.kind === 'saved' ? 'checkCircle' : sync.kind === 'offline' ? 'cloudOff' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'alert' : sync.kind === 'pending' ? 'cloud' : 'refresh';
   const label = statusLabel(sync);
@@ -109,6 +119,14 @@ export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = fals
     {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
     <span className={cn('truncate', labelClassName, iconOnly && 'sr-only')}>{label}</span>
   </>;
+  if (sync.kind === 'saved') {
+    return <Badge asChild variant="secondary" className={cn(classes, 'relative isolate overflow-hidden cursor-pointer hover:brightness-95')}>
+      <button type="button" aria-label="Saved. Dismiss notification" onClick={() => setDismissed(true)}>
+        <span aria-hidden="true" className="saved-countdown pointer-events-none absolute inset-0 -z-10 origin-left bg-success/[0.08]" />
+        {inner}
+      </button>
+    </Badge>;
+  }
   // Announcements come from the one live region in Shell (the pill renders twice and remounts when it
   // becomes clickable), so the pill itself stays quiet: a plain button when it acts, a silent status otherwise.
   if (clickable) {
@@ -126,25 +144,6 @@ interface NavCounts { taskCount: number; requestCount: number; chatCount: number
 /** The count a nav entry's badge shows, or 0 for none. */
 function badgeCount(id: View, { taskCount, requestCount, chatCount }: NavCounts): number {
   return id === 'tasks' ? taskCount : id === 'people' ? requestCount : id === 'messages' ? chatCount : 0;
-}
-
-/** The six-tab phone dock. Messages lives in the top bar instead (`dock: false`). */
-function TabBar({ view, counts, navigate }: { view: View; counts: NavCounts; navigate: (view: View) => void }) {
-  return <nav className="tabbar fixed inset-x-0 bottom-0 z-30 lg:hidden" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }} aria-label="Main">
-    <div className="glass mx-3 grid auto-cols-fr grid-flow-col rounded-[22px] p-1.5 shadow-float ring-1 ring-foreground/[0.08]">
-      {VIEWS.filter((entry) => entry.dock !== false).map((entry) => {
-        const active = entry.id === view;
-        const count = badgeCount(entry.id, counts);
-        return <a key={entry.id} href={`#${entry.id}`} aria-label={entry.label} aria-describedby={count > 0 ? COUNT_IDS[entry.id] : undefined} title={entry.label} aria-current={active ? 'page' : undefined}
-          onClick={() => scrollTopIfActive(active)}
-          className={cn('relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10.5px] font-bold no-underline transition-colors hover:no-underline', active ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground')}>
-          <Icon name={VIEW_ICONS[entry.id]} size={21} strokeWidth={active ? 2.4 : 2} />
-          <span>{entry.label}</span>
-          {count > 0 && <span aria-hidden="true" className={cn('absolute left-[calc(50%+6px)] top-0.5', BADGE_PILL)}>{badgeText(count)}</span>}
-        </a>;
-      })}
-    </div>
-  </nav>;
 }
 
 function useNavigationOpen(): [boolean, (open: boolean) => void] {
@@ -176,13 +175,16 @@ export interface ShellProps {
   /** The account-wide "Message notifications" switch. */
   chatPush: boolean;
   onChatPush: (enabled: boolean) => Promise<void>;
+  /** The account-wide "Next class on the Now card" choice. */
+  nowCard: NowCardStyle;
+  onNowCard: (style: NowCardStyle) => Promise<void>;
   children: ReactNode;
   gradeSettings?: ReactNode;
   /** The Connected calendars block; receives how many times the sheet was asked to open the Add dialog. */
   calendarSettings?: (openAdd: number) => ReactNode;
 }
 
-export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, children, gradeSettings, calendarSettings }: ShellProps) {
+export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, nowCard, onNowCard, children, gradeSettings, calendarSettings }: ShellProps) {
   const home = (event: MouseEvent<HTMLAnchorElement>) => { if (!followsInPage(event)) return; event.preventDefault(); if (view === 'today') scrollTopIfActive(true); else navigate('today'); };
   const [account, setAccount] = useState(false);
   // The checklist's "Add calendar" asks for the sheet with the Add dialog open; the count is what CalendarFeeds watches.
@@ -199,7 +201,8 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
   const chatCount = online ? chatUnread ?? 0 : 0;
   const counts: NavCounts = { taskCount, requestCount, chatCount };
   const onMessages = view === 'messages';
-  const chatCountId = chatCount > 0 ? COUNT_IDS.messages : undefined;
+  // Phones reach Messages and School through the dock's People and Classes tabs (phone-dock.tsx).
+  const dockMemory = useDockMemory(view);
   const displayName = context.user.displayName || 'Your account';
   const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
@@ -237,9 +240,10 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     {taskCount > 0 && <span id={COUNT_IDS.tasks} hidden>{taskCount === 1 ? '1 open task' : `${taskCount} open tasks`}</span>}
     {requestCount > 0 && <span id={COUNT_IDS.people} hidden>{requestCount === 1 ? '1 friend request' : `${requestCount} friend requests`}</span>}
     {chatCount > 0 && <span id={COUNT_IDS.messages} hidden>{chatCount === 1 ? '1 unread chat' : `${chatCount} unread chats`}</span>}
+    <DockCountDescriptions counts={counts} />
 
     <Sidebar collapsible="icon" className="app-sidebar">
-      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
+      <SidebarHeader className="flex-row items-center justify-between gap-2 px-3 pt-4 group-data-[collapsible=icon]:justify-start group-data-[collapsible=icon]:px-2">
         {navOpen ? <>
           <Brand onClick={home} />
           <SidebarTrigger aria-label="Collapse navigation sidebar" aria-expanded title="Collapse navigation" className="rounded-lg text-muted-foreground hover:bg-sidebar-accent" />
@@ -268,7 +272,11 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
                       <span className="group-data-[collapsible=icon]:hidden">{entry.label}</span>
                     </a>
                   </SidebarMenuButton>
-                  {count > 0 && <SidebarMenuBadge aria-hidden="true" className="top-1/2! right-2.5 h-5 min-w-5 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[11px] leading-none font-bold text-primary-foreground! tabular-nums">{badgeText(count)}</SidebarMenuBadge>}
+                  {/* A dot says something is waiting; hovering or focusing the row swaps it for the count. */}
+                  {count > 0 && <SidebarMenuBadge aria-hidden="true" className="top-1/2! right-2.5 grid -translate-y-1/2 place-items-center justify-items-end px-0 text-[12.5px] font-semibold text-foreground!">
+                    <span className="col-start-1 row-start-1 size-[7px] rounded-full bg-primary transition-opacity group-focus-within/menu-item:opacity-0 group-hover/menu-item:opacity-0" />
+                    <span className="col-start-1 row-start-1 opacity-0 transition-opacity group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100">{badgeText(count)}</span>
+                  </SidebarMenuBadge>}
                 </SidebarMenuItem>;
               })}
             </SidebarMenu>
@@ -277,7 +285,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         <AttentionGap zone="sidebar" top={8} className="mx-3 flex-1 group-data-[collapsible=icon]:hidden" />
       </SidebarContent>
       <SidebarFooter className="gap-3 px-3 pb-4 group-data-[collapsible=icon]:px-2">
-        <div className="flex group-data-[collapsible=icon]:justify-center">
+        <div className="flex group-data-[collapsible=icon]:w-10 group-data-[collapsible=icon]:justify-center">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} labelClassName="group-data-[collapsible=icon]:hidden" className="group-data-[collapsible=icon]:px-1.5" />
         </div>
         <SidebarMenu>
@@ -298,13 +306,6 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         <Brand onClick={home} markSize={28} className="min-h-11 gap-2 text-base" />
         <div className="flex shrink-0 items-center gap-0.5">
           <StatusPill sync={sync} online={online} onRetry={retry} onConflicts={conflictsAnchor} iconOnly />
-          {/* Messages is not in the six-tab dock on phones; this link reaches it from every view. No title:
-              it would become the accessible description whenever there is no unread count. */}
-          <a href="#messages" aria-label="Messages" aria-describedby={chatCountId} aria-current={onMessages ? 'page' : undefined} onClick={() => scrollTopIfActive(onMessages && !immersive)}
-            className={cn('relative grid size-11 shrink-0 place-items-center rounded-full no-underline outline-none transition-colors hover:no-underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background', onMessages ? 'bg-primary-soft text-primary-soft-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
-            <Icon name="message" size={20} strokeWidth={onMessages ? 2.4 : 2} />
-            {chatCount > 0 && <span aria-hidden="true" className={cn('absolute -right-0.5 -top-0.5', BADGE_PILL)}>{badgeText(chatCount)}</span>}
-          </a>
           <button type="button" className="grid size-11 shrink-0 place-items-center rounded-full outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => setAccount(true)} aria-label="Account" aria-haspopup="dialog">
             <UserAvatar user={context.user} className="size-7" />
           </button>
@@ -324,11 +325,12 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           {online && session.offlineReady === false && session.offlineSupported && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Try again</Button>}>Quasar couldn’t save itself to this device, so it may not open without signal.</Callout>}
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
+        {!immersive && <DockGroupSwitch view={view} counts={counts} navigate={navigate} />}
         {children}
       </div>
       <AttentionGap zone="right-gutter" top={8} className="mx-3" />
       </div>
-      {!immersive && <TabBar view={view} counts={counts} navigate={navigate} />}
+      {!immersive && <PhoneDock view={view} counts={counts} last={dockMemory} onTab={scrollTopIfActive} />}
     </SidebarInset>
 
     {/* Closing forgets a pending Add-calendar request, so reopening the sheet later does not replay it. */}
@@ -337,7 +339,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
       <SheetContent side="right" className="gap-0 border-l-0 p-0 text-foreground shadow-pop data-[side=right]:w-full data-[side=right]:sm:max-w-md">
         <SheetHeader className="border-b px-5 py-4">
           <SheetTitle className="text-[17px] font-bold">Account</SheetTitle>
-          <SheetDescription className="sr-only">Your profile, appearance, notifications and sign-out.</SheetDescription>
+          <SheetDescription className="sr-only">Your profile, appearance, notifications, betas and sign-out.</SheetDescription>
         </SheetHeader>
         {/* auto-rows-max: the summary hides its overflow, so without it the rows would share the fixed height and clip instead of scrolling. */}
         <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-y-auto px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
@@ -356,12 +358,14 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
             {session.storagePersistent === false && <div><dt className="text-muted-foreground">Device storage</dt><dd className="text-right font-semibold">The browser may clear it if space runs low</dd></div>}
           </dl>
           {gradeSettings && <div className="grid gap-3"><Eyebrow>School</Eyebrow>{gradeSettings}</div>}
-          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /></div>
+          <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /><NowCardSetting accountId={context.user.id} value={nowCard} online={online} onChange={onNowCard} /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
+          <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
-            {context.isAdmin && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
+            {/* A context saved before staff roles has no `staff` (see CONTEXT_VERSION); the owner still has isAdmin. */}
+            {(context.isAdmin || !!context.staff) && <Button icon="inbox" onClick={() => { window.location.assign('/admin'); }}>Open support admin</Button>}
             <Button icon="logout" variant="secondary" disabled={session.logout.pending || !online || session.writing} title={!online ? 'Connect to the internet to sign out safely.' : undefined} onClick={() => { setAccount(false); session.requestLogout(); }}>Sign out</Button>
             {!online && <Hint>Signing out removes this account’s saved data from this device, so it needs a connection to make sure everything is uploaded first.</Hint>}
             {snapshot && snapshot.pending > 0 && online && <Hint>{snapshot.pending === 1 ? '1 change is' : `${snapshot.pending} changes are`} still waiting to sync. You will be asked what to do with them.</Hint>}

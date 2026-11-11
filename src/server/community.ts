@@ -6,6 +6,7 @@ import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import { leaveAllGroups } from './group-chat';
 import { avatarUrl, type AvatarRow } from './avatars';
+import { directoryForMatching } from './directory';
 import type { Service, User } from './service';
 
 /**
@@ -35,7 +36,7 @@ export const FRIEND_REQUEST_LIMIT = 30;
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
 /** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
-export type Classmate = { id: string; displayName: string; personal: PersonalSchedule };
+export type Classmate = { id: string; displayName: string; avatar: string | null; personal: PersonalSchedule };
 export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
@@ -268,19 +269,21 @@ export class CommunityService {
     this.db.prepare('INSERT INTO reports(id,reporter_id,reported_id,school_id,reason,created_at) VALUES(?,?,?,?,?,?)').run(randomUUID(), viewerId, input.userId, other.school_id ?? viewer.schoolId, input.reason, now());
   }
 
-  /* ---------- Support (owner only) ---------- */
+  /* ---------- Support (staff roles, src/domain/staff.ts) ---------- */
 
   verificationRequests(adminId: string) {
-    this.service.admin(adminId);
-    return this.db.prepare(`SELECT r.id, r.user_id userId, r.school_id schoolId, r.proof, r.created_at createdAt, u.display_name displayName, u.full_name fullName, u.email, s.name schoolName
+    this.service.permit(adminId, 'verification');
+    return (this.db.prepare(`SELECT r.id, r.user_id userId, r.school_id schoolId, r.proof, r.created_at createdAt, u.display_name displayName, u.full_name fullName, u.email, s.name schoolName
       FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL ORDER BY r.created_at`).all() as
-      { id: string; userId: string; schoolId: string; proof: string; createdAt: string; displayName: string; fullName: string; email: string; schoolName: string }[];
+      { id: string; userId: string; schoolId: string; proof: string; createdAt: string; displayName: string; fullName: string; email: string; schoolName: string }[])
+      .filter(row => this.service.canTarget(adminId, row.userId));
   }
   decideVerification(adminId: string, requestId: string, approve: boolean): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'verification');
     const banned = this.db.transaction(() => {
       const request = this.db.prepare('SELECT user_id, school_id FROM verification_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already handled.');
+      this.service.guardTarget(adminId, request!.user_id);
       // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
       const banned = approve && this.isBanned(request.user_id, request.school_id);
       this.db.prepare('UPDATE verification_requests SET resolved_at=?, decision=?, actor_id=? WHERE id=?').run(now(), approve && !banned ? 'approved' : 'declined', adminId, requestId);
@@ -292,19 +295,25 @@ export class CommunityService {
     if (banned) fail('CONFLICT', 'This student was removed from this school, so the request was declined.');
   }
   revokeVerification(adminId: string, userId: string, schoolId: string): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'verification');
+    this.service.guardTarget(adminId, userId);
     this.db.transaction(() => {
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.withdrawProposals(userId, schoolId);
       this.service.audit(adminId, 'support.unverify', schoolId, { userId });
     }).immediate();
   }
-  /** Open reports, danger first, then oldest first. Chat reports carry a snapshot size but never message text. */
+  /**
+   * Open reports, danger first, then oldest first. Chat reports carry a snapshot size but never message text. A
+   * report that involves a staff account, as reporter, reported or a sender in its group snapshot, is left to the
+   * owner (Service.canTarget).
+   */
   reports(adminId: string): ReportSummary[] {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'reports');
     const rows = this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
         r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName,
         (r.thread_id IS NOT NULL OR r.group_id IS NOT NULL) isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
+        (SELECT json_group_array(DISTINCT json_extract(e.value, '$.senderId')) FROM json_each(coalesce(r.evidence, '[]')) e WHERE json_extract(e.value, '$.senderId') IS NOT NULL) evidenceSenders,
         (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id) historyReports,
         (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
         (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
@@ -313,17 +322,20 @@ export class CommunityService {
       FROM reports r JOIN users ru ON ru.id=r.reported_id JOIN users pu ON pu.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
       LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND (p.until IS NULL OR p.until>?)
       WHERE r.resolved_at IS NULL ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all(now()) as
-      (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null; pausedReason: string | null; pausedAppealed: number })[];
-    return rows.map(({ isChat, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, pausedReason, pausedAppealed, ...row }) => ({
+      (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; evidenceSenders: string; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null; pausedReason: string | null; pausedAppealed: number })[];
+    const visible = rows.filter(row => [row.reportedId, row.reporterId, ...(JSON.parse(row.evidenceSenders) as string[])].every(id => this.service.canTarget(adminId, id)));
+    return visible.map(({ isChat, evidenceSenders: _senders, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, pausedReason, pausedAppealed, ...row }) => ({
       ...row, isChat: !!isChat, history: { reports: historyReports, removals: historyRemovals, pauses: historyPauses },
       pause: pausedId ? { until: pausedUntil, reason: pausedReason ?? '', appealed: !!pausedAppealed } : null,
     }));
   }
   resolveReport(adminId: string, reportId: string, outcome: 'dismissed' | 'removed'): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'reports');
     this.db.transaction(() => {
-      const report = this.db.prepare('SELECT reported_id, school_id FROM reports WHERE id=? AND resolved_at IS NULL').get(reportId) as { reported_id: string; school_id: string | null } | undefined;
+      const report = this.db.prepare('SELECT reported_id, reporter_id, school_id FROM reports WHERE id=? AND resolved_at IS NULL').get(reportId) as { reported_id: string; reporter_id: string; school_id: string | null } | undefined;
       if (!report) return;
+      this.service.guardTarget(adminId, report.reported_id);
+      this.service.guardTarget(adminId, report.reporter_id);
       this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=?').run(now(), adminId, outcome, reportId);
       this.service.audit(adminId, 'report.resolve', report.school_id, { reportId, userId: report.reported_id, outcome });
     }).immediate();
@@ -333,7 +345,8 @@ export class CommunityService {
    * and cannot rejoin. Every friendship they have ends, at any school, which closes all of their chats (docs/CHAT.md D4).
    */
   removeFromSchool(adminId: string, userId: string, schoolId: string, reason: string): void {
-    this.service.admin(adminId);
+    this.service.permit(adminId, 'members.remove');
+    this.service.guardTarget(adminId, userId);
     const text = z.string().trim().min(3).max(2000).parse(reason);
     this.db.transaction(() => {
       const user = this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined;
@@ -353,18 +366,20 @@ export class CommunityService {
   isBanned(userId: string, schoolId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM school_bans WHERE school_id=? AND user_id=?').get(schoolId, userId);
   }
-  /** Summary counts for the workspace payload. */
-  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; unreadChats: number; unreadAt: string; chatPush: boolean } {
+  /** Summary counts for the workspace payload, with the school directory that classmates are matched through. */
+  summary(userId: string): { verification: Verification; incomingRequests: number; friendCount: number; classmates: Classmate[]; classDirectory: ReturnType<typeof directoryForMatching>; unreadChats: number; unreadAt: string; chatPush: boolean } {
     const verification = this.verification(userId);
     const incoming = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='pending' AND requester_id<>? AND (user_low=? OR user_high=?)").get(userId, userId, userId) as { n: number };
     const friends = this.db.prepare("SELECT count(*) n FROM friendships WHERE status='accepted' AND (user_low=? OR user_high=?)").get(userId, userId) as { n: number };
     const classmates = this.classmates(userId);
+    const schoolId = (this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined)?.school_id;
+    const classDirectory = schoolId ? directoryForMatching(this.db, schoolId) : [];
     // Same SQL as chat.inbox. It does not call ready(), so students still onboarding get 0. unreadAt is the
     // server's clock when the count was computed, so the client keeps whichever count is newest.
     const unreadChats = countUnreadChats(this.db, userId);
     const unreadAt = new Date().toISOString();
     const chatPush = (this.db.prepare('SELECT chat_push FROM users WHERE id=?').get(userId) as { chat_push: number } | undefined)?.chat_push !== 0;
-    return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, unreadChats, unreadAt, chatPush };
+    return { verification, incomingRequests: incoming.n, friendCount: friends.n, classmates, classDirectory, unreadChats, unreadAt, chatPush };
   }
   /**
    * Each accepted friend at the viewer's current school with their personal timetable, so the viewer's own timetable
@@ -372,10 +387,10 @@ export class CommunityService {
    * ("p1", "A"), so a friend at another school never shares a class with the viewer.
    */
   classmates(userId: string): Classmate[] {
-    const rows = this.db.prepare(`SELECT u.id, u.display_name FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
+    const rows = this.db.prepare(`SELECT u.id, u.display_name, u.google_picture, u.avatar_version, u.avatar_hidden FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       JOIN users me ON me.id=?
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
-      ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as { id: string; display_name: string }[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, personal: this.personalOf(row.id) }));
+      ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as (AvatarRow & { display_name: string })[];
+    return rows.map(row => ({ id: row.id, displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
   }
 }

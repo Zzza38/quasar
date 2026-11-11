@@ -13,7 +13,9 @@ process.env.E2E_AUTH_SECRET ||= 'test-only-secret-which-is-never-used-in-product
 // Use the NVIDIA-capable browser locally; keep CI's portable default.
 const useLocalGpu = process.platform === 'linux' && !process.env.CI;
 export default defineConfig({
-  testDir: './tests/e2e', workers: 1, fullyParallel: false, timeout: 60_000,
+  // CI shards individual tests, including large spec files. Keep one worker per
+  // runner because tests share its database, beta registry, and mock-provider port.
+  testDir: './tests/e2e', workers: 1, fullyParallel: !!process.env.CI, timeout: 60_000,
   // A committed test.only would otherwise run alone in CI and still pass.
   forbidOnly: !!process.env.CI,
   // Sync round-trips (save, session check, upload, refresh) can exceed 5 s on a busy host; the app shows saving states meanwhile.
@@ -34,6 +36,8 @@ export default defineConfig({
       NEXTAUTH_URL:'http://localhost:3100', OWNER_EMAIL:'browser-owner@example.com', OWNER_GOOGLE_SUB:'',
       GOOGLE_CLIENT_ID:'test-client', GOOGLE_CLIENT_SECRET:'test-client-secret',
       SCAN_API_URL:'http://127.0.0.1:3199/v1', SCAN_MODEL:'mock-vision', SCAN_API_KEY:'', SCAN_MODEL_REASONING:'', SCAN_MODEL_TEMPERATURE:'',
-      VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'' }
+      VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'',
+      // The beta list then sits beside the test database (src/server/beta-registry.ts); tests write it there.
+      BETAS_PATH:'' }
   }
 });

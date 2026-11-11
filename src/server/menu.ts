@@ -60,11 +60,11 @@ export class MenuService {
   }
 
   /**
-   * Who may point the school at a menu: the owner always, and any member while the shared schedule is open to
+   * Who may point the school at a menu: staff with schools.edit (Service.canEditAnySchool), and any member while the shared schedule is open to
    * member edits (the same rule as Service.updateSchool). A locked school's members send a correction request.
    */
   canEdit(userId: string, school: School): boolean {
-    if (this.service.isAdmin(userId)) return true;
+    if (this.service.canEditAnySchool(userId)) return true;
     if (this.service.user(userId).schoolId !== school.id) return false;
     return !school.memberLocked && !school.supportLocked && school.memberCount < 10;
   }

@@ -59,14 +59,20 @@ test('per-user admin overrides reach the selected account live, persist through 
       await expect(toggle).toBeDisabled();
       await choose(select, 'User choice');
       await expect(toggle).toBeEnabled();
-      await toggle.click();
+      // Keyboard toggling: Playwright never considers a switch stable once Spin keeps it turning.
+      await toggle.focus();
+      await visitor.keyboard.press('Space');
       await expect(toggle).toBeChecked();
-      await toggle.click();
+      await visitor.keyboard.press('Space');
       await expect(toggle).not.toBeChecked();
       await visitor.keyboard.press('Escape');
     }
     await visitor.emulateMedia({ reducedMotion: 'reduce' });
-    for (const name of ['What Is an Attention Span', "I'm Shy"]) await choose(page.getByRole('combobox', { name: `${name} override`, exact: true }), 'Force on');
+    for (const name of ['What Is an Attention Span', "I'm Shy"]) {
+      const select = page.getByRole('combobox', { name: `${name} override`, exact: true });
+      await choose(select, 'Force on');
+      await expect(select).toHaveText('Force on');
+    }
     for (const key of ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a']) await visitor.keyboard.press(key);
     for (const name of ['What Is an Attention Span', "I'm Shy"]) {
       const toggle = visitor.getByRole('switch', { name, exact: true });
@@ -75,7 +81,12 @@ test('per-user admin overrides reach the selected account live, persist through 
     }
     await expect(visitor.locator('html')).not.toHaveAttribute('data-shy-mode', 'true');
     await expect(visitor.getByText('Reduced motion is enabled.', { exact: false })).toBeVisible();
-    for (const name of ['What Is an Attention Span', "I'm Shy"]) await choose(page.getByRole('combobox', { name: `${name} override`, exact: true }), 'User choice');
+    for (const name of ['What Is an Attention Span', "I'm Shy"]) {
+      const select = page.getByRole('combobox', { name: `${name} override`, exact: true });
+      await choose(select, 'User choice');
+      // The select only shows the saved value once the mutation returns; reloading sooner can read the old policy.
+      await expect(select).toHaveText('User choice');
+    }
     await page.reload();
     await page.getByRole('tab', { name: 'People', exact: true }).click();
     await page.getByRole('textbox', { name: 'Search members', exact: true }).fill(memberId);

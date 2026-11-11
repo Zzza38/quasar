@@ -1,25 +1,26 @@
 'use client';
 
 import type { FeedSubscription } from '@/server/calendar';
-import { FeedGuide, FeedSubscribeForm } from './feed-guide';
+import { platformNames, type GuideSet } from '@/domain/setup-guides';
+import { FeedGuide, FeedSubscribeForm } from './setup-guide';
 import { Frame, STEP_FEED } from './onboarding';
 import { Icon } from './icon';
 import { Button, Chip, Hint, Panel, Spacer } from './primitives';
 
 /**
- * The optional last setup step: connect the school portal's iCal link so homework arrives
- * as tasks by itself. Schoology instructions are shown first because that is what the first
- * real users have.
+ * The optional last setup step: connect the school portal's iCal link so homework arrives as tasks by itself. The
+ * guide shows the platforms support set for the school, or all of them.
  */
-export function FeedStep({ userId, online, timeZone, subscriptions, onSubscribed, onDone, footer, notice }: {
-  userId: string; online: boolean; timeZone: string; subscriptions: FeedSubscription[]; onSubscribed: () => Promise<unknown>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
+export function FeedStep({ userId, online, timeZone, subscriptions, guides, onSubscribed, onDone, footer, notice }: {
+  userId: string; online: boolean; timeZone: string; subscriptions: FeedSubscription[]; guides?: GuideSet; onSubscribed: () => Promise<unknown>; onDone: () => void; footer: React.ReactNode; notice?: React.ReactNode;
 }) {
   const connected = subscriptions.length > 0;
-  return <Frame step={STEP_FEED} wide title="Get homework in automatically" description="If your school uses Schoology, Google Classroom or Canvas, it can send every assignment straight into your task list. Two minutes now, then it stays up to date on its own." notice={notice} footer={footer}>
+  const names = platformNames('calendar', guides);
+  return <Frame step={STEP_FEED} wide title="Get homework in automatically" description={`Connect ${names || 'your school’s calendar'} once and your assignments show up as tasks on their own. It takes about two minutes.`} notice={notice} footer={footer}>
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Panel className="grid gap-3">
         <strong className="text-sm font-bold">1. Copy your calendar link</strong>
-        <FeedGuide />
+        <FeedGuide guides={guides} />
       </Panel>
       <Panel className="grid gap-3 bg-card ring-1 ring-foreground/[0.06]">
         <strong className="text-sm font-bold">2. Paste it here</strong>

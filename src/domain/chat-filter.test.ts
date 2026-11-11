@@ -34,6 +34,94 @@ describe('chat filter', () => {
       expect(hasSlur(text), JSON.stringify(text)).toBe(true);
   });
 
+  it('catches slurs glued together or inside a longer word', () => {
+    for (const text of ['niggerniggernigger', 'faggotfaggot', 'retardretard', 'fagfag', 'spickspick', 'ilovenigger', 'niggerlover', 'bigniggers', 'nigg3rnigg3r', 'xnigger', 'sniggernigger', 'n i g g e r n i g g e r', 'trannies', 'zipperheads'])
+      expect(hasSlur(text), text).toBe(true);
+    expect(censorSlurs('niggerniggernigger')).toBe('******************');
+    expect(censorSlurs('you bigniggers lol')).toBe('you ********** lol');
+    expect(censorSlurs('ilovefaggots')).toBe('ilove******s');
+    expect(censorSlurs('fagfag!')).toBe('******!');
+    expect(censorSlurs('sniggernigger')).toBe('snigger******');
+  });
+
+  it('catches slurs split by symbols inside a word', () => {
+    for (const text of ['nigg.er', 'ni.gg.er', 'n.igger', 'n/i/g/g/e/r', 'fag/got', 're.tard', 'nig.ger.nig.ger', 'n.i.g.g.e.r', 'n.1.g.g.e.r'])
+      expect(hasSlur(text), text).toBe(true);
+    expect(censorSlurs('yo nigg.er lol')).toBe('yo ****** lol');
+    expect(censorSlurs('n/i/g/g/e/r!')).toBe('******!');
+    for (const text of ['e.g. the file', 'see example.com', 'and/or', 'Japan/Korea', 'raccoon.jpg', 'fire-retardant', 'co-op', 'i.e. tyranny'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('reads small capitals, phonetic letters, other scripts and boxed letters as the Latin letter they look like', () => {
+    for (const text of ['ɴɪɢɢᴇʀ', 'ɴɪɢɢᴀ', 'ꜰᴀɢɢᴏᴛ', 'ʀᴇᴛᴀʀᴅᴇᴅ', 'nɪgger', 'niggɑ', 'fɑggot', 'retɑrd', 'chɪnk', 'ɢᴏᴏᴋ', 'kɪke', 'trɑnny', 'ᴄᴏᴏɴ', 'FꓮGGOT', 'REꓔARD', 'retᗩrd', '🅽🅸🅶🅶🅴🆁', '🅵🅰🅶🅶🅾🆃', 'n🅸gger', '⒩⒤⒢⒢⒠⒭', 'fɑggots'])
+      expect(hasSlur(text), text).toBe(true);
+    expect(censorSlurs('yo ɴɪɢɢᴇʀ')).toBe('yo ******');
+    for (const text of ['ɑpple', 'Øystein is here', 'łódź trip', 'ᴛʜᴀɴᴋs', 'đà nẵng', '🇺🇸 flag', '🅰 blood type'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('catches respellings that still read as the slur', () => {
+    for (const text of ['nigguh', 'niqqa', 'niqqer', 'niggr', 'faggit', 'fagget', 'phaggot', 'retarted'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['phage therapy', 'esophagus', 'phagocyte', 'Fagin'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('reads the characters Unicode lists as confusable with a Latin letter', () => {
+    for (const text of ['fⲁggot', 'rⲉtard', 'rᥱtard', 'nᎥgger', 'niggeᎡ', 'nꭵggᴇꭱ', 'NIԌԌER', 'niԍԍa', 'ϜAGGOT', 'ȵigger', 'retaɼd', 'nigg℮r', 'n❗gger'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['Привет как дела', 'Γεια σου', 'Ժամը քանիսն է', 'Ⲡⲛⲟⲩⲧⲉ'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('catches y for i, more respellings, and short stems glued to an insult word', () => {
+    for (const text of ['nygga', 'chynk', 'niggur', 'faggut', 'rehtarded', 'wetbak', 'tranni', 'faggie', 'chinkies', 'fagboy', 'you gookboy', 'spicboy', 'coonboy', 'dumbfag', 'ufag'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['raccoon', 'coonhound', 'spicy boy', 'Japan', 'japanboy', 'spaceboy', 'bigspoon', 'uplift', 'chunk', 'spyglass', 'pygmy'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('reads apostrophes, middle dots, stars, brackets and narrow spaces inside a word as part of it', () => {
+    for (const text of ["nig'ger", 'nig·ger', 'nig＊ger', 'fa’ggot', 're·tarded', 'ni>gga', 'ni gga', 'fa ggot'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ["don't", "it's Japan's", 'rock’n’roll', 'f***ing', 'what?no', '10 000 points'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('reads any punctuation, symbol or modifier mark between letters as part of the word', () => {
+    for (const text of ['ni‧gga', 'nig∙ger', 'fa⋅ggot', 'ret‐arded', 'wet‧back', 'tra‧nny', 'nigʻger', 'nigˈger', 'nig⁄ger', 'nig🔥ger', 'nіg∙gа'])
+      expect(hasSlur(text), JSON.stringify(text)).toBe(true);
+    for (const text of ['wet.back', 'wet,back', 'a+b', 'AT&T', 'c++', 'rock&roll', 'and/or'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('catches l for i, 9 and q for g in longer stems, and more respellings', () => {
+    for (const text of ['NlGGER', 'N|GGA', 'ni9ga', 'ni99er', 'niqga', 'faqqot', 'hey niga', 'niggor', 'you ritarded', 'nᴉgga', 'niᵹga', 'n𐌉gga', 're†arded'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['faq', 'FAQs', 'the FAQ page', 'darkle', 'ritard', 'ritardando', 'b9 bingo'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('catches short stems glued to a wider set of insult words, markdown or not', () => {
+    for (const text of ['fagmaster', 'fagtrash', 'chinkmaster', 'gookbrain', 'spicmom', 'kikequeen', 'coontrash', 'stinkycoon'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['bigboy', 'the japanese', 'hey guys', 'the coolest', 'lazy sunday', 'coonskin cap', 'assignment'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('catches a silent h, 6 for g, more lookalikes, respellings and glued insult words', () => {
+    for (const text of ['niggher', 'niggha', 'fagghot', 'retharded', 'wetbhack', 'retart', 'feggot', 'trany', 'fagbucket', 'fagzilla', 'spicballs', 'coonballs', 'ni6ga', 'fa6got', 'fΛggot', 'retΔrd', 're✝️arded', 'niggær', 'ni’ggha', 'niggh3r', 'faghg0t'])
+      expect(hasSlur(text), text).toBe(true);
+    for (const text of ['night', 'nighthawk', 'restart', 'tyranny', 'Ægir', 'Λάμδα', 'snowball', 'coconuts', '6 pack'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
+  it('does not match innocent words that contain an embedded stem', () => {
+    for (const text of ['he sniggered', 'sniggering', 'niggardly', 'fire retardant', 'retardation', 'flame retarder', 'the beanery', 'Nigeria', 'Niger river', 'tyranny', 'progress', 'coonhound', 'squawk', 'Yiddish', 'f***ing', 'sh*tty', 'b*****d'])
+      expect(hasSlur(text), text).toBe(false);
+  });
+
   it('does not match innocent words that contain a stem', () => {
     for (const text of ['raccoon', 'spicy food', 'Japan', 'spices', 'conspicuous', 'cocoon', 'homogeneous', 'Pakistan', 'retardant', 'tardy', 'ABO blood type', 'yiddish', 'sauerkraut', 'spiced', 'a b', 'I am so late', 'fire retardant foam'])
       expect(hasSlur(text), text).toBe(false);
