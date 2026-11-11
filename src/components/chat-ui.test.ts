@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { imageFileFrom, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
+import { QUICK_REACTIONS, REACTIONS } from '@/domain/chat';
+import { REACTION_NAMES, imageFileFrom, imageFilesFrom, mentionMatches, sendParts, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
 
 describe('reaction names', () => {
   it('names the strip toggles by the emoji', () => {
@@ -105,5 +106,34 @@ describe('who reacted', () => {
     expect(imageFileFrom({ files: [text, png] })).toBe(png);
     expect(imageFileFrom({ files: [text] })).toBeNull();
     expect(imageFileFrom(null)).toBeNull();
+  });
+});
+
+describe('more reactions, mentions and several images (chat-polish beta)', () => {
+  it('names every reaction once, with the original six as the quick strip', () => {
+    expect(QUICK_REACTIONS).toEqual(['❤️', '👍', '👎', '😂', '‼️', '❓']);
+    expect(new Set(REACTIONS).size).toBe(REACTIONS.length);
+    for (const emoji of REACTIONS) expect(REACTION_NAMES[emoji], emoji).toBeTruthy();
+    expect(new Set(Object.values(REACTION_NAMES)).size).toBe(REACTIONS.length);
+    // The extra ones fill whole rows of seven under the strip.
+    expect((REACTIONS.length - QUICK_REACTIONS.length) % 7).toBe(0);
+  });
+  it('offers people whose name starts with what was typed first, then by word, then anywhere', () => {
+    const people = ['Sam Lee', 'Lee Ann', 'Rosalee', 'Bob'].map((displayName) => ({ displayName }));
+    expect(mentionMatches(people, 'lee').map((person) => person.displayName)).toEqual(['Lee Ann', 'Sam Lee', 'Rosalee']);
+    expect(mentionMatches(people, '').map((person) => person.displayName)).toEqual(['Sam Lee', 'Lee Ann', 'Rosalee', 'Bob']);
+    expect(mentionMatches(people, 'zz')).toEqual([]);
+    expect(mentionMatches(people, '', 2)).toHaveLength(2);
+  });
+  it('sends each image as its own message, with the text on the last one', () => {
+    expect(sendParts('hi', [])).toEqual([{ body: 'hi' }]);
+    expect(sendParts('look', ['a', 'b', 'c'])).toEqual([{ body: '', image: 'a' }, { body: '', image: 'b' }, { body: 'look', image: 'c' }]);
+    expect(sendParts('', ['a'])).toEqual([{ body: '', image: 'a' }]);
+  });
+  it('takes every image out of a paste or a drop, in order', () => {
+    const files = [{ type: 'text/plain', name: 'a' }, { type: 'image/png', name: 'b' }, { type: 'image/gif', name: 'c' }] as unknown as File[];
+    expect(imageFilesFrom({ files }).map((file) => file.name)).toEqual(['b', 'c']);
+    expect(imageFileFrom({ files })?.name).toBe('b');
+    expect(imageFilesFrom(null)).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyError, CHAT, COMPOSER_MAX_LENGTH, bodyError, censorBody, censoredLinkParts, linkParts, normalizeBody, rawBodySchema, REPORT_CATEGORIES, reportCategorySchema, TOO_LONG_MESSAGE, TOO_MANY_NEW_CHATS_MESSAGE } from './chat';
+import { type BodyError, CHAT, COMPOSER_MAX_LENGTH, bodyError, censorBody, censoredLinkParts, linkParts, normalizeBody, rawBodySchema, REPORT_CATEGORIES, reportCategorySchema, TOO_LONG_MESSAGE, TOO_MANY_NEW_CHATS_MESSAGE, EDIT_WINDOW_MESSAGE, mentionParts, mentionQuery, mentionsName, searchSnippet, withinEditWindow } from './chat';
 
 describe('normalizeBody', () => {
   it('converts to NFC and normalizes line endings', () => {
@@ -113,5 +113,48 @@ describe('censorBody and censoredLinkParts', () => {
     expect(censoredLinkParts(`see ${wiki} retard`)).toEqual([
       { text: 'see ' }, { text: 'https://en.wikipedia.org/wiki/****_Rapids,_Minnesota', href: wiki }, { text: ' ******' },
     ]);
+  });
+});
+
+describe('chat-polish helpers: mentions, the edit window, search excerpts', () => {
+  it('finds "@Name" only as a whole name, whatever the case', () => {
+    expect(mentionsName('hey @Sam, lunch?', 'Sam')).toBe(true);
+    expect(mentionsName('hey @sam', 'Sam')).toBe(true);
+    expect(mentionsName('hey @Samantha', 'Sam')).toBe(false);
+    expect(mentionsName('ask @Samantha or @Sam', 'Sam')).toBe(true);
+    expect(mentionsName('mail sam@school.org', 'school')).toBe(true); // The picker never offers this; the server also needs the id.
+    expect(mentionsName('hey Sam', 'Sam')).toBe(false);
+    expect(mentionsName('hey @', '')).toBe(false);
+  });
+  it('splits text around its mentions, the longest name first, and joins back into the same text', () => {
+    const mentions = [{ name: 'Sam' }, { name: 'Sam Lee' }];
+    const text = 'yo @Sam Lee and @sam, not @Samuel';
+    const parts = mentionParts(text, mentions);
+    expect(parts.map((part) => part.text).join('')).toBe(text);
+    expect(parts.filter((part) => part.mention).map((part) => [part.text, part.mention!.name])).toEqual([['@Sam Lee', 'Sam Lee'], ['@sam', 'Sam']]);
+    expect(mentionParts('no at sign', mentions)).toEqual([{ text: 'no at sign' }]);
+    expect(mentionParts('', mentions)).toEqual([]);
+  });
+  it('reads the "@word" being typed before the caret, but not an email address', () => {
+    expect(mentionQuery('hi @bo', 6)).toEqual({ start: 3, query: 'bo' });
+    expect(mentionQuery('@', 1)).toEqual({ start: 0, query: '' });
+    expect(mentionQuery('hi @bo there', 6)).toEqual({ start: 3, query: 'bo' });
+    expect(mentionQuery('hi @bo there', 12)).toBeNull();
+    expect(mentionQuery('me@school', 9)).toBeNull();
+    expect(mentionQuery('line one\n@ca', 12)).toEqual({ start: 9, query: 'ca' });
+  });
+  it('allows an edit for CHAT.editWindowMs after sending and says so in minutes', () => {
+    const sent = '2026-11-11T15:00:00.000Z';
+    expect(withinEditWindow(sent, new Date('2026-11-11T15:14:59.000Z'))).toBe(true);
+    expect(withinEditWindow(sent, new Date('2026-11-11T15:15:01.000Z'))).toBe(false);
+    expect(EDIT_WINDOW_MESSAGE).toBe('Messages can be edited for 15 minutes after they are sent.');
+  });
+  it('cuts a search excerpt around the match and marks where it was cut', () => {
+    expect(searchSnippet('short text', 'text')).toBe('short text');
+    const long = `${'a '.repeat(80)}needle ${'b '.repeat(80)}`;
+    const snippet = searchSnippet(long, 'NEEDLE', 40);
+    expect(snippet).toContain('needle');
+    expect(snippet.startsWith('…') && snippet.endsWith('…')).toBe(true);
+    expect(searchSnippet(`needle ${'b '.repeat(80)}`, 'needle', 40).startsWith('needle')).toBe(true);
   });
 });

@@ -1,13 +1,13 @@
 import { chatImageSchema } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema } from './chat-extras';
-import type { MessageExtras, Reaction } from '@/domain/chat';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, assertOwnEdit, searchTerms, searchSql, searchHit } from './chat-extras';
+import type { MessageExtras, Reaction, SearchHit } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, REPORT_CATEGORIES, bodyError, messageText, rawBodySchema, reportCategorySchema, TOO_MANY_NEW_CHATS_MESSAGE, type ReportCategory } from '@/domain/chat';
+import { CHAT, REPORT_CATEGORIES, bodyError, censorBody, messageText, rawBodySchema, reportCategorySchema, searchQuerySchema, TOO_MANY_NEW_CHATS_MESSAGE, type ReportCategory } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
-import { Reveal, actorRank, type RemovedText } from './moderation';
+import { Reveal, actorRank, type RemovedText, type RevealedText } from './moderation';
 import { plainText } from '@/domain/markdown';
 import { CommunityService } from './community';
 import { countSentSince, countUnreadGlobal, countUnreadSchool } from './global-chat';
@@ -42,7 +42,9 @@ export type ChatPeer = { id: string; displayName: string; fullName: string | nul
  * uncensored text, and a removed message's text and photo.
  */
 export type ChatMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string;
-  deletedBy: 'sender' | 'support' | null; original: string | null; removed: RemovedText | null };
+  deletedBy: 'sender' | 'support' | null; original: string | null; removed: RemovedText | null;
+  /** When the sender last edited it, its text as first sent, and that the edit was the sender's own (always, outside the rooms). */
+  editedAt: string | null; editedFrom: RevealedText | null; editedBySender: boolean };
 /** A messaging pause the student is under: when it ends (null: until lifted), support's reason, and whether they appealed (§14). */
 export type ChatPause = { until: string | null; reason: string; appealed: boolean };
 /**
@@ -69,7 +71,8 @@ export type StoredItem = { seq: number; fromReported: boolean; body: string; ima
 
 type ThreadRow = { id: string; user_low: string; user_high: string; revision: number; last_message_at: string | null; created_at: string };
 type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; thread_id: string; sender_id: string; body: string; created_at: string;
-  deleted_at: string | null; deleted_by: 'sender' | 'support' | null; revision: number; original: string | null; deleted_rank: string | null };
+  deleted_at: string | null; deleted_by: 'sender' | 'support' | null; revision: number; original: string | null; deleted_rank: string | null;
+  edited_at: string | null; edited_from: string | null };
 type PeerRow = AvatarRow & { display_name: string; full_name: string; school_id: string | null };
 type MemberRow = { last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
 
@@ -81,6 +84,8 @@ export const chatThreadSchema = chatUserSchema.extend({
 export const chatSendSchema = chatUserSchema.extend({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
 export const chatReactSchema = chatUserSchema.extend(reactionSchema.shape);
 export const chatDeleteSchema = chatUserSchema.extend({ messageId: z.uuid() });
+export const chatEditSchema = chatDeleteSchema.extend({ body: rawBodySchema });
+export const chatSearchSchema = chatUserSchema.extend({ query: searchQuerySchema });
 export const chatReadSchema = chatUserSchema.extend({ seq: z.number().int().min(0) });
 export const chatMuteSchema = chatUserSchema.extend({ muted: z.boolean() });
 export const chatTypingSchema = chatUserSchema.extend({ typing: z.boolean() });
@@ -95,6 +100,11 @@ export const pauseChatSchema = z.object({
   days: z.union([z.literal(1), z.literal(7), z.literal(30)]).nullable(),
   reason: z.string().trim().min(3).max(2000),
 });
+
+/** A reported message's text for the frozen snapshot: an edited one also carries what it said before the edit. */
+export function evidenceBody(row: { body: string; edited_at?: string | null; edited_from?: string | null }): string {
+  return row.edited_at && row.edited_from ? `${row.body}\n\n(Before the sender edited it: ${censorBody(row.edited_from)})` : row.body;
+}
 
 /**
  * Server side, the only place a message is censored: normalizeBody, then slurs censored to asterisks outside https
@@ -231,7 +241,8 @@ export class ChatService {
   private message(viewerId: string, row: MessageRow): ChatMessage {
     const reveal = this.reveal(viewerId);
     return { ...messageExtras(this.db, 'peer', viewerId, row.seq), id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null,
-      original: reveal.original(row), removed: reveal.removed(row, 'peer') };
+      original: reveal.original(row), removed: reveal.removed(row, 'peer'),
+      editedAt: row.deleted_at ? null : row.edited_at, editedFrom: reveal.editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at };
   }
   private latestPage(threadId: string, before?: number): { rows: MessageRow[]; hasEarlier: boolean } {
     const rows = (before === undefined
@@ -369,7 +380,7 @@ export class ChatService {
       const existing = this.db.prepare('SELECT * FROM chat_messages WHERE sender_id=? AND id=?').get(viewerId, clientId) as MessageRow | undefined;
       if (existing) {
         const thread = this.findThread(viewerId, otherId);
-        if (!thread || existing.thread_id !== thread.id || existing.body !== body || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if (!thread || existing.thread_id !== thread.id || (existing.body !== body && !existing.edited_at) || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
@@ -428,6 +439,43 @@ export class ChatService {
     return result;
   }
 
+  /**
+   * The sender rewrites their own message within CHAT.editWindowMs. The slur filter and the body rules apply to the
+   * new text; the text as first sent is kept, and both people can read it behind "See original".
+   */
+  editOwn(viewerId: string, otherId: string, messageId: string, raw: string): { message: ChatMessage } {
+    if (otherId === viewerId) fail('BAD_REQUEST', SELF);
+    const result = this.db.transaction(() => {
+      this.access(viewerId, otherId);
+      const thread = this.member(viewerId, otherId);
+      this.notPaused(viewerId);
+      const row = this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? AND id=?').get(thread.id, messageId) as MessageRow | undefined;
+      assertOwnEdit(row, viewerId, this.now(), CLOSED);
+      const { body, original } = parseBody(raw, !!row!.image);
+      if (body !== row!.body) {
+        this.db.prepare('UPDATE chat_messages SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), revision=? WHERE seq=?')
+          .run(body, original, this.iso(), row!.original ?? row!.body, this.bumpRevision(thread.id), row!.seq);
+      }
+      return { message: this.message(viewerId, this.db.prepare('SELECT * FROM chat_messages WHERE seq=?').get(row!.seq) as MessageRow) };
+    }).immediate();
+    notifyChat([otherId], { kind: 'peer', key: viewerId });
+    return result;
+  }
+
+  /** Messages in this chat whose text contains `query`, newest first. A query shorter than CHAT.searchMinLength finds nothing. */
+  search(viewerId: string, otherId: string, raw: string): { results: SearchHit[] } {
+    if (otherId === viewerId) fail('BAD_REQUEST', SELF);
+    const terms = searchTerms(raw);
+    return this.db.transaction(() => {
+      this.access(viewerId, otherId);
+      const thread = this.findThread(viewerId, otherId);
+      if (!terms || !thread) return { results: [] };
+      const rows = this.db.prepare(`SELECT c.*, u.display_name FROM chat_messages c JOIN users u ON u.id=c.sender_id WHERE c.thread_id=? AND ${searchSql('?')} ORDER BY c.seq DESC LIMIT ?`)
+        .all(thread.id, terms.pattern, CHAT.searchResults) as (MessageRow & { display_name: string })[];
+      return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
+    })();
+  }
+
   read(viewerId: string, otherId: string, seq: number): { unreadChats: number; unreadAt: string } {
     if (otherId === viewerId) fail('BAD_REQUEST', SELF);
     let changed = false;
@@ -465,7 +513,7 @@ export class ChatService {
     return this.db.transaction(() => {
       const thread = this.member(viewerId, otherId);
       let items: StoredItem[];
-      const item = (row: MessageRow, anchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === otherId, body: row.body, image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null, anchor });
+      const item = (row: MessageRow, anchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === otherId, body: evidenceBody(row), image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null, anchor });
       if (input.seq !== undefined) {
         const anchor = this.db.prepare('SELECT * FROM chat_messages WHERE thread_id=? AND seq=?').get(thread.id, input.seq) as MessageRow | undefined;
         if (!anchor) return fail('NOT_FOUND', CLOSED);
@@ -616,7 +664,7 @@ export function pruneChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM chat_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE chat_messages SET body='', image=NULL, original=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL)").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE chat_messages SET body='', image=NULL, original=NULL, edited_from=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL OR edited_from IS NOT NULL)").run(ago(CHAT.deletedTextDays));
     db.prepare('UPDATE reports SET evidence=NULL WHERE evidence IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at < ?').run(ago(CHAT.evidenceDays));
     db.prepare('DELETE FROM chat_threads WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
     db.prepare("DELETE FROM notification_deliveries WHERE entity_id='chat:messages' AND updated_at < ?").run(ago(2));

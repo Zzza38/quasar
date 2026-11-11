@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { CHAT, REACTIONS, type Reaction, type MessageExtras, type MessageReaction, type MessageReactor } from '@/domain/chat';
+import { CHAT, EDIT_WINDOW_MESSAGE, REACTIONS, mentionsName, searchSnippet, withinEditWindow, type Reaction, type MessageExtras, type MessageMention, type MessageReaction, type MessageReactor, type SearchHit } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 import { AVATAR_COLUMNS, avatarUrl, type AvatarRow } from './avatars';
@@ -66,7 +66,7 @@ export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): 
     };
   const visible = row.reply_to_seq !== null && row.target_seq !== null && !row.deleted_at && (!!row.body || !!row.image)
     && targetExists(db, kind, viewer, row.reply_to_seq, row.scope ?? undefined);
-  const attachment = db.prepare(`SELECT id, image, deleted_at FROM ${messages} WHERE seq=?`).get(seq) as { id: string; image: string | null; deleted_at: string | null };
+  const attachment = db.prepare(`SELECT id, image, deleted_at, ${kind === 'peer' ? 'NULL' : 'mentions'} mentions FROM ${messages} WHERE seq=?`).get(seq) as { id: string; image: string | null; deleted_at: string | null; mentions: string | null };
   const reactions = reactionsFor(db, kind, viewer, seq);
   return {
     image: attachment.image && !attachment.deleted_at ? `/api/chat/images/${kind}/${seq}` : null,
@@ -76,7 +76,76 @@ export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): 
     },
     reactions,
     reactors: reactions.length ? reactorsFor(db, kind, viewer, seq) : [],
+    mentions: attachment.deleted_at ? [] : readMentions(attachment.mentions, viewer),
   };
+}
+
+/* ---------- Mentions (groups and rooms) ---------- */
+
+type StoredMention = { id: string; name: string };
+function storedMentions(raw: string | null): StoredMention[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is StoredMention => !!entry && typeof entry.id === 'string' && typeof entry.name === 'string') : [];
+  } catch { return []; }
+}
+function readMentions(raw: string | null, viewer: string): MessageMention[] {
+  return storedMentions(raw).map(mention => ({ id: mention.id, name: mention.name, me: mention.id === viewer }));
+}
+
+/**
+ * What a new message stores as its mentions: the picked people who can read the conversation (a live member of the
+ * group, a member of the school, anyone with names in the Global chat) and whose "@Name" the text really carries.
+ * Anything else is dropped without an error, so a stale pick never fails a send. Null when nobody is left.
+ */
+export function resolveMentions(db: Db, kind: 'group' | 'global' | 'school', viewer: string, scope: string | undefined, body: string, ids: string[] | undefined): string | null {
+  const unique = [...new Set(ids ?? [])].filter(id => id !== viewer).slice(0, CHAT.mentionsPerMessage);
+  if (!unique.length) return null;
+  const find = db.prepare(kind === 'group'
+    ? 'SELECT u.id, u.display_name name FROM chat_group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=@scope AND m.user_id=@id AND m.left_at IS NULL'
+    : kind === 'school' ? "SELECT id, display_name name FROM users WHERE id=@id AND school_id=@scope AND display_name<>'' AND full_name<>''"
+      : "SELECT id, display_name name FROM users WHERE id=@id AND display_name<>'' AND full_name<>'' AND @scope IS NULL");
+  const found = unique.flatMap((id) => {
+    const row = find.get({ id, scope: kind === 'global' ? null : scope ?? '' }) as StoredMention | undefined;
+    return row && mentionsName(body, row.name) ? [{ id: row.id, name: row.name }] : [];
+  });
+  return found.length ? JSON.stringify(found) : null;
+}
+
+/** An edit keeps the mentions whose "@Name" the new text still carries; it never adds one. */
+export function keptMentions(raw: string | null, body: string): string | null {
+  const kept = storedMentions(raw).filter(mention => mentionsName(body, mention.name));
+  return kept.length ? JSON.stringify(kept) : null;
+}
+
+/** SQL that is true when message `c` mentions the member bound as `user`. Ids are UUIDs, so the pattern cannot match by accident. */
+export const mentionsUserSql = (user: string) => `(c.mentions IS NOT NULL AND instr(c.mentions, '"id":"' || ${user} || '"') > 0)`;
+
+/* ---------- A sender's own edit ---------- */
+
+/**
+ * The checks every chat kind shares before a sender rewrites their own message: it is theirs, still showing, and
+ * inside CHAT.editWindowMs. `missing` is the kind's own wording for a message that is gone.
+ */
+export function assertOwnEdit(row: { sender_id: string; deleted_at: string | null; created_at: string } | undefined, viewer: string, now: Date, missing: string): void {
+  if (!row || row.deleted_at) throw new TRPCError({ code: 'NOT_FOUND', message: missing });
+  if (row.sender_id !== viewer) throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own messages.' });
+  if (!withinEditWindow(row.created_at, now)) throw new TRPCError({ code: 'BAD_REQUEST', message: EDIT_WINDOW_MESSAGE });
+}
+
+/* ---------- Search inside one conversation ---------- */
+
+/** The query as searched (trimmed, spaces collapsed) and its LIKE pattern, or null when it is too short to search. */
+export function searchTerms(raw: string): { query: string; pattern: string } | null {
+  const query = raw.normalize('NFC').replace(/\s+/g, ' ').trim().slice(0, CHAT.searchMaxLength);
+  if (Array.from(query).length < CHAT.searchMinLength) return null;
+  return { query, pattern: `%${query.replace(/[\\%_]/g, character => `\\${character}`)}%` };
+}
+/** The LIKE clause for searchTerms' pattern, bound as `param`. Bodies are stored censored, so a search never reads what the filter hid. */
+export const searchSql = (param: string) => `c.deleted_at IS NULL AND c.body LIKE ${param} ESCAPE '\\'`;
+export function searchHit(row: { seq: number; sender_id: string; body: string; created_at: string; display_name?: string | null }, viewer: string, query: string): SearchHit {
+  return { seq: row.seq, fromMe: row.sender_id === viewer, senderName: row.display_name ?? '', createdAt: row.created_at, preview: searchSnippet(censorSlurs(plainText(row.body)), query) };
 }
 
 /** A cursor older than this viewer's last block change must replace its entire loaded window. */

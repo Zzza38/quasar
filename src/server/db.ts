@@ -801,6 +801,39 @@ function migrate(db: Db): void {
     END`);
   }
   db.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(30, datetime('now'))");
+  chatPolishColumns(db);
+}
+
+/**
+ * The chat-polish beta's storage (docs/CHAT.md, "Editing, mentions, search, GIFs, more reactions"). Checked by column
+ * and by table definition instead of a migration number, so it cannot collide with a numbered migration on another
+ * branch. Only adds and loosens, so a build from before it still runs on a database that has it.
+ * - `edited_at` and `edited_from` on one-to-one and group messages: when the sender last edited their message and its
+ *   text as first sent (the rooms have had both since moderators could edit there).
+ * - `mentions` on group and room messages: JSON `[{"id","name"}]` of the people the message mentions.
+ * - The reaction tables lose their CHECK on the six original emoji; the server validates against REACTIONS instead.
+ *   SQLite cannot drop a CHECK in place, so each table is rebuilt around its rows, in the order people reacted.
+ */
+function chatPolishColumns(db: Db): void {
+  const has = (table: string, column: string) => (db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column);
+  const add = (table: string, column: string) => { if (!has(table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`); };
+  for (const table of ['chat_messages', 'chat_group_messages']) { add(table, 'edited_at'); add(table, 'edited_from'); }
+  for (const table of ['chat_group_messages', 'global_messages', 'school_messages']) add(table, 'mentions');
+  for (const [reactions, messages] of [['chat_reactions', 'chat_messages'], ['chat_group_reactions', 'chat_group_messages'], ['global_reactions', 'global_messages'], ['school_reactions', 'school_messages']] as const) {
+    const table = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(reactions) as { sql: string } | undefined;
+    if (!table || !/CHECK\s*\(\s*emoji/i.test(table.sql)) continue;
+    db.exec(`
+      CREATE TABLE ${reactions}_next (
+        message_seq INTEGER NOT NULL REFERENCES ${messages}(seq) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL,
+        PRIMARY KEY(message_seq, user_id)
+      );
+      INSERT INTO ${reactions}_next(message_seq, user_id, emoji) SELECT message_seq, user_id, emoji FROM ${reactions} ORDER BY rowid;
+      DROP TABLE ${reactions};
+      ALTER TABLE ${reactions}_next RENAME TO ${reactions};
+    `);
+  }
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

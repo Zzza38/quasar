@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { test, expect, hydrating } from './fixtures';
 import { type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
@@ -1015,4 +1016,123 @@ test('chat polish beta: a pasted image attaches, pills list who reacted, and a g
   await bobs.getByRole('button', { name: '👍 1, you reacted' }).click();
   await expect(bobs.getByRole('button', { name: /👍/ })).toHaveCount(0);
   await expect(bob.getByRole('dialog', { name: 'Reactions' })).toHaveCount(0);
+});
+
+test('chat polish beta: mention, edit, more reactions, search, several images and a GIF that keeps moving', async ({ browser }, testInfo) => {
+  const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
+  const key = 'chat-polish';
+  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
+  const registry = readBetaRegistry(listPath);
+  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  let groupId: string;
+  try {
+    db.prepare('INSERT OR IGNORE INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.alice, new Date().toISOString());
+    const groups = new GroupChatService(new Service(db, OWNER_EMAIL));
+    groupId = groups.create(f.alice, { name: 'Lab crew', memberIds: [f.bob, f.cara] }).id;
+    groups.send(f.bob, groupId, randomUUID(), 'Did anyone start the write-up?');
+    groups.send(f.alice, groupId, randomUUID(), 'Meet at 3 in the libary');
+  } finally { db.close(); }
+
+  const alice = await signedIn(browser, f.alice);
+  await alice.goto(`/messages?group=${groupId}`);
+  const log = alice.getByRole('log', { name: 'Messages in Lab crew' });
+  const composer = alice.getByRole('textbox', { name: 'Message Lab crew' });
+
+  // Typing "@" and a few letters offers the members; Enter picks one instead of sending.
+  await composer.fill('thanks @bo');
+  const people = alice.getByRole('listbox', { name: 'People to mention' });
+  await expect(people.getByRole('option')).toHaveText([/Bob$/]);
+  await composer.press('Enter');
+  await expect(composer).toHaveValue('thanks @Bob ');
+  await composer.press('Enter');
+  const thanks = log.getByRole('listitem').filter({ hasText: 'thanks @Bob' });
+  await expect(thanks.locator('[data-mention="other"]')).toHaveText('@Bob');
+
+  // Edit: the message's text goes into the composer, and the bubble says "Edited" with the first text behind it.
+  const sent = log.getByRole('listitem').filter({ hasText: 'Meet at 3 in the libary' });
+  await sent.hover();
+  await sent.getByRole('button', { name: 'Message actions' }).click();
+  await sent.getByRole('button', { name: 'Edit message' }).click();
+  const editor = alice.getByRole('textbox', { name: 'Edit your message' });
+  await expect(editor).toHaveValue('Meet at 3 in the libary');
+  await expect(alice.getByRole('button', { name: 'Save edit' })).toBeDisabled();
+  await editor.fill('Meet at 3 in the library');
+  await testInfo.attach('editing', { body: await alice.screenshot(), contentType: 'image/png' });
+  await editor.press('Enter');
+  const fixed = log.getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' });
+  await expect(fixed).toContainText('Edited');
+  await expect(composer).toHaveValue('');
+  await fixed.getByRole('button', { name: 'See original' }).click();
+  await expect(fixed).toContainText('Meet at 3 in the libary');
+
+  // More reactions: the strip's "+" opens the rest.
+  const first = log.getByRole('listitem').filter({ hasText: 'Did anyone start the write-up?' });
+  await first.hover();
+  await first.getByRole('button', { name: 'Message actions' }).click();
+  await first.getByRole('button', { name: 'More reactions' }).click();
+  await testInfo.attach('more-reactions', { body: await alice.screenshot(), contentType: 'image/png' });
+  await first.getByRole('button', { name: 'React with fire' }).click();
+  await expect(first.getByRole('button', { name: '🔥 1, you. Show who reacted' })).toBeVisible();
+
+  // Search: a result jumps to its message.
+  await alice.getByRole('button', { name: 'More options' }).click();
+  await alice.getByRole('menuitem', { name: 'Search messages' }).click();
+  const search = alice.getByRole('search', { name: 'Search messages' });
+  await search.getByRole('searchbox', { name: 'Search this chat' }).fill('LIBRARY');
+  await expect(search.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveCount(1);
+  await testInfo.attach('search', { body: await alice.screenshot(), contentType: 'image/png' });
+  await search.getByRole('button', { name: /Meet at 3 in the library/ }).click();
+  await expect(log.locator('li[data-highlighted]')).toContainText('Meet at 3 in the library');
+  await search.getByRole('searchbox').fill('zzzz');
+  await expect(search).toContainText('Nothing matches “zzzz”.');
+  await search.getByRole('button', { name: 'Done' }).click();
+  await expect(search).toHaveCount(0);
+
+  // Two pasted images wait together and go out as two messages, the text under the last.
+  await composer.focus();
+  const paste = () => composer.evaluate(async (field) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320; canvas.height = 200;
+    canvas.getContext('2d')!.fillRect(0, 0, 320, 200);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((result) => resolve(result!), 'image/png'));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], 'one.png', { type: 'image/png' }));
+    data.items.add(new File([blob], 'two.png', { type: 'image/png' }));
+    field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await paste();
+  await expect(alice.getByRole('list', { name: '2 images to send' }).getByRole('img')).toHaveCount(2);
+  await composer.fill('both pages');
+  await testInfo.attach('two-images', { body: await alice.screenshot(), contentType: 'image/png' });
+  await composer.press('Enter');
+  await expect(log.getByAltText('Message attachment', { exact: true })).toHaveCount(2);
+  await expect(log.getByRole('listitem').filter({ hasText: 'both pages' }).getByAltText('Message attachment', { exact: true })).toHaveCount(1);
+
+  // A GIF from the picker keeps its frames all the way to what the server serves back.
+  const side = 32, frames = 3;
+  const pixels = Buffer.alloc(side * side * frames * 3);
+  for (let frame = 0; frame < frames; frame += 1) pixels.fill(frame * 100, frame * side * side * 3, (frame + 1) * side * side * 3);
+  const gif = await sharp(pixels, { raw: { width: side, height: side * frames, channels: 3, pageHeight: side } }).gif({ delay: [90, 90, 90] }).toBuffer();
+  await alice.getByLabel('Choose message image').setInputFiles({ name: 'wave.gif', mimeType: 'image/gif', buffer: gif });
+  await expect(alice.getByAltText('Image to send')).toBeVisible();
+  await composer.press('Enter');
+  await expect(log.getByAltText('Message attachment', { exact: true })).toHaveCount(3);
+  const url = await log.getByAltText('Message attachment', { exact: true }).last().getAttribute('src');
+  const served = await alice.request.get(url!);
+  expect(served.status()).toBe(200);
+  expect((await sharp(await served.body(), { animated: true }).metadata()).pages).toBe(frames);
+
+  // Bob is outside the beta: the edit still reads "Edited" for him, with no Edit of his own and the six reactions only.
+  const bob = await signedIn(browser, f.bob);
+  await bob.goto(`/messages?group=${groupId}`);
+  const bobLog = bob.getByRole('log', { name: 'Messages in Lab crew' });
+  await expect(bobLog.getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' })).toContainText('Edited');
+  const own = bobLog.getByRole('listitem').filter({ hasText: 'Did anyone start the write-up?' });
+  await own.hover();
+  await own.getByRole('button', { name: 'Message actions' }).click();
+  await expect(own.getByRole('button', { name: 'React with heart' })).toBeVisible();
+  await expect(own.getByRole('button', { name: 'More reactions' })).toHaveCount(0);
+  await expect(own.getByRole('button', { name: 'Edit message' })).toHaveCount(0);
+  await expect(bobLog.locator('[data-mention]')).toHaveCount(0);
 });

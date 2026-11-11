@@ -1,6 +1,6 @@
-import { chatImageSchema } from '@/domain/chat';
+import { chatImageSchema, mentionIdsSchema, searchQuerySchema, type SearchHit } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision } from './chat-extras';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHit, searchSql, searchTerms } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -44,19 +44,23 @@ export type GlobalMessage = MessageExtras & { id: string; seq: number; revision:
    * What the viewer's tier may read beyond `body` (src/server/moderation.ts): the owner's uncensored text, a removed
    * message's text and photo, and the text from before an edit.
    */
-  original: string | null; removed: RemovedText | null; editedFrom: RevealedText | null };
+  original: string | null; removed: RemovedText | null; editedFrom: RevealedText | null;
+  /** The edit was the sender's own (their name and no reason show), not a moderator's. */
+  editedBySender: boolean };
 /** `moderator` is the viewer's own rank when they may moderate the room, so the app can say what members will see. */
 export type GlobalRoom = { members: number; canModerate: boolean; moderator: StaffRank | null };
 export type GlobalSummary = {
   lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GlobalDeletedBy; moderatedBy: StaffRank | null } | null;
   unread: number; muted: boolean;
+  /** An unread message here mentions the viewer. */
+  mentioned: boolean;
 };
 /** A school room's list row: the global row's fields plus which school it belongs to. */
 export type SchoolSummary = GlobalSummary & { schoolId: string; schoolName: string };
 
 type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; sender_id: string; body: string; created_at: string; edited_at: string | null;
   deleted_at: string | null; deleted_by: GlobalDeletedBy; reason: string | null; revision: number; display_name: string; verified: number;
-  original: string | null; deleted_rank: string | null; edited_from: string | null; edited_rank: string | null;
+  original: string | null; deleted_rank: string | null; edited_from: string | null; edited_rank: string | null; mentions: string | null;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type MemberRow = { last_read_seq: number; muted: number };
 
@@ -64,13 +68,15 @@ export const globalThreadSchema = z.object({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
+export const globalSendSchema = z.object({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema, mentions: mentionIdsSchema });
 export const globalMessageSchema = z.object({ messageId: z.uuid() });
 /** The owner's reason, shown to everyone. Ignored when a sender deletes their own message. */
 export const reasonSchema = z.string().trim().max(200).default('');
 export const globalReactSchema = reactionSchema;
 export const globalDeleteSchema = globalMessageSchema.extend({ reason: reasonSchema });
 export const globalEditSchema = globalMessageSchema.extend({ body: rawBodySchema, reason: reasonSchema });
+export const globalEditOwnSchema = globalMessageSchema.extend({ body: rawBodySchema });
+export const globalSearchSchema = z.object({ query: searchQuerySchema });
 export const globalReadSchema = z.object({ seq: z.number().int().min(0) });
 export const globalMuteSchema = z.object({ muted: z.boolean() });
 
@@ -82,6 +88,8 @@ export const schoolSendSchema = globalSendSchema.extend(schoolScope.shape);
 export const schoolReactSchema = globalReactSchema.extend(schoolScope.shape);
 export const schoolDeleteSchema = globalDeleteSchema.extend(schoolScope.shape);
 export const schoolEditSchema = globalEditSchema.extend(schoolScope.shape);
+export const schoolEditOwnSchema = globalEditOwnSchema.extend(schoolScope.shape);
+export const schoolSearchSchema = globalSearchSchema.extend(schoolScope.shape);
 export const schoolReadSchema = globalReadSchema.extend(schoolScope.shape);
 export const schoolMuteSchema = globalMuteSchema.extend(schoolScope.shape);
 
@@ -154,6 +162,13 @@ export const roomReadSeqSql = (kind: RoomKind, user: string) => {
 };
 export const GLOBAL_READ_SEQ_SQL = (user: string) => roomReadSeqSql('global', user);
 const mutedSql = (kind: RoomKind, user: string) => `coalesce((SELECT m.muted FROM ${ROOMS[kind].members} m WHERE ${ROOMS[kind].member('m', user)}), 0)`;
+
+/** Whether an unread, undeleted message from someone else (not blocked) mentions the member. Muting does not hide it. */
+function mentionedInRoom(db: Db, room: Room, userId: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM ${ROOMS[room.kind].messages} c
+    WHERE ${ROOMS[room.kind].inRoom('c')} AND c.sender_id<>@user AND c.deleted_at IS NULL AND ${NOT_BLOCKED_SENDER_SQL('@user')}
+    AND c.seq > ${roomReadSeqSql(room.kind, '@user')} AND ${mentionsUserSql('@user')} LIMIT 1`).get({ user: userId, scope: room.scope });
+}
 
 /** Unread, undeleted messages from others (not ones the member blocked) past the member's read marker; 0 when muted. */
 function countUnreadRoom(db: Db, room: Room, userId: string): number {
@@ -262,6 +277,7 @@ class RoomChatService {
       reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null, moderatedBy: moderatedBy(row),
       sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }), staff: this.service.staffRank(row.sender_id) },
       original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, room.kind), editedFrom: this.reveal(viewerId).editedFrom(row),
+      editedBySender: !row.deleted_at && !!row.edited_at && row.edited_rank === 'member',
     };
   }
   /** Room messages the viewer can see (messages from members they blocked are left out), plus `extra` SQL. */
@@ -304,6 +320,7 @@ class RoomChatService {
       lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null, moderatedBy: deleted ? moderatedBy(last) : null } : null,
       unread: countUnreadRoom(this.db, room, viewerId),
       muted: !!member.muted,
+      mentioned: mentionedInRoom(this.db, room, viewerId),
     };
   }
 
@@ -326,7 +343,7 @@ class RoomChatService {
   }
 
   /** `admit` runs first inside the transaction and settles who may post. */
-  protected roomSend(room: Room, admit: () => void, viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GlobalMessage } {
+  protected roomSend(room: Room, admit: () => void, viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string, mentionIds?: string[]): { message: GlobalMessage } {
     const { body, original } = parseGlobalBody(raw, !!image);
     const { messages } = ROOMS[room.kind];
     const result = this.db.transaction(() => {
@@ -346,9 +363,10 @@ class RoomChatService {
       validateReply(this.db, room.kind, viewerId, replyTo, room.kind === 'school' ? room.scope : undefined);
       const revision = this.bumpRevision(room);
       const createdAt = this.iso();
+      const mentions = resolveMentions(this.db, room.kind, viewerId, room.kind === 'school' ? room.scope : undefined, body, mentionIds);
       const { seq } = (room.kind === 'school'
-        ? this.db.prepare('INSERT INTO school_messages(id,school_id,sender_id,body,original,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, room.scope, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null)
-        : this.db.prepare('INSERT INTO global_messages(id,sender_id,body,original,created_at,revision,reply_to_seq,image) VALUES(?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null)) as { seq: number };
+        ? this.db.prepare('INSERT INTO school_messages(id,school_id,sender_id,body,original,created_at,revision,reply_to_seq,image,mentions) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, room.scope, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null, mentions)
+        : this.db.prepare('INSERT INTO global_messages(id,sender_id,body,original,created_at,revision,reply_to_seq,image,mentions) VALUES(?,?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, viewerId, body, original, createdAt, revision, replyTo ?? null, image ?? null, mentions)) as { seq: number };
       this.db.prepare(ROOMS[room.kind].touch).run(this.params(room, { at: createdAt }));
       ensureRoomMember(this.db, room, viewerId);
       this.db.prepare(`UPDATE ${ROOMS[room.kind].members} AS m SET last_read_seq=max(last_read_seq, @seq) WHERE ${ROOMS[room.kind].member('m', '@user')}`).run(this.params(room, { seq, user: viewerId }));
@@ -413,14 +431,45 @@ class RoomChatService {
         // The sender's own text stays as it was before the first edit, and the rank kept is the highest that has edited,
         // so a later edit from a lower tier cannot show that tier what a higher one took out.
         const higher = row.edited_at && moderationTier(editorRank(row)) > moderationTier(moderationRank(this.service.staffRank(adminId)));
-        this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), edited_rank=?, reason=?, revision=? WHERE seq=?`)
-          .run(body, original, this.iso(), row.edited_at ? null : row.original ?? row.body, higher ? editorRank(row) : actorRank(this.service, adminId), reason, this.bumpRevision(room), row.seq);
+        this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), edited_rank=?, reason=?, mentions=?, revision=? WHERE seq=?`)
+          .run(body, original, this.iso(), row.edited_at ? null : row.original ?? row.body, higher ? editorRank(row) : actorRank(this.service, adminId), reason, keptMentions(row.mentions, body), this.bumpRevision(room), row.seq);
         this.audit(room, adminId, 'edit', { seq: row.seq, senderId: row.sender_id, reason });
       }
       return { message: this.message(room, adminId, this.find(room, messageId)!) };
     }).immediate();
     this.notify(room);
     return result;
+  }
+
+  /**
+   * The sender rewrites their own message within CHAT.editWindowMs. Everyone can read the text as first sent
+   * (src/domain/staff.ts: a member's edit shows to every tier). A message a moderator has edited stays as they left it.
+   */
+  protected roomEditOwn(room: Room, admit: () => void, viewerId: string, messageId: string, raw: string): { message: GlobalMessage } {
+    const result = this.db.transaction(() => {
+      admit();
+      this.notPaused(viewerId);
+      const row = this.find(room, messageId);
+      assertOwnEdit(row, viewerId, this.now(), MISSING);
+      if (row!.edited_at && editorRank(row!) !== null) fail('FORBIDDEN', 'A moderator edited this message, so it can’t be changed.');
+      const { body, original } = parseGlobalBody(raw, !!row!.image);
+      if (body !== row!.body) {
+        this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), edited_rank='member', reason=NULL, mentions=?, revision=? WHERE seq=?`)
+          .run(body, original, this.iso(), row!.original ?? row!.body, keptMentions(row!.mentions, body), this.bumpRevision(room), row!.seq);
+      }
+      return { message: this.message(room, viewerId, this.find(room, messageId)!) };
+    }).immediate();
+    this.notify(room);
+    return result;
+  }
+
+  /** Room messages the viewer can see whose text contains `query`, newest first. */
+  protected roomSearch(room: Room, viewerId: string, raw: string): { results: SearchHit[] } {
+    const terms = searchTerms(raw);
+    if (!terms) return { results: [] };
+    const rows = this.db.prepare(this.visible(room, `AND ${searchSql('@pattern')} ORDER BY c.seq DESC LIMIT @limit`))
+      .all(this.params(room, { viewer: viewerId, pattern: terms.pattern, limit: CHAT.searchResults })) as MessageRow[];
+    return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
   }
 
   /** Also returns the Messages badge count (each room counts as one chat), stamped like chat.read's, so the badge updates at once. */
@@ -461,8 +510,14 @@ export class GlobalChatService extends RoomChatService {
       return this.roomThread(GLOBAL_ROOM, viewerId, cursor);
     })();
   }
-  send(viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GlobalMessage } {
-    return this.roomSend(GLOBAL_ROOM, this.admit(viewerId), viewerId, clientId, raw, replyTo, image);
+  send(viewerId: string, clientId: string, raw: string, replyTo?: number, image?: string, mentionIds?: string[]): { message: GlobalMessage } {
+    return this.roomSend(GLOBAL_ROOM, this.admit(viewerId), viewerId, clientId, raw, replyTo, image, mentionIds);
+  }
+  editOwn(viewerId: string, messageId: string, raw: string): { message: GlobalMessage } {
+    return this.roomEditOwn(GLOBAL_ROOM, this.admit(viewerId), viewerId, messageId, raw);
+  }
+  search(viewerId: string, raw: string): { results: SearchHit[] } {
+    return this.db.transaction(() => { this.service.ready(viewerId); return this.roomSearch(GLOBAL_ROOM, viewerId, raw); })();
   }
   react(viewerId: string, seq: number, emoji: Reaction | null): { message: GlobalMessage } {
     return this.roomReact(GLOBAL_ROOM, this.admit(viewerId), viewerId, seq, emoji);
@@ -512,8 +567,14 @@ export class SchoolChatService extends RoomChatService {
       return { ...this.roomThread(room, viewerId, cursor), school: { id: schoolId, name: school.name } };
     })();
   }
-  send(viewerId: string, schoolId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GlobalMessage } {
-    return this.roomSend(this.room(schoolId), () => { this.access(viewerId, schoolId); }, viewerId, clientId, raw, replyTo, image);
+  send(viewerId: string, schoolId: string, clientId: string, raw: string, replyTo?: number, image?: string, mentionIds?: string[]): { message: GlobalMessage } {
+    return this.roomSend(this.room(schoolId), () => { this.access(viewerId, schoolId); }, viewerId, clientId, raw, replyTo, image, mentionIds);
+  }
+  editOwn(viewerId: string, schoolId: string, messageId: string, raw: string): { message: GlobalMessage } {
+    return this.roomEditOwn(this.room(schoolId), () => { this.access(viewerId, schoolId); }, viewerId, messageId, raw);
+  }
+  search(viewerId: string, schoolId: string, raw: string): { results: SearchHit[] } {
+    return this.db.transaction(() => this.roomSearch(this.access(viewerId, schoolId), viewerId, raw))();
   }
   react(viewerId: string, schoolId: string, seq: number, emoji: Reaction | null): { message: GlobalMessage } {
     return this.roomReact(this.room(schoolId), () => { this.access(viewerId, schoolId); }, viewerId, seq, emoji);

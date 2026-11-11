@@ -8,7 +8,13 @@ import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 
 /** Spoken names for the tapbacks, in the order of REACTIONS. */
-export const REACTION_NAMES: Record<Reaction, string> = { '❤️': 'heart', '👍': 'thumbs up', '👎': 'thumbs down', '😂': 'laugh', '‼️': 'exclamation', '❓': 'question' };
+export const REACTION_NAMES: Record<Reaction, string> = {
+  '❤️': 'heart', '👍': 'thumbs up', '👎': 'thumbs down', '😂': 'laugh', '‼️': 'exclamation', '❓': 'question',
+  '😮': 'surprised', '😢': 'sad', '😭': 'crying', '😡': 'angry', '🔥': 'fire', '🎉': 'party popper', '💀': 'skull',
+  '🙏': 'folded hands', '👀': 'eyes', '💯': 'hundred', '🥺': 'pleading', '😍': 'heart eyes', '🤔': 'thinking', '😎': 'cool',
+  '👏': 'clap', '🤝': 'handshake', '✅': 'check mark', '🤣': 'rolling laughing', '😅': 'nervous laugh', '🙄': 'eye roll', '😬': 'grimace',
+  '🤯': 'mind blown', '🥳': 'celebrating', '😴': 'sleeping', '🤡': 'clown', '💔': 'broken heart', '🫶': 'heart hands', '🫡': 'salute',
+};
 
 /** The reaction strip's toggle: "React with heart". */
 export function reactionToggleLabel(emoji: Reaction): string {
@@ -42,7 +48,35 @@ export function reactorNames(reaction: MessageReaction, reactors: MessageReactor
 
 /** The first image file in a paste or a drop, if it carries one (a copied screenshot, a dragged photo). */
 export function imageFileFrom(data: { files?: ArrayLike<File> | null } | null | undefined): File | null {
-  return Array.from(data?.files ?? []).find((file) => file.type.startsWith('image/')) ?? null;
+  return imageFilesFrom(data)[0] ?? null;
+}
+
+/** Every image file in a paste, a drop or a picker's selection, in order. */
+export function imageFilesFrom(data: { files?: ArrayLike<File> | null } | null | undefined): File[] {
+  return Array.from(data?.files ?? []).filter((file) => file.type.startsWith('image/'));
+}
+
+/**
+ * The people the mention picker offers for what has been typed after "@": names that start with it first, then names
+ * with a word that starts with it, then names that contain it; at most `limit`, in the order given within each rank.
+ */
+export function mentionMatches<T extends { displayName: string }>(people: T[], query: string, limit = 6): T[] {
+  const wanted = query.toLowerCase();
+  if (!wanted) return people.slice(0, limit);
+  const rank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.startsWith(wanted)) return 0;
+    if (lower.split(/\s+/).some((word) => word.startsWith(wanted))) return 1;
+    return lower.includes(wanted) ? 2 : -1;
+  };
+  return people.map((person, index) => ({ person, index, rank: rank(person.displayName) })).filter((entry) => entry.rank >= 0)
+    .sort((left, right) => left.rank - right.rank || left.index - right.index).slice(0, limit).map((entry) => entry.person);
+}
+
+/** How one press of Send goes out when it carries images: each image is its own message, and the text rides with the last one. */
+export function sendParts(body: string, images: string[]): Array<{ body: string; image?: string }> {
+  if (!images.length) return [{ body }];
+  return images.map((image, index) => ({ body: index === images.length - 1 ? body : '', image }));
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */

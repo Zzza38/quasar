@@ -329,7 +329,7 @@ describe('group replies and reactions', () => {
   it('rejects invalid emoji, missing and deleted messages, and paused senders', () => {
     const f = setup();
     const message = f.send(f.alice, 'hello');
-    fails(() => f.react(f.alice, message.seq, '🔥' as never), 'BAD_REQUEST');
+    fails(() => f.react(f.alice, message.seq, '🦄' as never), 'BAD_REQUEST');
     fails(() => f.react(f.alice, 999999, '👍'), 'NOT_FOUND');
     f.remove(message.id);
     fails(() => f.react(f.bob, message.seq, '👍'), 'NOT_FOUND');
