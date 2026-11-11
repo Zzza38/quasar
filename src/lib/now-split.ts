@@ -4,6 +4,14 @@
  * time between the two, and the next period grows from the far edge as the clock runs.
  */
 
+/**
+ * How Today's Now card shows the class after the current one: `classic` is a line of text at the foot of the card,
+ * `block` a full-width block in that class's colour along the card's bottom edge (FollowingBlock), and `split` the
+ * card shared between the two classes (NowSplitCard).
+ */
+export const NOW_CARD_STYLES = ['classic', 'block', 'split'] as const;
+export type NowCardStyle = typeof NOW_CARD_STYLES[number];
+
 /** Largest share of the card the grey part may take, so a long break does not crowd out both classes. */
 export const MAX_GAP_SHARE = 30;
 /** The next period's share when the current one has only just begun: a sliver of colour, no text. */

@@ -39,6 +39,8 @@ npm run test:e2e
 
 Run a build first. Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existing Chromium binary. The build and development commands use Webpack; the container enables Next's standalone output with `QUASAR_STANDALONE=1`.
 
+CI splits browser tests across four isolated runners with `--shard=1/4` through `--shard=4/4`. With `CI=1`, Playwright splits individual tests across shards, including tests in the same spec file. Each runner still uses one worker so tests do not concurrently change its shared database or beta registry, or compete for the mock-provider port. Failed shards upload separately named trace artifacts.
+
 ## Implemented scope
 
 - Google sign-in, an onboarding wizard for names and school search/creation (schedule templates plus a structured editor with live date preview), and an explicit approved / community / private schedule choice.

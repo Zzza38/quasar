@@ -128,6 +128,18 @@ export function formatMinutes(minutes: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+/**
+ * formatMinutes with the hours spelled out, for the split Now card's large countdowns, where "1 h" reads as a typo:
+ * "45 min", "1 hour", "2 hours", "1 hr 5 min".
+ */
+export function formatMinutesInWords(minutes: number): string {
+  const total = Math.max(0, Math.abs(minutes));
+  if (total < 60) return `${total} min`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest ? `${hours} hr ${rest} min` : `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+}
+
 /** "8:05" or "1:08:05" from a number of seconds; the precise companion to formatMinutes. */
 export function formatSeconds(seconds: number): string {
   const total = Math.max(0, Math.round(seconds));

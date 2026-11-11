@@ -4,9 +4,10 @@ import { AttentionGap } from '../attention-videos';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaySlots, describeDayIssues, effectiveSchedule, nextClass, resolveDay, type ResolvedPeriod, type StudentClass } from '@/domain/schedule';
-import { addDays, classColor, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
+import { addDays, classColor, daysBetween, formatMinutes, formatMinutesInWords, formatRange, formatRoom, formatSeconds, formatTime, minutesLeft, minutesUntil, relativeDate, formatDate, weekdayOf } from '@/lib/format';
 import { barTint, heroBase } from '@/lib/color';
-import { nowSplit, type NowSplit } from '@/lib/now-split';
+import { nowSplit, type NowCardStyle, type NowSplit } from '@/lib/now-split';
+import { nowCardStyle } from '../now-card-setting';
 import { classmatesFor, DONE_FOR_TODAY, FREE_PERIOD, nextStops, type Classmate, type NextStop } from '@/lib/classmates';
 import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
@@ -43,7 +44,9 @@ function greeting(now: Date, timeZone: string): string {
 export function TodayView({ state }: { state: AppState }) {
   const { schedule, personal, now, today, timeZone, context } = state;
   const next = useMemo(() => nextClass(schedule, now, personal), [schedule, now, personal]);
-  const following = useMemo(() => next?.status === 'current' ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
+  const following = useMemo(() => next ? nextClass(schedule, next.endAt, personal) : null, [schedule, next, personal]);
+  // The account's choice of line, block (the default) or split card (Account → Look).
+  const cardStyle: NowCardStyle = nowCardStyle(context.user);
   const day = useMemo(() => { try { return resolveDay(schedule, today, personal); } catch { return null; } }, [schedule, today, personal]);
   // Between two of today's periods, the one that just ended: the split Now card measures the wait from its start.
   const previous = useMemo(() => {
@@ -98,7 +101,7 @@ export function TodayView({ state }: { state: AppState }) {
 
     {setupFirst && <SetupChecklist state={state} />}
 
-    <NowCard splitCard={context.user.nowSplit === true} next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
+    <NowCard cardStyle={cardStyle} next={next} following={following} previous={previous} now={now} today={today} onSetup={() => state.navigate('classes')} onFixSchedule={() => openBellTimes(state)} privateSchedule={personal.customSchedule !== null} hasSetup={hasSetup} noSchedule={effective.cycleDays.every((entry) => cycleDaySlots(entry, personal).length === 0)} />
 
     {!setupFirst && <SetupChecklist state={state} />}
 
@@ -150,7 +153,7 @@ export function nowCardBase(dot: string): string {
   return heroBase(/^#[0-9a-fA-F]{6}$/.test(dot) ? dot : NEUTRAL_HERO);
 }
 
-function NowCard({ splitCard, next, following, previous, now, today, onSetup, onFixSchedule, privateSchedule, hasSetup, noSchedule }: { splitCard: boolean; next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; previous: ResolvedPeriod | null; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; privateSchedule: boolean; hasSetup: boolean; noSchedule: boolean }) {
+function NowCard({ cardStyle, next, following, previous, now, today, onSetup, onFixSchedule, privateSchedule, hasSetup, noSchedule }: { cardStyle: NowCardStyle; next: ReturnType<typeof nextClass>; following: ReturnType<typeof nextClass>; previous: ResolvedPeriod | null; now: Date; today: string; onSetup: () => void; onFixSchedule: () => void; privateSchedule: boolean; hasSetup: boolean; noSchedule: boolean }) {
   if (!next) return <Card role="region" aria-label="Next class"><CardContent className="grid gap-2 py-2">
     <Eyebrow>Up next</Eyebrow>
     <h2 className="text-xl">{noSchedule ? 'Your schedule has no periods yet' : 'No upcoming periods'}</h2>
@@ -170,7 +173,10 @@ function NowCard({ splitCard, next, following, previous, now, today, onSetup, on
   // Light class colours (amber, lime, yellow) are darkened just enough for white text to reach 4.5:1.
   const base = nowCardBase(color.dot);
   const addClasses = !hasSetup && !next.class && next.kind === 'class';
-  const classic = <Card className="hero-card rounded-3xl text-white shadow-float ring-0" style={{ background: `linear-gradient(120deg, ${base} 0%, color-mix(in srgb, ${base} 78%, #0b1020) 100%)` }} role="region" aria-label="Next class">
+  // The period after this one, named by the line at the foot of the card or by the block (FollowingBlock) in its place.
+  const then = following;
+  const block = cardStyle === 'block' ? following : null;
+  const whole = <Card className={cn('hero-card rounded-3xl text-white shadow-float ring-0', block && 'pb-0')} style={{ background: heroGradient(base) }} role="region" aria-label="Next class">
     <CardContent className="grid gap-5 px-5 py-1 sm:px-7 sm:py-3">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="grid min-w-0 gap-2">
@@ -186,29 +192,30 @@ function NowCard({ splitCard, next, following, previous, now, today, onSetup, on
         <div className="grid justify-items-start gap-1 sm:justify-items-end">
           {countdown
             ? <Countdown label={current ? 'Ends in' : 'Starts in'} target={current ? next.endAt : next.startAt} now={now.getTime()} />
-            : <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-bold tabular-nums text-white ring-1 ring-inset ring-white/20">{when}</span>}
+            : <span className="text-[15px] font-bold tabular-nums text-white sm:text-base">{when}</span>}
         </div>
       </div>
       {current && <Progress value={(elapsed / total) * 100} aria-label="Period progress" aria-valuetext={`${elapsed} of ${total} minutes`} className="h-2 bg-white/20 *:data-[slot=progress-indicator]:bg-white *:data-[slot=progress-indicator]:transition-[transform] *:data-[slot=progress-indicator]:duration-1000 *:data-[slot=progress-indicator]:ease-linear" />}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[13.5px] font-medium text-white">
-        <span className="inline-flex items-center gap-2">
-          <Icon name="arrowRight" size={14} className="text-white/60" />
-          {following ? <>Then <strong className="font-bold text-white">{following.class?.name ?? following.label}</strong> at <span className="tabular-nums">{formatTime(following.start)}</span>{following.date !== next.date ? ` ${relativeDate(following.date, today)}` : ''}</> : current ? 'Last period of the day' : `${next.cycleDayLabel}`}
-        </span>
+      {(!block || addClasses) && <div className="flex flex-wrap items-center justify-between gap-2 text-[16px] font-medium text-white sm:text-[18px]">
+        {!block && <span className="inline-flex items-center gap-2">
+          <Icon name="arrowRight" size={18} className="shrink-0 text-white/60" />
+          {then ? <>Then <strong className="font-bold text-white">{then.class?.name ?? then.label}</strong> at <span className="tabular-nums">{formatTime(then.start)}</span>{then.date !== next.date ? ` ${relativeDate(then.date, today)}` : ''}</> : current ? 'Last period of the day' : `${next.cycleDayLabel}`}
+        </span>}
         {addClasses && <button type="button" className="rounded-full bg-white/15 px-3 py-1 font-bold text-white ring-1 ring-inset ring-white/25 hover:bg-white/25" onClick={onSetup}>Add your classes</button>}
-      </div>
+      </div>}
     </CardContent>
+    {block && <FollowingBlock period={block} label={current ? 'Next' : 'Then'} sameDay={block.date === next.date} today={today} />}
   </Card>;
-  // The split is the member's choice (Account → Look). It needs two periods of the same day: the one that is on and the
+  // The split is the account's choice (Account → Look). The split needs two periods of the same day: the one that is on and the
   // one after it, or, between periods, the one that just ended and the one about to begin. Otherwise, and while the
   // card still asks for classes, it stays whole.
-  if (!splitCard) return classic;
+  if (cardStyle !== 'split') return whole;
   const from = current ? next : previous;
   const upcoming = current ? (following?.date === next.date ? following : null) : next;
   const split = from && upcoming && next.date === today && !addClasses
     ? nowSplit({ start: new Date(from.startAt).getTime(), end: new Date(from.endAt).getTime(), nextStart: new Date(upcoming.startAt).getTime(), now: now.getTime() })
     : null;
-  if (!split || !upcoming) return classic;
+  if (!split || !upcoming) return whole;
   return <NowSplitCard split={split} current={current ? next : null} upcoming={upcoming} now={now} />;
 }
 
@@ -230,11 +237,13 @@ function NowSplitCard({ split, current, upcoming, now }: { split: NowSplit; curr
     '--ns-gap': `${split.gap}%`, '--ns-next': `${split.next}%`, '--ns-progress': `${split.progress}%`,
     '--ns-fill-now': currentBase ? barTint(currentBase) : '#fff', '--ns-fill-next': barTint(upcomingBase),
   } as CSSProperties;
+  // A long name is set smaller, and then so is the other one: both classes are written at one size.
+  const long = [current, upcoming].some((period) => period && (period.class?.name ?? period.label).length > 14);
   return <div className="ns-wrap">
-    <div className="ns-card shadow-float" role="region" aria-label="Next class" data-phase={split.phase} style={style}>
+    <div className="ns-card shadow-float" role="region" aria-label="Next class" data-phase={split.phase} data-long={long ? '' : undefined} style={style}>
       {current && currentBase && <div className="ns-part ns-seg ns-now" style={{ background: heroGradient(currentBase) }}><SplitPart kind="now" period={current} now={now} /></div>}
       {split.gap > 0 && <div className="ns-part ns-seg ns-gap"><div className="ns-box">
-        <span className="ns-gap-label"><span className="ns-gap-word">{split.gapMinutes > 10 ? 'Break' : 'Passing'}</span><b>{formatMinutes(split.gapMinutes)}</b></span>
+        <span className="ns-gap-label"><span className="ns-gap-word">{split.gapMinutes > 10 ? 'Break' : 'Passing'}</span><b>{formatMinutesInWords(split.gapMinutes)}</b></span>
       </div></div>}
       <div className="ns-part ns-seg ns-next" style={{ background: heroGradient(upcomingBase) }}><SplitPart kind={current ? 'next' : 'only'} period={upcoming} now={now} /></div>
       {current && <div className="ns-bar" role="progressbar" aria-label="Period progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(split.progress)} aria-valuetext={`${elapsed} of ${total} minutes`}>
@@ -255,7 +264,7 @@ function SplitPart({ kind, period, now }: { kind: 'now' | 'next' | 'only'; perio
   return <div className="ns-box">
     {/* A part too small for its text still tells a screen reader what is next. */}
     {ahead && <p className="ns-sr">Then {name} at {formatTime(period.start)}{room ? `, ${room}` : ''}</p>}
-    <div className="ns-in" data-long={name.length > 14 ? '' : undefined}>
+    <div className="ns-in">
       <span className="ns-eyebrow">{kind === 'now' ? 'Right now' : kind === 'next' ? 'Next' : 'Up next'}{ahead && <span className="ns-when"> · {formatTime(period.start)}</span>}{ahead && room && <span className="ns-eroom"> · {room}</span>}</span>
       <Name className="ns-name">{name}</Name>
       <p className="ns-meta">
@@ -267,6 +276,25 @@ function SplitPart({ kind, period, now }: { kind: 'now' | 'next' | 'only'; perio
       </p>
       <Countdown split label={ahead ? 'Starts in' : 'Ends in'} shortLabel={ahead ? 'in' : undefined} target={ahead ? period.startAt : period.endAt} now={now.getTime()} />
     </div>
+  </div>;
+}
+
+/** The period after the Now card's, as a full-width block in its own class colour along the card's bottom edge. */
+export function FollowingBlock({ period, label, sameDay, today }: { period: NonNullable<ReturnType<typeof nextClass>>; label: string; sameDay: boolean; today: string }) {
+  const name = period.class?.name ?? period.label;
+  const base = nowCardBase(classColor(period.class?.id, period.kind, period.class?.color).dot);
+  const time = sameDay ? formatTime(period.start) : `${relativeDate(period.date, today, { weekday: 'long' })} ${formatTime(period.start)}`;
+  // Keyed by what each is, since a room and a teacher can be written the same.
+  const meta = [{ key: 'room', text: period.class?.room ? formatRoom(period.class.room) || null : null }, { key: 'teacher', text: period.class?.teacher ?? null }].filter((entry) => entry.text);
+  return <div className="grid gap-1 border-t border-white/20 px-5 pt-3 pb-3.5 sm:px-7" style={{ background: heroGradient(base) }} aria-label={`${label}: ${name}`} role="group">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white">{label}</span>
+      <strong className="min-w-0 text-[15.5px] font-extrabold tracking-[-0.01em] text-white [overflow-wrap:anywhere]">{name}</strong>
+      <span className="ml-auto text-[14px] font-bold tabular-nums text-white">{time}</span>
+    </div>
+    {meta.length > 0 && <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] font-medium text-white">
+      {meta.map((entry, index) => <span key={entry.key} className="inline-flex items-center gap-2.5">{index > 0 && <span aria-hidden="true" className="size-1 rounded-full bg-white/50" />}{entry.text}</span>)}
+    </p>}
   </div>;
 }
 
@@ -293,7 +321,8 @@ function Countdown({ label, shortLabel, target, now, split }: { label: string; s
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
   const seconds = Math.max(0, Math.round((new Date(target).getTime() - tick) / 1000));
-  const compact = formatMinutes(Math.ceil(seconds / 60));
+  // The split card spells hours out: at its sizes "1 h" reads as a typo.
+  const compact = (split ? formatMinutesInWords : formatMinutes)(Math.ceil(seconds / 60));
   const exact = formatSeconds(seconds);
   // Refresh the clock in the same event as the state change so the first precise frame is current.
   const show = (set: (value: boolean) => void, value: boolean) => () => { if (value) setTick(Date.now()); set(value); };

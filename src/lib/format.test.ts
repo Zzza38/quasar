@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { browserTimeZone, chatTime, classColor, formatMinutes, formatRange, formatRoom, formatSeconds, formatTime, formatTimeZone, instantParts, minutesLeft, monthGrid, monthOf, pluralize, relativeDate, reminderLabel, sameMonth, slugId, todayIn } from './format';
+import { browserTimeZone, chatTime, classColor, formatMinutes, formatMinutesInWords, formatRange, formatRoom, formatSeconds, formatTime, formatTimeZone, instantParts, minutesLeft, monthGrid, monthOf, pluralize, relativeDate, reminderLabel, sameMonth, slugId, todayIn } from './format';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -144,6 +144,15 @@ describe('relative dates and durations', () => {
     expect(formatMinutes(60)).toBe('1 h');
     expect(formatMinutes(125)).toBe('2 h 5 min');
     expect(formatMinutes(-90)).toBe('1 h 30 min');
+  });
+
+  it('spells the hours out for the split Now card', () => {
+    expect(formatMinutesInWords(0)).toBe('0 min');
+    expect(formatMinutesInWords(59)).toBe('59 min');
+    expect(formatMinutesInWords(60)).toBe('1 hour');
+    expect(formatMinutesInWords(120)).toBe('2 hours');
+    expect(formatMinutesInWords(61)).toBe('1 hr 1 min');
+    expect(formatMinutesInWords(-90)).toBe('1 hr 30 min');
   });
 
   it('pluralizes by count', () => {

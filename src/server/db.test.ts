@@ -223,7 +223,7 @@ it('adds the Now card choice off for everyone except members of the beta it came
   const path = join(folder, 'database.sqlite');
   try {
     const before = openDatabase(path);
-    before.exec('ALTER TABLE users DROP COLUMN now_split');
+    before.exec('ALTER TABLE users DROP COLUMN now_split; ALTER TABLE users DROP COLUMN now_card');
     const add = before.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)');
     for (const id of ['tester', 'other', 'elsewhere']) add.run(id, id, `${id}@example.com`, 'Student', 'Student Name', new Date().toISOString());
     const join_ = before.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)');
@@ -239,5 +239,29 @@ it('adds the Now card choice off for everyone except members of the beta it came
     } finally { after.close(); }
     const again = openDatabase(path);
     try { expect(again.prepare('SELECT now_split FROM users WHERE id=?').pluck().get('tester')).toBe(0); } finally { again.close(); }
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});
+
+it('moves every account on the line to the block when the Now card setting leaves its beta, and keeps a split', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'quasar-now-card-migration-'));
+  const path = join(folder, 'database.sqlite');
+  try {
+    const before = openDatabase(path);
+    before.exec('ALTER TABLE users DROP COLUMN now_card');
+    const add = before.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at,now_split) VALUES(?,?,?,?,?,?,?)');
+    for (const [id, style] of [['line', 0], ['split', 1], ['block', 2]] as const) add.run(id, id, `${id}@example.com`, 'Student', 'Student Name', new Date().toISOString(), style);
+    before.close();
+    const after = openDatabase(path);
+    try {
+      expect(after.prepare('SELECT id, now_card FROM users ORDER BY id').all()).toEqual([{ id: 'block', now_card: 2 }, { id: 'line', now_card: 2 }, { id: 'split', now_card: 1 }]);
+      // A later open leaves a choice alone, and a new account starts on the block.
+      after.prepare('UPDATE users SET now_card=0 WHERE id=?').run('line');
+      after.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)').run('new', 'new', 'new@example.com', 'Student', 'Student Name', new Date().toISOString());
+    } finally { after.close(); }
+    const again = openDatabase(path);
+    try {
+      expect(again.prepare('SELECT now_card FROM users WHERE id=?').pluck().get('line')).toBe(0);
+      expect(again.prepare('SELECT now_card FROM users WHERE id=?').pluck().get('new')).toBe(2);
+    } finally { again.close(); }
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
