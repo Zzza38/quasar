@@ -635,6 +635,9 @@ test('manually placed videos use existing blank space without changing layout', 
   await page.locator('[data-attention-zone="account-look"]').scrollIntoViewIfNeeded();
   await snapshot('ipad-account');
   await page.keyboard.press('Escape');
+  // The closed sheet stays mounted during its exit animation. Finish closing
+  // before resizing and measuring Classes against the remaining visible content.
+  await account.waitFor({ state: 'detached' });
   await page.setViewportSize({ width: 1024, height: 1366 });
   await page.getByRole('link', { name: 'Classes', exact: true }).click();
   await expect(page.locator('[data-attention-slot="classes-grid"]')).toHaveCount(2);
