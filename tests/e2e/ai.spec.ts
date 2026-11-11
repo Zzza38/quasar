@@ -9,14 +9,15 @@ import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/serve
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
 import { AI_BETA } from '../../src/domain/ai';
+import { addDays, todayIn } from '../../src/lib/format';
 
 /** Stands in for the server's text model; the config points AI_API_URL here. */
 const MOCK_PORT = Number(new URL(process.env.AI_API_URL ?? 'http://127.0.0.1:3198/v1').port);
 let mock: Server;
 const requests: Array<{ model: string; system: string; prompt: string }> = [];
 const spanish = randomUUID(), biology = randomUUID();
-/** A date `offset` days from today: fixed dates in seeds turn into "tomorrow" as the calendar catches up. */
-const fromToday = (offset: number) => { const date = new Date(); date.setDate(date.getDate() + offset); return date.toLocaleDateString('en-CA'); };
+/** Match the school calendar, even when the runner has already reached tomorrow in UTC. */
+const fromToday = (offset: number) => addDays(todayIn(exampleSchedule.timeZone), offset);
 /** "Mystery" tasks are skipped the first time the model sees them, so auto-sort leaves one for the manual sheet. */
 const seen = new Set<string>();
 
