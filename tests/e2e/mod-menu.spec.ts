@@ -525,7 +525,19 @@ test('manually placed videos use existing blank space without changing layout', 
   const snapshot = async (name: string) => {
     const overlaps = await page.evaluate(() => {
       const scope = [...document.querySelectorAll('[role="dialog"]')].find(element => element.getAttribute('data-state') === 'open') ?? document.body;
-      const videos = [...scope.querySelectorAll('[data-attention-slot]')].map(element => ({ rect: element.getBoundingClientRect(), zone: element.getAttribute('data-attention-slot') }));
+      // Only the part of a video its clipping ancestors show can cover anything: one scrolled out of the sheet's scroll
+      // area still has a rectangle, which may sit under the sheet's fixed header.
+      const shown = (element: Element) => {
+        let { left, top, right, bottom } = element.getBoundingClientRect();
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+          const clip = parent.getBoundingClientRect();
+          left = Math.max(left, clip.left); top = Math.max(top, clip.top); right = Math.min(right, clip.right); bottom = Math.min(bottom, clip.bottom);
+        }
+        return { left, top, right, bottom };
+      };
+      const videos = [...scope.querySelectorAll('[data-attention-slot]')].map(element => ({ rect: shown(element), zone: element.getAttribute('data-attention-slot') }));
       const obstacles = [...scope.querySelectorAll('button, input, textarea, [data-slot="card"], .app-main li')]
         .filter(element => !element.hasAttribute('data-attention-gap') && !element.closest('[aria-hidden="true"], [inert]') && getComputedStyle(element).visibility !== 'hidden')
         .map(element => ({ rect: element.getBoundingClientRect(), label: element.outerHTML.slice(0, 160) }));
@@ -537,7 +549,7 @@ test('manually placed videos use existing blank space without changing layout', 
         if (getComputedStyle(node.parentElement).visibility === 'hidden') continue;
         obstacles.push(...[...range.getClientRects()].map(rect => ({ rect, label: node.textContent! })));
       }
-      return videos.flatMap(video => obstacles.filter(item => { const a = video.rect, b = item.rect; return b.width > 0 && b.height > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }).map(item => ({ zone: video.zone, content: item.label, video: video.rect.toJSON(), obstacle: item.rect.toJSON() })));
+      return videos.flatMap(video => obstacles.filter(item => { const a = video.rect, b = item.rect; return a.right > a.left && a.bottom > a.top && b.width > 0 && b.height > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }).map(item => ({ zone: video.zone, content: item.label, video: video.rect, obstacle: item.rect.toJSON() })));
     });
     expect(overlaps, `Videos cover content on ${name}`).toEqual([]);
     expect(await page.locator('[data-attention-slot]').evaluateAll(elements => elements.every(element => getComputedStyle(element).position === 'static' && element.parentElement?.hasAttribute('data-attention-gap')))).toBe(true);
