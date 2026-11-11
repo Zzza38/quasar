@@ -15,7 +15,7 @@ import { exampleSchedule } from '../../src/domain/example';
  * A student in a ten-member school (so changes go through proposals), with four classes on the example rotation
  * and four days off on the calendar, one of which (tomorrow) uses up a day of the rotation. `beta` joins the school-hub beta, the key the School redesign is gated on.
  */
-function seed(beta: boolean, menu = false) {
+function seed(beta: boolean, menu = false, singleDay = false) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -41,7 +41,7 @@ function seed(beta: boolean, menu = false) {
         { id: 'eng10', name: 'English 10', room: '112', teacher: 'Mr. Hale', color: '#db2777' },
         { id: 'ushist', name: 'US History', room: '305', teacher: 'Mrs. Lin', color: '#d97706' },
       ],
-      assignments: { A: 'alg2', B: 'chem', C: 'eng10', D: 'ushist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: null, grade: '10',
+      assignments: { A: 'alg2', B: 'chem', C: 'eng10', D: 'ushist' }, cycleDayOverrides: [], dateOverrides: [], customSchedule: singleDay ? { ...exampleSchedule, cycleDays: [exampleSchedule.cycleDays[0]] } : null, grade: '10',
     } } as never);
     if (saved.status !== 'applied') throw new Error(`The classes were not saved: ${JSON.stringify(saved)}`);
     if (menu) {
@@ -332,4 +332,65 @@ test('without the beta the School page keeps its single column of cards', async 
     await expect(page.getByRole('region', { name: title })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Rotation' }).locator('button[aria-expanded]')).toHaveCount(10);
   await expect(page.getByRole('region', { name: 'Shared schedule' })).toContainText('Eastern Time');
+});
+
+test('a personal one-day schedule uses bell schedule wording throughout the hub', async ({ page, context }) => {
+  const { id } = seed(true, false, true);
+  await open(page, context, id, '/school?section=rotation');
+  await expect(page.getByRole('navigation', { name: 'School sections' }).getByRole('button', { name: /^Bell schedule/ })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Daily bell schedule' })).toBeVisible();
+  await expect(page.getByText('Pick a day of the cycle to see its periods, or adjust it for yourself.')).toHaveCount(0);
+});
+
+test('classic correction links scroll to the form', async ({ page, context }) => {
+  const { id } = seed(false);
+  await page.setViewportSize({ width: 390, height: 700 });
+  await open(page, context, id, '/school?section=correction');
+  await expect(page.getByRole('heading', { name: 'Request a correction' })).toBeInViewport();
+});
+
+test('empty lunch stations keep notes without an expandable row', async ({ page, context }) => {
+  const { id, schoolId } = seed(true, true);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    db.prepare('UPDATE menu_weeks SET days=? WHERE school_id=?').run(JSON.stringify([
+      { date: '2026-09-17', notes: ['Kitchen closed today'], sections: [{ title: 'Grill', items: [] }] },
+    ]), schoolId);
+  } finally { db.close(); }
+  await open(page, context, id, '/school?section=lunch');
+  const card = page.getByRole('region', { name: 'Lunch menu' });
+  await expect(card.getByText('Kitchen closed today')).toBeVisible();
+  await expect(card.locator('button[aria-expanded]')).toHaveCount(0);
+});
+
+test('logo details reflect immediate publication and an explicit removed logo', async ({ page, context }) => {
+  const { id, schoolId } = seed(true);
+  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try {
+    db.prepare('UPDATE users SET school_id=NULL WHERE school_id=? AND id<>?').run(schoolId, id);
+    db.prepare('UPDATE schools SET member_locked=0 WHERE id=?').run(schoolId);
+    new SchoolLogoService(new Service(db, 'browser-owner@example.com')).propose(id, {
+      schoolId, mime: 'image/png', data: (await sharp({ create: { width: 8, height: 8, channels: 4, background: '#2563eb' } }).png().toBuffer()).toString('base64'),
+    });
+  } finally { db.close(); }
+  // The workspace still has its previous logo, but the board has learned it was removed.
+  await page.route('**/api/trpc/*schoolLogo.list*', async route => {
+    const response = await route.fetch();
+    const replies = await response.json();
+    for (const reply of Array.isArray(replies) ? replies : [replies]) {
+      if (reply.result?.data && Object.hasOwn(reply.result.data, 'logo')) reply.result.data.logo = null;
+    }
+    await route.fulfill({ response, json: replies });
+  });
+  await open(page, context, id, '/school?section=logo');
+  const card = page.getByRole('region', { name: 'School logo' });
+  await expect(card).toContainText('No logo yet');
+  await expect(card).toContainText('a logo a member adds shows right away');
+  await expect(card.locator('img:not([alt="Proposed logo"])')).toHaveCount(0);
+  await page.goto('/school');
+  // Remove the workspace logo as well to inspect the empty-school navigation copy.
+  const next = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { next.prepare('UPDATE school_logos SET image=NULL WHERE school_id=?').run(schoolId); } finally { next.close(); }
+  await page.reload();
+  await expect(page.getByRole('navigation', { name: 'School sections' }).getByRole('button', { name: /^School logo/ })).toContainText('Add a logo for everyone');
 });

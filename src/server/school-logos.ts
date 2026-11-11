@@ -18,10 +18,13 @@ import { AVATAR_MAX_BYTES, AVATAR_MIMES, imageBytesMatch, schoolLogoUrl, type Se
  * - Staff overrule any of it. With `proposals` they force a vote to win (a vote still open, or one that already lost)
  *   or force an open vote to lose. With `schools.edit` they set or remove a logo directly, and revert the last change.
  *
- * Every logo a school has had is kept in `school_logo_history`, which is what reverting walks back through: the
+ * Within a fixed per-school storage budget, every logo a school has had is kept in `school_logo_history`, which is what reverting walks back through: the
  * newest entry is marked reverted and the one before it shows again, or the initials when there is none. Publishing
  * or setting a logo supersedes the school's other open proposals. Pictures are PNG, WebP or JPEG only (never SVG,
  * which can carry scripts), capped like profile pictures, and served by /api/school-logos.
+ * Members may upload five times per rolling 24 hours. Each school has a fixed budget for 120 retained records
+ * and 24 MB of image data, including space reserved to publish open votes. Closed proposal images remain
+ * available for staff to restore. At the budget, new uploads fail without deleting history or the current logo.
  */
 
 type FailCode = 'FORBIDDEN' | 'NOT_FOUND' | 'BAD_REQUEST' | 'CONFLICT' | 'TOO_MANY_REQUESTS';
@@ -29,6 +32,10 @@ const fail: (code: FailCode, message: string) => never = (code, message) => { th
 const now = () => new Date().toISOString();
 
 export const LOGO_MAX_BYTES = AVATAR_MAX_BYTES;
+export const LOGO_DAILY_UPLOADS = 5;
+/** Includes proposal pictures, undo history and the current logo. Open votes reserve publication space. */
+export const LOGO_STORAGE_IMAGES = 120;
+export const LOGO_STORAGE_BYTES = LOGO_STORAGE_IMAGES * LOGO_MAX_BYTES;
 const pictureShape = { mime: z.enum(AVATAR_MIMES), data: z.string().max(Math.ceil(LOGO_MAX_BYTES * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Choose an image file.') };
 export const logoProposeSchema = z.object({ schoolId: z.uuid(), ...pictureShape });
 export const logoVoteSchema = z.object({ proposalId: z.uuid(), vote: z.enum(['for', 'against']) });
@@ -67,12 +74,12 @@ export class SchoolLogoService {
   private verifiedMembers(schoolId: string): number {
     return (this.db.prepare('SELECT count(*) n FROM users u JOIN school_verifications v ON v.user_id=u.id AND v.school_id=u.school_id WHERE u.school_id=?').get(schoolId) as { n: number }).n;
   }
-  private rows(where: string, params: unknown[], viewerId: string): LogoProposal[] {
+  private rows(where: string, params: unknown[], viewerId: string, oldest = false): LogoProposal[] {
     const rows = this.db.prepare(`SELECT p.id, p.school_id, s.name school_name, p.proposer_id, u.display_name proposer_name, p.status, p.created_at, p.closed_at, p.tally_threshold, p.actor_id,
         ${shownVotes('for')} votes_for, ${shownVotes('against')} votes_against,
         (SELECT vote FROM school_logo_votes v WHERE v.proposal_id=p.id AND v.user_id=?) my_vote
       FROM school_logo_proposals p JOIN users u ON u.id=p.proposer_id JOIN schools s ON s.id=p.school_id WHERE ${where}
-      ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END, p.created_at DESC LIMIT 30`).all(viewerId, ...params) as Row[];
+      ORDER BY ${oldest ? 'p.created_at ASC, p.id ASC' : "CASE WHEN p.status='open' THEN 0 ELSE 1 END, p.created_at DESC, p.id DESC LIMIT 30"}`).all(viewerId, ...params) as Row[];
     const thresholds = new Map<string, number>();
     const live = (schoolId: string) => {
       if (!thresholds.has(schoolId)) thresholds.set(schoolId, voteThreshold(this.verifiedMembers(schoolId)));
@@ -81,6 +88,19 @@ export class SchoolLogoService {
     return rows.map((row) => ({ id: row.id, schoolId: row.school_id, schoolName: row.school_name, proposerId: row.proposer_id, proposerName: row.proposer_name, image: `/api/school-logos/proposals/${row.id}`,
       status: row.status, createdAt: row.created_at, closedAt: row.closed_at, votesFor: row.votes_for, votesAgainst: row.votes_against,
       threshold: row.status !== 'open' && row.tally_threshold !== null ? row.tally_threshold : live(row.school_id), myVote: row.my_vote, byStaff: row.actor_id !== null }));
+  }
+  /** Refuse new retained data rather than silently discard undo history or restorable proposals. */
+  private storageBudget(schoolId: string, bytes: number, copies: number, publishingId: string | null = null): void {
+    const retained = this.db.prepare(`SELECT count(*) n, coalesce(sum(size), 0) bytes FROM (
+      SELECT length(image) size FROM school_logo_proposals WHERE school_id=?
+      UNION ALL SELECT length(image) FROM school_logo_history WHERE school_id=?
+      UNION ALL SELECT length(image) FROM school_logos WHERE school_id=? AND image IS NOT NULL
+    )`).get(schoolId, schoolId, schoolId) as { n: number; bytes: number };
+    const reserved = this.db.prepare(`SELECT count(*) * 2 n, coalesce(sum(length(image)), 0) * 2 bytes
+      FROM school_logo_proposals WHERE school_id=? AND status='open' AND id IS NOT ?`).get(schoolId, publishingId) as { n: number; bytes: number };
+    if (retained.n + reserved.n + copies > LOGO_STORAGE_IMAGES || retained.bytes + reserved.bytes + bytes * copies > LOGO_STORAGE_BYTES) {
+      fail('TOO_MANY_REQUESTS', 'This school has reached its logo storage limit. Its current logo and undo history have been kept. Contact support.');
+    }
   }
   private logoVersion(schoolId: string): number | null {
     const row = this.db.prepare('SELECT version FROM school_logos WHERE school_id=? AND image IS NOT NULL').get(schoolId) as { version: number } | undefined;
@@ -119,6 +139,10 @@ export class SchoolLogoService {
       if (mine.n >= 1) fail('CONFLICT', 'You already have a logo being voted on. Withdraw it before proposing another.');
       const waiting = this.db.prepare("SELECT count(*) n FROM school_logo_proposals WHERE school_id=? AND status='open'").get(school.id) as { n: number };
       if (waiting.n >= 3) fail('TOO_MANY_REQUESTS', 'Three logos are already being voted on for this school. Vote on those first.');
+      const recent = this.db.prepare('SELECT count(*) n FROM school_logo_proposals WHERE proposer_id=? AND created_at>=?')
+        .get(viewerId, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) as { n: number };
+      if (recent.n >= LOGO_DAILY_UPLOADS) fail('TOO_MANY_REQUESTS', 'You can upload five school logos in 24 hours. Try again later.');
+      this.storageBudget(school.id, bytes.length, 3);
       const id = randomUUID();
       this.db.prepare("INSERT INTO school_logo_proposals(id,school_id,proposer_id,image,mime,status,created_at) VALUES(?,?,?,?,?,'open',?)").run(id, school.id, viewerId, bytes, input.mime, now());
       if (voting) {
@@ -163,6 +187,7 @@ export class SchoolLogoService {
   }
   /** A new logo (or its removal, `bytes` null): shown, and added to the history that reverting walks back through. */
   private store(schoolId: string, bytes: Buffer | null, mime: string, actorId: string | null, proposalId: string | null): void {
+    this.storageBudget(schoolId, bytes?.length ?? 0, bytes ? 2 : 1, proposalId);
     this.show(schoolId, bytes, mime, actorId);
     this.db.prepare('INSERT INTO school_logo_history(school_id,image,mime,proposal_id,actor_id,created_at) VALUES(?,?,?,?,?,?)').run(schoolId, bytes, mime, proposalId, actorId, now());
   }
@@ -182,7 +207,7 @@ export class SchoolLogoService {
   /** Every logo vote still open, across all schools, oldest first: the ones staff may want to force. */
   openVotes(adminId: string): LogoProposal[] {
     this.service.permit(adminId, 'proposals');
-    return this.rows("p.status='open'", [], adminId).reverse();
+    return this.rows("p.status='open'", [], adminId, true);
   }
   /** One school's logo and proposals for the /admin review sheet, whether or not the staff member belongs to it. */
   forSchool(adminId: string, schoolId: string): { logo: string | null; canRevert: boolean; proposals: LogoProposal[] } {

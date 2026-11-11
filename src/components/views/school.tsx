@@ -59,7 +59,7 @@ export function SchoolView({ state }: { state: AppState }) {
   const [correction, setCorrection] = useState<(ProposalSeed & { onSaved?: () => void }) | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [adjustCycleDay, setAdjustCycleDay] = useState<string | null>(null);
-  const rotation = sharedSchedule.cycleDays.length > 1;
+  const rotation = effectiveSchedule(state.schedule, personal).cycleDays.length > 1;
   // Older bell-time links still open the same shared-or-personal choice. Clear the one-shot parameter.
   const fix = state.params.get('fix');
   const { navigate } = state;
@@ -75,6 +75,13 @@ export function SchoolView({ state }: { state: AppState }) {
   useEffect(() => {
     if (redesign && wantsMenu) navigate('school', { section: 'lunch' }, { replace: true });
   }, [redesign, wantsMenu, navigate]);
+
+  const requestedSection = state.params.get('section');
+  useEffect(() => {
+    if (!redesign && requestedSection === 'correction') {
+      document.getElementById('correction-title')?.scrollIntoView({ behavior: 'instant', block: 'start' });
+    }
+  }, [redesign, requestedSection]);
 
   const chips = <>
     {school.approved ? <Chip tone="success" icon="check">Approved by support</Chip> : <Chip tone="warning" icon="users">Community schedule · not reviewed</Chip>}
@@ -259,7 +266,7 @@ function SchoolHub({ state, voting, panels, children }: { state: AppState; votin
         {voting && <HubRow icon="users" title="Proposed changes" detail="Vote on schedule changes" active={shown === 'changes'} onClick={() => go('changes')} />}
         <HubRow icon="school" title="Your setup" detail={personal.customSchedule ? 'Private schedule' : 'School schedule'} value={personal.grade ? gradeLabel(personal.grade) : undefined} active={shown === 'setup'} onClick={() => go('setup')} />
         <HubRow icon="inbox" title="Request a correction" detail="Tell support what is wrong" active={shown === 'correction'} onClick={() => go('correction')} />
-        <HubRow icon="imageUp" title="School logo" detail={school.logo ? 'Propose a new one' : 'Propose one and vote'} active={shown === 'logo'} onClick={() => go('logo')} />
+        <HubRow icon="imageUp" title="School logo" detail={school.logo ? 'Propose a new one' : voting ? 'Propose one and vote' : 'Add a logo for everyone'} active={shown === 'logo'} onClick={() => go('logo')} />
         <HubRow icon="info" title="How this is managed" detail={school.approved ? 'Approved by support' : 'Not reviewed yet'} active={shown === 'about'} onClick={() => go('about')} />
         <HubRow icon="book" title="School classes" detail="Shared by schoolmates" away onClick={() => state.navigate('classes', { directory: 'open' })} />
       </nav>

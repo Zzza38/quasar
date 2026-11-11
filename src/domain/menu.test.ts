@@ -97,6 +97,14 @@ describe('menuMainDish, menuDayPreview and menuDayCount', () => {
     expect(menuMainDish(day([{ title: 'Entree', items: [] }, { title: 'Grill', items: ['Hamburger'] }]))).toBe('Hamburger');
     expect(menuMainDish(day([]))).toBeUndefined();
   });
+  it('treats vegan and vegetarian kitchens as mains but vegetables as sides', () => {
+    for (const title of ['Vegan Kitchen', 'Vegetarian Station']) {
+      const menu = day([{ title: 'Soup', items: ['Tomato Soup'] }, { title, items: ['Lentil Curry'] }]);
+      expect(menuMainDish(menu)).toBe('Lentil Curry');
+      expect(menuDayPreview(menu)).toEqual(['Lentil Curry', 'Tomato Soup']);
+    }
+    expect(menuMainDish(day([{ title: 'Vegetables', items: ['Peas'] }, { title: 'Kitchen', items: ['Curry'] }]))).toBe('Curry');
+  });
   it('previews one dish per station, the main course first and the rest in the menu site’s order', () => {
     expect(menuDayPreview(tikka)).toEqual(['Chicken Tikka Masala', 'Curried Lentil Soup', 'Vegetable Samosas']);
     expect(menuDayPreview(day([{ title: 'Create', items: ['Orange Chicken', 'Brown Rice'] }, { title: 'Milk & Condiments', items: ['Low Fat Milk'] }]))).toEqual(['Orange Chicken', 'Low Fat Milk']);

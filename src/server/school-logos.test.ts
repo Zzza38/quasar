@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
-import { SchoolLogoService } from './school-logos';
+import { LOGO_DAILY_UPLOADS, LOGO_STORAGE_IMAGES, SchoolLogoService } from './school-logos';
 import { appRouter } from './router';
 import { exampleSchedule } from '@/domain/example';
 
@@ -33,6 +33,70 @@ function fixture(members: number, verified = members) {
 }
 
 describe('school logos', () => {
+  it('limits all member uploads, including immediate publication and withdrawn votes', () => {
+    const { db, logos, students, school } = fixture(3);
+    for (let i = 0; i < LOGO_DAILY_UPLOADS; i++) logos.propose(students[0], { schoolId: school.id, ...png(i) });
+    expect(() => logos.propose(students[0], { schoolId: school.id, ...png(9) })).toThrow(/five school logos in 24 hours/);
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(4);
+    expect(db.prepare('SELECT count(*) n FROM school_logo_history').get()).toEqual({ n: 5 });
+    db.prepare("UPDATE school_logo_proposals SET created_at='2000-01-01'").run();
+    expect(logos.propose(students[0], { schoolId: school.id, ...png(6) }).status).toBe('published');
+    const voting = fixture(10);
+    for (let i = 0; i < LOGO_DAILY_UPLOADS; i++) {
+      const vote = voting.logos.propose(voting.students[0], { schoolId: voting.school.id, ...png(i) });
+      voting.logos.withdraw(voting.students[0], vote.id);
+    }
+    expect(() => voting.logos.propose(voting.students[0], { schoolId: voting.school.id, ...png() })).toThrow(/five school logos/);
+  });
+
+  it('bounds retained images without deleting the current logo, history or restorable proposals', () => {
+    const { db, logos, owner, students, school } = fixture(3);
+    const proposal = logos.propose(students[0], { schoolId: school.id, ...png(1) });
+    for (let i = 0; i < LOGO_STORAGE_IMAGES; i++) {
+      try { logos.set(owner, { schoolId: school.id, ...png(2) }); }
+      catch (error) { expect(String(error)).toMatch(/storage limit/); break; }
+    }
+    const before = db.prepare('SELECT count(*) n FROM school_logo_history').get() as { n: number };
+    expect(() => logos.set(owner, { schoolId: school.id, ...png(3) })).toThrow(/storage limit/);
+    expect(() => logos.propose(students[1], { schoolId: school.id, ...png(3) })).toThrow(/storage limit/);
+    expect(db.prepare('SELECT count(*) n FROM school_logo_history').get()).toEqual(before);
+    expect(logos.proposalImage(owner, proposal.id)?.bytes.at(-1)).toBe(1);
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(2);
+    // Reverting still works at the limit and can walk all the way back through retained history.
+    for (let i = 0; i < before.n - 1; i++) logos.revert(owner, school.id);
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(1);
+    logos.revert(owner, school.id);
+    expect(logos.logoImage(school.id)).toBeNull();
+  });
+
+  it('reserves enough storage for an admitted vote to publish later', () => {
+    const { db, logos, owner, students, school } = fixture(10);
+    for (let i = 0; i < LOGO_STORAGE_IMAGES - 4; i++) logos.set(owner, { schoolId: school.id, ...png(1) });
+    const proposal = logos.propose(students[0], { schoolId: school.id, ...png(2) });
+    expect(() => logos.propose(students[1], { schoolId: school.id, ...png(3) })).toThrow(/storage limit/);
+    logos.vote(students[1], { proposalId: proposal.id, vote: 'for' });
+    expect(logos.vote(students[2], { proposalId: proposal.id, vote: 'for' }).status).toBe('published');
+    expect(logos.logoImage(school.id)?.bytes.at(-1)).toBe(2);
+    const retained = db.prepare(`SELECT count(*) n FROM (
+      SELECT id FROM school_logo_proposals UNION ALL SELECT id FROM school_logo_history UNION ALL SELECT school_id FROM school_logos
+    )`).get() as { n: number };
+    expect(retained.n).toBeLessThanOrEqual(LOGO_STORAGE_IMAGES);
+  });
+
+  it('returns every open vote oldest first when the queue exceeds thirty', () => {
+    const { db, logos, owner, students, school } = fixture(10);
+    const ids = Array.from({ length: 31 }, (_, index) => {
+      const id = randomUUID();
+      const schoolId = randomUUID();
+      db.prepare('INSERT INTO schools(id,name,location,schedule,created_at) SELECT ?,?,location,schedule,created_at FROM schools WHERE id=?')
+        .run(schoolId, `Queue school ${index}`, school.id);
+      db.prepare("INSERT INTO school_logo_proposals(id,school_id,proposer_id,image,mime,status,created_at) VALUES(?,?,?,?,?,'open',?)")
+        .run(id, schoolId, students[0], Buffer.from(png().data, 'base64'), 'image/png', new Date(2026, 0, index + 1).toISOString());
+      return id;
+    });
+    expect(logos.openVotes(owner).map(proposal => proposal.id)).toEqual(ids);
+  });
+
   it('a logo that wins the vote is published at once, with nobody approving it', () => {
     const { service, logos, owner, students, school, outsider } = fixture(11, 10);
     const [alice, bob, cara, dan] = students;
