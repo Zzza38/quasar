@@ -40,7 +40,7 @@ it('binds every reaction mutation to the account and validates reply and reactio
       const { message } = await send('target');
       expect((await send('reply', message.seq)).message.replyTo).toMatchObject({ seq: message.seq, preview: 'target', senderName: 'Alice', fromMe: true });
       await expect(react(message.seq, bob, '👍')).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
-      await expect(react(message.seq, alice, '🔥' as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(react(message.seq, alice, '🦄' as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       await expect(send('reply', -1)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       expect((await react(message.seq, alice, '👍')).message.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
       expect((await react(message.seq, alice, null)).message.reactions).toEqual([]);

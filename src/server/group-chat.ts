@@ -1,15 +1,15 @@
-import { chatImageSchema } from '@/domain/chat';
+import { chatImageSchema, mentionIdsSchema, searchQuerySchema, type SearchHit } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision } from './chat-extras';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHit, searchSql, searchTerms } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { CHAT, REPORT_CATEGORIES, bodyError, messageText, rawBodySchema, reportCategorySchema, type ReportCategory } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
-import { Reveal, actorRank, type RemovedText } from './moderation';
+import { Reveal, actorRank, type RemovedText, type RevealedText } from './moderation';
 // Cycles with ./chat and ./community, safe because no module uses another's exports while it loads.
-import { activePause, countUnreadChats, listPreview, type ChatPause, type Receipt, type StoredItem } from './chat';
+import { activePause, countUnreadChats, evidenceBody, listPreview, type ChatPause, type Receipt, type StoredItem } from './chat';
 import { CommunityService } from './community';
 import { countSentSince, NOT_BLOCKED_SENDER_SQL } from './global-chat';
 import type { Db } from './db';
@@ -45,8 +45,8 @@ export type GroupSender = { id: string; displayName: string; avatar: string | nu
 export type GroupMember = GroupSender & { role: GroupRole; joinedAt: string };
 export type GroupInfo = { id: string; name: string; createdAt: string; role: GroupRole; members: GroupMember[] };
 export type GroupMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string; deletedBy: GroupDeletedBy;
-  /** Never edited: kept for the same shape as a global message, so one bubble component renders both. */
-  editedAt: null; reason: null; editedFrom: null; sender: GroupSender;
+  /** When the sender last edited it and its text as first sent. `reason` is a room moderator's note, which a group never has. */
+  editedAt: string | null; reason: null; editedFrom: RevealedText | null; editedBySender: boolean; sender: GroupSender;
   /** What the viewer's tier may read beyond `body` (src/server/moderation.ts): the owner's uncensored text, a removed message. */
   original: string | null; removed: RemovedText | null };
 export type GroupSummary = {
@@ -56,12 +56,14 @@ export type GroupSummary = {
   lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GroupDeletedBy } | null;
   /** When the row was last active, for ordering: the newest message, else creation. */
   lastAt: string; unread: number; muted: boolean;
+  /** An unread message here mentions the viewer. */
+  mentioned: boolean;
 };
 
 type GroupRow = { id: string; name: string; creator_id: string; revision: number; last_message_at: string | null; created_at: string };
 type MemberRow = { group_id: string; user_id: string; role: GroupRole; joined_at: string; left_at: string | null; last_read_seq: number; delivered_seq: number; muted: number; typing_until: string | null };
 type MessageRow = { image: string | null; reply_to_seq: number | null; seq: number; id: string; group_id: string; sender_id: string; body: string; created_at: string; deleted_at: string | null; deleted_by: GroupDeletedBy; revision: number;
-  original: string | null; deleted_rank: string | null; display_name: string; verified: number; google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
+  original: string | null; deleted_rank: string | null; edited_at: string | null; edited_from: string | null; mentions: string | null; display_name: string; verified: number; google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null };
 type PersonRow = AvatarRow & { display_name: string; school_id: string | null; verified: number };
 
 // Group names lose control and format characters and extra spaces, like display names, and a slur in one is censored.
@@ -76,9 +78,11 @@ export const groupThreadSchema = groupIdSchema.extend({
   after: z.number().int().min(0).optional(),
   before: z.number().int().positive().optional(),
 }).refine(input => input.after === undefined || input.before === undefined, 'Use either after or before, not both.');
-export const groupSendSchema = groupIdSchema.extend({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema });
+export const groupSendSchema = groupIdSchema.extend({ clientId: z.uuid(), body: rawBodySchema, image: chatImageSchema, replyTo: replySchema, mentions: mentionIdsSchema });
 export const groupReactSchema = groupIdSchema.extend(reactionSchema.shape);
 export const groupDeleteSchema = groupIdSchema.extend({ messageId: z.uuid() });
+export const groupEditSchema = groupDeleteSchema.extend({ body: rawBodySchema });
+export const groupSearchSchema = groupIdSchema.extend({ query: searchQuerySchema });
 export const groupReadSchema = groupIdSchema.extend({ seq: z.number().int().min(0) });
 export const groupMuteSchema = groupIdSchema.extend({ muted: z.boolean() });
 export const groupTypingSchema = groupIdSchema.extend({ typing: z.boolean() });
@@ -186,7 +190,8 @@ export class GroupChatService {
     return {
       ...messageExtras(this.db, 'group', viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
-      deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: null, reason: null, editedFrom: null,
+      deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at, reason: null,
+      editedFrom: this.reveal(viewerId).editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at,
       sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
       original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, 'group'),
     };
@@ -289,19 +294,20 @@ export class GroupChatService {
       const groups = this.db.prepare(`SELECT g.*, m.role, m.last_read_seq, m.delivered_seq, m.muted, m.joined_at FROM chat_group_members m JOIN chat_groups g ON g.id=m.group_id
         WHERE m.user_id=? AND m.left_at IS NULL`).all(viewerId) as (GroupRow & { role: GroupRole; last_read_seq: number; delivered_seq: number; muted: number; joined_at: string })[];
       const latest = this.db.prepare(`${MESSAGE_SQL} JOIN chat_group_members m ON m.group_id=c.group_id AND m.user_id=? WHERE c.group_id=? AND ${VISIBLE_SQL('m')} ORDER BY c.seq DESC LIMIT 1`);
-      const unread = this.db.prepare(`SELECT count(*) n FROM chat_group_messages c JOIN chat_group_members m ON m.group_id=c.group_id AND m.user_id=? WHERE c.group_id=? AND c.seq>? AND c.sender_id<>? AND c.deleted_at IS NULL AND ${VISIBLE_SQL('m')}`);
+      const unread = this.db.prepare(`SELECT count(*) n, coalesce(max(${mentionsUserSql('m.user_id')}), 0) mentioned FROM chat_group_messages c JOIN chat_group_members m ON m.group_id=c.group_id AND m.user_id=? WHERE c.group_id=? AND c.seq>? AND c.sender_id<>? AND c.deleted_at IS NULL AND ${VISIBLE_SQL('m')}`);
       const delivered: { groupId: string; seq: number }[] = [];
       const rows = groups.map((group): GroupSummary => {
         const last = latest.get(viewerId, group.id) as MessageRow | undefined;
         if (last && last.sender_id !== viewerId && last.seq > group.delivered_seq) delivered.push({ groupId: group.id, seq: last.seq });
         const members = this.members(group.id);
         const deleted = !!last?.deleted_at;
+        const news = unread.get(viewerId, group.id, group.last_read_seq, viewerId) as { n: number; mentioned: number };
         return {
           id: group.id, name: group.name, memberCount: members.length, role: group.role,
           members: members.filter(member => member.id !== viewerId).slice(0, 4).map(member => ({ id: member.id, displayName: member.displayName, avatar: member.avatar })),
           lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
           lastAt: last?.created_at ?? group.created_at,
-          unread: (unread.get(viewerId, group.id, group.last_read_seq, viewerId) as { n: number }).n,
+          unread: news.n, mentioned: !!news.mentioned,
           muted: !!group.muted,
         };
       }).sort((left, right) => right.lastAt.localeCompare(left.lastAt));
@@ -318,7 +324,7 @@ export class GroupChatService {
       const members = this.members(group.id);
       const nowIso = this.iso();
       const receipts: Receipt[] = members.filter(entry => entry.id !== viewerId).map(entry => ({
-        id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso,
+        id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso, joinedAt: entry.joinedAt,
       }));
       const info: GroupInfo = { id: group.id, name: group.name, createdAt: group.created_at, role: member.role, members: members.map(({ row: _row, ...entry }) => entry) };
       const base = { peer: null, group: info, revision: group.revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts };
@@ -343,7 +349,7 @@ export class GroupChatService {
 
   /* ---------- Writing ---------- */
 
-  send(viewerId: string, groupId: string, clientId: string, raw: string, replyTo?: number, image?: string): { message: GroupMessage } {
+  send(viewerId: string, groupId: string, clientId: string, raw: string, replyTo?: number, image?: string, mentionIds?: string[]): { message: GroupMessage } {
     const { body, original } = messageText(raw);
     const problem = bodyError(body, !!image);
     if (problem) fail('BAD_REQUEST', problem);
@@ -353,7 +359,7 @@ export class GroupChatService {
       recipients = (this.db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=? AND left_at IS NULL').all(groupId) as { user_id: string }[]).map(row => row.user_id);
       const existing = this.db.prepare(`${MESSAGE_SQL} WHERE c.id=?`).get(clientId) as MessageRow | undefined;
       if (existing) {
-        if (existing.sender_id !== viewerId || existing.group_id !== group.id || existing.body !== body || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
+        if (existing.sender_id !== viewerId || existing.group_id !== group.id || (existing.body !== body && !existing.edited_at) || (existing.image ?? undefined) !== image || (existing.reply_to_seq ?? null) !== (replyTo ?? null)) fail('BAD_REQUEST', 'A retry ID cannot be reused for a different message.');
         return { message: this.message(viewerId, existing) };
       }
       this.notPaused(viewerId);
@@ -363,7 +369,8 @@ export class GroupChatService {
       validateReply(this.db, 'group', viewerId, replyTo, group.id);
       const revision = this.bumpRevision(group.id);
       const createdAt = this.iso();
-      const { seq } = this.db.prepare('INSERT INTO chat_group_messages(id,group_id,sender_id,body,original,created_at,revision,reply_to_seq) VALUES(?,?,?,?,?,?,?,?) RETURNING seq').get(clientId, group.id, viewerId, body, original, createdAt, revision, replyTo ?? null) as { seq: number };
+      const { seq } = this.db.prepare('INSERT INTO chat_group_messages(id,group_id,sender_id,body,original,created_at,revision,reply_to_seq,mentions) VALUES(?,?,?,?,?,?,?,?,?) RETURNING seq')
+        .get(clientId, group.id, viewerId, body, original, createdAt, revision, replyTo ?? null, resolveMentions(this.db, 'group', viewerId, group.id, body, mentionIds)) as { seq: number };
       if (image) this.db.prepare('UPDATE chat_group_messages SET image=? WHERE id=?').run(image, clientId);
       this.db.prepare('UPDATE chat_groups SET last_message_at=? WHERE id=?').run(createdAt, group.id);
       this.db.prepare('UPDATE chat_group_members SET last_read_seq=max(last_read_seq, ?), delivered_seq=max(delivered_seq, ?), typing_until=NULL WHERE group_id=? AND user_id=?').run(seq, seq, group.id, viewerId);
@@ -406,6 +413,40 @@ export class GroupChatService {
     }).immediate();
     notifyChat(recipients, { kind: 'group', key: groupId });
     return result;
+  }
+
+  /** The sender rewrites their own message within CHAT.editWindowMs; everyone in the group can read the text as first sent. */
+  editOwn(viewerId: string, groupId: string, messageId: string, raw: string): { message: GroupMessage } {
+    let recipients: string[] = [];
+    const result = this.db.transaction(() => {
+      const { group } = this.member(viewerId, groupId);
+      recipients = (this.db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=? AND left_at IS NULL').all(groupId) as { user_id: string }[]).map(row => row.user_id);
+      this.notPaused(viewerId);
+      const row = this.find(group.id, messageId);
+      assertOwnEdit(row, viewerId, this.now(), MISSING);
+      const { body, original } = messageText(raw);
+      const problem = bodyError(body, !!row!.image);
+      if (problem) fail('BAD_REQUEST', problem);
+      if (body !== row!.body) {
+        this.db.prepare('UPDATE chat_group_messages SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), mentions=?, revision=? WHERE seq=?')
+          .run(body, original, this.iso(), row!.original ?? row!.body, keptMentions(row!.mentions, body), this.bumpRevision(group.id), row!.seq);
+      }
+      return { message: this.message(viewerId, this.find(group.id, messageId)!) };
+    }).immediate();
+    notifyChat(recipients, { kind: 'group', key: groupId });
+    return result;
+  }
+
+  /** Messages the viewer can see in this group whose text contains `query`, newest first. */
+  search(viewerId: string, groupId: string, raw: string): { results: SearchHit[] } {
+    const terms = searchTerms(raw);
+    return this.db.transaction(() => {
+      const { group } = this.member(viewerId, groupId);
+      if (!terms) return { results: [] };
+      const rows = this.db.prepare(`${MESSAGE_SQL} JOIN chat_group_members m ON m.group_id=c.group_id AND m.user_id=? WHERE c.group_id=? AND ${VISIBLE_SQL('m')} AND ${searchSql('?')} ORDER BY c.seq DESC LIMIT ?`)
+        .all(viewerId, group.id, terms.pattern, CHAT.searchResults) as MessageRow[];
+      return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
+    })();
   }
 
   read(viewerId: string, groupId: string, seq: number): { unreadChats: number; unreadAt: string } {
@@ -456,7 +497,7 @@ export class GroupChatService {
       if (!anchor) return fail('NOT_FOUND', MISSING);
       if (anchor.sender_id === viewerId) fail('BAD_REQUEST', 'You cannot report your own message.');
       if (!anchor.body && !anchor.image) fail('BAD_REQUEST', NOTHING_TO_REPORT);
-      const item = (row: MessageRow, isAnchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === anchor.sender_id, senderId: row.sender_id, body: row.body, image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? (row.deleted_by === 'support' ? 'support' : 'sender') : null, anchor: isAnchor });
+      const item = (row: MessageRow, isAnchor = false): StoredItem => ({ seq: row.seq, fromReported: row.sender_id === anchor.sender_id, senderId: row.sender_id, body: evidenceBody(row), image: row.image ? `data:image/webp;base64,${row.image}` : undefined, createdAt: row.created_at, deletedBy: row.deleted_at ? (row.deleted_by === 'support' ? 'support' : 'sender') : null, anchor: isAnchor });
       const before = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq<? AND (body<>'' OR image IS NOT NULL) ORDER BY seq DESC LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceBefore) as MessageRow[];
       const after = this.db.prepare("SELECT * FROM chat_group_messages WHERE group_id=? AND seq>? AND (body<>'' OR image IS NOT NULL) ORDER BY seq LIMIT ?").all(group.id, anchor.seq, CHAT.evidenceAfter) as MessageRow[];
       const items = [...before.reverse().map(row => item(row)), item(anchor, true), ...after.map(row => item(row))];
@@ -478,7 +519,7 @@ export function pruneGroupChat(db: Db, now: Date = new Date()): void {
   const ago = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
   db.transaction(() => {
     db.prepare('DELETE FROM chat_group_messages WHERE created_at < ?').run(ago(CHAT.retentionDays));
-    db.prepare("UPDATE chat_group_messages SET body='', image=NULL, original=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL)").run(ago(CHAT.deletedTextDays));
+    db.prepare("UPDATE chat_group_messages SET body='', image=NULL, original=NULL, edited_from=NULL WHERE deleted_at IS NOT NULL AND deleted_at < ? AND (body <> '' OR image IS NOT NULL OR original IS NOT NULL OR edited_from IS NOT NULL)").run(ago(CHAT.deletedTextDays));
     db.prepare('DELETE FROM chat_groups WHERE last_message_at < ? OR (last_message_at IS NULL AND created_at < ?)').run(ago(CHAT.retentionDays), ago(CHAT.retentionDays));
   }).immediate();
 }

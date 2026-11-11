@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api, errorMessage, isTransportFailure, isUnauthorized, type RouterOutput } from '@/client/api';
-import { CHAT, type MessageReply, type Reaction } from '@/domain/chat';
+import { CHAT, type MessageReply, type Reaction, type SearchHit } from '@/domain/chat';
 import { connectChatEvents, type ChatEvent } from '@/client/chat-events';
 import type { AppState } from './app-state';
 
@@ -74,6 +74,8 @@ export type Outgoing = {
   image?: string;
   /** The quoted message (docs/CHAT.md §15), kept so the pending bubble shows the quote before the server confirms it. */
   reply: MessageReply | null;
+  /** The ids of the people picked with "@" (groups and rooms); the server keeps those the text really names. */
+  mentions?: string[];
   status: 'pending' | 'failed';
   /** The server's fixed message, when there is one. Network failures have none. */
   error?: string;
@@ -85,6 +87,9 @@ export type Outgoing = {
 
 /* ---------- Module memory: pending sends and drafts, keyed by `${accountId}:${userId}` (or `:global`) ---------- */
 
+/** The viewer's own message being edited in the composer: its id, where it sits, its text now and whether a photo keeps it from being empty. */
+export type EditTarget = { id: string; seq: number; body: string; hasImage: boolean };
+
 export interface ThreadMemory {
   key: string;
   accountId: string;
@@ -92,6 +97,8 @@ export interface ThreadMemory {
   draft: string;
   /** The message the next send quotes (docs/CHAT.md §15); it survives switching threads like the draft. */
   reply: MessageReply | null;
+  /** The viewer's own message the composer is rewriting, or null. */
+  editing: EditTarget | null;
   outgoing: Outgoing[];
   /** Server messages from successful sends, waiting for the mounted thread to merge them. */
   delivered: ChatMessage[];
@@ -125,7 +132,7 @@ export function threadMemory(accountId: string, target: ChatTarget): ThreadMemor
   const key = `${accountId}:${targetKey(target)}`;
   let entry = memory.threads.get(key);
   if (!entry) {
-    entry = { key, accountId, target, draft: '', reply: null, outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
+    entry = { key, accountId, target, draft: '', reply: null, editing: null, outgoing: [], delivered: [], closed: false, pollRequested: false, sending: false, refresh: null, listeners: new Set() };
     memory.threads.set(key, entry);
   }
   return entry;
@@ -184,10 +191,10 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
       const result = entry.target.kind === 'peer'
         ? await api.chat.send.mutate({ accountId: entry.accountId, userId: entry.target.userId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
         : entry.target.kind === 'group'
-          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
+          ? await api.group.send.mutate({ accountId: entry.accountId, groupId: entry.target.groupId, clientId: item.clientId, body: item.body, image: item.image, replyTo, mentions: item.mentions }, options)
           : entry.target.kind === 'school'
-            ? await api.schoolChat.send.mutate({ accountId: entry.accountId, schoolId: entry.target.schoolId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options)
-            : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo }, options);
+            ? await api.schoolChat.send.mutate({ accountId: entry.accountId, schoolId: entry.target.schoolId, clientId: item.clientId, body: item.body, image: item.image, replyTo, mentions: item.mentions }, options)
+            : await api.global.send.mutate({ accountId: entry.accountId, clientId: item.clientId, body: item.body, image: item.image, replyTo, mentions: item.mentions }, options);
       return { message: result.message };
     } catch (error) {
       const failure = classifySendError(error);
@@ -251,15 +258,15 @@ export function requeue(entry: ThreadMemory, networkOnly: boolean): boolean {
 }
 
 /** Queues a new message behind any unsent ones and starts sending when nothing ahead of it failed. */
-export function enqueue(entry: ThreadMemory, body: string, reply: MessageReply | null = null, image?: string) {
+export function enqueue(entry: ThreadMemory, body: string, reply: MessageReply | null = null, image?: string, mentions?: string[]) {
   // Only Retry (or reconnecting, for network failures) resends a failed message, so a new message never
   // sends one the student left at "Not sent.". To keep the order, the new message waits behind them as
   // failed too, and Retry sends them all in order. It joins the automatic reconnect retry only when
   // everything ahead of it failed for network reasons, so it can never overtake a rate-limited message.
   const blocking = entry.outgoing.filter((item) => item.status === 'failed' && item.retryable);
   const item: Outgoing = blocking.length
-    ? { clientId: crypto.randomUUID(), body, image, reply, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
-    : { clientId: crypto.randomUUID(), body, image, reply, status: 'pending', retryable: true, network: false };
+    ? { clientId: crypto.randomUUID(), body, image, reply, mentions, status: 'failed', retryable: true, network: blocking.every((candidate) => candidate.network) }
+    : { clientId: crypto.randomUUID(), body, image, reply, mentions, status: 'pending', retryable: true, network: false };
   setOutgoing(entry, [...entry.outgoing, item]);
   if (item.status === 'pending') void pump(entry);
 }
@@ -723,6 +730,34 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
+   * The sender's own edit (chat-polish beta): replaces the text of one of the viewer's messages while the server's
+   * edit window is open. The answer is the edited row, merged like any other change. A NOT_FOUND means the message
+   * went away meanwhile; the poll it asks for shows that.
+   */
+  const editOwn = useCallback(async (messageId: string, body: string) => {
+    let result: { message: ChatMessage };
+    try {
+      result = userId ? await api.chat.editOwn.mutate({ accountId, userId, messageId, body }) : groupId ? await api.group.editOwn.mutate({ accountId, groupId, messageId, body })
+        : schoolId ? await api.schoolChat.editOwn.mutate({ accountId, schoolId, messageId, body }) : await api.global.editOwn.mutate({ accountId, messageId, body });
+    } catch (err) {
+      if (errorCode(err) === 'NOT_FOUND') pollNow();
+      if (isUnauthorized(err)) void latest.current.refresh();
+      throw err;
+    }
+    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
+    onChangeRef.current?.();
+  }, [accountId, userId, groupId, schoolId, pollNow]);
+  /** Which of the viewer's messages the composer is rewriting; it lives in the thread's memory like the reply target. */
+  const setEditing = useCallback((editing: EditTarget | null) => { entry.editing = editing; emit(entry); }, [entry]);
+
+  /** Messages in this conversation whose text contains `query`, newest first (chat-polish beta). */
+  const search = useCallback(async (query: string, signal?: AbortSignal): Promise<SearchHit[]> => {
+    const result = userId ? await api.chat.search.query({ accountId, userId, query }, { signal }) : groupId ? await api.group.search.query({ accountId, groupId, query }, { signal })
+      : schoolId ? await api.schoolChat.search.query({ accountId, schoolId, query }, { signal }) : await api.global.search.query({ accountId, query }, { signal });
+    return result.results;
+  }, [accountId, userId, groupId, schoolId]);
+
+  /**
    * A tapback (docs/CHAT.md §15): the same emoji again removes it, another replaces it, null removes it. The answer is
    * the whole message with the viewer's new reaction summary, merged by seq like a confirmed send. A NOT_FOUND
    * (the message was deleted or hidden meanwhile) is shown by the caller; the poll it asks for brings the deleted row.
@@ -749,7 +784,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const setReply = useCallback((reply: MessageReply | null) => { entry.reply = reply; emit(entry); }, [entry]);
 
   // A send clears the signal on the server too, so the flag only needs resetting here. It also consumes the reply target.
-  const send = useCallback((body: string, image?: string) => { typingOn.current = false; const reply = entry.reply; entry.reply = null; enqueue(entry, body, reply, image); }, [entry]);
+  const send = useCallback((body: string, image?: string, mentions?: string[]) => { typingOn.current = false; const reply = entry.reply; entry.reply = null; enqueue(entry, body, reply, image, entry.target.kind === 'peer' ? undefined : mentions); }, [entry]);
   const retry = useCallback(() => { if (requeue(entry, false)) void pump(entry); }, [entry]);
   const discard = useCallback((clientId: string) => setOutgoing(entry, entry.outgoing.filter((item) => item.clientId !== clientId)), [entry]);
   const saveDraft = useCallback((text: string) => { entry.draft = text; }, [entry]);
@@ -797,6 +832,11 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     setMuted,
     deleteMessage,
     editMessage,
+    editOwn,
+    /** The viewer's own message the composer is rewriting, or null. */
+    editing: entry.editing,
+    setEditing,
+    search,
     signalTyping,
   };
 }
@@ -808,8 +848,14 @@ export type ChatThread = ReturnType<typeof useChatThread>;
 /**
  * While a phone thread is mounted, sets `--chat-h` on <html> to the visual viewport height minus the
  * top bar, so the composer stays above the on-screen keyboard (iOS Safari ignores interactive-widget).
+ *
+ * `pinPage` also holds the page itself at the top. iOS keeps the layout viewport tall under the keyboard, and on
+ * focus (and again while typing) it pans the page up to show the field, which leaves the thread scrolled off screen
+ * even though the column already fits above the keyboard. Only the log scrolls in a phone thread, so any page
+ * offset is undone. A field in a dialog or sheet (rendered outside #main) is left alone: those sit against the
+ * layout viewport and need the pan to clear the keyboard.
  */
-export function useChatViewport(active: boolean): void {
+export function useChatViewport(active: boolean, pinPage = false): void {
   useEffect(() => {
     if (!active || typeof window === 'undefined') return;
     const root = document.documentElement;
@@ -818,16 +864,22 @@ export function useChatViewport(active: boolean): void {
       const topbar = document.querySelector<HTMLElement>('.app-topbar');
       const height = (viewport?.height ?? window.innerHeight) - (topbar?.offsetHeight ?? 0);
       root.style.setProperty('--chat-h', `${Math.max(0, Math.round(height))}px`);
+      if (!pinPage || (window.scrollY <= 0 && (viewport?.offsetTop ?? 0) <= 0)) return;
+      const focused = document.activeElement;
+      if (focused && focused !== document.body && !document.getElementById('main')?.contains(focused)) return;
+      window.scrollTo(0, 0);
     };
     update();
     viewport?.addEventListener('resize', update);
     viewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, { passive: true });
     return () => {
       viewport?.removeEventListener('resize', update);
       viewport?.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update);
       root.style.removeProperty('--chat-h');
     };
-  }, [active]);
+  }, [active, pinPage]);
 }

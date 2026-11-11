@@ -3,12 +3,18 @@
  * the quote shown for a reply, and the maths behind swipe-to-reply. Kept free of React so they can be unit tested.
  */
 
-import { type MessageReaction, type MessageReply, type Reaction } from '@/domain/chat';
+import { type MessageReaction, type MessageReactor, type MessageReply, type Reaction } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 
 /** Spoken names for the tapbacks, in the order of REACTIONS. */
-export const REACTION_NAMES: Record<Reaction, string> = { '❤️': 'heart', '👍': 'thumbs up', '👎': 'thumbs down', '😂': 'laugh', '‼️': 'exclamation', '❓': 'question' };
+export const REACTION_NAMES: Record<Reaction, string> = {
+  '❤️': 'heart', '👍': 'thumbs up', '👎': 'thumbs down', '😂': 'laugh', '‼️': 'exclamation', '❓': 'question',
+  '😮': 'surprised', '😢': 'sad', '😭': 'crying', '😡': 'angry', '🔥': 'fire', '🎉': 'party popper', '💀': 'skull',
+  '🙏': 'folded hands', '👀': 'eyes', '💯': 'hundred', '🥺': 'pleading', '😍': 'heart eyes', '🤔': 'thinking', '😎': 'cool',
+  '👏': 'clap', '🤝': 'handshake', '✅': 'check mark', '🤣': 'rolling laughing', '😅': 'nervous laugh', '🙄': 'eye roll', '😬': 'grimace',
+  '🤯': 'mind blown', '🥳': 'celebrating', '😴': 'sleeping', '🤡': 'clown', '💔': 'broken heart', '🫶': 'heart hands', '🫡': 'salute',
+};
 
 /** The reaction strip's toggle: "React with heart". */
 export function reactionToggleLabel(emoji: Reaction): string {
@@ -18,6 +24,59 @@ export function reactionToggleLabel(emoji: Reaction): string {
 /** A pill under a bubble: "❤️ 2, you reacted" or "👍 1". */
 export function reactionLabel(reaction: MessageReaction): string {
   return `${reaction.emoji} ${reaction.count}${reaction.mine ? ', you reacted' : ''}`;
+}
+
+/**
+ * A pill's name once tapping it lists who reacted: "❤️ 2, Bob and you. Show who reacted". Names come from `reactors`
+ * for that emoji; a count larger than the names (a long list was cut, or someone is blocked) ends in "and N more".
+ */
+export function reactionWhoLabel(reaction: MessageReaction, reactors: MessageReactor[]): string {
+  const who = reactorNames(reaction, reactors);
+  return `${reaction.emoji} ${reaction.count}${who ? `, ${who}` : ''}. Show who reacted`;
+}
+
+/** "Bob", "Bob and you", "Bob, Cara and you", "Bob, Cara and 3 more": the viewer goes last, as "you". */
+export function reactorNames(reaction: MessageReaction, reactors: MessageReactor[]): string {
+  const mine = reactors.filter((reactor) => reactor.emoji === reaction.emoji);
+  const names = [...mine.filter((reactor) => !reactor.me).map((reactor) => reactor.name), ...(mine.some((reactor) => reactor.me) ? ['you'] : [])];
+  const shown = names.slice(0, 3);
+  const more = Math.max(0, reaction.count - shown.length);
+  if (!shown.length) return '';
+  if (more) return `${shown.join(', ')} and ${more} more`;
+  return shown.length === 1 ? shown[0]! : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+}
+
+/** The first image file in a paste or a drop, if it carries one (a copied screenshot, a dragged photo). */
+export function imageFileFrom(data: { files?: ArrayLike<File> | null } | null | undefined): File | null {
+  return imageFilesFrom(data)[0] ?? null;
+}
+
+/** Every image file in a paste, a drop or a picker's selection, in order. */
+export function imageFilesFrom(data: { files?: ArrayLike<File> | null } | null | undefined): File[] {
+  return Array.from(data?.files ?? []).filter((file) => file.type.startsWith('image/'));
+}
+
+/**
+ * The people the mention picker offers for what has been typed after "@": names that start with it first, then names
+ * with a word that starts with it, then names that contain it; at most `limit`, in the order given within each rank.
+ */
+export function mentionMatches<T extends { displayName: string }>(people: T[], query: string, limit = 6): T[] {
+  const wanted = query.toLowerCase();
+  if (!wanted) return people.slice(0, limit);
+  const rank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.startsWith(wanted)) return 0;
+    if (lower.split(/\s+/).some((word) => word.startsWith(wanted))) return 1;
+    return lower.includes(wanted) ? 2 : -1;
+  };
+  return people.map((person, index) => ({ person, index, rank: rank(person.displayName) })).filter((entry) => entry.rank >= 0)
+    .sort((left, right) => left.rank - right.rank || left.index - right.index).slice(0, limit).map((entry) => entry.person);
+}
+
+/** How one press of Send goes out when it carries images: each image is its own message, and the text rides with the last one. */
+export function sendParts(body: string, images: string[]): Array<{ body: string; image?: string }> {
+  if (!images.length) return [{ body }];
+  return images.map((image, index) => ({ body: index === images.length - 1 ? body : '', image }));
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */

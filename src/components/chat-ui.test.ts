@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { liveQuote, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
+import { QUICK_REACTIONS, REACTIONS } from '@/domain/chat';
+import { REACTION_NAMES, imageFileFrom, imageFilesFrom, mentionMatches, sendParts, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
 
 describe('reaction names', () => {
   it('names the strip toggles by the emoji', () => {
@@ -82,5 +83,57 @@ describe('swipe to reply', () => {
     expect(swipeProgress(SWIPE_MAX)).toBe(1);
     expect(swipeReplies(SWIPE_THRESHOLD - 1)).toBe(false);
     expect(swipeReplies(SWIPE_THRESHOLD)).toBe(true);
+  });
+});
+
+describe('who reacted', () => {
+  const bob = { emoji: '❤️' as const, name: 'Bob', avatar: null, me: false };
+  const cara = { emoji: '❤️' as const, name: 'Cara', avatar: null, me: false };
+  const me = { emoji: '❤️' as const, name: 'Alice', avatar: null, me: true };
+  it('names the people behind a pill, the viewer last', () => {
+    expect(reactorNames({ emoji: '❤️', count: 1, mine: false }, [bob])).toBe('Bob');
+    expect(reactorNames({ emoji: '❤️', count: 2, mine: true }, [me, bob])).toBe('Bob and you');
+    expect(reactorNames({ emoji: '❤️', count: 3, mine: true }, [me, bob, cara])).toBe('Bob, Cara and you');
+    expect(reactionWhoLabel({ emoji: '❤️', count: 2, mine: true }, [me, bob])).toBe('❤️ 2, Bob and you. Show who reacted');
+  });
+  it('only counts the pill’s own emoji and sums up the names it does not have', () => {
+    expect(reactorNames({ emoji: '👍', count: 1, mine: false }, [bob])).toBe('');
+    expect(reactorNames({ emoji: '❤️', count: 5, mine: false }, [bob, cara])).toBe('Bob, Cara and 3 more');
+    expect(reactionWhoLabel({ emoji: '👍', count: 1, mine: false }, [])).toBe('👍 1. Show who reacted');
+  });
+  it('finds the image in a paste or a drop', () => {
+    const text = { type: 'text/plain' } as File, png = { type: 'image/png' } as File;
+    expect(imageFileFrom({ files: [text, png] })).toBe(png);
+    expect(imageFileFrom({ files: [text] })).toBeNull();
+    expect(imageFileFrom(null)).toBeNull();
+  });
+});
+
+describe('more reactions, mentions and several images (chat-polish beta)', () => {
+  it('names every reaction once, with the original six as the quick strip', () => {
+    expect(QUICK_REACTIONS).toEqual(['❤️', '👍', '👎', '😂', '‼️', '❓']);
+    expect(new Set(REACTIONS).size).toBe(REACTIONS.length);
+    for (const emoji of REACTIONS) expect(REACTION_NAMES[emoji], emoji).toBeTruthy();
+    expect(new Set(Object.values(REACTION_NAMES)).size).toBe(REACTIONS.length);
+    // The extra ones fill whole rows of seven under the strip.
+    expect((REACTIONS.length - QUICK_REACTIONS.length) % 7).toBe(0);
+  });
+  it('offers people whose name starts with what was typed first, then by word, then anywhere', () => {
+    const people = ['Sam Lee', 'Lee Ann', 'Rosalee', 'Bob'].map((displayName) => ({ displayName }));
+    expect(mentionMatches(people, 'lee').map((person) => person.displayName)).toEqual(['Lee Ann', 'Sam Lee', 'Rosalee']);
+    expect(mentionMatches(people, '').map((person) => person.displayName)).toEqual(['Sam Lee', 'Lee Ann', 'Rosalee', 'Bob']);
+    expect(mentionMatches(people, 'zz')).toEqual([]);
+    expect(mentionMatches(people, '', 2)).toHaveLength(2);
+  });
+  it('sends each image as its own message, with the text on the last one', () => {
+    expect(sendParts('hi', [])).toEqual([{ body: 'hi' }]);
+    expect(sendParts('look', ['a', 'b', 'c'])).toEqual([{ body: '', image: 'a' }, { body: '', image: 'b' }, { body: 'look', image: 'c' }]);
+    expect(sendParts('', ['a'])).toEqual([{ body: '', image: 'a' }]);
+  });
+  it('takes every image out of a paste or a drop, in order', () => {
+    const files = [{ type: 'text/plain', name: 'a' }, { type: 'image/png', name: 'b' }, { type: 'image/gif', name: 'c' }] as unknown as File[];
+    expect(imageFilesFrom({ files }).map((file) => file.name)).toEqual(['b', 'c']);
+    expect(imageFileFrom({ files })?.name).toBe('b');
+    expect(imageFilesFrom(null)).toEqual([]);
   });
 });

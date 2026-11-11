@@ -12,11 +12,11 @@ import { CommunityService, memberIdSchema, proofSchema, reportSchema } from './c
 import { ProposalService, proposalCreateSchema, voteSchema } from './proposals';
 import { ScheduleSignalsService } from './schedule-signals';
 import { PERSONAL_SCHEDULE_CLIENT_VERSION } from '@/domain/schedule';
-import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
-import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
+import { ChatService, chatUserSchema, chatThreadSchema, chatSendSchema, chatReactSchema, chatDeleteSchema, chatEditSchema, chatSearchSchema, chatReadSchema, chatMuteSchema, chatTypingSchema, chatReportSchema, pauseChatSchema } from './chat';
+import { GroupChatService, groupCreateSchema, groupRenameSchema, groupMembersSchema, groupMemberSchema, groupIdSchema, groupThreadSchema, groupSendSchema, groupReactSchema, groupDeleteSchema, groupEditSchema, groupSearchSchema, groupReadSchema, groupMuteSchema, groupTypingSchema, groupReportSchema } from './group-chat';
 import { TASK_CLIENT_VERSION } from '@/domain/task';
-import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalReadSchema, globalMuteSchema,
-  SchoolChatService, schoolThreadSchema, schoolSendSchema, schoolReactSchema, schoolDeleteSchema, schoolEditSchema, schoolReadSchema, schoolMuteSchema } from './global-chat';
+import { GlobalChatService, globalThreadSchema, globalSendSchema, globalReactSchema, globalDeleteSchema, globalEditSchema, globalEditOwnSchema, globalSearchSchema, globalReadSchema, globalMuteSchema,
+  SchoolChatService, schoolThreadSchema, schoolSendSchema, schoolReactSchema, schoolDeleteSchema, schoolEditSchema, schoolEditOwnSchema, schoolSearchSchema, schoolReadSchema, schoolMuteSchema } from './global-chat';
 
 import { MenuService, menuLookupSchema, menuSetSchema, menuWeekSchema } from './menu';
 import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, SetupGuideService } from './setup-guides';
@@ -176,6 +176,8 @@ export const appRouter = t.router({
     send: accountScoped.input(chatSendSchema).mutation(async ({ ctx, input }) => chat(ctx.service).send(ctx.userId, input.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
     react: accountScoped.input(chatReactSchema).mutation(({ ctx, input }) => chat(ctx.service).react(ctx.userId, input.userId, input.seq, input.emoji)),
     delete: accountScoped.input(chatDeleteSchema).mutation(({ ctx, input }) => chat(ctx.service).delete(ctx.userId, input.userId, input.messageId)),
+    editOwn: accountScoped.input(chatEditSchema).mutation(({ ctx, input }) => chat(ctx.service).editOwn(ctx.userId, input.userId, input.messageId, input.body)),
+    search: accountScoped.input(chatSearchSchema).query(({ ctx, input }) => chat(ctx.service).search(ctx.userId, input.userId, input.query)),
     read: accountScoped.input(chatReadSchema).mutation(({ ctx, input }) => chat(ctx.service).read(ctx.userId, input.userId, input.seq)),
     mute: accountScoped.input(chatMuteSchema).mutation(({ ctx, input }) => chat(ctx.service).mute(ctx.userId, input.userId, input.muted)),
     typing: accountScoped.input(chatTypingSchema).mutation(({ ctx, input }) => chat(ctx.service).typing(ctx.userId, input.userId, input.typing)),
@@ -191,9 +193,11 @@ export const appRouter = t.router({
     removeMember: accountScoped.input(groupMemberSchema).mutation(({ ctx, input }) => groups(ctx.service).removeMember(ctx.userId, input.groupId, input.userId)),
     leave: accountScoped.input(groupIdSchema).mutation(({ ctx, input }) => groups(ctx.service).leave(ctx.userId, input.groupId)),
     thread: accountScoped.input(groupThreadSchema).query(({ ctx, input }) => groups(ctx.service).thread(ctx.userId, input.groupId, { after: input.after, before: input.before })),
-    send: accountScoped.input(groupSendSchema).mutation(async ({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
+    send: accountScoped.input(groupSendSchema).mutation(async ({ ctx, input }) => groups(ctx.service).send(ctx.userId, input.groupId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image), input.mentions)),
     react: accountScoped.input(groupReactSchema).mutation(({ ctx, input }) => groups(ctx.service).react(ctx.userId, input.groupId, input.seq, input.emoji)),
     delete: accountScoped.input(groupDeleteSchema).mutation(({ ctx, input }) => groups(ctx.service).delete(ctx.userId, input.groupId, input.messageId)),
+    editOwn: accountScoped.input(groupEditSchema).mutation(({ ctx, input }) => groups(ctx.service).editOwn(ctx.userId, input.groupId, input.messageId, input.body)),
+    search: accountScoped.input(groupSearchSchema).query(({ ctx, input }) => groups(ctx.service).search(ctx.userId, input.groupId, input.query)),
     read: accountScoped.input(groupReadSchema).mutation(({ ctx, input }) => groups(ctx.service).read(ctx.userId, input.groupId, input.seq)),
     mute: accountScoped.input(groupMuteSchema).mutation(({ ctx, input }) => groups(ctx.service).mute(ctx.userId, input.groupId, input.muted)),
     typing: accountScoped.input(groupTypingSchema).mutation(({ ctx, input }) => groups(ctx.service).typing(ctx.userId, input.groupId, input.typing)),
@@ -202,20 +206,24 @@ export const appRouter = t.router({
   // The global chat room (docs/CHAT.md §11). Public to every member with names, so the owner moderates it directly.
   global: t.router({
     thread: accountScoped.input(globalThreadSchema).query(({ ctx, input }) => room(ctx.service).thread(ctx.userId, { after: input.after, before: input.before })),
-    send: accountScoped.input(globalSendSchema).mutation(async ({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
+    send: accountScoped.input(globalSendSchema).mutation(async ({ ctx, input }) => room(ctx.service).send(ctx.userId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image), input.mentions)),
     react: accountScoped.input(globalReactSchema).mutation(({ ctx, input }) => room(ctx.service).react(ctx.userId, input.seq, input.emoji)),
     delete: accountScoped.input(globalDeleteSchema).mutation(({ ctx, input }) => room(ctx.service).delete(ctx.userId, input.messageId, input.reason)),
     edit: moderatorScoped.input(globalEditSchema).mutation(({ ctx, input }) => room(ctx.service).edit(ctx.userId, input.messageId, input.body, input.reason)),
+    editOwn: accountScoped.input(globalEditOwnSchema).mutation(({ ctx, input }) => room(ctx.service).editOwn(ctx.userId, input.messageId, input.body)),
+    search: accountScoped.input(globalSearchSchema).query(({ ctx, input }) => room(ctx.service).search(ctx.userId, input.query)),
     read: accountScoped.input(globalReadSchema).mutation(({ ctx, input }) => room(ctx.service).read(ctx.userId, input.seq)),
     mute: accountScoped.input(globalMuteSchema).mutation(({ ctx, input }) => room(ctx.service).mute(ctx.userId, input.muted)),
   }),
   // The member's school chat room (docs/CHAT.md §16): the global room's rules, for one school's members.
   schoolChat: t.router({
     thread: accountScoped.input(schoolThreadSchema).query(({ ctx, input }) => schoolRoom(ctx.service).thread(ctx.userId, input.schoolId, { after: input.after, before: input.before })),
-    send: accountScoped.input(schoolSendSchema).mutation(async ({ ctx, input }) => schoolRoom(ctx.service).send(ctx.userId, input.schoolId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image))),
+    send: accountScoped.input(schoolSendSchema).mutation(async ({ ctx, input }) => schoolRoom(ctx.service).send(ctx.userId, input.schoolId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image), input.mentions)),
     react: accountScoped.input(schoolReactSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).react(ctx.userId, input.schoolId, input.seq, input.emoji)),
     delete: accountScoped.input(schoolDeleteSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).delete(ctx.userId, input.schoolId, input.messageId, input.reason)),
     edit: moderatorScoped.input(schoolEditSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).edit(ctx.userId, input.schoolId, input.messageId, input.body, input.reason)),
+    editOwn: accountScoped.input(schoolEditOwnSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).editOwn(ctx.userId, input.schoolId, input.messageId, input.body)),
+    search: accountScoped.input(schoolSearchSchema).query(({ ctx, input }) => schoolRoom(ctx.service).search(ctx.userId, input.schoolId, input.query)),
     read: accountScoped.input(schoolReadSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).read(ctx.userId, input.schoolId, input.seq)),
     mute: accountScoped.input(schoolMuteSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).mute(ctx.userId, input.schoolId, input.muted)),
   }),

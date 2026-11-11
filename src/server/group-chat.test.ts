@@ -329,7 +329,7 @@ describe('group replies and reactions', () => {
   it('rejects invalid emoji, missing and deleted messages, and paused senders', () => {
     const f = setup();
     const message = f.send(f.alice, 'hello');
-    fails(() => f.react(f.alice, message.seq, '🔥' as never), 'BAD_REQUEST');
+    fails(() => f.react(f.alice, message.seq, '🦄' as never), 'BAD_REQUEST');
     fails(() => f.react(f.alice, 999999, '👍'), 'NOT_FOUND');
     f.remove(message.id);
     fails(() => f.react(f.bob, message.seq, '👍'), 'NOT_FOUND');
@@ -358,6 +358,28 @@ describe('group replies and reactions', () => {
     expect(f.thread(f.alice, revision).messages.find(m => m.seq === reply.seq)?.replyTo?.preview).toBeNull();
     expect(f.db.pragma('foreign_key_check')).toEqual([]);
   });
+});
+
+it('names who reacted in order, flags the viewer and leaves out people the viewer blocked', () => {
+  const f = fixture();
+  const group = f.groups.create(f.alice, { name: 'Who reacted', memberIds: [f.bob, f.cara] });
+  const message = f.send(f.alice, group.id, 'hello');
+  expect(message.reactors).toEqual([]);
+  f.groups.react(f.bob, group.id, message.seq, '👍');
+  f.groups.react(f.cara, group.id, message.seq, '❤️');
+  const seen = (viewer: string) => f.groups.thread(viewer, group.id).messages.find(m => m.seq === message.seq)!;
+  expect(seen(f.alice).reactors.map(r => [r.emoji, r.me])).toEqual([['👍', false], ['❤️', false]]);
+  expect(seen(f.bob).reactors.map(r => [r.emoji, r.me])).toEqual([['👍', true], ['❤️', false]]);
+  const names = seen(f.alice).reactors.map(r => r.name);
+  expect(new Set(names).size).toBe(2);
+  // Changing a tapback keeps the person's place in the list.
+  f.groups.react(f.bob, group.id, message.seq, '😂');
+  expect(seen(f.alice).reactors.map(r => r.emoji)).toEqual(['😂', '❤️']);
+  // Alice blocks Cara: the count still includes Cara's heart, the names do not.
+  f.community.block(f.alice, f.cara, true);
+  expect(seen(f.alice).reactions.map(r => r.count)).toEqual([1, 1]);
+  expect(seen(f.alice).reactors.map(r => r.emoji)).toEqual(['😂']);
+  expect(seen(f.bob).reactors).toHaveLength(2);
 });
 
 it('keeps pre-join and blocked group targets out of replies and reactions', () => {
