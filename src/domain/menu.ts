@@ -23,7 +23,7 @@ export type MenuDay = { date: string; notes: string[]; sections: Array<{ title: 
 /** Station names that mean the main course: "Entree", "Entrées", "Hot Entree", "Main Line", "Mains", "Hot Lunch". */
 const MAIN_STATION = /\bentr[eé]es?\b|\bmains?\b|\bhot lunch\b/i;
 /** Station names for what goes beside the main course. The dish that names a day is never taken from one of these when another station exists. */
-const SIDE_STATION = /soup|salad|side|fruit|veg|dessert|sweet|bakery|bread|milk|beverage|drink|condiment|sauce|topping|snack/i;
+const SIDE_STATION = /soup|salad|side|fruit|\bveg(?:etable)?s?\b|dessert|sweet|bakery|bread|milk|beverage|drink|condiment|sauce|topping|snack/i;
 
 /**
  * The station that holds the day's main course. Schools name their stations freely ("Entree", "Create", "Main Line")

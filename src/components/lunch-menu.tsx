@@ -112,7 +112,7 @@ function MenuWeekList({ days, today }: { days: Array<{ date: string; day: MenuDa
   // Undefined until the member picks: today then, when it lists dishes. Null after they close the open day.
   const [picked, setPicked] = useState<string | null | undefined>(undefined);
   const todayDay = days.find((entry) => entry.date === today)?.day;
-  const open = picked === undefined ? (todayDay && todayDay.sections.length > 0 ? today : null) : picked;
+  const open = picked === undefined ? (todayDay && todayDay.sections.some((section) => section.items.length > 0) ? today : null) : picked;
   const tile = 'rounded-2xl bg-muted/70 ring-1 ring-inset ring-foreground/[0.04]';
   return <ul className="grid gap-1.5">
     {days.map(({ date, day }) => {
@@ -123,7 +123,7 @@ function MenuWeekList({ days, today }: { days: Array<{ date: string; day: MenuDa
         <span aria-hidden="true" className="text-[10.5px] font-bold text-muted-foreground">{weekday.slice(0, 3)}</span><span className="sr-only">{weekday}</span>
         <span className={cn('relative text-[15px] font-extrabold tabular-nums', isToday && 'after:absolute after:-bottom-0.5 after:left-1/2 after:h-0.5 after:w-3.5 after:-translate-x-1/2 after:rounded-full after:bg-primary')}>{Number(date.slice(8))}</span>
       </span>;
-      if (!day || day.sections.length === 0) return <li key={date} className={cn(tile, 'flex items-center gap-3 p-3')}>
+      if (!day || !day.sections.some((section) => section.items.length > 0)) return <li key={date} className={cn(tile, 'flex items-center gap-3 p-3')}>
         {cell}
         <div className="grid min-w-0 flex-1 gap-px">
           {day && day.notes.length > 0 ? day.notes.map((note) => <p key={note} className="text-sm font-semibold">{note}</p>) : <p className="text-sm text-muted-foreground">No menu posted.</p>}

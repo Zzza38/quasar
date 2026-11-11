@@ -211,7 +211,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     await refresh();
     if (failure) setError(errorMessage(failure));
   };
-  const openCount = requests.length + verifications.length + reports.length + proposals.length;
+  const openCount = requests.length + verifications.length + reports.length + proposals.length + logos.length;
   const may = (permission: StaffPermission) => hasPermission(access, permission);
   const owner = access?.role === 'owner';
   const role = access?.role ?? 'owner';

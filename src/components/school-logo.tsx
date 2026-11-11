@@ -120,7 +120,7 @@ export function SchoolLogoSection({ state }: { state: AppState }) {
     });
   };
   const choose = (next: 'propose' | 'set') => { mode.current = next; picker.current?.click(); };
-  const logo = board?.logo ?? school.logo ?? null;
+  const logo = board ? board.logo : school.logo ?? null;
   const waiting = (board?.proposals ?? []).filter((entry) => entry.status === 'open');
   const closed = (board?.proposals ?? []).filter((entry) => entry.status !== 'open');
   const force = (id: string, win: boolean) => void run(() => api.admin.forceLogo.mutate({ id, win }));
