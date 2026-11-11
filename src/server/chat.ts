@@ -49,7 +49,8 @@ export type ChatPause = { until: string | null; reason: string; appealed: boolea
  * How far one other member of a conversation has got (docs/CHAT.md §13): `deliveredSeq` is the newest message their
  * device has fetched, `readSeq` the newest they have marked read. `typing` is true while their typing signal is live.
  */
-export type Receipt = { id: string; displayName: string; avatar: string | null; deliveredSeq: number; readSeq: number; typing: boolean };
+/** `joinedAt` is sent for groups only: a message sent before a member joined is not theirs to read (docs/CHAT.md §12). */
+export type Receipt = { id: string; displayName: string; avatar: string | null; deliveredSeq: number; readSeq: number; typing: boolean; joinedAt?: string };
 export type InboxRow =
   | { state: 'open'; peer: ChatPeer;
       lastMessage: { fromMe: boolean; preview: string | null; createdAt: string; deletedBy: 'sender' | 'support' | null } | null;

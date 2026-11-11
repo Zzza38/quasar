@@ -318,7 +318,7 @@ export class GroupChatService {
       const members = this.members(group.id);
       const nowIso = this.iso();
       const receipts: Receipt[] = members.filter(entry => entry.id !== viewerId).map(entry => ({
-        id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso,
+        id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso, joinedAt: entry.joinedAt,
       }));
       const info: GroupInfo = { id: group.id, name: group.name, createdAt: group.created_at, role: member.role, members: members.map(({ row: _row, ...entry }) => entry) };
       const base = { peer: null, group: info, revision: group.revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts };
