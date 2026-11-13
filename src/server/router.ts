@@ -24,6 +24,7 @@ import { guideImageUploadSchema, guidePlatformsUpdateSchema, saveGuideSchema, Se
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS, adminSignInAllowed } from '@/lib/admin-session';
 import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, friendshipRemoveSchema, personalEditSchema, reasonedUserSchema, schoolDetailsSchema, schoolMoveSchema, supportViewSchema, suspendSchema, taskDeleteSchema, taskEditSchema, unbanSchema, userSearchSchema, verificationSetSchema } from './support';
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
+import { NOW_CARD_STYLES } from '@/lib/now-split';
 import { BetaService, betaEnrollSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
 import { staffAccess, type StaffPermission } from '@/domain/staff';
 /**
@@ -124,7 +125,11 @@ export const appRouter = t.router({
     // /admin is outside the workspace, so staff betas (for <Beta> in the school review) come with the session.
     return { user: ctx.service.user(ctx.userId), isAdmin, staff: access, adminReady: !!access && adminSignInAllowed(ctx.authAt), betas: access ? betas(ctx.service).joined(ctx.userId) : [] };
   }),
-  profile: t.router({save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input))}),
+  profile: t.router({
+    save: accountScoped.input(namesSchema).mutation(({ctx, input}) => ctx.service.profile(ctx.userId, input)),
+    // Account → Look: how the Now card shows the next class.
+    nowCard: accountScoped.input(z.object({ style: z.enum(NOW_CARD_STYLES) })).mutation(({ ctx, input }) => ctx.service.setNowCard(ctx.userId, input.style)),
+  }),
   // Profile pictures (docs/CHAT.md §13): an uploaded picture, or back to the Google picture or initials.
   avatar: t.router({
     upload: accountScoped.input(avatarUploadSchema).mutation(({ ctx, input }) => ctx.service.setAvatar(ctx.userId, input)),

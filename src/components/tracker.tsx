@@ -15,6 +15,8 @@ import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { BetaProvider } from './betas';
+import { nowCardStyle } from './now-card-setting';
+import type { NowCardStyle } from '@/lib/now-split';
 import { Welcome } from './landing';
 import { Button, Callout } from './primitives';
 import { useWorkspace, type InitialBoot } from './use-workspace';
@@ -257,11 +259,16 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     await api.chat.setPush.mutate({ accountId, enabled });
     await session.synchronize();
   };
+  const onNowCard = async (style: NowCardStyle) => {
+    await api.profile.nowCard.mutate({ accountId, style });
+    await session.synchronize();
+  };
 
   // A context saved by a build before betas existed has none (see CONTEXT_VERSION).
   return <BetaProvider key={accountKey} accountId={accountId} betas={context.betas ?? []} online={session.online} refresh={session.initialize}>
     <Shell session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
+    nowCard={nowCardStyle(context.user)} onNowCard={onNowCard}
     gradeSettings={<GradePicker personal={personal} save={state.savePersonal} disabled={!state.personalValid} />}
     calendarSettings={(openAdd) => <CalendarFeeds state={state} openAdd={openAdd} />}>
     {/* The grade prompt would crowd the chat column; it shows again on every other view. */}
