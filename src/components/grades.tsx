@@ -399,8 +399,6 @@ function MissingCallout({ cls }: { cls: GradeClass }) {
   </div>;
 }
 
-const FINE_PRINT = 'Letters use common cutoffs. If your school’s differ, set a custom percentage. Quasar reads grades live from Schoology and saves only your goals.';
-
 /** One class: its gradebook, the goal and the what-ifs. `sheet` is the phone order (goal first, in one column). */
 export function ClassDetail({ cls, sheet, today, ...actions }: { cls: GradeClass; sheet?: boolean; today: string } & DetailActions) {
   const scenario = useMemo(() => scenarioOf(actions.typed), [actions.typed]);
@@ -416,7 +414,6 @@ export function ClassDetail({ cls, sheet, today, ...actions }: { cls: GradeClass
     {comingUp}
     <Categories cls={cls} scenario={scenario} />
     <Graded cls={cls} limit={4} />
-    <p className="text-[12.5px] text-muted-foreground">{FINE_PRINT}</p>
   </div>;
   return <section aria-label={`${cls.title} grades`} className="grid grid-cols-[minmax(0,1fr)] gap-[18px] rounded-2xl bg-card px-6 pt-[22px] pb-5 text-sm shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]">
     <ClassHead cls={cls} withTile />
@@ -425,7 +422,6 @@ export function ClassDetail({ cls, sheet, today, ...actions }: { cls: GradeClass
       <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
         {goalBox}
         {cls.now !== null && <WhatIfBox cls={cls} projected={projected} onClear={actions.onClear} plusLocked={actions.plusLocked} />}
-        <p className="px-1 text-[12.5px] text-muted-foreground">{FINE_PRINT}</p>
       </div>
     </div>
   </section>;
@@ -488,7 +484,7 @@ export function GradesBoard({ classes, selected, today, mobile, online, plusLock
   const cards = <ul className="grid items-start gap-3.5 sm:grid-cols-2 lg:grid-cols-3" aria-label="Grades by class">
     {classes.map(cls => <GradeCard key={cls.id} cls={cls} today={today} onOpen={onSelect} onGoal={onGoal} online={online} />)}
   </ul>;
-  if (!current || !actions) return <>{cards}<p className="text-[12.5px] text-muted-foreground max-lg:hidden">{FINE_PRINT}</p></>;
+  if (!current || !actions) return cards;
   if (mobile) return <>
     {cards}
     <Modal open onClose={() => onSelect(null)} footer={current.now !== null && Object.keys(scenarioOf(actions.typed).scores ?? {}).length > 0 ? <WhatIfBar cls={current} typed={actions.typed} onClear={actions.onClear} /> : undefined}
@@ -508,12 +504,6 @@ export function GradesBoard({ classes, selected, today, mobile, online, plusLock
 /** Gradebooks this tab already read, by account, so switching tabs or pages doesn't reread Schoology. Memory only. */
 const memory = new Map<string, { book: Book; at: number }>();
 const FRESH_MS = 5 * 60_000;
-const checkedText = (iso: string, now: Date, short: boolean) => {
-  const at = new Date(iso);
-  const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(at);
-  if (short) return time;
-  return at.toDateString() === now.toDateString() ? `Today, ${time}` : `${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(at)}, ${time}`;
-};
 
 export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode }) {
   const accountId = state.context.user.id;
@@ -599,11 +589,10 @@ export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode })
   const withGoal = classes.filter(cls => cls.goalSaved && cls.now !== null && cls.target !== null);
   const met = withGoal.filter(cls => cls.now! >= cls.target! - 1e-9).length;
   const missing = classes.reduce((sum, cls) => sum + cls.counts.missing, 0);
-  const summary = (short: boolean) => {
+  const summary = () => {
     const parts: ReactNode[] = [];
     if (withGoal.length > 0) parts.push(<span key="goals"><strong className="text-foreground">{met} of {withGoal.length}</strong> {withGoal.length === 1 ? 'goal' : 'goals'} met</span>);
     if (missing > 0) parts.push(<span key="missing" className="font-bold text-destructive">{missing} missing</span>);
-    if (short && book) parts.push(<span key="checked">checked {checkedText(book.checkedAt, state.now, true)}</span>);
     return parts.flatMap((part, index) => index === 0 ? [part] : [' · ', part]);
   };
   const plusLocked = connection.status?.beta === true && connection.status.plusLocked;
@@ -626,15 +615,14 @@ export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode })
   return <>
     <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
       {tabs}
-      <span className="text-[13px] text-muted-foreground max-lg:hidden">{summary(false)}</span>
+      <span className="text-[13px] text-muted-foreground max-lg:hidden">{summary()}</span>
       <span className="flex-1" />
       {isConnected && <span className="flex items-center gap-2">
-        {book && <span className="inline-flex items-center gap-2 text-[13px] text-muted-foreground max-lg:hidden"><i aria-hidden="true" className="size-2 rounded-full bg-success" />Schoology, checked {checkedText(book.checkedAt, state.now, false)}</span>}
         <Button size="sm" icon="refresh" aria-label="Refresh grades" title="Refresh grades" busy={loading} disabled={!state.online || busy} onClick={() => void refresh()} />
         <IconButton size="sm" variant="secondary" icon="settings" label="Schoology settings" onClick={() => setSettings(true)} />
       </span>}
     </div>
-    {book && summary(true).length > 0 && <p className="-mt-2 text-[13px] text-muted-foreground lg:hidden">{summary(true)}</p>}
+    {book && summary().length > 0 && <p className="-mt-2 text-[13px] text-muted-foreground lg:hidden">{summary()}</p>}
     {connection.error && !settings && <Callout tone="danger" icon="alert" role="alert">{connection.error}</Callout>}
     {error && <Callout tone="danger" icon="alert" role="alert" actions={<Button size="sm" disabled={!state.online || busy} onClick={() => void load(true)}>Try again</Button>}>{error}{book && ' Showing the grades from the last check.'}</Callout>}
     {goalError && <Callout tone="danger" icon="alert" role="alert">Your goal didn’t save. {goalError}</Callout>}

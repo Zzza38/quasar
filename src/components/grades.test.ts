@@ -86,7 +86,7 @@ describe('the grades overview', () => {
     expect(page).toContain('No grade yet');
     expect(page).toContain('Schoology shows no grade here yet. Portfolio check 1 is due Nov 16. You can set a goal once a grade lands.');
     expect(html.match(/role="img"/g)).toHaveLength(2);
-    expect(page).toContain('Letters use common cutoffs.');
+    expect(page).not.toContain('Letters use common cutoffs.');
     // Every control is a shadcn one: no native form elements anywhere on the page.
     expect(html.replace(/<select aria-hidden="true"[^>]*>.*?<\/select>/g, '')).not.toMatch(/<select|<textarea|type="(number|range|checkbox|radio|date)"/);
   });
