@@ -178,8 +178,8 @@ test('on a phone the redesigned School page is a list that opens one section at 
   await expect(rotation).toBeHidden();
 });
 
-test('a member proposes a school logo and the school votes it in; support can force a vote and revert a logo', async ({ page, context, browser }, testInfo) => {
-  test.setTimeout(90_000);
+test('a member proposes a school logo and the school votes it in; support can force a vote, revert a logo, and lock one it set', async ({ page, context, browser }, testInfo) => {
+  test.setTimeout(120_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const { id, name, members, schoolId } = seed(true);
   await open(page, context, id, '/school?section=logo');
@@ -261,13 +261,52 @@ test('a member proposes a school logo and the school votes it in; support can fo
   // Support then forces the vote that lost to win: its logo shows, at a new address.
   await votes.filter({ hasText: 'Stopped by support' }).getByRole('button', { name: 'Force win' }).click();
   await expect(votes.filter({ hasText: 'Published by support' })).toHaveCount(1);
-  await support.close();
   await page.reload();
   await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=3`);
   await card.getByRole('button', { name: /earlier logos \(2\)/ }).click();
   await expect(card).toContainText('Published by support');
   await expect(card).toContainText('Reverted by support');
   await card.screenshot({ path: testInfo.outputPath('logo-history.png') });
+
+  // A classmate starts another vote, then support sets a logo of its own. That deletes the vote and locks the logo.
+  const again = openDatabase(process.env.E2E_DATABASE_PATH!);
+  try { new SchoolLogoService(new Service(again, 'browser-owner@example.com')).propose(members[4], { schoolId, ...rival }); } finally { again.close(); }
+  await page.reload();
+  await expect(card.getByRole('listitem').filter({ hasText: 'Proposed by Member 3' })).toBeVisible();
+  const official = await sharp({ create: { width: 200, height: 200, channels: 4, background: { r: 30, g: 120, b: 60, alpha: 1 } } }).png().toBuffer();
+  await sheet.locator('input[type="file"]').setInputFiles({ name: 'official.png', mimeType: 'image/png', buffer: official });
+  await expect(sheet).toContainText('Support chose this logo, so new ones come in as requests.');
+  await expect(votes).toHaveCount(2);
+  await page.reload();
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=4`);
+  await expect(card).toContainText('Support chose this school’s logo. Members can ask support for a different one.');
+  await expect(card.getByRole('listitem').filter({ hasText: 'Proposed by Member 3' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /Propose/ })).toHaveCount(0);
+
+  // A member's new logo is now a request to support, with no vote.
+  await expect(card.getByRole('button', { name: 'Request a new logo' })).toBeVisible();
+  await card.locator('input[type="file"]').setInputFiles({ name: 'crest.png', mimeType: 'image/png', buffer: picture });
+  const request = card.getByRole('listitem').filter({ hasText: 'Your request' });
+  await expect(request).toContainText('waiting for support');
+  for (const label of ['For', 'Against', 'Approve', 'Decline']) await expect(request.getByRole('button', { name: label, exact: true })).toHaveCount(0);
+  await expect(request.getByRole('button', { name: 'Withdraw' })).toBeVisible();
+  await card.screenshot({ path: testInfo.outputPath('logo-request.png') });
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=4`);
+
+  // It waits in the /admin inbox until support answers it. Approving it publishes it, and the logo stays locked.
+  await admin.goto('/admin');
+  await expect(queue).toContainText('Requested by Maya');
+  await expect(admin.getByRole('tab', { name: 'Inbox · 1', exact: true })).toBeVisible();
+  await admin.screenshot({ path: testInfo.outputPath('admin-logo-request.png') });
+  await queue.getByRole('button', { name: `Approve the logo request for ${name}` }).click();
+  await expect(queue).toContainText('No open votes or requests');
+  await support.close();
+  await page.reload();
+  await expect(header.locator('img')).toHaveAttribute('src', `/api/school-logos/${schoolId}?v=5`);
+  await expect(request).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Request a new logo' })).toBeVisible();
+  await card.getByRole('button', { name: /earlier logos \(3\)/ }).click();
+  await expect(card).toContainText('Approved by support');
 });
 
 for (const width of [1280, 390]) {

@@ -840,6 +840,24 @@ function migrate(db: Db): void {
     UPDATE school_logo_proposals SET status='open', closed_at=NULL WHERE status='awaiting-support';
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(35, datetime('now'));
   `);
+
+  // Logo requests (src/server/school-logos.ts). While staff chose a school's logo, a member's new logo is a request
+  // to support (`request` 1, status 'requested') instead of a vote. The column is added only if missing, and no
+  // migration number is used, for the reason given at migration 35.
+  const logoProposalColumns = db.pragma('table_info(school_logo_proposals)') as {name: string}[];
+  if (!logoProposalColumns.some(column => column.name === 'request')) db.exec('ALTER TABLE school_logo_proposals ADD COLUMN request INTEGER NOT NULL DEFAULT 0');
+  // Setting a logo deletes the school's logo votes. This applies the same rule to schools whose logo staff set before
+  // the rule existed: their proposals that are not requests go, with their votes, except any that was once the
+  // school's logo (the history points at those). Safe to repeat: once it has run, the service keeps such a school
+  // free of votes.
+  const staffChose = `SELECT h.school_id FROM school_logo_history h LEFT JOIN school_logo_proposals hp ON hp.id=h.proposal_id
+    WHERE h.id=(SELECT max(x.id) FROM school_logo_history x WHERE x.school_id=h.school_id AND x.reverted_at IS NULL)
+      AND h.image IS NOT NULL AND h.actor_id IS NOT NULL AND (h.proposal_id IS NULL OR hp.request=1)`;
+  const staleVotes = `school_id IN (${staffChose}) AND request=0 AND NOT EXISTS (SELECT 1 FROM school_logo_history h WHERE h.proposal_id=school_logo_proposals.id)`;
+  db.exec(`
+    DELETE FROM school_logo_votes WHERE proposal_id IN (SELECT id FROM school_logo_proposals WHERE ${staleVotes});
+    DELETE FROM school_logo_proposals WHERE ${staleVotes};
+  `);
 }
 const globalDb = globalThis as unknown as { quasarDb?: Db };
 export function getDb(): Db {

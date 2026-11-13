@@ -211,7 +211,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     await refresh();
     if (failure) setError(errorMessage(failure));
   };
-  const openCount = requests.length + verifications.length + reports.length + proposals.length;
+  // A logo vote settles without staff, so only logo requests count as waiting on them.
+  const openCount = requests.length + verifications.length + reports.length + proposals.length + logos.filter((logo) => logo.status === 'requested').length;
   const may = (permission: StaffPermission) => hasPermission(access, permission);
   const owner = access?.role === 'owner';
   const role = access?.role ?? 'owner';
@@ -372,16 +373,22 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         </li>)}</ul>}
       </Section>}
 
-      {may('proposals') && <Section id="logos-title" title="School logo votes" icon="imageUp" description="Logos a school is voting on. A vote publishes or rejects its logo without you; force one either way here. To undo a published logo, open the school and revert it.">
-        {!loading && logos.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open votes</Hint>}
-        {logos.length > 0 && <ul className="grid gap-2">{logos.map((logo) => <li key={logo.id} className="flex flex-wrap items-center gap-4 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
-          {/* eslint-disable-next-line @next/next/no-img-element -- a small picture from our own route. */}
-          <img src={logo.image} alt={`Proposed logo for ${logo.schoolName}`} draggable={false} className="size-24 shrink-0 rounded-2xl bg-white object-contain p-1.5 ring-1 ring-foreground/10" />
-          <div className="grid min-w-0 flex-1 basis-56 gap-2">
-            <span><strong className="text-sm font-bold">{logo.schoolName}</strong><Hint>Proposed by {logo.proposerName} · {logo.votesFor} for, {logo.votesAgainst} against, passes at {logo.threshold} · {formatDate(instantParts(logo.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></span>
-            <div className="flex flex-wrap gap-2"><Button size="sm" aria-label={`Force the logo for ${logo.schoolName} to win`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: true }))}>Force win</Button><Button size="sm" variant="ghost" aria-label={`Force the logo for ${logo.schoolName} to lose`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: false }))}>Force loss</Button></div>
-          </div>
-        </li>)}</ul>}
+      {may('proposals') && <Section id="logos-title" title="School logo votes and requests" icon="imageUp" description="Logos a school is voting on, and logos members asked for at a school whose logo support chose. A vote publishes or rejects its logo without you; force one either way here. A request waits until you approve or decline it. To undo a published logo, open the school and revert it.">
+        {!loading && logos.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open votes or requests</Hint>}
+        {logos.length > 0 && <ul className="grid gap-2">{logos.map((logo) => {
+          const request = logo.status === 'requested';
+          return <li key={logo.id} className="flex flex-wrap items-center gap-4 rounded-2xl bg-muted/70 p-4 ring-1 ring-inset ring-foreground/[0.04]">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a small picture from our own route. */}
+            <img src={logo.image} alt={`Proposed logo for ${logo.schoolName}`} draggable={false} className="size-24 shrink-0 rounded-2xl bg-white object-contain p-1.5 ring-1 ring-foreground/10" />
+            <div className="grid min-w-0 flex-1 basis-56 gap-2">
+              <span><strong className="text-sm font-bold">{logo.schoolName}</strong><Hint>{request ? `Requested by ${logo.proposerName} · support chose this school’s logo, so there is no vote` : `Proposed by ${logo.proposerName} · ${logo.votesFor} for, ${logo.votesAgainst} against, passes at ${logo.threshold}`} · {formatDate(instantParts(logo.createdAt, browserTimeZone()).date, { weekday: 'short', year: true })}</Hint></span>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" aria-label={request ? `Approve the logo request for ${logo.schoolName}` : `Force the logo for ${logo.schoolName} to win`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: true }))}>{request ? 'Approve' : 'Force win'}</Button>
+                <Button size="sm" variant="ghost" aria-label={request ? `Decline the logo request for ${logo.schoolName}` : `Force the logo for ${logo.schoolName} to lose`} onClick={() => void act(() => api.admin.forceLogo.mutate({ id: logo.id, win: false }))}>{request ? 'Decline' : 'Force loss'}</Button>
+              </div>
+            </div>
+          </li>;
+        })}</ul>}
       </Section>}
       </TabsContent>
       {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
