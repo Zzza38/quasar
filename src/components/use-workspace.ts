@@ -1,4 +1,5 @@
 'use client';
+import { clearReceived, removeReceived } from '@/client/received-cache';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { removeStaleWorkers, serviceWorkerEnabled } from '@/client/service-worker-support';
@@ -208,7 +209,8 @@ export async function signOutDevice(store: OfflineWorkspace | null, discard: boo
     // next-auth's client does not expose the sign-out response status. Check
     // the cookie-backed session before deleting the offline account.
     if (await steps.session()) throw new Error('Sign-out did not finish. Your saved data is preserved; please try again.');
-    if (session) steps.forget(session.user.id);
+    if (session) { removeReceived(session.user.id); steps.forget(session.user.id); }
+    if (store) removeReceived(store.accountId);
     // Without discard, the queue is checked again in the same transaction as the delete, in case a tab
     // that predates the sign-out marker (or outlived its expiry) queued a change after the check above.
     if (store) {
@@ -269,6 +271,7 @@ export function useWorkspace(initial?: InitialBoot): WorkspaceSession {
   }, []);
 
   const requireSignIn = useCallback((message = '') => {
+    clearReceived();
     detach(); setContext(null); setSnapshot(null); setClassmates([]); setAuthRequired(true); setLoading(false); setError(message);
   }, [detach]);
 

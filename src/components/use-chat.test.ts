@@ -83,6 +83,13 @@ describe('applyThreadPage', () => {
   const loaded = () => ({ peer: null, room: null, group: null, receipts: [], hasEarlier: false, muted: false, pause: null,
     messages: [message(1, { reactions: [{ emoji: '❤️', count: 1, mine: false }] }), message(2, { replyTo: { seq: 1, fromMe: false, senderName: 'Blocked', preview: 'message 1' } }), message(3)] });
 
+  it('preserves a deletion confirmed while a full refresh was in flight', () => {
+    const previous = loaded();
+    previous.messages = [message(1, { revision: 10, body: null, deletedBy: 'sender' })];
+    const result = { ...page([message(1)], false), revision: 5 };
+    expect(applyThreadPage(previous, result, true, false, true).messages[0].body).toBeNull();
+    expect(applyThreadPage(previous, result, true, false).messages[0].body).toBe('message 1');
+  });
   it('merges an incremental page by seq and keeps the local hasEarlier', () => {
     const next = applyThreadPage(loaded(), page([message(4)], false), false, false);
     expect(seqs(next.messages)).toEqual([1, 2, 3, 4]);
