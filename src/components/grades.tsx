@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, errorMessage, type RouterOutput } from '@/client/api';
+import { receivedGeneration, watchReceivedInvalidation, useReceivedCacheReady } from '@/client/received-cache';
+import { clearGradeCache, readGradeCache, writeGradeCache } from '@/client/grade-cache';
+import { api, errorMessage, isUnauthorized, type RouterOutput } from '@/client/api';
 import { LETTER_CUTOFFS, classGrade, type Calibration, type ClassGrades, type Scenario } from '@/domain/grade-math';
 import { anchor, categoryLines, defaultGoal, displayNeeded, formatPercent, goalLabel, goalPercent, gradeCounts, letterFor, openWork, outlook, parseGoalPercent, planCategories, resolvePlan, rulerPosition, rulerWindow,
   type GradeCounts, type GradeGoal, type OpenWork, type PlanTarget, type SavedGoal } from '@/domain/grade-goals';
@@ -20,7 +22,7 @@ import { Card } from './ui/card';
  * Classes → Grades, part of the `schoology-connect` beta. One card per Schoology class: the grade Schoology reports,
  * a ruler from that grade to the member's goal, and the score the next piece of work needs. Opening a class shows its
  * gradebook, the goal (a letter or a custom percent) and what-if scores. Grades are read from Schoology and held in
- * memory only; goals are the one thing saved (SchoologyService.setGoal). The math is src/domain/grade-math.ts and
+ * a bounded browser cache; goals are also saved on the server (SchoologyService.setGoal). The math is src/domain/grade-math.ts and
  * src/domain/grade-goals.ts, and runs in the browser.
  */
 
@@ -501,15 +503,23 @@ export function GradesBoard({ classes, selected, today, mobile, online, plusLock
   </div>;
 }
 
-/** Gradebooks this tab already read, by account, so switching tabs or pages doesn't reread Schoology. Memory only. */
-const memory = new Map<string, { book: Book; at: number }>();
-const FRESH_MS = 5 * 60_000;
 
 export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode }) {
   const accountId = state.context.user.id;
+  const cacheReady = useReceivedCacheReady();
+  const authorized = (state.context.betas ?? []).some(beta => beta.key === 'schoology-connect');
+  const accountRef = useRef(accountId);
+  accountRef.current = accountId;
+  const bookAccount = useRef(accountId);
   const mobile = useIsMobile();
-  const [book, setBook] = useState<Book | null>(() => memory.get(accountId)?.book ?? null);
-  const [goals, setGoals] = useState<Goals>(() => memory.get(accountId)?.book.goals ?? {});
+  const [storedBook, setBook] = useState<Book | null>(() => authorized && cacheReady ? readGradeCache(accountId) : null);
+  const [goals, setGoals] = useState<Goals>(() => authorized && cacheReady ? readGradeCache(accountId)?.goals ?? {} : {});
+  const book = authorized && bookAccount.current === accountId ? storedBook : null;
+  useEffect(() => {
+    bookAccount.current = accountId; const cached = readGradeCache(accountId);
+    setBook(cached); setGoals(cached?.goals ?? {}); confirmed.current = cached?.goals ?? {}; shown.current = cached?.goals ?? {};
+    unsent.current.clear(); for (const timer of timers.current.values()) window.clearTimeout(timer); timers.current.clear();
+  }, [accountId]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [goalError, setGoalError] = useState('');
@@ -524,37 +534,47 @@ export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode })
   const connection = useSchoologyConnection(state, () => void loadRef.current(true));
   const reloadStatus = connection.reload;
 
+  useEffect(() => watchReceivedInvalidation(() => { if (!readGradeCache(accountId)) setBook(null); }), [accountId]);
   const load = useCallback(async (force = false) => {
+    if (!authorized) return;
+    const generation = receivedGeneration();
     setLoading(true); setError('');
     try {
       const next = await api.schoology.gradebook.mutate({ accountId, force });
-      memory.set(accountId, { book: next, at: Date.now() });
+      if (accountRef.current !== accountId || generation !== receivedGeneration()) return;
+      writeGradeCache(accountId, next);
       confirmed.current = next.goals;
       setBook(next);
       show({ ...next.goals, ...Object.fromEntries(unsent.current) });
-    } catch (err) { setError(errorMessage(err)); void reloadStatus(); }
-    setLoading(false);
-  }, [accountId, reloadStatus]);
+    } catch (err) {
+      if (accountRef.current !== accountId || generation !== receivedGeneration()) return;
+      const code = (err as { data?: { code?: string } })?.data?.code;
+      if (isUnauthorized(err) || code === 'FORBIDDEN') { clearGradeCache(accountId); setBook(null); }
+      setError(errorMessage(err)); void reloadStatus();
+    } finally { if (accountRef.current === accountId) setLoading(false); }
+  }, [accountId, reloadStatus, authorized]);
   useEffect(() => { loadRef.current = load; }, [load]);
 
   const isConnected = connection.connected !== null, statusKnown = connection.status !== null;
   useEffect(() => {
+    if (!authorized) { clearGradeCache(accountId); setBook(null); return; }
     if (!statusKnown || connection.connecting) return;
-    if (!isConnected) { memory.delete(accountId); setBook(null); return; }
-    const cached = memory.get(accountId);
-    if (state.online && (!cached || Date.now() - cached.at >= FRESH_MS)) void load();
-  }, [statusKnown, isConnected, connection.connecting, accountId, state.online, load]);
+    if (!isConnected) { clearGradeCache(accountId); setBook(null); return; }
+    if (state.online) void load();
+  }, [statusKnown, isConnected, connection.connecting, accountId, state.online, load, authorized]);
 
   const flush = useCallback(async (sectionId: string) => {
     window.clearTimeout(timers.current.get(sectionId)); timers.current.delete(sectionId);
+    const generation = receivedGeneration();
     const value = unsent.current.get(sectionId);
     if (!value) return;
     setGoalNote('saving'); setGoalError('');
     try {
       const saved = await api.schoology.setGoal.mutate({ accountId, sectionId, goal: value.goal, plan: value.plan });
+      if (accountRef.current !== accountId || generation !== receivedGeneration()) return;
       confirmed.current = { ...confirmed.current, [sectionId]: { goal: saved.goal, plan: saved.plan } };
-      const cached = memory.get(accountId);
-      if (cached) memory.set(accountId, { ...cached, book: { ...cached.book, goals: confirmed.current } });
+      const cached = readGradeCache(accountId);
+      if (cached) writeGradeCache(accountId, { ...cached, goals: confirmed.current });
       if (unsent.current.get(sectionId) === value) { unsent.current.delete(sectionId); setGoalNote('saved'); }
     } catch (err) {
       if (unsent.current.get(sectionId) !== value) return;

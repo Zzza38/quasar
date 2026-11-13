@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * Chat delivery for the Messages view (docs/CHAT.md §6). Chat is online only: messages, drafts and
- * unsent messages live in this module's memory for the open tab and never reach IndexedDB, the
- * offline queue, localStorage or the service-worker cache.
+ * Chat delivery for the Messages view (docs/CHAT.md §6). Received snapshots survive reloads.
+ * Drafts and unconfirmed sends remain in memory; delivery always requires the network.
  */
 
+import { validInbox, validThread, threadSnapshot } from '@/client/chat-cache';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api, errorMessage, isTransportFailure, isUnauthorized, type RouterOutput } from '@/client/api';
 import { CHAT, type MessageReply, type Reaction } from '@/domain/chat';
 import { connectChatEvents, type ChatEvent } from '@/client/chat-events';
+import { clearReceived, readReceived, writeReceived, removeReceived, receivedGeneration, watchReceivedInvalidation, pruneReceivedThreads, useReceivedCacheReady } from '@/client/received-cache';
 import type { AppState } from './app-state';
 
 type ChatRouter = RouterOutput['chat'];
@@ -37,7 +38,7 @@ export type GlobalMessage = GlobalThreadResult['messages'][number];
 /** Which conversation a thread hook drives: one friend, a friend group (§12), the global room (§11) or the member's school room (§16). */
 export type ChatTarget = { kind: 'peer'; userId: string } | { kind: 'global' } | { kind: 'group'; groupId: string } | { kind: 'school'; schoolId: string };
 export const GLOBAL_TARGET: ChatTarget = { kind: 'global' };
-const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? target.userId : target.kind === 'group' ? `group:${target.groupId}` : target.kind === 'school' ? `school:${target.schoolId}` : 'global');
+const targetKey = (target: ChatTarget) => (target.kind === 'peer' ? `peer:${target.userId}` : target.kind === 'group' ? `group:${target.groupId}` : target.kind === 'school' ? `school:${target.schoolId}` : 'global');
 
 /** Window event that asks every mounted chat poller to poll now (Tracker fires it on a service-worker CHAT_ACTIVITY message). */
 export const CHAT_ACTIVITY_EVENT = 'quasar:chat-activity';
@@ -83,7 +84,7 @@ export type Outgoing = {
   network: boolean;
 };
 
-/* ---------- Module memory: pending sends and drafts, keyed by `${accountId}:${userId}` (or `:global`) ---------- */
+/* ---------- Module memory: pending sends and drafts, keyed by account and conversation kind ---------- */
 
 export interface ThreadMemory {
   key: string;
@@ -109,12 +110,14 @@ const memory: { accountId: string | null; threads: Map<string, ThreadMemory> } =
 /** Another account's drafts and unsent messages never survive an account switch in this tab. */
 function claimAccount(accountId: string) {
   if (memory.accountId === accountId) return;
+  if (memory.accountId) removeReceived(memory.accountId);
   memory.threads.clear();
   memory.accountId = accountId;
 }
 
 /** Forgets every draft and unsent message (for sign-out). In-flight sends stop touching the cleared entries. */
 export function clearChatMemory(): void {
+  clearReceived();
   memory.threads.clear();
   memory.accountId = null;
 }
@@ -131,7 +134,7 @@ export function threadMemory(accountId: string, target: ChatTarget): ThreadMemor
   return entry;
 }
 
-const live = (entry: ThreadMemory) => memory.threads.get(entry.key) === entry;
+const liveEntry = (entry: ThreadMemory) => memory.threads.get(entry.key) === entry;
 
 function emit(entry: ThreadMemory) {
   for (const listener of [...entry.listeners]) listener();
@@ -194,7 +197,7 @@ async function deliver(entry: ThreadMemory, item: Outgoing): Promise<{ message: 
       if (!failure.network || attempt > 0) return { failure };
       await wait(SEND_RETRY_MS);
       // A poll may have found the message meanwhile (the response was lost), or the memory was cleared.
-      if (!live(entry) || !isQueued(entry, item.clientId)) return 'gone';
+      if (!liveEntry(entry) || !isQueued(entry, item.clientId)) return 'gone';
     }
   }
 }
@@ -205,11 +208,11 @@ export async function pump(entry: ThreadMemory): Promise<void> {
   entry.sending = true;
   try {
     for (;;) {
-      if (!live(entry)) return;
+      if (!liveEntry(entry)) return;
       const item = entry.outgoing.find((candidate) => candidate.status === 'pending');
       if (!item) return;
       const outcome = await deliver(entry, item);
-      if (!live(entry)) return;
+      if (!liveEntry(entry)) return;
       if (outcome === 'gone') continue;
       if ('message' in outcome) {
         entry.delivered.push(outcome.message);
@@ -225,7 +228,8 @@ export async function pump(entry: ThreadMemory): Promise<void> {
         if (position > index && candidate.status === 'pending') return { ...candidate, status: 'failed', error: undefined, retryable: true, network: failure.network };
         return candidate;
       });
-      if (failure.code === 'NOT_FOUND') entry.closed = true;
+      if (failure.code === 'NOT_FOUND') { entry.closed = true; removeReceived(entry.accountId, `thread:${targetKey(entry.target)}`); removeReceived(entry.accountId, 'inbox'); }
+      if (failure.code === 'UNAUTHORIZED' || failure.code === 'FORBIDDEN') removeReceived(entry.accountId);
       if (failure.code === 'FORBIDDEN') entry.pollRequested = true; // Picks up the pause so the composer explains it.
       // A lost response is a network failure whose message the server may have stored: a poll now reconciles it, instead
       // of waiting for the fallback interval (the event stream never tells a sender about their own send).
@@ -413,22 +417,28 @@ function usePoller(key: string, enabled: boolean, online: boolean, baseMs: numbe
 export function useChatInbox(state: AppState, active = true) {
   const accountId = state.context.user.id;
   claimAccount(accountId);
+  const cacheReady = useReceivedCacheReady();
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
-  const [inbox, setInbox] = useState<ChatInbox | null>(null);
+  const [inbox, setInbox] = useState<ChatInbox | null>(() => cacheReady ? readReceived(accountId, 'inbox', validInbox) : null);
+  const inboxAccount = useRef(accountId);
+  useEffect(() => watchReceivedInvalidation(() => { if (!readReceived(accountId, 'inbox', validInbox)) setInbox(null); }), [accountId]);
   const [error, setError] = useState('');
 
   const fetchInbox = useCallback(async (signal?: AbortSignal): Promise<PollOutcome> => {
+    const generation = receivedGeneration();
     try {
       const result = await api.chat.inbox.query({ accountId }, { signal });
-      if (signal?.aborted) return 'ok';
+      if (signal?.aborted || memory.accountId !== accountId || generation !== receivedGeneration()) return 'ok';
+      pruneReceivedThreads(accountId, ['thread:global', ...result.rows.flatMap(row => row.state === 'open' ? [`thread:peer:${row.peer.id}`] : []), ...result.groups.map(group => `thread:group:${group.id}`), ...(result.school ? [`thread:school:${result.school.schoolId}`] : [])]);
+      writeReceived(accountId, 'inbox', result);
       setInbox(result);
       setError('');
       latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       return 'ok';
     } catch (err) {
-      if (signal?.aborted) return 'ok';
-      if (isUnauthorized(err)) void latest.current.refresh();
+      if (signal?.aborted || memory.accountId !== accountId || generation !== receivedGeneration()) return 'ok';
+      if (isUnauthorized(err) || errorCode(err) === 'FORBIDDEN') { removeReceived(accountId); setInbox(null); void latest.current.refresh(); }
       setError(errorMessage(err));
       return 'fail';
     }
@@ -439,7 +449,7 @@ export function useChatInbox(state: AppState, active = true) {
   const live = useChatStream(accountId, active, () => pollRef.current(), () => pollRef.current());
   const { pollNow, failures } = usePoller(`inbox:${accountId}`, active, state.online, pollInterval('inbox', live), fetchInbox);
   useEffect(() => { pollRef.current = pollNow; }, [pollNow]);
-  useEffect(() => { setInbox(null); setError(''); }, [accountId]);
+  useEffect(() => { inboxAccount.current = accountId; setInbox(readReceived(accountId, 'inbox', validInbox)); setError(''); }, [accountId]);
 
   const reload = useCallback(() => {
     if (active) pollNow();
@@ -447,7 +457,7 @@ export function useChatInbox(state: AppState, active = true) {
   }, [active, pollNow, fetchInbox]);
 
   return {
-    inbox,
+    inbox: inboxAccount.current === accountId ? inbox : null,
     error,
     loading: state.online && !inbox && !error,
     /** Two or more polls in a row failed. */
@@ -501,14 +511,15 @@ export function mergeMessages(current: ChatMessage[], changes: ChatMessage[], ha
  * The thread state after a poll. A full page (the first load, or a `reset` page: more than CHAT.maxChanges
  * changes, a cursor past the server's revision, or a block that changed what the viewer may see) replaces every
  * loaded row outright, quotes and reactions included, so rows that are no longer visible disappear; an incremental
- * page merges by seq. `muted` is passed in because a mute toggled while the poll was out wins over its older value.
+ * page merges by seq. Confirmed mutations newer than an in-flight full response can be preserved
+ * with `preserveNewer`, so a slow initial refresh cannot resurrect a just-deleted row. `muted` is passed in because a mute toggled while the poll was out wins over its older value.
  */
-export function applyThreadPage(previous: ThreadData | null, result: ThreadPage, full: boolean, muted: boolean): ThreadData {
+export function applyThreadPage(previous: ThreadData | null, result: ThreadPage, full: boolean, muted: boolean, preserveNewer = false): ThreadData {
   const room = result.room ?? null;
   const group = result.group ?? null;
   const receipts = result.receipts ?? [];
   const school = result.school ?? null;
-  if (full || !previous) return { peer: result.peer, room, group, school, receipts, messages: result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
+  if (full || !previous) return { peer: result.peer, room, group, school, receipts, messages: preserveNewer && previous ? mergeMessages(result.messages, previous.messages.filter(message => message.revision > result.revision), false) : result.messages, hasEarlier: result.hasEarlier, muted, pause: result.pause };
   return { peer: result.peer, room, group, school, receipts, messages: mergeMessages(previous.messages, result.messages, previous.hasEarlier), hasEarlier: previous.hasEarlier, muted, pause: result.pause };
 }
 
@@ -540,8 +551,34 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   useEffect(() => { onChangeRef.current = options.onChange; });
   const [, rerender] = useReducer((count: number) => count + 1, 0);
 
-  const [data, setData] = useState<ThreadData | null>(null);
-  const [status, setStatus] = useState<ThreadStatus>('loading');
+  const cacheReady = useReceivedCacheReady();
+  const resource = `thread:${targetKey(target)}`;
+  const [data, setData] = useState<ThreadData | null>(() => cacheReady ? readReceived(accountId, resource, validThread) : null);
+  const [status, setStatus] = useState<ThreadStatus>(() => cacheReady && readReceived(accountId, resource, validThread) ? 'ready' : 'loading');
+  const dataKey = useRef(entry.key);
+  useEffect(() => {
+    dataKey.current = entry.key; cursor.current = null;
+    const cached = readReceived(accountId, resource, validThread);
+    setData(cached); setStatus(cached ? 'ready' : 'loading'); setLastReadSeq(0); setInitialReadSeq(null);
+  }, [entry, accountId, resource]);
+  const cacheGeneration = useRef(receivedGeneration());
+  useEffect(() => watchReceivedInvalidation(() => {
+    if (!readReceived(accountId, resource, validThread)) { cursor.current = null; setData(null); }
+  }), [accountId, resource]);
+  const activeEntry = useRef(entry);
+  activeEntry.current = entry;
+  const mutationVersion = useRef(0);
+  const updateData = useCallback((update: (previous: ThreadData | null) => ThreadData | null, fromPoll = false) => {
+    if (activeEntry.current !== entry || !liveEntry(entry) || cacheGeneration.current !== receivedGeneration()) return;
+    if (!fromPoll) mutationVersion.current += 1;
+    const generation = receivedGeneration();
+    setData(previous => {
+      if (activeEntry.current !== entry || !liveEntry(entry) || generation !== receivedGeneration()) return previous;
+      const next = update(previous);
+      if (next) writeReceived(accountId, resource, threadSnapshot(next), next.messages.reduce((revision, message) => Math.max(revision, message.revision), cursor.current ?? 0));
+      return next;
+    });
+  }, [entry, accountId, resource]);
   const [error, setError] = useState('');
   const [lastReadSeq, setLastReadSeq] = useState(0);
   /** The read marker when the thread first loaded; the "New messages" divider stays where it was. */
@@ -556,16 +593,25 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const lastReadRef = useRef(lastReadSeq);
   useEffect(() => { lastReadRef.current = lastReadSeq; }, [lastReadSeq]);
 
+  const rejectAccess = (err: unknown) => {
+    if (errorCode(err) !== 'UNAUTHORIZED' && errorCode(err) !== 'FORBIDDEN') return;
+    removeReceived(accountId); setData(null); setStatus('closed');
+    void latest.current.refresh();
+  };
+
   const poll = useCallback(async (signal: AbortSignal): Promise<PollOutcome> => {
+    const generation = receivedGeneration();
     const after = cursor.current;
     const muteAtStart = muteVersion.current;
+    const mutationAtStart = mutationVersion.current;
     try {
       const result = await queryThread(accountId, entry.target, after === null ? {} : { after }, signal);
-      if (signal.aborted) return 'ok';
+      if (signal.aborted || !liveEntry(entry) || activeEntry.current !== entry || generation !== receivedGeneration()) return 'ok';
+      cacheGeneration.current = generation;
       const full = after === null || result.reset;
       cursor.current = result.revision;
       // A mute toggled while this poll was out wins over the poll's older value.
-      setData((previous) => applyThreadPage(previous, result, full, previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted));
+      updateData((previous) => applyThreadPage(previous, result, full, previous && muteAtStart !== muteVersion.current ? previous.muted : result.muted, mutationAtStart !== mutationVersion.current), true);
       setLastReadSeq((previous) => Math.max(previous, result.lastReadSeq));
       setInitialReadSeq((previous) => previous ?? result.lastReadSeq);
       setStatus('ready');
@@ -573,14 +619,19 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       reconcile(entry, result.messages);
       return 'ok';
     } catch (err) {
-      if (signal.aborted) return 'ok';
+      if (signal.aborted || !liveEntry(entry) || activeEntry.current !== entry || generation !== receivedGeneration()) return 'ok';
       const code = errorCode(err);
-      if (code === 'NOT_FOUND') { setStatus('closed'); return 'stop'; }
-      if (code === 'UNAUTHORIZED') void latest.current.refresh();
+      rejectAccess(err);
+      if (code === 'NOT_FOUND' || code === 'FORBIDDEN' || code === 'UNAUTHORIZED') {
+        removeReceived(accountId, resource); removeReceived(accountId, 'inbox'); setData(null); setStatus('closed');
+        return 'stop';
+      }
       if (after === null) { setError(errorMessage(err)); setStatus((current) => (current === 'loading' ? 'error' : current)); }
       return 'fail';
     }
-  }, [accountId, entry]);
+  }, [accountId, entry, resource, updateData]);
+
+  useEffect(() => { if (status === 'closed') { removeReceived(accountId, resource); removeReceived(accountId, 'inbox'); setData(null); } }, [status, accountId, resource]);
 
   const pollRef = useRef<() => void>(() => undefined);
   // An event for this conversation (a send, delete, reaction, receipt or typing signal) polls it at once.
@@ -598,7 +649,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       if (entry.delivered.length) {
         const delivered = entry.delivered;
         entry.delivered = [];
-        setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, delivered, previous.hasEarlier) });
+        updateData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, delivered, previous.hasEarlier) });
         onChangeRef.current?.();
       }
       if (entry.pollRequested) { entry.pollRequested = false; pollNow(); }
@@ -618,8 +669,10 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     try {
       const result = await queryThread(accountId, entry.target, { before: first.seq });
       // An older page never moves the revision cursor, so no change can be skipped.
-      setData((previous) => prependEarlier(previous, first.seq, result));
+      updateData((previous) => prependEarlier(previous, first.seq, result));
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       if (errorCode(err) === 'NOT_FOUND') { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
@@ -640,6 +693,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       setLastReadSeq((previous) => Math.max(previous, seq));
       onChangeRef.current?.();
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       readRequested.current = lastReadRef.current;
       if (errorCode(err) === 'NOT_FOUND') setStatus('closed');
       else if (isUnauthorized(err)) void latest.current.refresh();
@@ -652,11 +707,13 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       const result = userId ? await api.chat.mute.mutate({ accountId, userId, muted }) : groupId ? await api.group.mute.mutate({ accountId, groupId, muted })
         : schoolId ? await api.schoolChat.mute.mutate({ accountId, schoolId, muted }) : await api.global.mute.mutate({ accountId, muted });
       muteVersion.current += 1;
-      setData((previous) => previous && { ...previous, muted: result.muted });
+      updateData((previous) => previous && { ...previous, muted: result.muted });
       // Muted chats are left out of the badge (§3.4), so the new count comes back with the answer.
       latest.current.setChatUnread(result.unreadChats, result.unreadAt);
       onChangeRef.current?.();
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       if (errorCode(err) === 'NOT_FOUND') { setStatus('closed'); return; }
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
@@ -672,6 +729,8 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
           : schoolId ? await api.schoolChat.delete.mutate({ accountId, schoolId, messageId, reason })
             : await api.global.delete.mutate({ accountId, messageId, reason });
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       // A private chat that vanished is closed; a room or group message that vanished is simply gone, and the poll shows that.
       // Leaving the group or the school closes those.
       if (errorCode(err) === 'NOT_FOUND' && (userId || (groupId && errorMessage(err) === 'You are not in this group.') || (schoolId && errorMessage(err) === SCHOOL_CLOSED))) { setStatus('closed'); return; }
@@ -679,7 +738,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       throw err;
     }
     // The answer is the deleted row (with the owner's note and its new revision), merged like any other change.
-    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
+    updateData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
   }, [accountId, userId, groupId, schoolId, pollNow]);
@@ -714,10 +773,12 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
     try {
       result = schoolId ? await api.schoolChat.edit.mutate({ accountId, schoolId, messageId, body, reason }) : await api.global.edit.mutate({ accountId, messageId, body, reason });
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
+    updateData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
     pollNow();
     onChangeRef.current?.();
   }, [accountId, userId, groupId, schoolId, pollNow]);
@@ -733,11 +794,13 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
       result = userId ? await api.chat.react.mutate({ accountId, userId, seq, emoji }) : groupId ? await api.group.react.mutate({ accountId, groupId, seq, emoji })
         : schoolId ? await api.schoolChat.react.mutate({ accountId, schoolId, seq, emoji }) : await api.global.react.mutate({ accountId, seq, emoji });
     } catch (err) {
+      if (activeEntry.current !== entry || !liveEntry(entry)) return;
+      rejectAccess(err);
       if (errorCode(err) === 'NOT_FOUND') pollNow();
       if (isUnauthorized(err)) void latest.current.refresh();
       throw err;
     }
-    setData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
+    updateData((previous) => previous && { ...previous, messages: mergeMessages(previous.messages, [result.message], previous.hasEarlier) });
   }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
@@ -754,25 +817,26 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   const discard = useCallback((clientId: string) => setOutgoing(entry, entry.outgoing.filter((item) => item.clientId !== clientId)), [entry]);
   const saveDraft = useCallback((text: string) => { entry.draft = text; }, [entry]);
 
-  const messages = data?.messages ?? [];
+  const visibleData = dataKey.current === entry.key ? data : null;
+  const messages = visibleData?.messages ?? [];
   const shown = new Set(messages.map((message) => message.id));
   return {
     status,
     /** Load error for the first page (the thread shows it with Try again). */
     error,
-    peer: data?.peer ?? null,
+    peer: visibleData?.peer ?? null,
     /** The room's details (global or school); null otherwise. */
-    room: data?.room ?? null,
+    room: visibleData?.room ?? null,
     /** The school room's school; null otherwise. */
-    school: data?.school ?? null,
+    school: visibleData?.school ?? null,
     /** The friend group's details (name, members, the viewer's role); null otherwise. */
-    group: data?.group ?? null,
+    group: visibleData?.group ?? null,
     /** The other members' delivery and read markers and typing signals (§13); empty in the room. */
-    receipts: data?.receipts ?? [],
+    receipts: visibleData?.receipts ?? [],
     messages,
-    hasEarlier: data?.hasEarlier ?? false,
-    muted: data?.muted ?? false,
-    pause: data?.pause ?? null,
+    hasEarlier: visibleData?.hasEarlier ?? false,
+    muted: visibleData?.muted ?? false,
+    pause: visibleData?.pause ?? null,
     lastReadSeq,
     initialReadSeq,
     /** Two or more polls in a row failed. */

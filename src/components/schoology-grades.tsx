@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { clearGradeCache } from '@/client/grade-cache';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { SCHOOLOGY_BETA, SCHOOLOGY_RETURN_PARAM } from '@/domain/schoology';
 import type { AppState } from './app-state';
@@ -49,7 +50,11 @@ export function SchoologySync({ accountId, online, synchronize }: { accountId: s
  */
 export function useSchoologyConnection(state: AppState, onConnected: () => void) {
   const accountId = state.context.user.id;
-  const [status, setStatus] = useState<SchoologyStatus | null>(null);
+  const currentAccount = useRef(accountId);
+  currentAccount.current = accountId;
+  const [savedStatus, setStatus] = useState<{ accountId: string; value: SchoologyStatus } | null>(null);
+  const status = savedStatus?.accountId === accountId ? savedStatus.value : null;
+  const saveStatus = (value: SchoologyStatus) => { if (currentAccount.current === accountId) setStatus({ accountId, value }); };
   const [statusFailed, setStatusFailed] = useState(false);
   const [pending, setPending] = useState<SchoologyPending>(null);
   const [error, setError] = useState('');
@@ -60,7 +65,12 @@ export function useSchoologyConnection(state: AppState, onConnected: () => void)
   const onConnectedRef = useRef(onConnected);
   useEffect(() => { onConnectedRef.current = onConnected; });
 
-  const reload = useCallback(() => api.schoology.status.query().then(next => { setStatus(next); setStatusFailed(false); return next; }, () => { setStatusFailed(true); return null; }), []);
+  const reload = useCallback(() => api.schoology.status.query().then(next => {
+    if (currentAccount.current !== accountId) return null;
+    if (!next.beta || !next.connected) clearGradeCache(accountId);
+    setStatus({ accountId, value: next }); setStatusFailed(false);
+    return next;
+  }, () => { if (currentAccount.current === accountId) setStatusFailed(true); return null; }), [accountId]);
   const finish = useCallback(async (oauthToken?: string) => {
     setPending('finish'); setError('');
     try {
@@ -92,14 +102,14 @@ export function useSchoologyConnection(state: AppState, onConnected: () => void)
   };
   const disconnect = async () => {
     setPending('disconnect'); setError('');
-    try { setStatus(await api.schoology.disconnect.mutate({ accountId })); await state.refresh(); }
+    try { saveStatus(await api.schoology.disconnect.mutate({ accountId })); clearGradeCache(accountId); await state.refresh(); }
     catch (err) { setError(errorMessage(err)); }
     setPending(null);
   };
   const setting = async (change: { importAssignments?: boolean; autoComplete?: boolean }) => {
     setPending('settings'); setError('');
     try {
-      setStatus(await api.schoology.setSettings.mutate({ accountId, ...change }));
+      saveStatus(await api.schoology.setSettings.mutate({ accountId, ...change }));
       if ((await api.schoology.sync.mutate({ accountId, force: true })).changed > 0) await state.refresh();
     } catch (err) { setError(errorMessage(err)); }
     setPending(null);
@@ -139,7 +149,7 @@ export function SchoologySettings({ state, connection, open }: { state: AppState
   return <div className="grid gap-4">
     <div className="grid gap-1 text-sm">
       <strong>Connected as {connected.name}</strong>
-      <Hint>Quasar reads your grades from Schoology each time and doesn’t save them. It saves only the goals you set.</Hint>
+      <Hint>Quasar keeps a copy of your grades on this browser for up to 24 hours and refreshes them when you open Grades. Signing out or disconnecting clears the copy.</Hint>
     </div>
     <div className="grid gap-3 rounded-xl bg-muted/80 px-3 py-3">
       <Toggle checked={connected.importAssignments} disabled={busy} onChange={(value) => void connection.setting({ importAssignments: value })}

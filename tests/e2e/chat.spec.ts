@@ -499,7 +499,7 @@ test('offline shows the connect state and recovers', async ({ browser }) => {
   await composer.fill('Draft about lunch');
 
   await context.setOffline(true);
-  await expect(page.getByRole('status').filter({ hasText: 'You’re offline. Messages load when you reconnect.' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'You’re offline. Saved messages may be out of date. New messages load when you reconnect.' })).toBeVisible();
   await expect(page.getByText('Schedule and task changes stay saved')).toHaveCount(0);
   await expect(composer).toBeDisabled();
   await expect(composer).toHaveAttribute('placeholder', 'Offline');
@@ -513,7 +513,7 @@ test('offline shows the connect state and recovers', async ({ browser }) => {
   await expect(composer).toHaveValue('Draft about lunch');
   await expect(log.getByText('Bob wrote while you were offline', { exact: true })).toBeVisible({ timeout: 20_000 });
 
-  // D5: nothing about chat is stored on the device.
+  // D5: confirmed messages may persist only in the account-scoped received cache.
   await composer.fill('ZX-DEVICE-7');
   await composer.press('Enter');
   await expect(log.getByText('ZX-DEVICE-7', { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -554,6 +554,7 @@ test('offline shows the connect state and recovers', async ({ browser }) => {
     for (const [label, storage] of [['localStorage', localStorage], ['sessionStorage', sessionStorage]] as const) {
       for (let index = 0; index < storage.length; index += 1) {
         const key = storage.key(index) ?? '';
+        if (label === 'localStorage' && key.startsWith('quasar-received-v1:')) continue;
         check(label, `${key}=${storage.getItem(key) ?? ''}`);
       }
     }
@@ -571,6 +572,9 @@ test('offline shows the connect state and recovers', async ({ browser }) => {
     return { hits, databases: names };
   }, markers);
   expect(found.hits).toEqual([]);
+  const saved = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('quasar-received-v1:')).map(key => localStorage.getItem(key)).join(''));
+  expect(saved).toContain('ZX-DEVICE-8');
+  expect(saved).not.toContain('Draft about lunch');
 });
 
 test('the harasser blocking first still leaves the victim a report path, and support sees only that chat', async ({ browser }) => {
