@@ -36,9 +36,14 @@ const nowCardOf = (stored: number): NowCardStyle => NOW_CARD_STYLES.find(style =
 /** A support sanction the student can see and appeal (§14). */
 export type Ban = { schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean };
 export type Sanctions = { bans: Ban[]; pause: { until: string | null; reason: string; appealed: boolean } | null };
-export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[]; feedPlatforms: string[]; schedulePlatforms: string[] };
+/** `logo` is the address of the school's published logo (src/server/school-logos.ts), or null while it shows its initials. */
+export type School = { id: string; name: string; location: string; schedule: Schedule; version: number; approved: boolean; memberLocked: boolean; supportLocked: boolean; memberCount: number; emailDomains: string[]; feedPlatforms: string[]; schedulePlatforms: string[]; logo: string | null };
 /** What a school search returns: enough to pick a school, without its schedule (fetch that with `school(id)`). */
-export type SchoolSummary = Omit<School, 'schedule' | 'emailDomains' | 'feedPlatforms' | 'schedulePlatforms'>;
+export type SchoolSummary = Omit<School, 'schedule' | 'emailDomains' | 'feedPlatforms' | 'schedulePlatforms' | 'logo'>;
+/** The address of a school's published logo. The version changes with every new logo, so a browser may keep each one. */
+export const schoolLogoUrl = (schoolId: string, version: number | null | undefined): string | null => version ? `/api/school-logos/${schoolId}?v=${version}` : null;
+/** The published logo's version for school row `s`, for schoolFromRow; NULL when the school has no logo. */
+const LOGO_VERSION = '(SELECT l.version FROM school_logos l WHERE l.school_id=s.id AND l.image IS NOT NULL) logo_version';
 type UserRow = { id: string; email: string; display_name: string; full_name: string; school_id: string | null; reviewed_version: number | null; google_name: string | null;
   google_picture: string | null; avatar_version: number | null; avatar_hidden: number | null; avatar_mime: string | null; now_card: number };
 /** Uploaded pictures are small: the client resizes to 256 px and encodes as JPEG or WebP before sending (§13). */
@@ -46,7 +51,7 @@ export const AVATAR_MAX_BYTES = 200_000;
 export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const avatarUploadSchema = z.object({ mime: z.enum(AVATAR_MIMES), data: z.string().max(Math.ceil(AVATAR_MAX_BYTES * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Choose an image file.') });
 export const appealSchema = z.object({ kind: z.enum(['pause', 'ban']), schoolId: z.uuid().optional(), message: z.string().trim().min(10).max(2000) });
-type SchoolRow = { id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string; feed_platforms: string; schedule_platforms: string };
+type SchoolRow = { logo_version?: number | null; id: string; name: string; location: string; schedule: string; version: number; approved: number; member_locked: number; support_locked: number; member_count: number; email_domains: string; feed_platforms: string; schedule_platforms: string };
 const fail = (code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'BAD_REQUEST' | 'TOO_MANY_REQUESTS', message: string): never => { throw new TRPCError({ code, message }); };
 const now = () => new Date().toISOString();
 /** A school schedule is shared with every member and every searcher, so its stored size is capped (sync caps personal data at 1 MB). */
@@ -335,7 +340,7 @@ export class Service {
     return this.user(id);
   }
   schools(query = '', limit = 100): School[] {
-    const rows = this.db.prepare(`SELECT s.*, (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count
+    const rows = this.db.prepare(`SELECT s.*, (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count, ${LOGO_VERSION}
       FROM schools s WHERE instr(lower(s.name || ' ' || s.location), lower(?)) > 0 ORDER BY s.name LIMIT ?`).all(query, limit) as SchoolRow[];
     return rows.map(row => this.schoolFromRow(row));
   }
@@ -349,10 +354,10 @@ export class Service {
   }
   private schoolFromRow(row: SchoolRow): School {
     return { id: row.id, name: row.name, location: row.location, schedule: JSON.parse(row.schedule), version: row.version,
-      approved: !!row.approved, memberLocked: !!row.member_locked, supportLocked: !!row.support_locked, memberCount: row.member_count, emailDomains: parseEmailDomains(row.email_domains ?? ''), feedPlatforms: parsePlatforms('calendar', row.feed_platforms ?? ''), schedulePlatforms: parsePlatforms('schedule', row.schedule_platforms ?? '') };
+      approved: !!row.approved, memberLocked: !!row.member_locked, supportLocked: !!row.support_locked, memberCount: row.member_count, emailDomains: parseEmailDomains(row.email_domains ?? ''), feedPlatforms: parsePlatforms('calendar', row.feed_platforms ?? ''), schedulePlatforms: parsePlatforms('schedule', row.schedule_platforms ?? ''), logo: schoolLogoUrl(row.id, row.logo_version) };
   }
   school(id: string): School {
-    const row = this.db.prepare(`SELECT s.*, (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count FROM schools s WHERE s.id=?`).get(id) as SchoolRow | undefined;
+    const row = this.db.prepare(`SELECT s.*, (SELECT count(*) FROM users u WHERE u.school_id=s.id) member_count, ${LOGO_VERSION} FROM schools s WHERE s.id=?`).get(id) as SchoolRow | undefined;
     if (!row) return fail('NOT_FOUND', 'School not found.');
     return this.schoolFromRow(row);
   }
