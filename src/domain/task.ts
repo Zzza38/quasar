@@ -12,6 +12,8 @@ export const taskSchema = z.object({
   dueDate: dateSchema.nullable(), dueTime: timeSchema.nullable(),
   classId: z.string().min(1).max(100).nullable(),
   notes: z.string().max(10000), completed: z.boolean(),
+  workLocation: z.enum(['in-class', 'out-of-class']).optional(),
+  workLocationSource: z.enum(['ai', 'manual']).optional(),
   /** When the task was last checked off. Server-owned (see stampCompletion); absent on tasks completed before it existed. */
   completedAt: z.string().datetime().optional(),
   priority: z.enum(['low', 'normal', 'high']).optional(),
@@ -31,7 +33,7 @@ export type Task = z.infer<typeof taskSchema>;
  * strictly and send nothing, so the server leaves `completedAt` out of what it returns to them (Service.workspace
  * and Service.sync); raise it when task data gains another field that such a bundle would reject.
  */
-export const TASK_CLIENT_VERSION = 2;
+export const TASK_CLIENT_VERSION = 3;
 
 /**
  * Older builds accepted any 4-digit year, so a task can be stored with a date outside 1900-2199 that taskSchema now

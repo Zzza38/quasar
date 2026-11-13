@@ -50,18 +50,6 @@ describe('betas', () => {
     expect((await f.join(f.member, 'GRID2026')).length).toBe(1);
   });
 
-  it('shows codes only for private betas the member has joined', async () => {
-    const f = fixture();
-    f.save(createBeta(f.registry(), { key: 'public-test', name: 'Public test', public: true }));
-    await f.join(f.member, 'GRID-2026');
-    await f.caller(f.member).beta.enroll({ accountId: f.member, key: 'public-test' });
-    const betas = f.service.workspace(f.member).betas;
-    expect(betas.find(beta => beta.key === 'month-grid')).toMatchObject({ code: 'GRID-2026', public: false });
-    expect(betas.find(beta => beta.key === 'public-test')).toMatchObject({ public: true });
-    expect(betas.find(beta => beta.key === 'public-test')).not.toHaveProperty('code');
-    expect(f.service.workspace(f.other).betas).toEqual([]);
-  });
-
   it('refuses wrong codes and stops guessing after the limit, even with the right code', async () => {
     const f = fixture();
     for (let i = 0; i < BETA_GUESS_LIMIT; i++) await expect(f.join(f.member, `WRONG${i}`)).rejects.toThrow(WRONG_CODE_MESSAGE);
@@ -162,15 +150,14 @@ describe('betas', () => {
     expect(actions).toEqual(['beta.join', 'beta.removeMember']);
   });
 
-  it('keeps owner tools from members and binds changes to the signed-in account', async () => {
+  it('keeps owner tools and codes from members and binds changes to the signed-in account', async () => {
     const f = fixture();
     await expect(f.caller(f.member).admin.betas.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller(f.member).admin.betas.removeMember({ accountId: f.member, key: 'month-grid', userId: f.other })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller(f.owner).admin.betas.removeMember({ accountId: f.member, key: 'month-grid', userId: f.other })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     await expect(f.caller(f.member).beta.join({ accountId: f.other, code: 'GRID-2026' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
-    // Members only see the code after joining that beta.
-    expect(JSON.stringify(f.service.workspace(f.member))).not.toContain('GRID-2026');
+    // A member's workspace names their betas but never carries a code.
     await f.join(f.member, 'GRID-2026');
-    expect(f.service.workspace(f.member).betas[0].code).toBe('GRID-2026');
+    expect(JSON.stringify(f.service.workspace(f.member))).not.toContain('GRID-2026');
   });
 });

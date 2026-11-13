@@ -13,8 +13,14 @@ import { cn } from '@/lib/utils';
 import { taskLink } from '@/lib/task-link';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
-import { nextSchoolDate } from '../task-groups';
+import { doNow } from '../focus-lists';
+import { Beta, useBeta } from '../betas';
 import { Icon } from '../icon';
+import { AI_BETA } from '@/domain/ai';
+import { PriorityLabel } from '../ai-tasks';
+import { EstimateChip, PlanToday } from '../plan-week';
+import { TaskWorkLabel } from '../task-work';
+import { schoologyItemUrl } from '@/domain/schoology';
 import { MemberAvatar } from '../member-avatar';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
@@ -51,14 +57,14 @@ export function TodayView({ state }: { state: AppState }) {
   const displayDate = next && next.date > today ? next.date : today;
   const displayDay = useMemo(() => { try { return resolveDay(schedule, displayDate, personal); } catch { return null; } }, [schedule, displayDate, personal]);
   const tasks = useMemo(() => sortByDue(taskItems(state.snapshot.entities).filter((item) => !item.task.completed)), [state.snapshot.entities]);
-  // "Due soon" reaches at least two days out and always through the next school day, so on a Friday (or before
-  // a holiday) the homework due when school resumes is up next rather than hidden behind "due later".
-  const soonUntil = Math.max(2, (() => { const school = nextSchoolDate(schedule, personal, today); return school ? daysBetween(today, school) : 0; })());
-  const dueSoon = tasks.filter((item) => !item.task.dueDate || daysBetween(today, item.task.dueDate) <= soonUntil);
-  const shown = dueSoon.slice(0, 6);
-  const later = tasks.length - dueSoon.length;
   // Same rule as the task rows and the Tasks page groups: overdue is the more urgent number, so it wins the tile.
   const nowTime = clockTime(now, timeZone);
+  // Do now (src/components/focus-lists.ts): overdue, due by the next school day, or high priority and due soon.
+  // Tasks added here stay in the list for this visit, so an undated quick add doesn't vanish as it's saved.
+  const [added, setAdded] = useState<string[]>([]);
+  const urgent = doNow(tasks, { today, nowTime, schedule, personal });
+  const shown = [...urgent, ...tasks.filter((item) => added.includes(item.id) && !urgent.some((entry) => entry.item.id === item.id)).map((item) => ({ item, reason: 'Added' }))];
+  const rest = tasks.length - shown.length;
   const overdue = tasks.filter((item) => isOverdue(item.task, today, nowTime)).length;
   const dueToday = tasks.filter((item) => item.task.dueDate === today && !isOverdue(item.task, today, nowTime)).length;
   const periodsLeft = day && !day.closed ? day.periods.filter((period) => new Date(period.endAt).getTime() > now.getTime()).length : 0;
@@ -106,6 +112,8 @@ export function TodayView({ state }: { state: AppState }) {
       <StatTile icon="clock" tone="accent" value={periodsLeft} label={periodsLeft === 1 ? 'period left' : 'periods left'} onClick={() => state.navigate('schedule')} />
     </div>
 
+    <PlanToday state={state} />
+
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
       <Section title={displayDate === today ? 'Today' : `Next school day · ${relativeDate(displayDate, today, { weekday: 'long' })}`} id="today-timeline" description={displayDay && !displayDay.closed ? `${displayDay.periods.length} periods · ${displayDay.periods.length ? formatRange(displayDay.periods[0].start, displayDay.periods[displayDay.periods.length - 1].end) : ''}` : undefined} action={<div className="flex flex-wrap gap-1">{displayDay && !displayDay.closed && displayDay.periods.length > 0 && <Button size="sm" variant="ghost" onClick={() => openBellTimes(state)} title={personal.customSchedule ? 'Edit my private schedule' : 'Fix the shared bell schedule'}>Wrong time?</Button>}<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('schedule', displayDate === today ? undefined : { date: displayDate })}>Full schedule</Button></div>}>
         {displayDay?.closed && <div className="grid justify-items-start gap-2 py-3">
@@ -118,15 +126,15 @@ export function TodayView({ state }: { state: AppState }) {
       </Section>
 
       <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] self-stretch">
-      <Section data-attention-after="today-tasks" title={<>Up next{dueSoon.length > 0 && <Chip className="ml-2 align-middle">{dueSoon.length}</Chip>}</>} id="today-tasks" action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
+      <Section data-attention-after="today-tasks" title={<>Do now{urgent.length > 0 && <Chip tone={urgent.some((entry) => entry.reason === 'Overdue') ? 'danger' : 'neutral'} className="ml-2 align-middle">{urgent.length}</Chip>}</>} id="today-tasks"
+        description={urgent.length ? 'Overdue, due by the next school day, or high priority and due soon.' : undefined} action={<Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => state.navigate('tasks')}>All tasks</Button>}>
         <QuickAdd today={today} classes={personal.classes} suggestedClassId={suggestedClassId}
-          onAdd={(title, extra) => state.saveTask(crypto.randomUUID(), { title, dueDate: extra.dueDate ?? null, dueTime: null, classId: extra.classId ?? null, notes: '', completed: false })} />
-        {shown.length === 0 && <EmptyState icon="checkCircle" title="Nothing due soon">Add anything you need to get done. Homework, forms, practice.</EmptyState>}
-        {shown.length > 0 && <ul className="grid gap-0.5">{shown.map((item) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} />)}</ul>}
+          onAdd={(title, extra) => { const id = crypto.randomUUID(); setAdded((current) => [...current, id]); return state.saveTask(id, { title, dueDate: extra.dueDate ?? null, dueTime: null, classId: extra.classId ?? null, notes: '', completed: false }); }} />
+        {shown.length === 0 && <EmptyState icon="checkCircle" title="Nothing urgent right now">{tasks.length ? 'Nothing is overdue or due by the next school day.' : 'Add anything you need to get done. Homework, forms, practice.'}</EmptyState>}
+        {shown.length > 0 && <ul className="grid gap-0.5">{shown.map(({ item, reason }) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={reason === 'Added'}
+          badge={{ label: reason, tone: reason === 'Overdue' ? 'danger' : reason === 'Due today' ? 'accent' : 'neutral' }} />)}</ul>}
         {undoBar}
-        {dueSoon.length > shown.length
-          ? <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{dueSoon.length - shown.length} more</Button>
-          : later > 0 && <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{later} due later</Button>}
+        {rest > 0 && <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => state.navigate('tasks')}>{rest} more open {rest === 1 ? 'task' : 'tasks'}</Button>}
       </Section>
         <AttentionGap zone="today-tasks" top={12} />
       </div>
@@ -616,18 +624,22 @@ export function useCompletionUndo(state: AppState): { onComplete: (item: TaskIte
   return { onComplete, undoBar };
 }
 
-export function TaskRow({ item, state, showDate = true, centered = false, onComplete }: { item: TaskItem; state: AppState; showDate?: boolean;
+export function TaskRow({ item, state, showDate = true, centered = false, onComplete, badge }: { item: TaskItem; state: AppState; showDate?: boolean;
+  /** A short note first in the details line, such as why a task is in Do now. */ badge?: { label: string; tone?: 'danger' | 'accent' | 'neutral' };
   /** Centers the checkbox on the title and details instead of the title's first line. */ centered?: boolean; onComplete?: (item: TaskItem, options?: { focus?: boolean }) => void }) {
   const [error, setError] = useState('');
   // Checkbox change events carry no pointer type, so remember whether the last press was a key.
   const keyboardRef = useRef(false);
   const metaId = useId();
   const { task } = item;
-  const link = taskLink(task);
+  const schoologyUrl = schoologyItemUrl(task, item.id);
+  const sourceUrl = schoologyUrl ?? taskLink(task);
   const cls = state.personal.classes.find((entry) => entry.id === task.classId);
   const overdue = isOverdue(task, state.today, clockTime(state.now, state.timeZone));
   const dueToday = task.dueDate === state.today && !overdue;
-  const hasMeta = task.dueDate || cls || task.notes || task.priority || task.subtasks?.length || task.recurrence || task.imported || task.reminder;
+  // The ai-tasks beta sets a priority on every task, so it shows all three as a meter (normal included).
+  const showBars = useBeta(AI_BETA);
+  const hasMeta = badge || task.dueDate || cls || task.notes || task.priority || task.workLocation || task.subtasks?.length || task.recurrence || task.imported || task.reminder;
   return <li className={cn('group/task flex gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-muted/70', centered ? 'items-center' : 'items-start')}>
     <Checkbox className="size-[22px] rounded-full border-2 border-control-border shadow-none transition-colors hover:border-primary data-checked:border-primary [&_svg]:size-3.5" checked={task.completed} aria-label={`Mark ${task.title} ${task.completed ? 'incomplete' : 'complete'}`} data-task-check={item.id}
       onKeyDown={() => { keyboardRef.current = true; }} onPointerDown={() => { keyboardRef.current = false; }} onCheckedChange={async (checked) => {
@@ -640,10 +652,14 @@ export function TaskRow({ item, state, showDate = true, centered = false, onComp
       <button type="button" className="grid w-full min-w-0 gap-1 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" onClick={() => state.navigate('tasks', { edit: item.id })} aria-label={`Edit ${task.title}`} aria-describedby={hasMeta ? metaId : undefined}>
         <span className={cn('text-[15px] font-semibold leading-snug', task.completed && 'line-through text-muted-foreground')}>{task.title}</span>
         {hasMeta && <span id={metaId} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-medium text-muted-foreground">
+          {badge && <span className={cn('inline-flex items-center rounded-md px-1.5 py-0.5 font-bold', badge.tone === 'danger' ? 'bg-destructive/10 text-destructive' : badge.tone === 'accent' ? 'bg-primary-soft text-primary-soft-foreground' : 'bg-muted text-foreground/80')}>{badge.label}</span>}
           {showDate && task.dueDate && <span className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5', overdue ? 'bg-destructive/10 font-bold text-destructive' : dueToday ? 'bg-primary-soft font-bold text-primary-soft-foreground' : 'bg-secondary')}><Icon name="calendar" size={11} strokeWidth={2.4} />{overdue ? 'Overdue · ' : ''}{relativeDate(task.dueDate, state.today)}{task.dueTime ? ` · ${formatTime(task.dueTime)}` : ''}</span>}
           {!showDate && task.dueTime && <span className="inline-flex items-center gap-1"><Icon name="clock" size={11} strokeWidth={2.4} />{formatTime(task.dueTime)}</span>}
           {cls && <span className="inline-flex items-center gap-1.5"><ColorDot color={classColor(cls.id, 'class', cls.color).dot} size={8} />{cls.name}</span>}
-          {task.priority && task.priority !== 'normal' && <span className={cn('inline-flex items-center gap-1', task.priority === 'high' && 'font-bold text-destructive')}><Icon name={task.priority === 'high' ? 'arrowUp' : 'arrowDown'} size={11} strokeWidth={2.6} />{task.priority === 'high' ? 'High priority' : 'Low priority'}</span>}
+          {task.priority && showBars && <PriorityLabel priority={task.priority} />}
+          {showBars && <EstimateChip item={item} />}
+          {showBars && <TaskWorkLabel task={task} state={state} />}
+          {task.priority && !showBars && task.priority !== 'normal' && <span className={cn('inline-flex items-center gap-1', task.priority === 'high' && 'font-bold text-destructive')}><Icon name={task.priority === 'high' ? 'arrowUp' : 'arrowDown'} size={11} strokeWidth={2.6} />{task.priority === 'high' ? 'High priority' : 'Low priority'}</span>}
           {!!task.subtasks?.length && <span className="inline-flex items-center gap-1"><Icon name="tasks" size={11} strokeWidth={2.4} />{task.subtasks.filter(entry => entry.completed).length}/{task.subtasks.length} checklist</span>}
           {task.recurrence && <span className="inline-flex items-center gap-1"><Icon name="refresh" size={11} strokeWidth={2.4} />Repeats {task.recurrence.frequency}</span>}
           {task.reminder && <span className="inline-flex items-center gap-1"><Icon name="bell" size={11} strokeWidth={2.4} />Reminder</span>}
@@ -653,6 +669,6 @@ export function TaskRow({ item, state, showDate = true, centered = false, onComp
       </button>
       {error && <Hint tone="danger" role="alert">{error}</Hint>}
     </div>
-    {link && <a href={link} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0 text-muted-foreground')} aria-label={`Open link for ${task.title}`} title="Open link"><Icon name="externalLink" /></a>}
+    {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0 text-muted-foreground')} aria-label={schoologyUrl ? `Open in Schoology: ${task.title}` : `Open link for ${task.title}`} title={schoologyUrl ? 'Open in Schoology' : 'Open link'}><Icon name="externalLink" /></a>}
   </li>;
 }

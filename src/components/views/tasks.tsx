@@ -4,20 +4,30 @@ import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { FIRST_DATE, LAST_DATE } from '@/domain/schedule';
 import { taskSchema, type Task } from '@/domain/task';
-import { addDays, classColor, formatTime, formatTimeZone, reminderLabel } from '@/lib/format';
+import { taskClassPeriods, workLocationOf } from '@/domain/task-work';
+import { schoologyItemUrl } from '@/domain/schoology';
+import { addDays, classColor, formatDate, formatRange, formatTime, formatTimeZone, reminderLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, sortByDue, taskItems } from '../app-state';
 import { groupTasks, type TaskGroupKey } from '../task-groups';
 import { ChangedWhileEditing, taskFields } from '../conflicts';
 import { Icon } from '../icon';
-import { Button, Callout, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Select, Spacer, Textarea } from '../primitives';
+import { Button, Callout, Chip, ColorDot, EmptyState, Eyebrow, Field, Hint, Input, Modal, PageHeader, Section, Select, Spacer, Textarea } from '../primitives';
 import { buttonVariants } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Toggle } from '../ui/toggle';
 import { QuickAdd, TaskRow, useCompletionUndo } from './today';
+import { AiBreakdownButton, AiTasksBanner, useAssessmentKinds } from '../ai-tasks';
+import { useBeta } from '../betas';
+import { AI_BETA } from '@/domain/ai';
+import { assessmentCandidates, keywordKind, upcomingAssessments } from '../focus-lists';
+import { DuplicatesBanner, DuplicatesSheet, type DuplicatesTab } from '../duplicates';
+import { PhotoTasksButton } from '../photo-tasks';
+import { StudySetBlock } from '../study-set';
+import { CrunchNotice } from '../plan-week';
 
 const emptyTask: Task = { title: '', dueDate: null, dueTime: null, classId: null, notes: '', completed: false };
 
@@ -71,6 +81,15 @@ export function TasksView({ state }: { state: AppState }) {
   const nowTime = clockTime(state.now, state.timeZone);
   const late = (item: TaskItem) => isOverdue(item.task, state.today, nowTime);
   // Groups follow the school calendar: the next school day stands apart from the weekend or holiday before it.
+  // Upcoming tests and quizzes (ai-tasks beta, picked by the AI) summarizes every open task, so it steps aside while a
+  // filter is on. Do now is on Today.
+  const focus = !classFilter && !priorityFilter && open.length > 0;
+  const aiBeta = useBeta(AI_BETA);
+  const candidates = useMemo(() => aiBeta ? assessmentCandidates(open, state.today) : [], [aiBeta, open, state.today]);
+  const kinds = useAssessmentKinds(candidates, aiBeta && focus);
+  const [duplicates, setDuplicates] = useState<DuplicatesTab | null>(null);
+  // Until the AI answers (or if it can't), titles that name a test or quiz stand in.
+  const assessments = focus && aiBeta ? upcomingAssessments(open, { today: state.today }, kinds.error ? keywordKind : (item) => kinds.kindOf(item) ?? (kinds.pending ? keywordKind(item) : 'none')) : [];
   const groups = groupTasks(filtered, { today: state.today, nowTime, schedule: state.schedule, personal: state.personal });
   const current = editing && editing !== 'new' ? items.find((item) => item.id === editing) : undefined;
   const overdue = open.filter(late).length;
@@ -78,9 +97,12 @@ export function TasksView({ state }: { state: AppState }) {
 
   return <div className="grid grid-cols-[minmax(0,1fr)] gap-5 animate-in fade-in-0 duration-300">
     <PageHeader title="Tasks" eyebrow="To do" description={open.length === 0 ? 'Nothing open. Nice.' : `${open.length} open${overdue ? ` · ${overdue} overdue` : ''}${completed.length > 0 ? ` · ${completed.length} done` : ''}`}
-      actions={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>New task</Button>} />
+      actions={<><Button icon="layers" onClick={() => setDuplicates('find')}>Duplicates</Button><PhotoTasksButton state={state} /><Button variant="primary" icon="plus" onClick={() => setEditing('new')}>New task</Button></>} />
     <QuickAdd today={state.today} classes={state.personal.classes} onAdd={(title, extra) => state.saveTask(crypto.randomUUID(), { ...emptyTask, title, dueDate: extra.dueDate ?? null, classId: extra.classId ?? null })} />
     {undoBar}
+    <AiTasksBanner state={state} items={items} />
+    <DuplicatesBanner onReview={setDuplicates} />
+    <CrunchNotice state={state} />
     {(open.length > 0 || classFilter || priorityFilter) && <div className="relative flex flex-wrap items-center gap-x-4 gap-y-2.5 max-sm:-mx-4 max-sm:-my-1 max-sm:flex-nowrap max-sm:gap-x-3 max-sm:overflow-x-auto max-sm:px-4 max-sm:py-1 max-sm:[scrollbar-width:none]">
       {/* On phones the class chips and the two selects share one sideways-scrolling row, however many classes there are.
           `relative` keeps each Select's hidden native <select> inside the scroller; otherwise it widens the page on phones. */}
@@ -95,6 +117,12 @@ export function TasksView({ state }: { state: AppState }) {
         <Select id="task-sort" small className="w-auto shrink-0" value={sort} onChange={(event) => setSort(event.target.value)}><option value="due">Sort by due time</option><option value="priority">Sort by priority</option></Select>
       </div>
     </div>}
+    {focus && aiBeta && <Section title={<>Upcoming tests and quizzes{assessments.length > 0 && <Chip className="ml-2 align-middle">{assessments.length}</Chip>}</>} id="tasks-assessments"
+      description={kinds.error ? `Matched by name: the AI couldn’t check them. ${kinds.error}` : kinds.pending ? 'Checking your tasks with AI…' : assessments.length ? 'The next three weeks.' : undefined} contentClassName="gap-1">
+      {assessments.length === 0 ? <p className="px-1 text-sm text-muted-foreground">No tests or quizzes in the next three weeks.</p>
+        : <ul className="grid gap-0.5">{assessments.map(({ item, when, kind }) => <TaskRow key={item.id} item={item} state={state} onComplete={onComplete} showDate={false}
+          badge={{ label: `${kind === 'quiz' ? 'Quiz' : 'Test'} · ${when} · ${formatDate(item.task.dueDate!, { weekday: 'short' })}`, tone: when === 'Today' || when === 'Tomorrow' ? 'accent' : 'neutral' }} />)}</ul>}
+    </Section>}
     {groups.length === 0 && <Card><EmptyState icon="checkCircle" title={classFilter || priorityFilter ? 'No matching open tasks' : 'All clear'} action={!(classFilter || priorityFilter) ? <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add a task</Button> : <Button onClick={() => { setClassFilter(''); setPriorityFilter(''); }}>Clear filters</Button>}>{classFilter || priorityFilter ? 'Try another filter or add a task.' : 'Add homework, forms, practice, anything you need to remember.'}</EmptyState></Card>}
     {groups.map((group) => <Card key={group.key} className="gap-1 py-3" role="region" aria-labelledby={`group-${group.key}`}>
       <CardContent className="grid gap-1 px-2 sm:px-3">
@@ -132,7 +160,8 @@ export function TasksView({ state }: { state: AppState }) {
         {showCompleted && completed.length > completedShown && <div className="px-1 pt-1"><Button size="sm" variant="ghost" onClick={() => setCompletedShown(completedShown + COMPLETED_PAGE)}>Show more · {completed.length - completedShown} older hidden</Button></div>}
       </CardContent>
     </Card>}
-    <TaskSheet key={editing ?? 'closed'} open={editing !== null} onClose={() => setEditing(null)} initial={editing === 'new' ? emptyTask : current?.task ?? null} current={editing === 'new' ? undefined : current?.task ?? null} classes={state.personal.classes} today={state.today} timeZone={state.timeZone}
+    {duplicates && <DuplicatesSheet state={state} tab={duplicates} onClose={() => setDuplicates(null)} />}
+    <TaskSheet key={editing ?? 'closed'} open={editing !== null} onClose={() => setEditing(null)} initial={editing === 'new' ? emptyTask : current?.task ?? null} current={editing === 'new' ? undefined : current?.task ?? null} classes={state.personal.classes} today={state.today} timeZone={state.timeZone} workState={state} taskId={editing && editing !== 'new' ? editing : null}
       onSave={async (task) => { await state.saveTask(editing === 'new' || !editing ? crypto.randomUUID() : editing, task); setEditing(null); }}
       onDelete={editing && editing !== 'new' ? async () => { await state.saveTask(editing, null); setEditing(null); } : undefined} />
   </div>;
@@ -150,9 +179,12 @@ function FormGroup({ title, children }: { title: string; children: React.ReactNo
   </div>;
 }
 
-export function TaskSheet({ open, onClose, initial, current, classes, today, timeZone, onSave, onDelete }: { open: boolean; onClose: () => void; initial: Task | null; current?: Task | null; classes: Array<{ id: string; name: string; color?: string }>; today: string; timeZone: string; onSave: (task: Task) => Promise<void>; onDelete?: () => Promise<void> }) {
+export function TaskSheet({ open, onClose, initial, current, classes, today, timeZone, workState, onSave, onDelete, taskId = null }: { open: boolean; onClose: () => void; initial: Task | null; current?: Task | null; classes: Array<{ id: string; name: string; color?: string }>; today: string; timeZone: string; workState: Pick<AppState, 'schedule' | 'personal'>; onSave: (task: Task) => Promise<void>; onDelete?: () => Promise<void>; taskId?: string | null }) {
+  const workBeta = useBeta(AI_BETA);
   const [original, setOriginal] = useState<Task>(initial ?? emptyTask);
   const [draft, setDraft] = useState<Task>(original);
+  const schoologyUrl = schoologyItemUrl(draft, taskId);
+  const classPeriods = taskClassPeriods(draft, workState.schedule, workState.personal);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const serialized = JSON.stringify(current);
@@ -193,17 +225,33 @@ export function TaskSheet({ open, onClose, initial, current, classes, today, tim
         <Field label="Class" htmlFor="task-class"><Select id="task-class" value={draft.classId ?? ''} onChange={(event) => setDraft({ ...draft, classId: event.target.value || null })}><option value="">No class</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>{cls.name}</option>)}{draft.classId && !classes.some((cls) => cls.id === draft.classId) && <option value={draft.classId}>Removed class</option>}</Select></Field>
         <Field label="Priority" htmlFor="task-priority"><Select id="task-priority" value={draft.priority ?? 'normal'} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Task['priority'] })}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></Select></Field>
       </div>
-      {draft.imported && <Callout tone="neutral" icon="calendar" actions={draft.imported.url ? <a href={draft.imported.url} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}><Icon name="externalLink" />Open link</a> : undefined}>Imported calendar event{draft.imported.sourceRemoved ? ' · Removed from its source; your task is kept.' : '. Calendar updates keep your completion and checklist.'}</Callout>}
+      {workBeta && <Field label="Work happens" htmlFor="task-work-location" hint={draft.workLocationSource === 'ai' ? 'Labeled by AI. You can change it.' : !draft.workLocation && workLocationOf(draft) === 'in-class' ? 'The title suggests in-class work. Choose a label to save it. Your choice takes priority.' : 'AI labels new tasks when it can tell. Your choice takes priority.'}>
+        <Select id="task-work-location" value={draft.workLocation ?? ''} onChange={event => {
+          const { workLocation: _location, workLocationSource: _source, ...rest } = draft;
+          setDraft(event.target.value ? { ...rest, workLocation: event.target.value as Task['workLocation'], workLocationSource: 'manual' } : rest);
+        }}>
+          <option value="">Not labeled yet</option><option value="in-class">In class</option><option value="out-of-class">Out of class</option>
+        </Select>
+        {workLocationOf(draft) === 'in-class' && <Hint>{classPeriods.length
+          ? `Class time: ${classPeriods.map(period => `${period.label}, ${formatRange(period.start, period.end)}`).join('; ')}. Follows your timetable; the due time is the submission deadline.`
+          : !draft.classId || !draft.dueDate ? 'Choose a class and due date to link its period.' : 'This class has no scheduled period on that date.'}</Hint>}
+      </Field>}
+      {draft.imported && <Callout tone="neutral" icon="calendar" actions={(schoologyUrl ?? draft.imported.url) ? <a href={(schoologyUrl ?? draft.imported.url)!} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}><Icon name="externalLink" />{schoologyUrl ? 'Open in Schoology' : 'Open link'}</a> : undefined}>Imported calendar event{draft.imported.sourceRemoved ? ' · Removed from its source; your task is kept.' : '. Calendar updates keep your completion and checklist.'}</Callout>}
+      {!draft.imported && schoologyUrl && <a href={schoologyUrl} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'justify-self-start')}><Icon name="externalLink" />Open in Schoology</a>}
       <fieldset className="grid gap-2 rounded-2xl bg-muted/60 p-4 ring-1 ring-inset ring-foreground/[0.04]"><legend className="sr-only">Checklist</legend>
-        <div className="flex items-center justify-between gap-3"><div className="grid min-w-0 gap-1"><Eyebrow>Checklist{draft.subtasks?.length ? ` · ${draft.subtasks.filter((entry) => entry.completed).length}/${draft.subtasks.length}` : ''}</Eyebrow>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2"><div className="grid min-w-0 gap-1"><Eyebrow>Checklist{draft.subtasks?.length ? ` · ${draft.subtasks.filter((entry) => entry.completed).length}/${draft.subtasks.length}` : ''}</Eyebrow>
           {!draft.subtasks?.length && <Hint>Break the task into steps you can tick off.</Hint>}</div>
-          <Button size="sm" variant="ghost" icon="plus" className="shrink-0" disabled={(draft.subtasks?.length ?? 0) >= 100} onClick={() => setDraft({ ...draft, subtasks: [...(draft.subtasks ?? []), { id: crypto.randomUUID(), title: '', completed: false }] })}>Add checklist item</Button></div>
+          <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-1">
+            <AiBreakdownButton draft={draft} onSteps={(steps) => setDraft((current) => ({ ...current, subtasks: [...(current.subtasks ?? []).filter((entry) => entry.title.trim()), ...steps.map((title) => ({ id: crypto.randomUUID(), title: title.slice(0, 300), completed: false }))].slice(0, 100) }))} />
+            <Button size="sm" variant="ghost" icon="plus" className="shrink-0" disabled={(draft.subtasks?.length ?? 0) >= 100} onClick={() => setDraft({ ...draft, subtasks: [...(draft.subtasks ?? []), { id: crypto.randomUUID(), title: '', completed: false }] })}>Add checklist item</Button>
+          </div></div>
         {(draft.subtasks ?? []).map((item, index) => <div key={item.id} className="flex items-center gap-2">
           <Checkbox className="size-5 rounded-full [&_svg]:size-3.5" checked={item.completed} aria-label={`Complete checklist item ${index + 1}`} onCheckedChange={(checked) => setDraft({ ...draft, subtasks: draft.subtasks!.map(entry => entry.id === item.id ? { ...entry, completed: checked === true } : entry) })} />
           <Input small aria-label={`Checklist item ${index + 1}`} maxLength={300} value={item.title} placeholder="Step" className={cn('h-9', item.completed && 'line-through text-muted-foreground')} onChange={(event) => setDraft({ ...draft, subtasks: draft.subtasks!.map(entry => entry.id === item.id ? { ...entry, title: event.target.value } : entry) })} />
           <Button size="sm" variant="ghost" icon="x" aria-label={`Remove checklist item ${index + 1}`} onClick={() => setDraft({ ...draft, subtasks: draft.subtasks!.filter(entry => entry.id !== item.id) })} />
         </div>)}
       </fieldset>
+      {current && <StudySetBlock taskId={taskId} task={current} />}
       <FormGroup title="Repeat and remind">
         {!draft.imported && <Field label="Repeat" htmlFor="task-repeat" hint={!draft.dueDate ? 'Pick a due date first' : 'Completing this task creates the next occurrence after syncing.'}><Select id="task-repeat" disabled={!draft.dueDate} value={draft.recurrence?.frequency ?? ''} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value ? { frequency: event.target.value as NonNullable<Task['recurrence']>['frequency'], interval: draft.recurrence?.interval ?? 1, until: draft.recurrence?.until ?? null, anchorDate: draft.dueDate! } : null })}><option value="">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></Select></Field>}
         {draft.recurrence && <div className="grid gap-3 sm:grid-cols-2"><Field label={`Every (${draft.recurrence.frequency === 'daily' ? 'days' : draft.recurrence.frequency === 'weekly' ? 'weeks' : 'months'})`} htmlFor="task-interval"><Input id="task-interval" type="number" min={1} max={365} required value={draft.recurrence.interval} onChange={(event) => setDraft({ ...draft, recurrence: { ...draft.recurrence!, interval: Number(event.target.value) } })} /></Field><Field label="Repeat until (optional)" htmlFor="task-until"><Input id="task-until" type="date" min={draft.dueDate ?? FIRST_DATE} max={LAST_DATE} value={draft.recurrence.until ?? ''} onChange={(event) => setDraft({ ...draft, recurrence: { ...draft.recurrence!, until: event.target.value || null } })} /></Field></div>}

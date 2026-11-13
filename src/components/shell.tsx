@@ -15,7 +15,9 @@ import type { NowCardStyle } from '@/lib/now-split';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
-import { BetasButton } from './betas';
+import { BetasButton, useBeta } from './betas';
+import { AI_BETA } from '@/domain/ai';
+import { AiSettings } from './ai-tasks';
 import { DockCountDescriptions, DockGroupSwitch, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
@@ -361,6 +363,7 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
           <div data-attention-zone="account-look" className="grid gap-3"><Eyebrow>Look</Eyebrow><ThemePicker /><NowCardSetting accountId={context.user.id} value={nowCard} online={online} onChange={onNowCard} /></div>
           <div className="grid gap-3"><Eyebrow>Notifications</Eyebrow><NotificationSettings accountId={context.user.id} online={online} chatPush={chatPush} onChatPush={onChatPush} /></div>
           {calendarSettings && calendarSettings(openAddFeed)}
+          <AiAccountBlock />
           <BetasButton accountId={context.user.id} betas={context.betas ?? []} online={online} onChanged={session.initialize} />
           <div className="grid gap-2 border-t pt-5">
             <Button icon="info" onClick={() => { window.location.assign('/help'); }}>Help and FAQ</Button>
@@ -405,4 +408,10 @@ export function CenteredNotice({ title, children, action }: { title: ReactNode; 
       {action}
     </CardContent></Card>
   </div>;
+}
+
+/** The AI block (ai-tasks beta). AiSettings renders nothing outside the beta, so the heading goes with it. */
+function AiAccountBlock() {
+  const beta = useBeta(AI_BETA);
+  return beta ? <div className="grid gap-3"><Eyebrow>AI</Eyebrow><AiSettings /></div> : null;
 }

@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { AppState } from './app-state';
+import { describe, expect, it, vi } from 'vitest';
 import { examplePersonalSchedule, exampleSchedule } from '@/domain/example';
 import { emptyPersonalSchedule, type PersonalSchedule, type Schedule } from '@/domain/schedule';
-import { coreSetupDone, tickedStep } from './setup-checklist';
+import { coreSetupDone, tickedStep, homeworkCalendarConnected, SetupChecklist } from './setup-checklist';
 
 const noSlots: Schedule = { ...exampleSchedule, cycleDays: exampleSchedule.cycleDays.map((day) => ({ ...day, slots: [] })) };
 const algebra = { id: 'algebra', name: 'Algebra' };
@@ -48,5 +51,41 @@ describe('tickedStep', () => {
 
   it('keeps a claimed step ("Already added", "It matches") done but undoable', () => {
     expect(tickedStep(false, true, false)).toEqual({ done: true, manual: true, skipped: false });
+  });
+});
+
+// Re-evaluate the current account response rather than remembering a connection as a tick.
+describe('homework calendar connection', () => {
+  const disconnected = { subscriptions: [], betas: [{ key: 'schoology-connect' }], schoologyConnected: false } as unknown as Parameters<typeof homeworkCalendarConnected>[0];
+  it('tracks connection, disconnection and account switches without a manual tick', () => {
+    expect(homeworkCalendarConnected(disconnected)).toBe(false);
+    expect(homeworkCalendarConnected({ ...disconnected, schoologyConnected: true })).toBe(true);
+    expect(homeworkCalendarConnected(disconnected)).toBe(false);
+    expect(homeworkCalendarConnected({ ...disconnected, schoologyConnected: undefined })).toBe(false);
+  });
+  it('preserves the beta gate and calendar subscription path', () => {
+    expect(homeworkCalendarConnected({ ...disconnected, schoologyConnected: true, betas: [] })).toBe(false);
+    expect(homeworkCalendarConnected({ ...disconnected, subscriptions: [{}] } as typeof disconnected)).toBe(true);
+    expect(tickedStep(homeworkCalendarConnected(disconnected), true, true)).toEqual({ done: true, manual: true, skipped: true });
+    expect(tickedStep(homeworkCalendarConnected({ ...disconnected, schoologyConnected: true }), false, true)).toEqual({ done: true, manual: false, skipped: false });
+  });
+});
+
+
+describe('setup card rendering', () => {
+  it('hides the completed card, keeps other steps, and restores the calendar prompt after disconnect', () => {
+    vi.stubGlobal('localStorage', { getItem: (key: string) => /tick-(install|reminders)/.test(key) ? '1' : null });
+    try {
+      const state = { personal: examplePersonalSchedule, schedule: exampleSchedule, context: { user: { id: 'first' }, school: { approved: true }, subscriptions: [], betas: [{ key: 'schoology-connect' }], schoologyConnected: true }, navigate: vi.fn() } as unknown as AppState;
+      expect(renderToStaticMarkup(createElement(SetupChecklist, { state }))).toBe('');
+      const disconnected = { ...state, context: { ...state.context, schoologyConnected: false } };
+      expect(renderToStaticMarkup(createElement(SetupChecklist, { state: disconnected }))).toContain('Connect your homework calendar');
+      const otherAccount = { ...disconnected, context: { ...disconnected.context, user: { ...state.context.user, id: 'second' } } };
+      expect(renderToStaticMarkup(createElement(SetupChecklist, { state: otherAccount }))).toContain('Connect your homework calendar');
+      const incomplete = { ...state, personal: emptyPersonalSchedule() };
+      const html = renderToStaticMarkup(createElement(SetupChecklist, { state: incomplete }));
+      expect(html).toContain('Add your classes');
+      expect(html).not.toContain('Connect your homework calendar');
+    } finally { vi.unstubAllGlobals(); }
   });
 });

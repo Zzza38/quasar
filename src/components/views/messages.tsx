@@ -3,6 +3,7 @@
 import { chatImage } from '@/client/chat-image';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { clearChatCache } from '@/client/chat-cache';
 import { api, errorMessage } from '@/client/api';
 import { bodyError, censorBody, CHAT, COMPOSER_MAX_LENGTH, normalizeBody, REACTIONS, REPORT_CATEGORIES, revealableText, type CensorMask, type MessageReply, type Reaction, type ReportCategory } from '@/domain/chat';
 import { censorSlurs, slurNotice } from '@/domain/chat-filter';
@@ -314,7 +315,7 @@ export function MessagesView({ state }: { state: AppState }) {
   return <div className={cn('flex min-h-0 flex-1 flex-col gap-4 animate-in fade-in-0 duration-300', openKey && 'max-lg:gap-5')}>
     {/* A phone thread keeps the page heading for screen readers only. */}
     <header className={cn('grid gap-1', openKey && 'max-lg:sr-only')}><h1 ref={heading} tabIndex={-1} className="outline-none">Messages</h1></header>
-    {!state.online && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Messages load when you reconnect.</Callout>}
+    {!state.online && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Saved messages may be out of date. New messages load when you reconnect.</Callout>}
     {notice && <Callout tone="success" icon="check" role="status">{notice}</Callout>}
     <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-5">
       {listMounted && <div className={cn('min-h-0 lg:overflow-y-auto lg:pr-1', openKey && 'max-lg:hidden')}>
@@ -670,6 +671,7 @@ function Thread({ state, userId, phone, nudge, fallbackName, closedRow, onChange
     {modal?.kind === 'block' && <ConfirmModal title={`Block ${name}?`} description={`You won’t see each other in People, their Global chat, school chat and group messages are hidden from you, and this chat closes.`} confirm="Block" online={state.online}
       onClose={() => setModal(null)} onConfirm={async () => {
         await api.community.block.mutate({ accountId: state.context.user.id, userId, blocked: true });
+        clearChatCache(state.context.user.id);
         setModal(null);
         onLeave(`${name} is blocked.`);
       }} />}
@@ -756,7 +758,7 @@ function GroupThread({ state, groupId, phone, nudge, friends, onChange, onLeave 
     {modal?.kind === 'members' && <GroupMembersModal state={state} group={group} friends={friends} onClose={() => setModal(null)} onChanged={() => { chat.pollNow(); onChange(); }} />}
     {modal?.kind === 'rename' && <RenameGroupModal state={state} group={group} onClose={() => setModal(null)} onRenamed={() => { setModal(null); chat.pollNow(); onChange(); }} />}
     {modal?.kind === 'leave' && <ConfirmModal title={`Leave ${name}?`} description={admin && others.length > 0 ? 'The member who has been in the group longest becomes its admin. You can only come back if they add you.' : 'You can only come back if the group’s admin adds you again.'} confirm="Leave" online={state.online}
-      onClose={() => setModal(null)} onConfirm={async () => { await api.group.leave.mutate({ accountId: me, groupId }); setModal(null); onLeave(`You left ${name}.`); }} />}
+      onClose={() => setModal(null)} onConfirm={async () => { await api.group.leave.mutate({ accountId: me, groupId }); clearChatCache(me, `group:${groupId}`); setModal(null); onLeave(`You left ${name}.`); }} />}
   </>);
 }
 
@@ -1776,6 +1778,7 @@ function ReportModal({ state, name, target, onClose, onSent }: { state: AppState
         ? await api.group.report.mutate({ accountId, groupId: target.groupId, category, note: note.trim(), seq: target.seq, block })
         : await api.chat.report.mutate({ accountId, userId: target.userId, category, note: note.trim(), ...(target.mode === 'message' && target.seq ? { seq: target.seq } : {}), block: !closed && block });
       setPending(false);
+      if (result.blocked) clearChatCache(accountId);
       onSent(result.blocked);
     } catch (err) {
       setError(errorMessage(err));

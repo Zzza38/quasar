@@ -130,6 +130,18 @@ describe('task data for clients built before completedAt', () => {
     const stored = (await caller.workspace(current)).entities.find(entity => entity.id === 't1')!;
     expect(stored.data).toMatchObject({ title: 'Read chapter 2', completed: true, completedAt: stamp });
   });
+
+  it('keeps work labels when a version-2 client edits the task without seeing those fields', async () => {
+    const { accountId, caller } = fixture();
+    const created = applied(await caller.sync({ accountId, mutationId: randomUUID(), id: 'work-label', kind: 'task', base: null,
+      data: { ...open, workLocation: 'in-class', workLocationSource: 'manual' }, ...current }));
+    const seen = (await caller.workspace({ clientVersion: 2 })).entities.find(entity => entity.id === 'work-label')!;
+    expect(seen.data).not.toHaveProperty('workLocation');
+    const edited = applied(await caller.sync({ accountId, clientVersion: 2, mutationId: randomUUID(), id: 'work-label', kind: 'task', base: seen, data: { ...seen.data, title: 'Edited in old tab' } }));
+    expect(edited.data).not.toHaveProperty('workLocation');
+    const stored = (await caller.workspace(current)).entities.find(entity => entity.id === created.id)!;
+    expect(stored.data).toMatchObject({ title: 'Edited in old tab', workLocation: 'in-class', workLocationSource: 'manual' });
+  });
 });
 
 describe('requests from a bundle built before the current API', () => {
