@@ -15,6 +15,7 @@ import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { BetaProvider } from './betas';
+import { clearGradeCache } from '@/client/grade-cache';
 import { SchoologySync } from './schoology-grades';
 import { nowCardStyle } from './now-card-setting';
 import type { NowCardStyle } from '@/lib/now-split';
@@ -152,6 +153,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
   // Finishing a setup step bumps this so its flag (in this device's storage) is re-read during render.
   const [, rereadSetup] = useState(0);
   const userId = context?.user.id;
+  const gradesAuthorized = context?.betas?.some(beta => beta.key === 'schoology-connect') ?? false;
+  useEffect(() => { if (userId && !gradesAuthorized) clearGradeCache(userId); }, [userId, gradesAuthorized]);
 
   const saveUnlocked = personalSaver(parsedPersonal.success, (value) => session.save('personal', 'personal', value));
   const scheduleLock = useScheduleLock(userId, personal, saveUnlocked);

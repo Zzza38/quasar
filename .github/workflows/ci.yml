@@ -28,6 +28,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Install Chromium for cache persistence tests
+        run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
         env:
