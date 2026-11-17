@@ -1,15 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { QUICK_REACTIONS, REACTIONS } from '@/domain/chat';
-import { REACTION_NAMES, imageFileFrom, imageFilesFrom, mentionMatches, sendParts, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionLabel, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
+import { REACTION_NAMES, imageFileFrom, imageFilesFrom, mentionMatches, sendParts, liveQuote, reactionWhoLabel, reactorNames, outsideRestoresFocus, quoteName, quoteOf, reactionToggleLabel, swipeOffset, swipeProgress, swipeReplies, SWIPE_MAX, SWIPE_THRESHOLD } from './chat-ui';
 
 describe('reaction names', () => {
   it('names the strip toggles by the emoji', () => {
     expect(reactionToggleLabel('❤️')).toBe('React with heart');
     expect(reactionToggleLabel('‼️')).toBe('React with exclamation');
-  });
-  it('reads a pill as the emoji, its count, and whether the viewer is in it', () => {
-    expect(reactionLabel({ emoji: '❤️', count: 2, mine: true })).toBe('❤️ 2, you reacted');
-    expect(reactionLabel({ emoji: '👍', count: 1, mine: false })).toBe('👍 1');
   });
 });
 
@@ -109,7 +105,7 @@ describe('who reacted', () => {
   });
 });
 
-describe('more reactions, mentions and several images (chat-polish beta)', () => {
+describe('more reactions, mentions and several images ', () => {
   it('names every reaction once, with the original six as the quick strip', () => {
     expect(QUICK_REACTIONS).toEqual(['❤️', '👍', '👎', '😂', '‼️', '❓']);
     expect(new Set(REACTIONS).size).toBe(REACTIONS.length);

@@ -116,7 +116,7 @@ describe('censorBody and censoredLinkParts', () => {
   });
 });
 
-describe('chat-polish helpers: mentions, the edit window, search excerpts', () => {
+describe('mentions, the edit window, search excerpts', () => {
   it('finds "@Name" only as a whole name, whatever the case', () => {
     expect(mentionsName('hey @Sam, lunch?', 'Sam')).toBe(true);
     expect(mentionsName('hey @sam', 'Sam')).toBe(true);

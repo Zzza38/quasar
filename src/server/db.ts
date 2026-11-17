@@ -881,7 +881,7 @@ function migrate(db: Db): void {
 }
 
 /**
- * The chat-polish beta's storage (docs/CHAT.md, "Editing, mentions, search, GIFs, more reactions"). Checked by column
+ * Storage for edits, mentions and the larger reaction set (docs/CHAT.md, "Editing, mentions, search, GIFs, more reactions"). Checked by column
  * and by table definition instead of a migration number, so it cannot collide with a numbered migration on another
  * branch. Only adds and loosens, so a build from before it still runs on a database that has it.
  * - `edited_at` and `edited_from` on one-to-one and group messages: when the sender last edited their message and its

@@ -21,11 +21,6 @@ export function reactionToggleLabel(emoji: Reaction): string {
   return `React with ${REACTION_NAMES[emoji]}`;
 }
 
-/** A pill under a bubble: "❤️ 2, you reacted" or "👍 1". */
-export function reactionLabel(reaction: MessageReaction): string {
-  return `${reaction.emoji} ${reaction.count}${reaction.mine ? ', you reacted' : ''}`;
-}
-
 /**
  * A pill's name once tapping it lists who reacted: "❤️ 2, Bob and you. Show who reacted". Names come from `reactors`
  * for that emoji; a count larger than the names (a long list was cut, or someone is blocked) ends in "and N more".

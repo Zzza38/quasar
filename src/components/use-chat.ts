@@ -730,7 +730,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   }, [accountId, userId, groupId, schoolId, pollNow]);
 
   /**
-   * The sender's own edit (chat-polish beta): replaces the text of one of the viewer's messages while the server's
+   * The sender's own edit: replaces the text of one of the viewer's messages while the server's
    * edit window is open. The answer is the edited row, merged like any other change. A NOT_FOUND means the message
    * went away meanwhile; the poll it asks for shows that.
    */
@@ -750,7 +750,7 @@ export function useChatThread(state: AppState, target: ChatTarget, options: { on
   /** Which of the viewer's messages the composer is rewriting; it lives in the thread's memory like the reply target. */
   const setEditing = useCallback((editing: EditTarget | null) => { entry.editing = editing; emit(entry); }, [entry]);
 
-  /** Messages in this conversation whose text contains `query`, newest first (chat-polish beta). */
+  /** Messages in this conversation whose text contains `query`, newest first. */
   const search = useCallback(async (query: string, signal?: AbortSignal): Promise<SearchHit[]> => {
     const result = userId ? await api.chat.search.query({ accountId, userId, query }, { signal }) : groupId ? await api.group.search.query({ accountId, groupId, query }, { signal })
       : schoolId ? await api.schoolChat.search.query({ accountId, schoolId, query }, { signal }) : await api.global.search.query({ accountId, query }, { signal });
@@ -849,13 +849,13 @@ export type ChatThread = ReturnType<typeof useChatThread>;
  * While a phone thread is mounted, sets `--chat-h` on <html> to the visual viewport height minus the
  * top bar, so the composer stays above the on-screen keyboard (iOS Safari ignores interactive-widget).
  *
- * `pinPage` also holds the page itself at the top. iOS keeps the layout viewport tall under the keyboard, and on
- * focus (and again while typing) it pans the page up to show the field, which leaves the thread scrolled off screen
- * even though the column already fits above the keyboard. Only the log scrolls in a phone thread, so any page
- * offset is undone. A field in a dialog or sheet (rendered outside #main) is left alone: those sit against the
- * layout viewport and need the pan to clear the keyboard.
+ * It also holds the page itself at the top. iOS keeps the layout viewport tall under the keyboard, and on focus (and
+ * again while typing) it pans the page up to show the field, which leaves the thread scrolled off screen even though
+ * the column already fits above the keyboard. Only the log scrolls in a phone thread, so any page offset is undone.
+ * A field in a dialog or sheet (rendered outside #main) is left alone: those sit against the layout viewport and
+ * need the pan to clear the keyboard.
  */
-export function useChatViewport(active: boolean, pinPage = false): void {
+export function useChatViewport(active: boolean): void {
   useEffect(() => {
     if (!active || typeof window === 'undefined') return;
     const root = document.documentElement;
@@ -864,7 +864,7 @@ export function useChatViewport(active: boolean, pinPage = false): void {
       const topbar = document.querySelector<HTMLElement>('.app-topbar');
       const height = (viewport?.height ?? window.innerHeight) - (topbar?.offsetHeight ?? 0);
       root.style.setProperty('--chat-h', `${Math.max(0, Math.round(height))}px`);
-      if (!pinPage || (window.scrollY <= 0 && (viewport?.offsetTop ?? 0) <= 0)) return;
+      if (window.scrollY <= 0 && (viewport?.offsetTop ?? 0) <= 0) return;
       const focused = document.activeElement;
       if (focused && focused !== document.body && !document.getElementById('main')?.contains(focused)) return;
       window.scrollTo(0, 0);
@@ -881,5 +881,5 @@ export function useChatViewport(active: boolean, pinPage = false): void {
       window.removeEventListener('scroll', update);
       root.style.removeProperty('--chat-h');
     };
-  }, [active, pinPage]);
+  }, [active]);
 }

@@ -3,8 +3,6 @@ import { test, expect, hydrating } from './fixtures';
 import { type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { ChatService } from '../../src/server/chat';
@@ -942,17 +940,11 @@ test('image messages preview, send without captions, open full size and stay pri
   expect((await bob.request.get(url!)).status()).toBe(404);
 });
 
-test('chat polish beta: a pasted image attaches, pills list who reacted, and a group caption lists who read', async ({ browser }, testInfo) => {
+test('chat polish: a pasted image attaches, pills list who reacted, and a group caption lists who read', async ({ browser }, testInfo) => {
   const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
-  const key = 'chat-polish';
-  // What `npm run beta -- create chat-polish --public` writes; Alice is in it, Bob is not.
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   let groupId: string;
   try {
-    db.prepare('INSERT INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.alice, new Date().toISOString());
     const groups = new GroupChatService(new Service(db, OWNER_EMAIL));
     groupId = groups.create(f.alice, { name: 'Lab crew', memberIds: [f.bob, f.cara] }).id;
     groups.send(f.bob, groupId, randomUUID(), 'Did anyone start the write-up?');
@@ -1008,26 +1000,13 @@ test('chat polish beta: a pasted image attaches, pills list who reacted, and a g
   await expect(alice.getByAltText('Image to send')).toBeVisible();
   await composer.press('Enter');
   await expect(log.getByAltText('Message attachment', { exact: true })).toBeVisible();
-
-  // Bob is outside the beta: his pill still toggles his own reaction, and nothing opens a list.
-  const bob = await signedIn(browser, f.bob);
-  await bob.goto(`/messages?group=${groupId}`);
-  const bobs = bob.getByRole('log', { name: 'Messages in Lab crew' }).getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' });
-  await bobs.getByRole('button', { name: '👍 1, you reacted' }).click();
-  await expect(bobs.getByRole('button', { name: /👍/ })).toHaveCount(0);
-  await expect(bob.getByRole('dialog', { name: 'Reactions' })).toHaveCount(0);
 });
 
-test('chat polish beta: mention, edit, more reactions, search, several images and a GIF that keeps moving', async ({ browser }, testInfo) => {
+test('chat polish: mention, edit, more reactions, search, several images and a GIF that keeps moving', async ({ browser }, testInfo) => {
   const f = seed({ friends: [['alice', 'bob'], ['alice', 'cara']] });
-  const key = 'chat-polish';
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   let groupId: string;
   try {
-    db.prepare('INSERT OR IGNORE INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.alice, new Date().toISOString());
     const groups = new GroupChatService(new Service(db, OWNER_EMAIL));
     groupId = groups.create(f.alice, { name: 'Lab crew', memberIds: [f.bob, f.cara] }).id;
     groups.send(f.bob, groupId, randomUUID(), 'Did anyone start the write-up?');
@@ -1123,29 +1102,20 @@ test('chat polish beta: mention, edit, more reactions, search, several images an
   expect(served.status()).toBe(200);
   expect((await sharp(await served.body(), { animated: true }).metadata()).pages).toBe(frames);
 
-  // Bob is outside the beta: the edit still reads "Edited" for him, with no Edit of his own and the six reactions only.
+  // Bob sees the edit and the mention, and has the same actions on his own message.
   const bob = await signedIn(browser, f.bob);
   await bob.goto(`/messages?group=${groupId}`);
   const bobLog = bob.getByRole('log', { name: 'Messages in Lab crew' });
   await expect(bobLog.getByRole('listitem').filter({ hasText: 'Meet at 3 in the library' })).toContainText('Edited');
+  await expect(bobLog.locator('[data-mention="me"]')).toHaveText('@Bob');
   const own = bobLog.getByRole('listitem').filter({ hasText: 'Did anyone start the write-up?' });
   await own.hover();
   await own.getByRole('button', { name: 'Message actions' }).click();
-  await expect(own.getByRole('button', { name: 'React with heart' })).toBeVisible();
-  await expect(own.getByRole('button', { name: 'More reactions' })).toHaveCount(0);
-  await expect(own.getByRole('button', { name: 'Edit message' })).toHaveCount(0);
-  await expect(bobLog.locator('[data-mention]')).toHaveCount(0);
+  await expect(own.getByRole('button', { name: 'More reactions' })).toBeVisible();
 });
 
-test('chat polish beta: a phone thread undoes the page pan iOS makes for the keyboard, but not for a field in a dialog', async ({ browser }) => {
+test('chat polish: a phone thread undoes the page pan iOS makes for the keyboard, but not for a field in a dialog', async ({ browser }) => {
   const f = seed({ friends: [['alice', 'bob']], messages: Array.from({ length: 20 }, (_, index) => ['alice', 'bob', `Message ${index}`] as [Name, Name, string]) });
-  const key = 'chat-polish';
-  const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-  const registry = readBetaRegistry(listPath);
-  if (!registry.betas.some((beta) => beta.key === key)) writeBetaRegistry(createBeta(registry, { key, name: 'Chat polish', public: true }), listPath);
-  const db = openDatabase(process.env.E2E_DATABASE_PATH!);
-  try { db.prepare('INSERT OR IGNORE INTO beta_members(beta_key,user_id,joined_at) VALUES(?,?,?)').run(key, f.bob, new Date().toISOString()); } finally { db.close(); }
-
   const page = await phone(browser, f.bob);
   await page.goto(`/messages?with=${f.alice}`);
   const composer = page.getByRole('textbox', { name: 'Message Alice' });

@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-/** The chat-polish beta's server side: a sender's own edit, mentions, search, GIFs that keep moving and the larger reaction set. */
+/** The chat polish server side: a sender's own edit, mentions, search, GIFs that keep moving and the larger reaction set. */
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open) db.close(); });
