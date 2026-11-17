@@ -6,20 +6,36 @@ import { ChatService } from './chat';
 import { targetExists } from './chat-extras';
 import { Reveal } from './moderation';
 
-/** Decode and re-encode every upload, stripping metadata and refusing oversized or invalid images. */
+const IMAGE_ERROR = 'Choose a JPEG, PNG, WebP or GIF image up to 1 MB.';
+export const GIF_ERROR = 'This GIF is too big to send. Try a shorter or smaller one.';
+
+/**
+ * Decode and re-encode every upload, stripping metadata and refusing oversized or invalid images. A still image
+ * becomes a WebP of at most CHAT.imageMaxBytes. An animated GIF (up to CHAT.gifMaxBytes as sent) keeps its frames:
+ * it becomes an animated WebP no larger than CHAT.gifMaxDimension a side, at the best quality that fits imageMaxBytes.
+ */
 export async function prepareChatImage(raw: string | undefined): Promise<string | undefined> {
   if (raw === undefined) return undefined;
+  let animated = false;
   try {
     const bytes = Buffer.from(chatImageSchema.parse(raw)!, 'base64');
-    if (!bytes.length || bytes.length > CHAT.imageMaxBytes) throw new Error('size');
-    const image = sharp(bytes, { limitInputPixels: 40_000_000, animated: false });
-    const metadata = await image.metadata();
+    if (!bytes.length) throw new Error('size');
+    const metadata = await sharp(bytes, { limitInputPixels: 40_000_000, animated: true }).metadata();
     if (!['jpeg', 'png', 'webp', 'gif'].includes(metadata.format ?? '')) throw new Error('format');
-    const output = await image.rotate().resize(CHAT.imageMaxDimension, CHAT.imageMaxDimension, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
+    animated = metadata.format === 'gif' && (metadata.pages ?? 1) > 1;
+    if (bytes.length > (animated ? CHAT.gifMaxBytes : CHAT.imageMaxBytes)) throw new Error('size');
+    if (animated) {
+      for (const [side, quality] of [[CHAT.gifMaxDimension, 70], [CHAT.gifMaxDimension, 45], [Math.round(CHAT.gifMaxDimension * 2 / 3), 40], [Math.round(CHAT.gifMaxDimension / 2), 30]] as const) {
+        const output = await sharp(bytes, { limitInputPixels: 40_000_000, animated: true }).resize(side, side, { fit: 'inside', withoutEnlargement: true }).webp({ quality, effort: 2 }).toBuffer();
+        if (output.length <= CHAT.imageMaxBytes) return output.toString('base64');
+      }
+      throw new Error('size');
+    }
+    const output = await sharp(bytes, { limitInputPixels: 40_000_000, animated: false }).rotate().resize(CHAT.imageMaxDimension, CHAT.imageMaxDimension, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
     if (output.length > CHAT.imageMaxBytes) throw new Error('size');
     return output.toString('base64');
   } catch {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a JPEG, PNG, WebP or GIF image up to 1 MB.' });
+    throw new TRPCError({ code: 'BAD_REQUEST', message: animated ? GIF_ERROR : IMAGE_ERROR });
   }
 }
 

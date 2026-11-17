@@ -1,7 +1,16 @@
 import { CHAT } from '@/domain/chat';
 
-/** Resize on the device before upload so phone photos fit the request and message limits. */
-export async function chatImage(file: File): Promise<string> {
+/** "data:image/gif;base64,…" for an image the composer holds as bare base64: a GIF kept whole, or the JPEG every other pick becomes. */
+export function imageDataUrl(base64: string): string {
+  return `data:image/${base64.startsWith('R0lGOD') ? 'gif' : 'jpeg'};base64,${base64}`;
+}
+
+/**
+ * Resize on the device before upload so phone photos fit the request and message limits. With `keepGif`, a GIF is
+ * sent as it is (up to CHAT.gifMaxBytes) so the server can keep it moving; drawing it on a canvas would freeze it on
+ * its first frame.
+ */
+export async function chatImage(file: File, keepGif = false): Promise<string> {
   if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) throw new Error('Choose a JPEG, PNG, WebP or GIF image.');
   if (file.size > 20_000_000) throw new Error('Choose an image smaller than 20 MB.');
   const source = await new Promise<string>((resolve, reject) => {
@@ -10,6 +19,10 @@ export async function chatImage(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('This image could not be read.'));
     reader.readAsDataURL(file);
   });
+  if (keepGif && file.type === 'image/gif' && file.size <= CHAT.gifMaxBytes) {
+    const data = source.split(',')[1];
+    if (data) return data;
+  }
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
     element.onload = () => resolve(element);

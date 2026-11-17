@@ -8,7 +8,13 @@ import { censorSlurs, joinsIntoSlur, slurRanges } from './chat-filter';
  */
 export const CHAT = {
   imageMaxBytes: 1_000_000, imageMaxDimension: 1600,
-  maxLength: 1000, reactionsPerMinute: 60, perMinute: 20, perDay: 500, newChatsPerDay: 20,
+  /** An animated GIF may arrive this large; the server stores it as an animated WebP of at most imageMaxBytes, no side longer than gifMaxDimension. */
+  gifMaxBytes: 3_000_000, gifMaxDimension: 480,
+  /** Images one press of Send may carry (each goes out as its own message), people one message may mention, and how long a sender may edit their message. */
+  imagesPerSend: 6, mentionsPerMessage: 10, editWindowMs: 15 * 60_000,
+  /** Search inside one conversation: the shortest query, the longest, and how many matches come back (newest first). */
+  searchMinLength: 2, searchMaxLength: 80, searchResults: 30,
+  maxLength: 1000, reactionsPerMinute: 60, reactorsShown: 50, perMinute: 20, perDay: 500, newChatsPerDay: 20,
   page: 50, maxChanges: 200, evidence: 30, evidenceBefore: 15, evidenceAfter: 14,
   retentionDays: 180, deletedTextDays: 30, evidenceDays: 180, closedRowDays: 30,
   pushDelayMs: 60_000, pushWindowMs: 600_000, pushPerDay: 20, quietStart: 22, quietEnd: 7,
@@ -232,10 +238,98 @@ export const REPORT_CATEGORIES: Record<ReportCategory, { label: string; short: s
   other: { label: 'Something else', short: 'Other' },
 };
 
-/** The tapbacks available in every chat, in display order. */
-export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓'] as const;
+/**
+ * The reactions available in every chat, in display order. The first QUICK_REACTIONS are the strip on a message's
+ * action sheet; the rest sit behind its "More reactions" button. Only append: stored reactions hold the emoji itself.
+ */
+export const REACTIONS = ['❤️', '👍', '👎', '😂', '‼️', '❓',
+  '😮', '😢', '😭', '😡', '🔥', '🎉', '💀',
+  '🙏', '👀', '💯', '🥺', '😍', '🤔', '😎',
+  '👏', '🤝', '✅', '🤣', '😅', '🙄', '😬',
+  '🤯', '🥳', '😴', '🤡', '💔', '🫶', '🫡'] as const;
 export type Reaction = typeof REACTIONS[number];
+export const QUICK_REACTIONS: readonly Reaction[] = REACTIONS.slice(0, 6);
 export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
+/** One person's tapback, for the list of who reacted. `me` marks the viewer, whose row reads "You". */
+export type MessageReactor = { emoji: Reaction; name: string; avatar: string | null; me: boolean };
+/** Someone a group or room message mentions: `name` is the display name as it was written after the "@". */
+export type MessageMention = { id: string; name: string; me: boolean };
 export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
-export const chatImageSchema = z.string().max(Math.ceil(CHAT.imageMaxBytes * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
-export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[] };
+export const chatImageSchema = z.string().max(Math.ceil(Math.max(CHAT.imageMaxBytes, CHAT.gifMaxBytes) * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
+export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[]; reactors: MessageReactor[]; mentions: MessageMention[] };
+export const mentionIdsSchema = z.array(z.uuid()).max(CHAT.mentionsPerMessage).optional();
+export const searchQuerySchema = z.string().max(CHAT.searchMaxLength * 4);
+/** One search match inside a conversation: enough to list it and to jump to it. */
+export type SearchHit = { seq: number; fromMe: boolean; senderName: string; createdAt: string; preview: string };
+
+/** "Messages can be edited for 15 minutes after they are sent." for the default CHAT.editWindowMs. */
+export const EDIT_WINDOW_MESSAGE: `Messages can be edited for ${number} minutes after they are sent.` = `Messages can be edited for ${Math.round(CHAT.editWindowMs / 60_000)} minutes after they are sent.`;
+/** Whether a message sent at `createdAt` is still inside the sender's edit window at `now` (both the app and the server ask). */
+export function withinEditWindow(createdAt: string, now: Date | number): boolean {
+  return new Date(now).getTime() - new Date(createdAt).getTime() <= CHAT.editWindowMs;
+}
+
+/** The "@Name" a mention is written as. */
+export const mentionText = (name: string) => `@${name}`;
+/**
+ * Whether `body` still says "@Name" for a mention: the name must end at the end of the text or before something that
+ * is not a letter or a digit, so "@Sam" is not found inside "@Samantha".
+ */
+export function mentionsName(body: string, name: string): boolean {
+  if (!name) return false;
+  const needle = mentionText(name).toLowerCase();
+  const text = body.toLowerCase();
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) {
+    const next = text.slice(at + needle.length)[Symbol.iterator]().next().value as string | undefined;
+    if (next === undefined || !/[\p{L}\p{N}]/u.test(next)) return true;
+  }
+  return false;
+}
+
+/**
+ * Splits a run of message text around the "@Name"s it mentions, longest names first so "@Sam Lee" wins over "@Sam".
+ * Matching is the same as mentionsName; the text of every part is unchanged, so the parts join back into `text`.
+ */
+export function mentionParts<T extends { name: string }>(text: string, mentions: T[]): Array<{ text: string; mention?: T }> {
+  const ordered = [...mentions].filter((mention) => mention.name).sort((left, right) => right.name.length - left.name.length);
+  if (!ordered.length || !text.includes('@')) return text ? [{ text }] : [];
+  const lower = text.toLowerCase();
+  const parts: Array<{ text: string; mention?: T }> = [];
+  let cursor = 0, at = lower.indexOf('@');
+  while (at >= 0) {
+    const hit = ordered.find((mention) => {
+      const needle = mentionText(mention.name).toLowerCase();
+      if (!lower.startsWith(needle, at)) return false;
+      const next = lower.slice(at + needle.length)[Symbol.iterator]().next().value as string | undefined;
+      return next === undefined || !/[\p{L}\p{N}]/u.test(next);
+    });
+    if (hit) {
+      const end = at + mentionText(hit.name).length;
+      if (at > cursor) parts.push({ text: text.slice(cursor, at) });
+      parts.push({ text: text.slice(at, end), mention: hit });
+      cursor = end;
+      at = lower.indexOf('@', end);
+    } else at = lower.indexOf('@', at + 1);
+  }
+  if (cursor < text.length) parts.push({ text: text.slice(cursor) });
+  return parts;
+}
+
+/**
+ * The "@word" being typed right before the caret, for the mention picker: its start in the text and what follows the
+ * "@" so far. The "@" must open the text or follow a space, so an email address never opens the picker.
+ */
+export function mentionQuery(text: string, caret: number): { start: number; query: string } | null {
+  const match = /(?:^|\s)@([^\s@]{0,30})$/u.exec(text.slice(0, caret));
+  if (!match) return null;
+  return { start: caret - match[1]!.length - 1, query: match[1]! };
+}
+
+/** A one-line excerpt of `text` around the first place `query` appears (case-insensitive), with "…" where it was cut. */
+export function searchSnippet(text: string, query: string, width = 90): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const at = flat.toLowerCase().indexOf(query.toLowerCase());
+  if (flat.length <= width) return flat;
+  const start = Math.max(0, Math.min(flat.length - width, (at < 0 ? 0 : at) - Math.floor(width / 3)));
+  return `${start > 0 ? '…' : ''}${flat.slice(start, start + width).trim()}${start + width < flat.length ? '…' : ''}`;
+}
