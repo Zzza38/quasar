@@ -1,40 +1,22 @@
 # Mockups
 
-Three current sets. Older rounds (countdown hover, classmates popup, landing) are in git history.
+Two current sets. Older rounds (School page, phone Messages entry, sidebar count badges, countdown hover, classmates popup, landing) are in git history.
 
-## Phone Messages entry
+## Lunch menu redesign
 
-Five ways to open Messages on a phone instead of the bare icon in the top bar's corner. The owner picked 4 with
-2's raised button holding Home, and School folded into Classes so the dock is symmetric (`?v=b`), which shipped
-as the `phone-dock` beta.
+The Lunch menu section of the redesigned School page. The owner picked the week list (one row per day previewing a dish from each station; tap a row for the full menu) and asked for the inside of an open day to be redesigned, so this set is five ways to draw that inside. Every one is drawn from the generic menu shape (days, each with notes and stations, each station with dishes), and never assumes which station is the main one or what the stations are called.
 
-Open `messages-entry.html?v=0` (before) and `?v=1` through `?v=5`, plus `?v=a` and `?v=b` for the two dock layouts:
+Open `lunch.html?v=1` through `?v=5`. Add `&view=phones` for three phone frames side by side, one per sample school, or `&d=fa`, `&d=fw` or `&d=edge` to pick the school in the desktop view.
 
-| `v` | Direction |
-| --- | --------- |
-| 1 | Seventh tab: "Chats" joins the dock. |
-| 2 | Centre bubble: a raised round Messages button in the middle of the dock. |
-| 3 | Split dock: a separate round Messages button beside the six-tab dock. |
-| 4 | Chats inside People: a Chats / Friends switch on the People tab. |
-| 5 | Peek bar + sheet: the newest unread message above the dock; tapping it slides Messages up as a sheet. |
-| a | Home in the middle, two tabs left, three right. |
-| b | Home in the middle, School folded into Classes, two and two. |
+| `v` | Inside an open day |
+| --- | ------------------ |
+| 1 | Lead dish: each station's first dish as a headline, the rest as one quieter line. |
+| 2 | Station tiles: each station is a small tile, packed in columns. |
+| 3 | Dish chips: every dish is a chip under its station. |
+| 4 | Menu card: the station name with a rule beside it, dishes listed under it. |
+| 5 | Ruled table: station on the left, dishes on the right, a hairline between stations. |
 
-## Sidebar count badges
-
-Five replacements for the bright filled pill on the sidebar's Tasks, People and Messages counts.
-
-Open `nav-badge.html` for all five side by side, or `nav-badge.html?v=1` through `?v=5` for one:
-
-| `v` | Direction |
-| --- | --------- |
-| 1 | Quiet number: the digits alone, dim, brighter on hover. |
-| 2 | Soft chip: the selected row's tint with a flat 1px ring. |
-| 3 | Neutral chip: a grey chip that blends into the sidebar. |
-| 4 | Inline: the count follows the label ("Tasks · 17"). |
-| 5 | Dot: a small dot; the number shows on hover. |
-
-The Messages row is drawn in its hover state in every column.
+The sample menus are the week of November 9, 2026: Friends Academy (`fa`, real), a Fort Worth ISD high school (`fw`, real), and a made-up worst case (`edge`: a day with no station names, a nine-station day with a long dish name, a note-only day, an empty day and a weekend day).
 
 ## Next class on the Now card
 

@@ -298,7 +298,7 @@ test('a locked school time correction opens a prefilled proposal and uses verifi
   expect(draft.gradeSchedules['10'].cycleDays[0].slots[0].start).toBe('08:05');
   expect(personal(f.id)).toEqual(before);
   expect(school(f.school.id).version).toBe(f.school.version);
-  await page.goto('/school');
+  await page.goto('/school?section=changes');
   const card = page.getByRole('listitem').filter({ hasText: summary });
   await expect(card).toContainText('Voting open');
   await expect(card).toContainText('1 for · 0 against');
@@ -308,7 +308,7 @@ test('a locked school time correction opens a prefilled proposal and uses verifi
   try {
     await authenticate(voterContext, f.members[1]);
     const voter = hydrating(await voterContext.newPage());
-    await voter.goto('/school');
+    await voter.goto('/school?section=changes');
     const voterCard = voter.getByRole('listitem').filter({ hasText: summary });
     await voterCard.getByRole('button', { name: 'Against', exact: true }).click();
     await expect(voterCard).toContainText('1 for · 1 against');
@@ -344,7 +344,7 @@ test('private schedules require the advanced warning and suggestions need three 
 
   const [suggestionResponse] = await Promise.all([
     page.waitForResponse(response => response.url().includes('scheduleSignals.list') && response.ok()),
-    page.goto('/school'),
+    page.goto('/school?section=changes'),
   ]);
   const replies = await suggestionResponse.json() as { result?: { data?: { signals?: unknown[] } } }[];
   expect(replies.find(reply => reply.result?.data?.signals)?.result?.data?.signals).toEqual([]);
@@ -367,7 +367,7 @@ test('bell corrections keep the selected grade and preserve a canceled personal 
   junior.cycleDays[0].slots[0].end = '08:50';
   const fixture = seed(false, true, { ...exampleSchedule, gradeSchedules: { '11': junior } });
   await authenticate(context, fixture.id);
-  await page.goto('/school');
+  await page.goto('/school?section=setup');
   await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 11', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.goto('/classes?bell=open');

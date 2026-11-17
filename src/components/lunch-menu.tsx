@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useId, useReducer, useState, type ReactNode } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
-import { MENU_URL_HELP, menuChoiceName, menuWeekStart, type MenuDay } from '@/domain/menu';
+import { MENU_URL_HELP, menuChoiceName, menuDayCount, menuDayPreview, menuWeekStart, type MenuDay } from '@/domain/menu';
 import { addDays, formatDate, relativeDate } from '@/lib/format';
-import { cn, scrollToId } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { AppState, WorkspaceContext } from './app-state';
 import { hasPermission } from '@/domain/staff';
 import { Icon } from './icon';
-import { Button, Callout, ChoiceGroup, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, OptionCard, Section } from './primitives';
+import { Button, Callout, Chip, ChoiceGroup, EmptyState, Field, Hint, IconButton, Input, Modal, OptionCard, Section } from './primitives';
 
 export type MenuWeek = RouterOutput['school']['menu'];
 type MenuLookup = RouterOutput['school']['menuSources'];
@@ -89,6 +89,66 @@ function DayMenu({ day, compact }: { day: MenuDay; compact?: boolean }) {
 }
 
 /**
+ * The inside of an open day in the week list: each station's name with a rule beside it and its dishes listed under
+ * it, like a printed menu. A station the menu site left unnamed lists its dishes with no heading.
+ */
+function MenuCard({ day }: { day: MenuDay }) {
+  return <div className="grid gap-4">
+    {day.notes.map((note) => <p key={note} className="text-sm font-semibold">{note}</p>)}
+    {day.sections.map((section, index) => <section key={`${section.title}-${index}`} className="grid gap-1.5" aria-label={section.title || undefined}>
+      {section.title && <h3 className="flex items-center gap-2.5 text-[13px] font-extrabold tracking-normal"><span className="min-w-0">{section.title}</span><span aria-hidden="true" className="h-px min-w-6 flex-1 bg-foreground/10" /></h3>}
+      <ul className="gap-x-6 sm:columns-2">{section.items.map((item) => <li key={item} className="break-inside-avoid text-sm leading-relaxed [overflow-wrap:anywhere]">{item}</li>)}</ul>
+    </section>)}
+  </div>;
+}
+
+/**
+ * The week as one row per day. A row previews one dish from each station; tapping it
+ * opens that day's full menu, one day at a time. Today starts open when it has a menu. A day with only a note
+ * shows the note, and a day with nothing shows that nothing is posted; neither opens.
+ */
+function MenuWeekList({ days, today }: { days: Array<{ date: string; day: MenuDay | null }>; today: string }) {
+  const baseId = useId();
+  // Undefined until the member picks: today then, when it lists dishes. Null after they close the open day.
+  const [picked, setPicked] = useState<string | null | undefined>(undefined);
+  const todayDay = days.find((entry) => entry.date === today)?.day;
+  const open = picked === undefined ? (todayDay && todayDay.sections.length > 0 ? today : null) : picked;
+  const tile = 'rounded-2xl bg-muted/70 ring-1 ring-inset ring-foreground/[0.04]';
+  return <ul className="grid gap-1.5">
+    {days.map(({ date, day }) => {
+      const isToday = date === today;
+      const weekday = formatDate(date, { weekday: 'long' }).split(',')[0];
+      // Today is the short underline under its number, as on the Schedule month grid and the rotation's day cells.
+      const cell = <span className="grid w-10 shrink-0 justify-items-center gap-px">
+        <span aria-hidden="true" className="text-[10.5px] font-bold text-muted-foreground">{weekday.slice(0, 3)}</span><span className="sr-only">{weekday}</span>
+        <span className={cn('relative text-[15px] font-extrabold tabular-nums', isToday && 'after:absolute after:-bottom-0.5 after:left-1/2 after:h-0.5 after:w-3.5 after:-translate-x-1/2 after:rounded-full after:bg-primary')}>{Number(date.slice(8))}</span>
+      </span>;
+      if (!day || day.sections.length === 0) return <li key={date} className={cn(tile, 'flex items-center gap-3 p-3')}>
+        {cell}
+        <div className="grid min-w-0 flex-1 gap-px">
+          {day && day.notes.length > 0 ? day.notes.map((note) => <p key={note} className="text-sm font-semibold">{note}</p>) : <p className="text-sm text-muted-foreground">No menu posted.</p>}
+        </div>
+        {isToday && <Chip className="shrink-0">Today</Chip>}
+      </li>;
+      const expanded = open === date;
+      const count = menuDayCount(day);
+      return <li key={date} className={cn(tile, 'transition-colors', expanded && 'bg-card shadow-card ring-foreground/[0.08]')}>
+        <button type="button" aria-expanded={expanded} aria-controls={expanded ? `${baseId}-${date}` : undefined} onClick={() => setPicked(expanded ? null : date)}
+          className="flex w-full min-w-0 items-center gap-3 rounded-2xl p-3 text-left outline-none transition-colors hover:bg-foreground/[0.03] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+          {cell}
+          <span className="grid min-w-0 flex-1 gap-px">
+            <strong className="flex min-w-0 items-center gap-2 text-sm font-semibold"><span className="truncate">{expanded ? weekday : menuDayPreview(day).join(' · ')}</span>{isToday && <Chip className="shrink-0">Today</Chip>}</strong>
+            <Hint className="truncate">{!expanded && day.notes[0] ? `${day.notes[0]} · ${count}` : count}</Hint>
+          </span>
+          <Icon name="chevronDown" size={16} className={cn('shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
+        </button>
+        {expanded && <div id={`${baseId}-${date}`} className="px-3.5 pb-4 pt-1 sm:pl-[4.25rem]"><MenuCard day={day} /></div>}
+      </li>;
+    })}
+  </ul>;
+}
+
+/**
  * The day's lunch under a timeline (Today, Schedule). Shows nothing until the week has loaded, when the school
  * has no menu set up, or when the provider lists nothing for the day, so a page without a menu looks as before.
  */
@@ -110,7 +170,10 @@ export function LunchDay({ state, date }: { state: AppState; date: string }) {
   </section>;
 }
 
-/** The School view's Lunch menu card: the week's menus with week navigation, where the menu comes from, and set-up for those who may change it. */
+/**
+ * The School view's Lunch menu card: the week's menus with week navigation, where the menu comes from, and set-up for
+ * those who may change it. "Full week" on Today lands here through the School page's `?section=lunch`.
+ */
 export function LunchMenuSection({ state }: { state: AppState }) {
   const { context, online, today } = state;
   // Weeks relative to today, not a stored date: the first render's `today` is the server's (renderedAt in the tracker),
@@ -120,14 +183,6 @@ export function LunchMenuSection({ state }: { state: AppState }) {
   const { menu, loading, error, reload } = useLunchMenu(state, weekDate);
   const [editing, setEditing] = useState(false);
   const editable = canEditMenu(context);
-  // "Full week" on Today lands here; the one-shot param is stripped so Back and reloads do not scroll again.
-  const wantsOpen = state.params.get('menu') === 'open';
-  const { navigate } = state;
-  useEffect(() => {
-    if (!wantsOpen) return;
-    scrollToId('lunch-menu-title', true);
-    navigate('school', {}, { replace: true });
-  }, [wantsOpen, navigate]);
   const weekStart = menuWeekStart(weekDate);
   const thisWeek = menuWeekStart(today) === weekStart;
   // One narrowing for both: `loaded` is the week when the school has a menu.
@@ -155,19 +210,7 @@ export function LunchMenuSection({ state }: { state: AppState }) {
         </div>
         <IconButton label="Next week" icon="chevronRight" onClick={() => setWeekOffset(weekOffset + 1)} />
       </div>
-      <ul className={cn('grid gap-2', loading && 'opacity-70')} aria-busy={loading || undefined}>
-        {menuWeekDays(loaded.weekStart, loaded.days).map(({ date, day }) => {
-          const isToday = date === today;
-          const empty = !day || (day.sections.length === 0 && day.notes.length === 0);
-          return <li key={date} className={cn('grid gap-2 rounded-2xl bg-muted/70 p-3.5 ring-1 ring-inset ring-foreground/[0.04]', isToday && 'bg-primary-soft/60 ring-primary/30')}>
-            <div className="flex items-baseline justify-between gap-2">
-              <strong className="text-sm font-bold">{formatDate(date, { weekday: 'long' }).split(',')[0]}{isToday && <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-primary-foreground">Today</span>}</strong>
-              <Eyebrow>{formatDate(date)}</Eyebrow>
-            </div>
-            {empty ? <p className="text-sm text-muted-foreground">No menu posted.</p> : <DayMenu day={day} />}
-          </li>;
-        })}
-      </ul>
+      <div className={cn(loading && 'opacity-70')} aria-busy={loading || undefined}><MenuWeekList key={loaded.weekStart} days={menuWeekDays(loaded.weekStart, loaded.days)} today={today} /></div>
       <Hint>{loaded.stale ? `The menu site could not be reached; showing the copy from ${stamp(loaded.fetchedAt)}.` : `Updated ${stamp(loaded.fetchedAt)}.`}{error ? ` ${error}` : ''}</Hint>
     </>}
     {editable && <MenuSourceDialog open={editing} onClose={() => setEditing(false)} state={state} current={source} />}

@@ -558,7 +558,7 @@ test('manually placed videos use existing blank space without changing layout', 
   for (const name of ['Schedule', 'Tasks', 'Classes', 'School', 'People']) {
     await page.getByRole('link', { name, exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
-    if (name === 'School') await expect(page.locator('#school-directory-title')).toBeVisible();
+    if (name === 'School') await expect(page.getByRole('navigation', { name: 'School sections' })).toBeVisible();
     else await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
     await enterCode(page);
     await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
@@ -602,9 +602,9 @@ test('manually placed videos use existing blank space without changing layout', 
       await page.setViewportSize({ width: 1920, height: 1080 });
     }
     if (name === 'School') {
-      await page.locator('[data-attention-after="school-directory"]').evaluate(element => { const rect = element.getBoundingClientRect(); window.scrollTo(0, window.scrollY + rect.bottom - 180); });
-      await expect(page.locator('[data-attention-slot="school-directory"]').first()).toBeVisible();
-      await snapshot('school-directory');
+      await page.locator('[data-attention-after="school-sections"]').evaluate(element => { const rect = element.getBoundingClientRect(); window.scrollTo(0, window.scrollY + rect.bottom - 180); });
+      await expect(page.locator('[data-attention-slot="school-sections"]').first()).toBeVisible();
+      await snapshot('school-sections');
     }
   }
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('quasar:open-account')));
