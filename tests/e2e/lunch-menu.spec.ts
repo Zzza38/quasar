@@ -50,9 +50,9 @@ test('today’s lunch shows under the timeline and the School view lists the wee
   await expect(lunch).toContainText('Grilled Cheese');
   await lunch.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('today-lunch.png') });
-  // "Full week" lands on the School view's menu card, scrolled into view, with the one-shot param stripped.
+  // "Full week" lands on the School view's Lunch menu section, with the one-shot param swapped for the section.
   await lunch.getByRole('button', { name: 'Full week' }).click();
-  await expect(page).toHaveURL(/\/school$/);
+  await expect(page).toHaveURL(/\/school\?section=lunch$/);
   const card = page.getByRole('region', { name: 'Lunch menu' });
   await expect(card).toBeInViewport();
   await expect(card).toContainText('Upper School Lunch');
@@ -93,7 +93,7 @@ test('the Today timeline and lunch advance together after the last period', asyn
 test('members of an open school can change the menu, and a link off Nutrislice is refused before any fetch', async ({ page, context }) => {
   const fixture = seed(); await authenticate(context, fixture.id);
   await page.clock.setFixedTime(new Date('2026-09-17T12:51:37Z'));
-  await page.goto('/school');
+  await page.goto('/school?section=lunch');
   const card = page.getByRole('region', { name: 'Lunch menu' });
   await card.getByRole('button', { name: 'Change' }).click();
   const dialog = page.getByRole('dialog', { name: 'Change the lunch menu' });
