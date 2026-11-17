@@ -20,6 +20,42 @@ export type MenuSource = z.infer<typeof menuSourceSchema>;
 /** One day of a menu: notes such as a holiday name, and the items grouped by station (Soup, Entree, Grill). */
 export type MenuDay = { date: string; notes: string[]; sections: Array<{ title: string; items: string[] }> };
 
+/** Station names that mean the main course: "Entree", "Entrées", "Hot Entree", "Main Line", "Mains", "Hot Lunch". */
+const MAIN_STATION = /\bentr[eé]es?\b|\bmains?\b|\bhot lunch\b/i;
+/** Station names for what goes beside the main course. The dish that names a day is never taken from one of these when another station exists. */
+const SIDE_STATION = /soup|salad|side|fruit|\bveg(?:etable)?s?\b|dessert|sweet|bakery|bread|milk|beverage|drink|condiment|sauce|topping|snack/i;
+
+/**
+ * The station that holds the day's main course. Schools name their stations freely ("Entree", "Create", "Main Line")
+ * or not at all, so this reads the names it can and falls back in steps: a station named as the main course, then
+ * the first one not named as a side (soup, salad, milk), then simply the first.
+ */
+function mainSection(day: MenuDay): MenuDay['sections'][number] | undefined {
+  const stations = day.sections.filter((section) => section.items.length > 0);
+  return stations.find((section) => MAIN_STATION.test(section.title)) ?? stations.find((section) => !SIDE_STATION.test(section.title)) ?? stations[0];
+}
+
+/** The one dish that names the day: the first dish of the main-course station. Undefined when the day lists no dishes. */
+export function menuMainDish(day: MenuDay): string | undefined {
+  return mainSection(day)?.items[0];
+}
+
+/**
+ * One dish from each station as a one-line preview of the day: the main course first, so it survives when the line
+ * is cut short, then the other stations in the menu site's own order.
+ */
+export function menuDayPreview(day: MenuDay): string[] {
+  const main = mainSection(day);
+  return [main, ...day.sections.filter((section) => section !== main)].map((section) => section?.items[0]).filter((item): item is string => !!item);
+}
+
+/** "4 stations · 9 dishes" for a day's menu, or an empty string when it lists no dishes. */
+export function menuDayCount(day: MenuDay): string {
+  const dishes = day.sections.reduce((total, section) => total + section.items.length, 0);
+  if (dishes === 0) return '';
+  return `${day.sections.length === 1 ? '1 station' : `${day.sections.length} stations`} · ${dishes === 1 ? '1 dish' : `${dishes} dishes`}`;
+}
+
 export const MENU_URL_HELP = 'Paste a link from your school’s Nutrislice menu site (for example https://yourschool.nutrislice.com/menu/… or …flikisdining.com/menu/…).';
 
 /**

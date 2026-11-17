@@ -468,14 +468,19 @@ export function Preview({ value }: { value: Schedule }) {
 
 /* ---------- Read-only summary ---------- */
 
-export function ScheduleSummary({ schedule }: { schedule: Schedule }): ReactNode {
+/**
+ * The schedule's shape as chips. `brief` is for a member reading their own school (the School page redesign): it
+ * leaves out what they already know, that the school has a lunch and which time zone it is in. Several lunch waves
+ * still show, since that is something to know. Setup and support screens show everything.
+ */
+export function ScheduleSummary({ schedule, brief }: { schedule: Schedule; brief?: boolean }): ReactNode {
   const classes = schedule.periods.filter((period) => period.kind === 'class').length;
   const lunches = schedule.periods.filter((period) => period.kind === 'lunch').length;
   return <div className="flex flex-wrap gap-1.5">
     <Chip tone="accent" icon="layers">{schedule.cycleDays.length === 1 ? 'Same every day' : `${schedule.cycleDays.length}-day rotation`}</Chip>
     <Chip icon="book">{classes} class periods</Chip>
-    {lunches > 0 && <Chip icon="coffee">{lunches === 1 ? 'Lunch' : `${lunches} lunch waves`}</Chip>}
+    {lunches > (brief ? 1 : 0) && <Chip icon="coffee">{lunches === 1 ? 'Lunch' : `${lunches} lunch waves`}</Chip>}
     {schedule.exceptions.length > 0 && <Chip icon="calendar">{schedule.exceptions.length} exceptions</Chip>}
-    <Chip icon="clock">{formatTimeZone(schedule.timeZone)}</Chip>
+    {!brief && <Chip icon="clock">{formatTimeZone(schedule.timeZone)}</Chip>}
   </div>;
 }
