@@ -376,7 +376,7 @@ export class AiService {
       if (!group.sure || !autoMergeable(group.ids.map(id => byId.get(id)!))) { left.push(group); continue; }
       // A task edited or deleted on another device since the list was read fails the merge, and stays a suggestion.
       try { merged.push(merges.merge(userId, { keepId: group.keepId, removeIds: group.ids.filter(id => id !== group.keepId), reason: group.reason }, 'ai')); }
-      catch (error) { if (!(error instanceof TRPCError) || error.code !== 'NOT_FOUND') throw error; left.push(group); }
+      catch (error) { if (!(error instanceof TRPCError) || !['NOT_FOUND', 'BAD_REQUEST'].includes(error.code)) throw error; left.push(group); }
     }
     return { checked: true, merged, groups: left };
   }

@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Entity } from '@/domain/sync';
 import { taskSchema, type Task } from '@/domain/task';
-import { MERGE_MAX, mergeTasks, pickKeep } from '@/domain/task-merge';
+import { MERGE_MAX, mergeBlocked, mergeTasks, pickKeep } from '@/domain/task-merge';
 import { readEntity, writeEntity } from './entities';
 import type { Service } from './service';
 
@@ -63,6 +63,8 @@ export class MergeService {
       const keep = this.task(userId, input.keepId);
       const removed = input.removeIds.map((id) => this.task(userId, id));
       const merged = mergeTasks(keep.task, removed.map((entry) => entry.task));
+      const blocked = mergeBlocked(merged);
+      if (blocked) fail('BAD_REQUEST', blocked);
       const at = this.now().toISOString();
       const keptVersion = keep.entity.version + 1;
       writeEntity(this.db, userId, { ...keep.entity, version: keptVersion, data: merged });
