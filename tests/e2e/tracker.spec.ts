@@ -225,7 +225,7 @@ test('explicit community choice, class and task persistence, offline reload and 
   const offlineResponse = await page.goto('/tasks');
   expect(await offlineResponse?.text()).not.toContain('Continue with Google');
   await page.reload();
-  await expect(page.getByText('You’re offline.', { exact: false })).toBeVisible();
+  await expect(page.locator('[aria-label="Offline · saved on this device"]:visible')).toBeVisible();
   // Completion moves the row into the collapsed completed section after IndexedDB commits.
   await page.getByLabel('Mark Read biology chapter complete').click();
   await expect(page.getByRole('button', { name: /Completed · 1/ })).toBeVisible();

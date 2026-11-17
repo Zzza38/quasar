@@ -15,7 +15,7 @@ import type { NowCardStyle } from '@/lib/now-split';
 import { NotificationSettings } from './notification-settings';
 import { Button, Callout, Eyebrow, Hint, Modal, Spacer } from './primitives';
 import { AvatarSettings } from './avatar-settings';
-import { BetasButton, useBeta } from './betas';
+import { BetasButton } from './betas';
 import { DockCountDescriptions, DockGroupSwitch, PhoneDock, useDockMemory } from './phone-dock';
 import { MemberAvatar } from './member-avatar';
 import { Badge } from './ui/badge';
@@ -102,7 +102,6 @@ const STATUS_TONES = {
 } as const;
 
 export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = false, labelClassName, className }: { sync: SyncState; online: boolean; onRetry: () => void; onConflicts: () => void; iconOnly?: boolean; labelClassName?: string; className?: string }) {
-  const compactOfflineStatus = useBeta('compact-offline-status');
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     setDismissed(false);
@@ -115,7 +114,7 @@ export function StatusPill({ sync, online, onRetry, onConflicts, iconOnly = fals
   const icon: IconName = sync.kind === 'saved' ? 'checkCircle' : sync.kind === 'offline' ? 'cloudOff' : sync.kind === 'failed' || sync.kind === 'conflict' ? 'alert' : sync.kind === 'pending' ? 'cloud' : 'refresh';
   const label = statusLabel(sync);
   const clickable = sync.kind === 'conflict' || sync.kind === 'failed' || (sync.kind === 'pending' && online);
-  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', iconOnly && 'size-11 gap-0 p-0 [&>svg]:size-4!', iconOnly && !compactOfflineStatus && 'bg-transparent', iconOnly && clickable && 'hover:bg-muted', className);
+  const classes = cn('h-auto max-w-full gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold', STATUS_TONES[tone], clickable && 'cursor-pointer hover:brightness-95', iconOnly && 'size-11 gap-0 p-0 [&>svg]:size-4!', iconOnly && clickable && 'hover:bg-muted', className);
   const inner = <>
     {sync.kind === 'saving' || sync.kind === 'syncing' ? <Spinner size={12} /> : <Icon name={icon} size={13} strokeWidth={2.4} />}
     <span className={cn('truncate', labelClassName, iconOnly && 'sr-only')}>{label}</span>
@@ -186,7 +185,6 @@ export interface ShellProps {
 }
 
 export function Shell({ session, context, view, navigate, taskCount, chatUnread, immersive, chatPush, onChatPush, nowCard, onNowCard, children, gradeSettings, calendarSettings }: ShellProps) {
-  const compactOfflineStatus = useBeta('compact-offline-status');
   const home = (event: MouseEvent<HTMLAnchorElement>) => { if (!followsInPage(event)) return; event.preventDefault(); if (view === 'today') scrollTopIfActive(true); else navigate('today'); };
   const [account, setAccount] = useState(false);
   // The checklist's "Add calendar" asks for the sheet with the Add dialog open; the count is what CalendarFeeds watches.
@@ -322,8 +320,6 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
         onMessages ? 'lg:flex lg:h-dvh lg:flex-col lg:pb-8' : 'lg:pb-12')} id="main" tabIndex={-1}>
         <div className="mb-4 grid shrink-0 gap-3 empty:hidden">
           {session.error && <Callout tone="danger" icon="alert" role="alert" actions={<><Button size="sm" onClick={() => void session.initialize()} disabled={session.loading}>Try again</Button><Button size="sm" variant="ghost" onClick={session.dismissError}>Dismiss</Button></>}>{session.error}</Callout>}
-          {/* Messages shows its own offline callout; two stacked banners would crowd a phone thread. */}
-          {!compactOfflineStatus && !online && !onMessages && <Callout tone="neutral" icon="cloudOff" role="status">You’re offline. Schedule and task changes stay saved on this device until you reconnect.{!context.school && ' Connect to finish school setup.'}</Callout>}
           {online && session.offlineReady === false && session.offlineSupported && <Callout tone="neutral" icon="info" actions={<Button size="sm" onClick={() => void session.prepareOffline()}>Try again</Button>}>Quasar couldn’t save itself to this device, so it may not open without signal.</Callout>}
           {sync.kind === 'failed' && online && <Callout tone="warning" icon="alert" role="alert" title="Some changes could not sync" actions={<Button size="sm" busy={session.syncing} onClick={retry}>Retry now</Button>}>{sync.message} Your changes are saved on this device.</Callout>}
         </div>
