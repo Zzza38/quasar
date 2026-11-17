@@ -160,7 +160,8 @@ test('friends chat, the badge counts unread chats, and deletion reaches both sid
   await expect(bobComposer).toBeInViewport();
 
   const hi = bobLog.getByRole('listitem').filter({ hasText: 'Hi Bob' });
-  await hi.getByRole('button', { name: 'Message actions' }).click();
+  // On a touch screen the actions button is left for screen readers (a long press opens the sheet), so press it as one would.
+  await hi.getByRole('button', { name: 'Message actions' }).dispatchEvent('click');
   await hi.getByRole('button', { name: 'Add as task' }).click();
   await expect(bob.getByRole('status').filter({ hasText: 'Added to Tasks.' })).toBeVisible();
 
@@ -284,7 +285,7 @@ test('global chat: everyone posts, slurs are censored, the owner edits and remov
 
   // Bob cannot edit or remove Alice's message; Alice can delete her own.
   const bobSeesAlice = bobLog.getByRole('listitem').filter({ hasText: 'this homework is bullshit' });
-  await bobSeesAlice.getByRole('button', { name: 'Message actions' }).click();
+  await bobSeesAlice.getByRole('button', { name: 'Message actions' }).dispatchEvent('click');
   await expect(bobSeesAlice.getByRole('button', { name: 'Add as task' })).toBeVisible();
   await expect(bobSeesAlice.getByRole('button', { name: /Edit|Remove|Delete/ })).toHaveCount(0);
 
@@ -753,24 +754,26 @@ test('reactions and replies: a tapback shows on both sides and toggles off, a re
   const heart = target.getByRole('button', { name: 'React with heart' });
   await expect(heart).toHaveAttribute('aria-pressed', 'false');
   await heart.click();
-  const myPill = target.getByRole('button', { name: '❤️ 1, you reacted' });
+  const myPill = target.getByRole('button', { name: '❤️ 1, you. Show who reacted' });
   await expect(myPill).toBeVisible();
   await expect(target.getByRole('button', { name: 'React with heart' })).toHaveCount(0);
 
-  // Bob sees it after a poll, with the count but without "you reacted"; a second reaction from him makes it two.
+  // Bob sees it after a poll, with Alice named; a second reaction from him makes it two.
   const bob = await phone(browser, f.bob);
   await bob.goto(`/messages?with=${f.alice}`);
   const bobLog = bob.getByRole('log', { name: 'Messages with Alice' });
   const bobsOwn = bobLog.getByRole('listitem').filter({ hasText: 'Did you finish the pre-lab?' });
-  await expect(bobsOwn.getByRole('button', { name: '❤️ 1' })).toBeVisible({ timeout: 10_000 });
-  await bobsOwn.getByRole('button', { name: '❤️ 1' }).click();
-  await expect(bobsOwn.getByRole('button', { name: '❤️ 2, you reacted' })).toBeVisible();
-  await expect(target.getByRole('button', { name: '❤️ 2, you reacted' })).toBeVisible({ timeout: 10_000 });
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 1, Alice. Show who reacted' })).toBeVisible({ timeout: 10_000 });
+  await bobsOwn.getByRole('button', { name: 'Message actions' }).dispatchEvent('click');
+  await bobsOwn.getByRole('button', { name: 'React with heart' }).click();
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 2, Alice and you. Show who reacted' })).toBeVisible();
+  await expect(target.getByRole('button', { name: '❤️ 2, Bob and you. Show who reacted' })).toBeVisible({ timeout: 10_000 });
 
-  // Tapping the pill toggles Alice's reaction off; Bob's stays.
-  await target.getByRole('button', { name: '❤️ 2, you reacted' }).click();
-  await expect(target.getByRole('button', { name: '❤️ 1' })).toBeVisible();
-  await expect(bobsOwn.getByRole('button', { name: '❤️ 1, you reacted' })).toBeVisible({ timeout: 10_000 });
+  // The pill lists who reacted, and Alice's own row there takes her reaction off; Bob's stays.
+  await target.getByRole('button', { name: '❤️ 2, Bob and you. Show who reacted' }).click();
+  await alice.getByRole('dialog', { name: 'Reactions' }).getByRole('button', { name: 'You, heart. Remove your reaction' }).click();
+  await expect(target.getByRole('button', { name: '❤️ 1, Bob. Show who reacted' })).toBeVisible();
+  await expect(bobsOwn.getByRole('button', { name: '❤️ 1, you. Show who reacted' })).toBeVisible({ timeout: 10_000 });
 
   // Reply from the action sheet: the composer shows the quote strip, the sent bubble carries the quote card.
   // The reply's quote repeats the target's text, so the reply is excluded by its own text (an open action sheet adds text too).
