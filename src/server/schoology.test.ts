@@ -414,6 +414,49 @@ describe('assignments straight from Schoology', () => {
   }
   const task = (db: Db, student: string, id: string) => readEntity(db, student, id);
 
+  it.each(['disconnect', 'replace-same-id'])('discards pending assignment results after %s', async action => {
+    const f = await setup();
+    const original = f.fetcher.getMockImplementation()!;
+    let release!: () => void;
+    let started!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    f.fetcher.mockImplementation(async (url, init) => {
+      const response = await original(url, init);
+      if (new URL(url).pathname.endsWith('/assignments')) { started(); await pending; }
+      return response;
+    });
+    const sync = f.schoology.sync(f.student);
+    await entered;
+    if (action === 'disconnect') f.schoology.disconnect(f.student);
+    else f.db.prepare('UPDATE schoology_connections SET token_encrypted=token_encrypted WHERE user_id=?').run(f.student);
+    release();
+    expect(await sync).toEqual({ changed: 0 });
+    expect(task(f.db, f.student, 'sgy_601')).toBeNull();
+    expect(f.db.prepare('SELECT count(*) n FROM schoology_imports WHERE user_id=?').get(f.student)).toEqual({ n: 0 });
+  });
+
+  it.each(['disconnect', 'replace-same-id'])('discards pending submission results after %s', async action => {
+    const f = await setup();
+    const original = f.fetcher.getMockImplementation()!;
+    let release!: () => void;
+    let started!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    f.fetcher.mockImplementation(async (url, init) => {
+      const response = await original(url, init);
+      if (new URL(url).pathname.includes('/submissions/7605/')) { started(); await pending; }
+      return response;
+    });
+    const sync = f.schoology.sync(f.student);
+    await entered;
+    if (action === 'disconnect') f.schoology.disconnect(f.student);
+    else f.db.prepare('UPDATE schoology_connections SET token_encrypted=token_encrypted WHERE user_id=?').run(f.student);
+    release(); await sync;
+    expect(task(f.db, f.student, 'sgy_605')?.data.completed).toBe(false);
+    expect(f.db.prepare("SELECT submitted FROM schoology_items WHERE user_id=? AND item_key='assignment:605'").get(f.student)).toEqual({ submitted: 0 });
+  });
+
   it('adds assignments the feed lacks, with their class, and checks off ones turned in', async () => {
     const { db, student, schoology } = await setup();
     const { changed } = await schoology.sync(student);

@@ -895,6 +895,16 @@ function migrate(db: Db): void {
   addColumn('schoology_connections', 'synced_at', 'TEXT');
   addColumn('schoology_connections', 'import_assignments', 'INTEGER NOT NULL DEFAULT 1');
   addColumn('schoology_connections', 'auto_complete', 'INTEGER NOT NULL DEFAULT 1');
+  // Persist connection identity across service instances, workers and reconnects to the same Schoology uid.
+  addColumn('schoology_connections', 'generation', "TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    UPDATE schoology_connections SET generation=lower(hex(randomblob(16))) WHERE generation='';
+    CREATE TRIGGER IF NOT EXISTS schoology_connection_insert_generation AFTER INSERT ON schoology_connections
+    BEGIN UPDATE schoology_connections SET generation=lower(hex(randomblob(16))) WHERE user_id=NEW.user_id; END;
+    CREATE TRIGGER IF NOT EXISTS schoology_connection_replace_generation
+    AFTER UPDATE OF token_encrypted, schoology_uid, connected_at ON schoology_connections
+    BEGIN UPDATE schoology_connections SET generation=lower(hex(randomblob(16))) WHERE user_id=NEW.user_id; END;
+  `);
   addColumn('schoology_items', 'submitted', 'INTEGER NOT NULL DEFAULT 0');
   // Grade goals (Classes → Grades, SchoologyService.setGoal): the one thing about grades Quasar stores. Per member
   // and Schoology section, a goal as JSON ({kind:'letter',letter} or {kind:'percent',percent}) and the assignment the
