@@ -37,7 +37,7 @@ describe('openDatabase migrations', () => {
     const db = openDatabase(path);
     try {
       const versions = (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map(row => row.version);
-      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 35]);
+      expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]);
       for (const table of ['chat_messages', 'chat_group_messages', 'global_messages']) {
         expect((db.pragma(`table_info(${table})`) as { name: string; notnull: number }[]).find(column => column.name === 'reply_to_seq')).toMatchObject({ notnull: 0 });
       }
@@ -264,4 +264,25 @@ it('moves every account on the line to the block when the Now card setting leave
       expect(again.prepare('SELECT now_card FROM users WHERE id=?').pluck().get('new')).toBe(2);
     } finally { again.close(); }
   } finally { rmSync(folder, { recursive: true, force: true }); }
+});
+
+it('assigns durable Schoology generations on insert and replacement, even for identical credentials', () => {
+  const path = tempPath();
+  const db = openDatabase(path);
+  try {
+    db.prepare("INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES('member','member','member@example.com','Member','Member','2026-11-17')").run();
+    const insert = () => db.prepare("INSERT INTO schoology_connections(user_id,token_encrypted,schoology_uid,name,connected_at) VALUES('member','same-token','4242','Member','2026-11-17')").run();
+    const generation = () => (db.prepare("SELECT generation FROM schoology_connections WHERE user_id='member'").get() as { generation: string }).generation;
+    insert(); const first = generation();
+    expect(first).toMatch(/^[a-f0-9]{32}$/);
+    db.prepare("UPDATE schoology_connections SET synced_at='2026-11-17' WHERE user_id='member'").run();
+    expect(generation()).toBe(first);
+    db.prepare("UPDATE schoology_connections SET token_encrypted=token_encrypted WHERE user_id='member'").run();
+    const replacement = generation(); expect(replacement).not.toBe(first);
+    db.prepare("DELETE FROM schoology_connections WHERE user_id='member'").run();
+    insert(); expect(generation()).not.toBe(replacement);
+    const second = openDatabase(path);
+    try { expect((second.prepare("SELECT generation FROM schoology_connections WHERE user_id='member'").get() as { generation: string }).generation).toBe(generation()); }
+    finally { second.close(); }
+  } finally { db.close(); }
 });

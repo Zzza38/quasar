@@ -537,7 +537,7 @@ html[data-rgb-mode] body > div:first-of-type {
 .timetable-pin-bar > p { flex: 1 1 12rem; padding: 4px 0; font-size: 13px; font-weight: 600; color: var(--foreground); }
 /* Dragging uses pointer events (pointer-drag.ts): a held press must not open the iOS callout or select text, and a
    swipe that starts on a class or block still scrolls. */
-.timetable-palette-items > button, .time-block-body { touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+.timetable-palette-items > button, .time-block-body, .board-class { touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
 html[data-pointer-dragging] { overscroll-behavior: contain; }
 html[data-pointer-dragging], html[data-pointer-dragging] * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .time-drag-ghost { position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; max-width: min(240px, calc(100vw - 8px)); padding: 7px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.25; color: var(--foreground); box-shadow: var(--shadow-float); will-change: transform; overflow-wrap: anywhere; }
@@ -619,6 +619,72 @@ html[data-pointer-dragging], html[data-pointer-dragging] * { cursor: grabbing !i
 html[data-pointer-dragging] .time-block-detail { display: none !important; }
 /* A tapped (selected) block shows its detail card too: touch screens cannot hover, and iPad Safari does not focus a tapped button. */
 .time-block-open { z-index: 4; }
+/* ---------- Classes board (ScheduleGrid `board`) ----------
+   The class list sits beside one rotation week of the time canvas; under 900px the timetable comes first. */
+.timetable-board { grid-template-columns: minmax(0, 356px) minmax(0, 1fr); }
+.timetable-board-side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; min-width: 0; }
+.timetable-board-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; }
+.timetable-board-chips { display: none; }
+.board-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; min-width: 0; }
+.board-top:empty { display: none; }
+.board-weeks { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+/* The week switch: a small map of each week. The chosen one takes the month grid's grey outline, not an accent fill. */
+.board-week { display: grid; gap: 8px; width: 184px; padding: 10px 12px 12px; border-radius: 14px; text-align: left; outline: none; background: color-mix(in srgb, var(--foreground) 3%, transparent); box-shadow: inset 0 0 0 1px var(--border); transition: background-color .15s ease; }
+.board-week:hover { background: color-mix(in srgb, var(--foreground) 5%, transparent); }
+.board-week[data-state="on"] { background: color-mix(in srgb, var(--foreground) 6%, transparent); box-shadow: inset 0 0 0 1.5px var(--control-border); }
+.board-week:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.board-week-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.board-week-head > strong { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.board-week-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted-foreground); }
+.board-map { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); gap: 3px; height: 56px; }
+.board-map-day { position: relative; border-radius: 4px; background: color-mix(in srgb, var(--foreground) 3%, transparent); }
+.board-map-day > i { position: absolute; left: 0; right: 0; min-height: 2px; border-radius: 3px; background: color-mix(in srgb, var(--block-color) 58%, var(--card)); }
+.board-map[data-lit] .board-map-day > i { background: color-mix(in srgb, var(--block-color) 28%, var(--card)); }
+.board-map .board-map-day > i.board-map-lit { background: var(--block-color); }
+.board-map .board-map-day > i.board-map-other { background: color-mix(in srgb, var(--foreground) 11%, transparent); }
+.board-map .board-map-day > i.board-map-empty { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.board-note { flex: 1 1 150px; min-width: 0; display: grid; align-content: center; justify-items: end; gap: 2px; text-align: right; font-size: 12.5px; line-height: 1.4; color: var(--muted-foreground); }
+.board-note > strong { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--foreground); }
+/* The classes in the list: the whole row is the handle. */
+.board-class { cursor: pointer; }
+.timetable-board:not([data-locked]) .board-class { cursor: grab; }
+.timetable-board:not([data-locked]) .board-class:active { cursor: grabbing; }
+.board-also { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; padding: 8px 10px 2px; overflow: visible; mask-image: none; }
+/* Day name and its edit button share one row. */
+.time-canvas-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 44px; padding-left: 8px; }
+.time-canvas-heading-row > strong { padding: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.time-canvas-heading-row button:first-child { display: inline-flex; overflow: visible; padding: 0; }
+.time-canvas-heading-row > div { flex: none; gap: 2px; }
+/* A locked board is for reading: no × and no resize handles. */
+.timetable-board[data-locked] .time-block-clear, .timetable-board[data-locked] .time-resize { display: none; }
+.time-block.time-block-lit { background: color-mix(in srgb, var(--block-color) 44%, var(--card)) !important; box-shadow: 0 0 0 1px var(--block-color); }
+/* A period neighbouring days have at the same time (lunch, advisory) is one band: the fill is drawn once, from the
+   run's first day, and each day's own block stays on top of it, see-through, so it still drags, resizes and clears
+   by itself. A day whose time differs is not part of the run and keeps its own block. */
+.time-band-fill { position: absolute; left: 4px; width: calc(var(--band-span) * (100% + 1px) - 9px); z-index: 1; pointer-events: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; overflow: hidden; white-space: nowrap; border: 1px solid var(--block-color); border-radius: 9px; background: color-mix(in srgb, var(--block-color) 22%, var(--card)); font-size: 11.5px; line-height: 1.25; }
+.time-band-fill > strong { font-weight: 700; letter-spacing: -0.015em; }
+.time-band-fill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; opacity: .8; font-variant-numeric: tabular-nums; }
+.time-block.time-band { left: 0; right: 0; border-color: transparent; border-radius: 0; background: transparent !important; box-shadow: none; }
+.timetable-board:not([data-locked]) .time-block.time-band:is(:hover, :focus-within, .time-block-open) { background: color-mix(in srgb, var(--foreground) 8%, transparent) !important; }
+.time-band .time-block-body > * { visibility: hidden; }
+.time-band .time-resize::after, .time-band .time-block-clear { opacity: 0; }
+.time-band:is(:hover, :focus-within) .time-resize::after { opacity: .45; }
+.time-band:is(:hover, :focus-within, .time-block-open) .time-block-clear { opacity: .7; }
+@media (hover: none) { .time-band .time-block-clear { opacity: .35; } }
+@media (max-width: 900px) {
+  .timetable-board { grid-template-columns: minmax(0, 1fr); }
+  .timetable-board-main { order: -1; }
+  .timetable-board-chips { display: flex; max-height: none; overflow: visible; }
+  .timetable-board-chips > strong { display: none; }
+  .timetable-board-chips .timetable-palette-items { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; mask-image: none; scrollbar-width: none; }
+  .timetable-board-chips .timetable-palette-items > button { flex: none; max-width: 15rem; }
+  .board-weeks { flex: 1 1 100%; }
+  .board-week { flex: 1 1 0; width: auto; min-width: 120px; }
+  .board-note { display: none; }
+  /* Narrower day columns than the stacked editor's, so nearly three days show on a phone. */
+  .timetable-board .time-canvas { min-width: calc(54px + var(--days) * 104px); grid-template-columns: 54px repeat(var(--days), minmax(0, 1fr)); }
+  .timetable-board .time-axis > span { right: 5px; font-size: 10.5px; white-space: nowrap; }
+}
 /* Moving pieces may leave their original cards and scrollports. */
 html[data-shy-mode="true"]:not([data-shy-measuring]) body *:not(svg *) {
   overflow: visible !important;

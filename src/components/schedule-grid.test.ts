@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { exampleSchedule, examplePersonalSchedule } from '@/domain/example';
 import { REMOVED_PERIOD_LABEL, type Schedule } from '@/domain/schedule';
-import { ScheduleGrid } from './schedule-grid';
+import { dayRangeLabel, ScheduleGrid, scheduleBands } from './schedule-grid';
 
 const noop = () => {};
 
@@ -77,4 +77,68 @@ describe('disabled timetable', () => {
     expect(control(html, 'Place Lunch')).not.toContain('disabled=""');
   });
 
+});
+
+describe('scheduleBands', () => {
+  const slot = (id: string, periodId: string, start: string, end: string) => ({ id, periodId, start, end });
+  const lunchOnly = (entry: { periodId: string }) => entry.periodId === 'lunch';
+
+  it('joins neighbouring days that have the period at the same time, and leaves a day with another time on its own', () => {
+    const days = [
+      { id: 'd1', slots: [slot('a1', 'A', '08:00', '09:00'), slot('l1', 'lunch', '12:00', '12:40')] },
+      { id: 'd2', slots: [slot('a2', 'A', '08:00', '09:00'), slot('l2', 'lunch', '12:00', '12:40')] },
+      { id: 'd3', slots: [slot('l3', 'lunch', '12:30', '13:10')] },
+      { id: 'd4', slots: [slot('l4', 'lunch', '12:00', '12:40')] },
+      { id: 'd5', slots: [slot('l5', 'lunch', '12:00', '12:40')] },
+    ];
+    const { runs, members } = scheduleBands(days, lunchOnly);
+    expect(runs.map(run => [run.dayId, run.slot.id, run.span])).toEqual([['d1', 'l1', 2], ['d4', 'l4', 2]]);
+    expect([...members].sort()).toEqual(['d1:l1', 'd2:l2', 'd4:l4', 'd5:l5']);
+  });
+
+  it('never joins the slots the caller leaves out, even at matching times', () => {
+    const days = [{ id: 'd1', slots: [slot('a1', 'A', '08:00', '09:00')] }, { id: 'd2', slots: [slot('a2', 'A', '08:00', '09:00')] }];
+    expect(scheduleBands(days, lunchOnly)).toEqual({ members: new Set(), runs: [] });
+  });
+
+  it('keeps a lone day and a slot without times as ordinary blocks', () => {
+    const days = [{ id: 'd1', slots: [slot('l1', 'lunch', '12:00', '12:40'), slot('l0', 'lunch', '', '')] }, { id: 'd2', slots: [slot('l9', 'lunch', '', '')] }];
+    expect(scheduleBands(days, lunchOnly).runs).toEqual([]);
+  });
+});
+
+describe('dayRangeLabel', () => {
+  it('shortens numbered days and keeps other names whole', () => {
+    expect(dayRangeLabel('Day 1', 'Day 5')).toBe('Days 1–5');
+    expect(dayRangeLabel('Day 6', 'Day 10')).toBe('Days 6–10');
+    expect(dayRangeLabel('Mon', 'Fri')).toBe('Mon – Fri');
+    expect(dayRangeLabel('A1', 'B2')).toBe('A1 – B2');
+    expect(dayRangeLabel('Day 3', 'Day 3')).toBe('Day 3');
+    expect(dayRangeLabel('1', '5')).toBe('1 – 5');
+  });
+});
+
+describe('ScheduleGrid board', () => {
+  const render = (disabled: boolean) => renderToStaticMarkup(createElement(ScheduleGrid, { value: exampleSchedule, personal: examplePersonalSchedule, personalClassesOnly: true, allowStructure: false, disabled, onChange: noop, onEditDay: noop, onRemoveDay: noop,
+    board: { palette: entries => createElement('ul', { 'data-list': '' }, entries.map(entry => createElement('li', { key: entry.period.id }, entry.label))), highlight: 'algebra' } }));
+
+  it('draws the caller\'s class list, one week behind week maps, a lunch band and the lit class', () => {
+    const html = render(true);
+    expect(html).toContain('<ul data-list="">');
+    expect(html).toContain('aria-label="Rotation week 1"');
+    expect(html).not.toContain('aria-label="Rotation week 2"');
+    expect(html.match(/class="board-week"/g)).toHaveLength(2);
+    expect(html.match(/class="time-band-fill"/g)).toHaveLength(1);
+    expect(html).toContain('time-block-lit');
+    expect(html).toContain('board-map-lit');
+    // Locked: no chips to place and no day editing.
+    expect(html).not.toContain('Available periods');
+    expect(html).not.toContain('Edit times');
+  });
+
+  it('brings the chips and the day editing back when the timetable can change', () => {
+    const html = render(false);
+    expect(html).toContain('Available periods');
+    expect(html).toContain('aria-label="Edit times for Day 1"');
+  });
 });

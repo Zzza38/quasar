@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { buildTimeAxis } from './time-axis';
 import { scheduledPeriodIds } from '@/domain/period-status';
-import { cycleDaySchema, displayPeriodLabel, UNASSIGNED_BLOCK_LABEL, type Schedule, type ScheduleSlot, type PersonalSchedule } from '@/domain/schedule';
+import { cycleDaySchema, displayPeriodLabel, UNASSIGNED_BLOCK_LABEL, type Schedule, type ScheduleSlot, type PersonalSchedule, type StudentClass } from '@/domain/schedule';
 import { classColor, formatRange, formatTime, randomId } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { Button, IconButton, Input, Modal, Spacer } from './primitives';
+import { Button, ChoiceGroup, ChoiceItem, IconButton, Input, Modal, Spacer } from './primitives';
 import { Button as ShadButton } from './ui/button';
 import { usePointerDrag, verticalScroller, type DragPoint } from './pointer-drag';
 import { classFill, periodFill, clockTime, minutes, placeTimedPeriod, PLACEMENT_BLOCKED, type PeriodPlacement } from './schedule-placement';
@@ -23,6 +23,71 @@ type Carry = { source: PeriodPlacement; label: string; color: string; grab: numb
  */
 type Landing = { dayId: string; start: number; end: number; slotId?: string; changes?: Record<string, string | null>; schedule?: Schedule; label?: string; done?: string; problem?: string };
 
+/** A class or period in the palette, with the handlers that place it by drag (pointer down) or by tap (click). */
+export type PaletteEntry = {
+  period: Schedule['periods'][number]; cls?: StudentClass; label: string; color: string;
+  /** Why it is not on the timetable yet, when it is not. */
+  status?: string;
+  /** Selected for placing by tap, and being dragged. */
+  active: boolean; lifted: boolean; disabled: boolean;
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void; onClick: (event: MouseEvent<HTMLElement>) => void;
+};
+
+/**
+ * The Classes page board (beta `classes-board`): the caller draws the classes beside the timetable in place
+ * of the palette, one rotation week shows at a time behind a small map of each week, and a period that neighbouring
+ * days have at the same time (lunch, advisory) is drawn as one band across them.
+ */
+export type ScheduleBoard = {
+  palette: (entries: PaletteEntry[]) => ReactNode;
+  /** Shown beside the week maps. */
+  note?: (entries: PaletteEntry[]) => ReactNode;
+  /** A class to light up in the timetable and the week maps. A class selected for placing is lit without it. */
+  highlight?: string | null;
+  /** Shown under the timetable, in its card. */
+  footer?: ReactNode;
+};
+
+/** A palette entry as a tinted chip. */
+export function PaletteChip({ entry }: { entry: PaletteEntry }) {
+  return <ShadButton type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', entry.active && 'ring-2 ring-ring/60', entry.lifted && 'opacity-50')} disabled={entry.disabled} aria-label={`Place ${entry.label}`} aria-pressed={entry.active}
+    style={{ borderColor: 'transparent', background: `color-mix(in srgb, ${entry.color} 22%, var(--card))` }} onPointerDown={entry.onPointerDown} onClick={entry.onClick}>
+    <span>{entry.label}{entry.status && <span className="block text-xs font-normal opacity-75">{entry.status}</span>}</span>
+  </ShadButton>;
+}
+
+/**
+ * Runs of neighbouring days that have the same period at the same time, among the slots `merges` accepts. `runs` has
+ * each run's first day and how many days it spans; `members` has every slot in a run, as `dayId:slotId`.
+ */
+export function scheduleBands(days: Array<{ id: string; slots: ScheduleSlot[] }>, merges: (slot: ScheduleSlot) => boolean): { members: Set<string>; runs: Array<{ dayId: string; slot: ScheduleSlot; span: number }> } {
+  const members = new Set<string>();
+  const runs: Array<{ dayId: string; slot: ScheduleSlot; span: number }> = [];
+  const twin = (day: { slots: ScheduleSlot[] } | undefined, slot: ScheduleSlot) => day?.slots.find(entry => entry.periodId === slot.periodId && entry.start === slot.start && entry.end === slot.end && merges(entry));
+  days.forEach((day, index) => {
+    for (const slot of day.slots) {
+      if (!slot.start || !slot.end || !merges(slot) || members.has(`${day.id}:${slot.id}`)) continue;
+      const run = [{ day, slot }];
+      for (let next = index + 1; next < days.length; next++) {
+        const match = twin(days[next], slot);
+        if (!match || members.has(`${days[next].id}:${match.id}`)) break;
+        run.push({ day: days[next], slot: match });
+      }
+      if (run.length < 2) continue;
+      runs.push({ dayId: day.id, slot, span: run.length });
+      for (const entry of run) members.add(`${entry.day.id}:${entry.slot.id}`);
+    }
+  });
+  return { members, runs };
+}
+
+/** "Day 1" and "Day 5" read "Days 1–5"; labels that do not share a numbered name keep both ("Mon – Fri"). */
+export function dayRangeLabel(first: string, last: string): string {
+  const from = /^(\D*?)\s*(\d+)$/.exec(first.trim()), to = /^(\D*?)\s*(\d+)$/.exec(last.trim());
+  if (first === last) return first;
+  return from && to && from[1] && from[1] === to[1] ? `${from[1]}s ${from[2]}–${to[2]}` : `${first} – ${last}`;
+}
+
 /** The part of the viewport between the app's top bar and tab bar, which cover the page's edges on phones and tablets. */
 function pageBounds() {
   const bar = document.querySelector('.app-topbar')?.getBoundingClientRect();
@@ -30,7 +95,7 @@ function pageBounds() {
   return { top: bar?.height ? bar.bottom : 0, bottom: dock?.height ? dock.top : window.innerHeight };
 }
 
-export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay, allowStructure = true }: {
+export function ScheduleGrid({ value, onChange, disabled, personal, personalClassesOnly, onAssign, onEditDay, onRemoveDay, allowStructure = true, board }: {
   /** Sets the class of each listed period, or clears it with null, in one save. */
   onAssign?: (changes: Record<string, string | null>) => Promise<void>; personalClassesOnly?: boolean; personal?: PersonalSchedule; value: Schedule; disabled?: boolean;
   /**
@@ -41,6 +106,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   onChange: (value: Schedule) => boolean | void;
   allowStructure?: boolean;
   onEditDay: (id: string) => void; onRemoveDay: (id: string) => void;
+  board?: ScheduleBoard;
 }) {
   const disabledRef = useRef(!!disabled);
   const [selected, setSelected] = useState<PeriodPlacement | null>(null);
@@ -93,6 +159,17 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
   const height = axis.height;
   const weekLength = Math.max(1, value.schoolWeekdays.length);
   const weeks = Array.from({ length: Math.ceil(value.cycleDays.length / weekLength) }, (_, index) => value.cycleDays.slice(index * weekLength, (index + 1) * weekLength));
+  // The board shows one rotation week at a time. A drag held over another week's map turns to that week.
+  const [week, setWeek] = useState(0);
+  const shownWeek = Math.min(week, weeks.length - 1);
+  const weekTurn = useRef<{ index: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const turnWeek = (point: DragPoint | null) => {
+    const tile = point && board ? document.elementFromPoint(point.x, point.y)?.closest('.board-week') : null;
+    const index = tile?.parentElement ? [...tile.parentElement.children].indexOf(tile) : -1;
+    if (weekTurn.current && weekTurn.current.index !== index) { clearTimeout(weekTurn.current.timer); weekTurn.current = null; }
+    if (index >= 0 && !weekTurn.current) weekTurn.current = { index, timer: setTimeout(() => { weekTurn.current = null; setWeek(index); }, 450) };
+  };
+  useEffect(() => () => { if (weekTurn.current) clearTimeout(weekTurn.current.timer); }, []);
   const clsFor = (id: string) => personal?.classes.find(cls => cls.id === personal.assignments[id]);
   const periodOf = (id: string) => value.periods.find(period => period.id === id);
   const slotOf = (source: PeriodPlacement | null) => value.cycleDays.find(day => day.id === source?.dayId)?.slots.find(slot => slot.id === source?.slotId);
@@ -267,12 +344,12 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     // Nothing here changes the layout (no message, no selection): the canvas must not shift under the pointer.
     start: (item, point, touch) => { if (disabledRef.current) return; pointer.current = point; setCarry({ ...item, touch }); setFlash(''); },
     move: (item, point) => {
-      pointer.current = point; moveGhost();
+      pointer.current = point; moveGhost(); turnWeek(point);
       const next = disabledRef.current ? null : landingAt(item, point);
       setHover(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
     },
     drop: (item, point) => {
-      setCarry(null); setHover(null);
+      setCarry(null); setHover(null); turnWeek(null);
       if (disabledRef.current) return;
       const spot = landingAt(item, point);
       // Put back where it was: nothing to save, and no message to replace the one showing.
@@ -280,7 +357,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
       if (spot && !spot.slotId && own && spot.dayId === item.source.dayId && spot.start === minutes(own.start) && spot.end === minutes(own.end)) return;
       if (spot) place(item.source, spot);
     },
-    cancel: () => { setCarry(null); setHover(null); },
+    cancel: () => { setCarry(null); setHover(null); turnWeek(null); },
   }, { scrollX: '.time-canvas-scroll', pageBounds });
   // What is being placed, by drag or by tap, and whether it is a class that goes into blocks.
   const placing = carry?.source ?? selected;
@@ -305,31 +382,46 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
     const end = current.edge === 'end' ? Math.min(endMinute, Math.max(minutes(current.slot.start) + 5, minutes(current.slot.end) + delta)) : current.end;
     resizeRef.current = { ...current, start, end }; setResizing(resizeRef.current);
   };
-  return <><div ref={workspaceRef} className="timetable-workspace" data-hover-cards={hoverCards ? '' : undefined} data-placing={fillsBlocks ? '' : undefined} onPointerOver={event => setHoverCards(event.pointerType !== 'touch')}>
-    <aside className="timetable-palette gap-2 rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]">
-      <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
-      <div className="timetable-palette-items" role="group" aria-label="Available periods">
-        {value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
-          const cls = clsFor(period.id);
-          const label = cls ? (personalClassesOnly ? cls.name : `${cls.name} · ${period.label}`) : period.label;
-          const color = classColor(cls?.id ?? period.id, period.kind, cls?.color);
-          const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
-          const active = selected?.periodId === period.id && !selected.dayId;
-          const lifted = !!carry && !carry.source.dayId && carry.source.periodId === period.id;
-          return <ShadButton key={period.id} type="button" variant="outline" size="sm" className={cn('cursor-grab font-semibold text-foreground shadow-card active:cursor-grabbing', active && 'ring-2 ring-ring/60', lifted && 'opacity-50')} disabled={disabled} aria-label={`Place ${label}`} aria-pressed={active}
-            style={{ borderColor: 'transparent', background: `color-mix(in srgb, ${color.dot} 22%, var(--card))` }} onPointerDown={event => { if (!disabledRef.current) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); }}
-            onClick={event => {
-              if (disabledRef.current) return;
-              if (active) { cancelSelection(); return; }
-              // Tap works in either order: with an empty block selected, tapping a class puts it in that block.
-              const block = slotOf(selected);
-              if (selected?.dayId && block && (cls || period.kind !== 'class') && onAssign && isGuide(block)) { followWithFocus(event.detail, selected.dayId, placeAt({ periodId: period.id }, selected.dayId, minutes(block.start))); return; }
-              select({ periodId: period.id }, cls && onAssign ? `${label} selected. Tap a block to put it there, or tap an empty time.` : period.kind !== 'class' && onAssign ? `${label} selected. Tap an empty block to put it there, or tap an empty time.` : `${label} selected. Tap a time in a day column.`);
-            }}><span>{label}{!isScheduled && <span className="block text-xs font-normal opacity-75">{personalClassesOnly && cls ? 'Not placed yet' : 'No times set'}</span>}</span></ShadButton>;
+  const entries: PaletteEntry[] = value.periods.filter(period => !personalClassesOnly || period.kind !== 'class' || clsFor(period.id)).filter((period, index, all) => !personalClassesOnly || !clsFor(period.id) || all.findIndex(entry => clsFor(entry.id)?.id === clsFor(period.id)?.id) === index).map(period => {
+    const cls = clsFor(period.id);
+    const label = cls ? (personalClassesOnly ? cls.name : `${cls.name} · ${period.label}`) : period.label;
+    const color = classColor(cls?.id ?? period.id, period.kind, cls?.color);
+    const isScheduled = personalClassesOnly && cls ? value.periods.some(entry => personal?.assignments[entry.id] === cls.id && scheduled.has(entry.id)) : scheduled.has(period.id);
+    const active = selected?.periodId === period.id && !selected.dayId;
+    const lifted = !!carry && !carry.source.dayId && carry.source.periodId === period.id;
+    return { period, cls, label, color: color.dot, status: isScheduled ? undefined : personalClassesOnly && cls ? 'Not placed yet' : 'No times set', active, lifted, disabled: !!disabled,
+      onPointerDown: event => { if (!disabledRef.current) lift(event, { source: { periodId: period.id }, label, color: color.dot, grab: 0 }); },
+      onClick: event => {
+        if (disabledRef.current) return;
+        if (active) { cancelSelection(); return; }
+        // Tap works in either order: with an empty block selected, tapping a class puts it in that block.
+        const block = slotOf(selected);
+        if (selected?.dayId && block && (cls || period.kind !== 'class') && onAssign && isGuide(block)) { followWithFocus(event.detail, selected.dayId, placeAt({ periodId: period.id }, selected.dayId, minutes(block.start))); return; }
+        select({ periodId: period.id }, cls && onAssign ? `${label} selected. Tap a block to put it there, or tap an empty time.` : period.kind !== 'class' && onAssign ? `${label} selected. Tap an empty block to put it there, or tap an empty time.` : `${label} selected. Tap a time in a day column.`);
+      } };
+  });
+  // The board lights a class the caller names, or the one picked up for placing.
+  const lit = board ? board.highlight ?? entries.find(entry => entry.active)?.cls?.id ?? null : null;
+  const slotTimes = slots.filter(slot => slot.start && slot.end);
+  const mapStart = Math.min(...slotTimes.map(slot => minutes(slot.start)), endMinute), mapEnd = Math.max(...slotTimes.map(slot => minutes(slot.end)), mapStart + 1);
+  const palette = <aside className={cn('timetable-palette gap-2', board ? 'timetable-board-chips' : 'rounded-2xl bg-muted/70 p-3 ring-1 ring-inset ring-foreground/[0.04]')}>
+    <strong className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Classes & periods</strong>
+    <div className="timetable-palette-items" role="group" aria-label="Available periods">{entries.map(entry => <PaletteChip key={entry.period.id} entry={entry} />)}</div>
+  </aside>;
+  const weekMaps = board && weeks.length > 1 && <ChoiceGroup label="Rotation week" value={String(shownWeek)} onChange={next => setWeek(Number(next))} className="board-weeks">
+    {weeks.map((days, index) => <ChoiceItem key={days[0].id} value={String(index)} className="board-week" aria-label={`Week ${index + 1}, ${days[0].label} to ${days[days.length - 1].label}`}>
+      <span className="board-week-head"><strong>Week {index + 1}</strong><span>{dayRangeLabel(days[0].label, days[days.length - 1].label)}</span></span>
+      <span className="board-map" data-lit={lit ? '' : undefined} style={{ '--days': days.length } as CSSProperties}>{days.map(day => <span key={day.id} className="board-map-day">
+        {day.slots.filter(slot => slot.start && slot.end).map(slot => {
+          const cls = clsFor(slot.periodId); const period = periodOf(slot.periodId);
+          const top = (minutes(slot.start) - mapStart) / (mapEnd - mapStart) * 100;
+          return <i key={slot.id} className={isGuide(slot) ? 'board-map-empty' : !cls && period?.kind !== 'class' ? 'board-map-other' : lit && cls?.id === lit ? 'board-map-lit' : undefined}
+            style={{ top: `${top}%`, height: `${(minutes(slot.end) - minutes(slot.start)) / (mapEnd - mapStart) * 100}%`, '--block-color': classColor(cls?.id ?? period?.id, period?.kind, cls?.color).dot } as CSSProperties} />;
         })}
-      </div>
-    </aside>
-    <div ref={contentRef} className="timetable-content">
+      </span>)}</span>
+    </ChoiceItem>)}
+  </ChoiceGroup>;
+  const content = <div ref={contentRef} className="timetable-content">
       {/* The selection bar: it takes no room in the flow and stays in view, so the way out is at hand anywhere on a long timetable. */}
       <div className="timetable-pin">{(selected || flash) && <div className="timetable-pin-bar">
         {selected ? <p role="status">{prompt}</p> : <p aria-hidden="true">{flash}</p>}
@@ -343,14 +435,20 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
         {undoable && <Button size="sm" variant="ghost" disabled={disabled} onClick={undoAssign}>Undo</Button>}
       </div>
       <span id={hintId} className="sr-only">Use the arrow keys to choose a time, then press Enter.</span>
-      {weeks.map((days, weekIndex) => <section key={days[0].id} className="grid gap-2 min-w-0" aria-label={`Rotation week ${weekIndex + 1}`}>
-        <h3 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Week {weekIndex + 1}</h3>
+      {weeks.map((days, weekIndex) => {
+        if (board && weekIndex !== shownWeek) return null;
+        const bands = board ? scheduleBands(days, slot => { const period = periodOf(slot.periodId); return !!period && period.kind !== 'class' && !clsFor(slot.periodId); }) : null;
+        return <section key={days[0].id} className="grid gap-2 min-w-0" aria-label={`Rotation week ${weekIndex + 1}`}>
+        {!board && <h3 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Week {weekIndex + 1}</h3>}
         <div className="time-canvas-scroll">
           <div className="time-canvas" style={{ '--days': days.length } as CSSProperties}>
             <div className="time-canvas-heading text-xs text-muted-foreground">Time</div>
-            {days.map((day, index) => <div key={day.id} className="time-canvas-heading">
-              {allowStructure ? <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return changeTimetable({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} /> : <strong className="px-2 text-sm">{day.label}</strong>}
-              <div className="flex items-center justify-between"><Button size="sm" variant="ghost" disabled={disabled} onClick={() => { if (!disabledRef.current) onEditDay(day.id); }}>Edit times<span className="sr-only"> for {day.label}</span></Button>{allowStructure && <IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => { if (!disabledRef.current) onRemoveDay(day.id); }} />}</div>
+            {days.map((day, index) => <div key={day.id} className={cn('time-canvas-heading', board && !(allowStructure && !disabled) && 'time-canvas-heading-row')}>
+              {allowStructure && !(board && disabled) ? <DayNameInput name={`Day ${weekIndex * weekLength + index + 1} name`} label={day.label} disabled={disabled} onCommit={label => { setCleared(null); return changeTimetable({ ...value, cycleDays: value.cycleDays.map(entry => entry.id === day.id ? { ...entry, label } : entry) }); }} /> : <strong className="px-2 text-sm">{day.label}</strong>}
+              {/* A locked board is for reading: the day's editing controls come back when it is unlocked. */}
+              {!(board && disabled) && <div className="flex items-center justify-between">{board
+                ? <IconButton size="sm" icon="edit" label={`Edit times for ${day.label}`} disabled={disabled} onClick={() => { if (!disabledRef.current) onEditDay(day.id); }} />
+                : <Button size="sm" variant="ghost" disabled={disabled} onClick={() => { if (!disabledRef.current) onEditDay(day.id); }}>Edit times<span className="sr-only"> for {day.label}</span></Button>}{allowStructure && <IconButton size="sm" icon="trash" label={`Remove ${day.label}`} disabled={disabled || value.cycleDays.length <= 1} onClick={() => { if (!disabledRef.current) onRemoveDay(day.id); }} />}</div>}
             </div>)}
             <div className="time-axis" style={{ height }}>{Array.from({ length: Math.ceil((endMinute - startMinute) / 60) }, (_, index) => <span key={index} style={{ top: axis.y(startMinute + index * 60) }}>{formatTime(clockTime(startMinute + index * 60))}</span>)}</div>
             {days.map(day => <div key={day.id} className="time-day" data-column={day.id} role="group" aria-label={`${day.label} time canvas`} style={{ height }}>
@@ -366,6 +464,13 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                   }}
                   onClick={event => { if (selected) followWithFocus(event.detail, day.id, placeAt(selected, day.id, start)); }} />;
               })}</div>
+              {bands?.runs.filter(run => run.dayId === day.id).map(run => {
+                const period = periodOf(run.slot.periodId);
+                const top = axis.y(minutes(run.slot.start));
+                return <div key={`band-${run.slot.id}`} className="time-band-fill" aria-hidden="true" style={{ top, height: axis.y(minutes(run.slot.end)) - top, '--band-span': run.span, '--block-color': classColor(period?.id, period?.kind).dot } as CSSProperties}>
+                  <strong>{displayPeriodLabel(period, !personalClassesOnly)}</strong><span>{formatRange(run.slot.start, run.slot.end)}</span>
+                </div>;
+              })}
               {day.slots.filter(slot => slot.start && slot.end).map(slot => {
                 const period = periodOf(slot.periodId);
                 const cls = clsFor(slot.periodId);
@@ -381,7 +486,7 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
                 const titleLines = Math.max(1, Math.min(4, Math.floor((blockHeight - 31) / 14.5)));
                 const own = selected?.slotId === slot.id && selected.dayId === day.id;
                 const lifted = carry?.source.slotId === slot.id && carry.source.dayId === day.id;
-                return <div key={slot.id} className={`time-block${guide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}${own ? ' time-block-open' : ''}${lifted ? ' time-drag-source' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, '--block-color': color.dot, background: guide ? undefined : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
+                return <div key={slot.id} className={`time-block${guide ? ' time-school-guide' : ''}${compact ? ' time-block-compact' : titleLines === 1 ? ' time-block-short' : ''}${own ? ' time-block-open' : ''}${lifted ? ' time-drag-source' : ''}${bands?.members.has(`${day.id}:${slot.id}`) ? ' time-band' : ''}${lit && cls?.id === lit ? ' time-block-lit' : ''}`} style={{ top: axis.y(start), height: blockHeight, '--title-lines': titleLines, '--block-color': color.dot, background: guide ? undefined : `color-mix(in srgb, ${color.dot} 22%, var(--card))` } as CSSProperties}>
                   <button type="button" title={`${name} · ${formatRange(clockTime(start), clockTime(end))}`} className="time-block-body" data-day={day.id} data-start={minutes(slot.start)} disabled={disabled} aria-pressed={own} aria-label={`${day.label}, ${formatRange(slot.start, slot.end)}: ${name}`}
                     onPointerDown={event => { if (!disabledRef.current) lift(event, { source: { periodId: slot.periodId, dayId: day.id, slotId: slot.id }, label: name, color: color.dot, grab: event.clientY - event.currentTarget.getBoundingClientRect().top }); }}
                     onClick={event => {
@@ -407,8 +512,19 @@ export function ScheduleGrid({ value, onChange, disabled, personal, personalClas
             </div>)}
           </div>
         </div>
-      </section>)}
-    </div>
+      </section>; })}
+    </div>;
+  return <><div ref={workspaceRef} className={cn('timetable-workspace', board && 'timetable-board')} data-locked={board && disabled ? '' : undefined} data-hover-cards={hoverCards ? '' : undefined} data-placing={fillsBlocks ? '' : undefined} onPointerOver={event => setHoverCards(event.pointerType !== 'touch')}>
+    {board ? <>
+      <div className="timetable-board-side">{board.palette(entries)}</div>
+      <div className="timetable-board-main rounded-2xl bg-card p-3 text-sm text-card-foreground shadow-card ring-1 ring-foreground/[0.06] sm:p-4 dark:ring-foreground/[0.09]">
+        {/* On a narrow screen the class list sits under the timetable, so the classes to place come along as chips. */}
+        {!disabled && palette}
+        <div className="board-top">{weekMaps}{board.note && <div className="board-note">{board.note(entries)}</div>}</div>
+        {content}
+        {board.footer}
+      </div>
+    </> : <>{palette}{content}</>}
   </div>
   {/* In a portal: a dialog around the timetable is transformed, which would offset and clip a fixed child. */}
   {carry && createPortal(<div ref={ghostRef} className="time-drag-ghost" aria-hidden="true" data-invalid={hover?.problem ? '' : undefined} style={{ background: `color-mix(in srgb, ${carry.color} 22%, var(--card))` }}>

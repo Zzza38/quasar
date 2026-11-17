@@ -34,6 +34,12 @@ export function BetaProvider({ accountId, betas, online, refresh, children }: Be
   return <BetaContext.Provider value={{ accountId, betas, online, refresh }}>{children}</BetaContext.Provider>;
 }
 
+/** The signed-in account and connection, for beta UI that sits outside AppState (the task sheet, Account). Null outside the app. */
+export function useBetaAccount(): { accountId: string; online: boolean } | null {
+  const state = useContext(BetaContext);
+  return state ? { accountId: state.accountId, online: state.online } : null;
+}
+
 /** True when the signed-in member joined the beta `key`. False outside the signed-in app. */
 export function useBeta(key: string): boolean {
   return useContext(BetaContext)?.betas.some((beta) => beta.key === key) ?? false;
@@ -85,21 +91,6 @@ function BetaCrashNotice({ id, state }: { id: string; state: BetaState }) {
 
 const formatJoined = (iso: string) => formatDate(instantParts(iso, browserTimeZone()).date, { year: true });
 
-function BetaDetails({ beta }: { beta: JoinedBeta }) {
-  const [revealed, setRevealed] = useState(false);
-  if (beta.public) return <Hint>Public beta</Hint>;
-  if (!beta.code) return null;
-  return <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-    <span>Beta code</span>
-    <button type="button" aria-label={`${revealed ? 'Hide' : 'Reveal'} code for ${beta.name}`} aria-pressed={revealed}
-      onClick={() => setRevealed(value => !value)} onBlur={() => setRevealed(false)}
-      className="group rounded-md px-2 py-1 outline-none ring-1 ring-inset ring-border focus-visible:ring-2 focus-visible:ring-ring">
-      <span className={`inline-block font-mono text-foreground transition-[filter] ${revealed ? '' : 'blur-sm group-hover:blur-none group-focus-visible:blur-none'}`}>{beta.code}</span>
-    </button>
-    <span>Hover or tap to reveal</span>
-  </div>;
-}
-
 type BetaListProps = { accountId: string; betas: JoinedBeta[]; online: boolean; onChanged: () => Promise<unknown> };
 
 /** The betas the member is in, each with Send feedback and Leave beta. Renders nothing when they are in none. */
@@ -116,7 +107,6 @@ function JoinedBetaList({ accountId, betas, online, onChanged, onError }: BetaLi
   return <>
     <ul className="grid gap-2" aria-label="Your betas">{betas.map((beta) => <li key={beta.key} className="grid gap-2 rounded-2xl bg-muted/80 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
       <div className="grid gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}<Hint>Joined {formatJoined(beta.joinedAt)}</Hint></div>
-      <BetaDetails beta={beta} />
       <div className="flex flex-wrap gap-2">
         <Button size="sm" icon="message" disabled={!online} onClick={() => setReporting(beta)}>Send feedback</Button>
         <Button size="sm" variant="ghost" busy={leaving === beta.key} disabled={!online || leaving !== null} onClick={() => void leave(beta)} aria-label={`Leave ${beta.name}`}>Leave beta</Button>
@@ -204,7 +194,7 @@ function BetasModal({ onClose, ...props }: BetaListProps & { onClose: () => void
           : available === null ? <Hint>Looking for betas…</Hint>
           : available.length === 0 ? <Hint>No open betas right now. New ones show up here.</Hint>
           : <ul className="grid gap-2" aria-label="Betas you can join">{available.map((beta) => <li key={beta.key} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-muted/80 p-3.5 ring-1 ring-inset ring-foreground/[0.04]">
-            <div className="grid min-w-0 flex-1 gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}<Hint>Public beta</Hint></div>
+            <div className="grid min-w-0 flex-1 gap-0.5"><strong className="text-sm font-bold">{beta.name}</strong>{beta.description && <Hint>{beta.description}</Hint>}</div>
             {beta.full ? <Hint>Full</Hint> : <Button size="sm" variant="primary" busy={enrolling === beta.key} disabled={enrolling !== null} onClick={() => void enroll(beta)} aria-label={`Join ${beta.name}`}>Join</Button>}
           </li>)}</ul>}
         {joined && <Hint role="status">{joined}</Hint>}

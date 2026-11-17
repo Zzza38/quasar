@@ -61,6 +61,7 @@ export function taskFields(classes: Array<{ id: string; name: string }>): FieldS
     { key: 'notes', label: 'Notes', render: (task) => empty(task.notes) },
     { key: 'completed', label: 'Status', render: (task) => task.completed ? 'Completed' : 'Open' },
     { key: 'priority', label: 'Priority', render: (task) => { const priority = parse(task)?.priority ?? 'normal'; return priority.charAt(0).toUpperCase() + priority.slice(1); } },
+    { key: 'workLocation', label: 'Work happens', render: (task) => task.workLocation === 'in-class' ? 'In class' : task.workLocation === 'out-of-class' ? 'Out of class' : 'Not labeled' },
     { key: 'subtasks', label: 'Checklist', render: (task) => parse(task)?.subtasks?.map((item) => `${item.completed ? 'Done' : 'Open'}: ${item.title}`).join('; ') || null },
     { key: 'recurrence', label: 'Repeat', render: (task) => { const recurrence = parse(task)?.recurrence; if (!recurrence) return null; const unit = { daily: 'day', weekly: 'week', monthly: 'month' }[recurrence.frequency]; return `Every ${recurrence.interval} ${unit}${recurrence.interval === 1 ? '' : 's'}${recurrence.until ? ` through ${formatDate(recurrence.until)}` : ''}`; } },
     { key: 'reminder', label: 'Reminder', render: (task) => { const reminder = parse(task)?.reminder; return reminder ? `${reminderLabel(reminder.minutesBefore)} · ${formatTimeZone(reminder.timeZone)}` : null; } },

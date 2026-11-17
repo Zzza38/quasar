@@ -32,7 +32,7 @@ export const betaFeedbackSchema = z.object({ key: betaKeySchema, message: z.stri
 export const betaMemberSchema = z.object({ key: betaKeySchema, userId: z.uuid() });
 
 /** What a member sees of a beta they are in. `public`: they can rejoin without a code. */
-export type JoinedBeta = { key: string; name: string; description: string; joinedAt: string; public: boolean; code?: string };
+export type JoinedBeta = { key: string; name: string; description: string; joinedAt: string; public: boolean };
 /** A public beta the member can join with one tap. `full`: it reached its member limit. */
 export type PublicBeta = { key: string; name: string; description: string; full: boolean };
 export const NOT_PUBLIC_MESSAGE = 'That beta isn’t open to everyone. Ask for its code instead.';
@@ -64,7 +64,7 @@ export class BetaService {
   joined(userId: string): JoinedBeta[] {
     const registry = this.registry();
     const rows = this.db.prepare('SELECT beta_key key, joined_at joinedAt FROM beta_members WHERE user_id=? ORDER BY joined_at').all(userId) as { key: string; joinedAt: string }[];
-    return rows.flatMap(row => { const beta = registry.betas.find(beta => beta.key === row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt, public: beta.public === true, ...(!beta.public ? { code: beta.code } : {}) }] : []; });
+    return rows.flatMap(row => { const beta = registry.betas.find(beta => beta.key === row.key); return beta ? [{ key: beta.key, name: beta.name, description: beta.description, joinedAt: row.joinedAt, public: beta.public === true }] : []; });
   }
 
   /** Public betas taking testers that the member hasn't joined, for Account → Betas. */

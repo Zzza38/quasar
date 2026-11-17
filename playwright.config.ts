@@ -36,6 +36,9 @@ export default defineConfig({
       NEXTAUTH_URL:'http://localhost:3100', OWNER_EMAIL:'browser-owner@example.com', OWNER_GOOGLE_SUB:'',
       GOOGLE_CLIENT_ID:'test-client', GOOGLE_CLIENT_SECRET:'test-client-secret',
       SCAN_API_URL:'http://127.0.0.1:3199/v1', SCAN_MODEL:'mock-vision', SCAN_API_KEY:'', SCAN_MODEL_REASONING:'', SCAN_MODEL_TEMPERATURE:'',
+      AI_API_URL:'http://127.0.0.1:3198/v1', AI_MODEL:'mock-text', AI_API_KEY:'', AI_MODEL_REASONING:'',
+      // Schoology is a stand-in the grades spec starts on this port; the key pair only signs requests to it.
+      SCHOOLOGY_CONSUMER_KEY:'test-consumer-key', SCHOOLOGY_CONSUMER_SECRET:'test-consumer-secret', SCHOOLOGY_HOST:'', SCHOOLOGY_API_URL:'http://127.0.0.1:3197/v1',
       VAPID_PUBLIC_KEY:'', VAPID_PRIVATE_KEY:'', VAPID_SUBJECT:'',
       // The beta list then sits beside the test database (src/server/beta-registry.ts); tests write it there.
       BETAS_PATH:'' }

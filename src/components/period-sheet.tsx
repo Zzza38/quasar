@@ -4,8 +4,11 @@ import { useRef, useState } from 'react';
 import { errorMessage } from '@/client/api';
 import { cycleDaysWithPeriod, effectiveSchedule, type ResolvedPeriod } from '@/domain/schedule';
 import { formatDate, formatRange } from '@/lib/format';
-import { openBellTimes, type AppState } from './app-state';
+import { openBellTimes, taskItems, type AppState } from './app-state';
 import { Button, Field, Hint, Modal, Select } from './primitives';
+import { useBeta } from './betas';
+import { AI_BETA } from '@/domain/ai';
+import { taskClassPeriods } from '@/domain/task-work';
 
 /** The picker's value for a period marked free; class IDs never start with an underscore. */
 const FREE = '_free';
@@ -20,6 +23,8 @@ export function PeriodSheet({ state, period, date, onClose, onAdjustDay }: { sta
 }
 
 function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state: AppState; period: ResolvedPeriod; date: string; onClose: () => void; onAdjustDay: () => void }) {
+  const workBeta = useBeta(AI_BETA);
+  const tasks = workBeta ? taskItems(state.snapshot.entities).filter(({ task }) => !task.completed && task.dueDate === date && taskClassPeriods(task, state.schedule, state.personal).some(slot => slot.slotId === period.slotId)) : [];
   const { personal } = state;
   const [pending, setPending] = useState(false);
   // Controls stay enabled while saving (disabling the picker would drop its focus); this ref blocks
@@ -59,6 +64,10 @@ function PeriodSheetBody({ state, period, date, onClose, onAdjustDay }: { state:
     </Field>
     {personal.classes.length === 0 && <div className="flex flex-wrap items-center gap-2"><Hint>You have not added any classes yet.</Hint><Button size="sm" onClick={() => { onClose(); state.navigate('classes'); }}>Add a class</Button></div>}
     {saved && <Hint role="status">{assigned === FREE ? 'Marked as a free period.' : 'Class updated.'}</Hint>}
+    {tasks.length > 0 && <section className="grid gap-2" aria-label="In-class tasks">
+      <h3 className="text-sm font-bold">In-class tasks</h3>
+      {tasks.map(({ id, task }) => <Button key={id} variant="link" className="h-auto justify-start whitespace-normal px-0 text-left" onClick={() => { onClose(); state.navigate('tasks', { edit: id }); }}>{task.title}</Button>)}
+    </section>}
     <div className="grid gap-1.5">
       <div><Button icon="calendar" onClick={whenIdle(onAdjustDay)}>Adjust this day</Button></div>
       <Hint>Close, reopen or move periods on {formatDate(date, { weekday: 'long' })} only.</Hint>

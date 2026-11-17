@@ -15,6 +15,7 @@ import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { BetaProvider } from './betas';
+import { SchoologySync } from './schoology-grades';
 import { nowCardStyle } from './now-card-setting';
 import type { NowCardStyle } from '@/lib/now-split';
 import { Welcome } from './landing';
@@ -26,6 +27,8 @@ import { ScheduleView } from './views/schedule';
 import { SchoolView } from './views/school';
 import { TasksView } from './views/tasks';
 import { TodayView } from './views/today';
+import { AiAutoSort } from './ai-tasks';
+import { AiAutoDedup } from './duplicates';
 import { PeopleView } from './views/people-now';
 import { MessagesView } from './views/messages';
 import { CHAT_ACTIVITY_EVENT, clearChatMemory, resumeChatSends } from './use-chat';
@@ -266,6 +269,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
 
   // A context saved by a build before betas existed has none (see CONTEXT_VERSION).
   return <BetaProvider key={accountKey} accountId={accountId} betas={context.betas ?? []} online={session.online} refresh={session.initialize}>
+    <SchoologySync accountId={accountId} online={session.online} synchronize={session.synchronize} />
     <Shell session={session} context={context} view={route.view} navigate={route.navigate} taskCount={openTasks} chatUnread={state.chatUnread} immersive={immersive}
     chatPush={context.community?.chatPush ?? true} onChatPush={onChatPush}
     nowCard={nowCardStyle(context.user)} onNowCard={onNowCard}
@@ -285,6 +289,8 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
         onOpenClasses={() => route.navigate('classes')} />}
     </div>
     {scheduleLock.dialog}
+    <AiAutoSort state={state} />
+    <AiAutoDedup state={state} />
     {route.view === 'today' && <TodayView state={state} />}
     {route.view === 'schedule' && <ScheduleView state={state} />}
     {route.view === 'tasks' && <TasksView state={state} />}

@@ -4,12 +4,15 @@ import { pruneGlobalChat } from './global-chat';
 import { pruneGroupChat } from './group-chat';
 import { NotificationService } from './notifications';
 import { ScheduleFeedService } from './schedule-feed';
+import { SchoologyService } from './schoology';
+import { Service } from './service';
 import type { Db } from './db';
 
-type Job = 'calendar' | 'schedule' | 'notifications' | 'chat' | 'support';
+type Job = 'calendar' | 'schedule' | 'schoology' | 'notifications' | 'chat' | 'support';
 type Jobs = {
   calendar: Pick<CalendarService, 'refreshDue'>;
   schedule: Pick<ScheduleFeedService, 'refreshDue'>;
+  schoology: Pick<SchoologyService, 'tagAll'>;
   notifications: Pick<NotificationService, 'deliverDue' | 'deliverChat' | 'deliverSupport'>;
   chat: { prune: (now: Date) => void };
 };
@@ -39,15 +42,19 @@ export function errorSummary(error: unknown): string {
  * Single sequential loop: a slow cycle cannot overlap the following cycle. One cycle runs
  * calendar refresh → class-schedule sync → task reminders → chat pushes → owner support pushes → chat retention, each step isolated so a
  * failure is reported and the rest of the cycle still runs. Stopping skips the remaining steps.
+ * Schoology runs in a separate lane with at most one pass active, so slow API calls cannot delay reminders.
+ * Stop waits for both lanes before the caller closes the database.
  */
 export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
-  calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
+  calendar: new CalendarService(db), schedule: new ScheduleFeedService(db), schoology: new SchoologyService(new Service(db)), notifications: new NotificationService(db), chat: { prune: now => { pruneChat(db, now); pruneGlobalChat(db, now); pruneGroupChat(db, now); } },
 }): { stop: () => Promise<void> } {
   const interval = options.intervalMs ?? 60_000;
   if (!Number.isFinite(interval) || interval < 1) throw new Error('Worker interval must be positive');
   let stopped = false;
+  const schoologyStop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void>;
+  let schoologyPending: Promise<void> | undefined;
   const push = async (job: Exclude<Job, 'calendar' | 'schedule'>, run: () => Promise<{ failed: number }>) => {
     const { failed } = await run();
     if (failed > 0) options.onFailures?.(job, failed);
@@ -56,6 +63,12 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
     try { await jobs.calendar.refreshDue(); } catch (error) { options.onError?.('calendar', error); }
     if (stopped) return;
     try { await jobs.schedule.refreshDue(); } catch (error) { options.onError?.('schedule', error); }
+    if (stopped) return;
+    if (!schoologyPending) {
+      schoologyPending = push('schoology', () => jobs.schoology.tagAll(schoologyStop.signal))
+        .catch(error => { options.onError?.('schoology', error); })
+        .finally(() => { schoologyPending = undefined; });
+    }
     if (stopped) return;
     try { await push('notifications', () => jobs.notifications.deliverDue()); } catch (error) { options.onError?.('notifications', error); }
     if (stopped) return;
@@ -69,7 +82,9 @@ export function startJobs(db: Db, options: Options = {}, jobs: Jobs = {
   pending = cycle();
   return { stop: async () => {
     stopped = true;
+    schoologyStop.abort();
     if (timer) clearTimeout(timer);
     await pending;
+    await schoologyPending;
   } };
 }
