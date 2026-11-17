@@ -431,7 +431,7 @@ describe('assignments straight from Schoology', () => {
   it('imports events beside assignments, preserves edits and deletions, and yields to feed copies', async () => {
     const { db, student, schoology, now } = await setup();
     biologyEvents = [
-      { id: 601, title: 'Lab visit', description: '<p>Bring goggles</p>', start: '2026-11-01 00:30:00', end: '2026-11-02 03:00:00' },
+      { id: 601, assignment_id: 0, title: 'Lab visit', description: '<p>Bring goggles</p>', start: '2026-11-01 00:30:00', end: '2026-11-02 03:00:00' },
       { id: 602, title: 'Field day', start: '2026-11-02 00:00:00', all_day: 1 },
       { id: 77, title: 'Feed event', start: '2026-11-02 10:00:00' },
       { id: 90, title: 'Assignment wrapper', start: '2026-11-02 10:00:00', assignment_id: 601 },

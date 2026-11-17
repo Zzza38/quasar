@@ -648,7 +648,7 @@ export class SchoologyService {
       }
       for (const sectionId of this.rememberSections(userId, sections)) {
         if (row.import_assignments === 1) for (const event of await this.pages(`${this.api}/sections/${sectionId}/events?limit=200`, 'event', token)) {
-          if (/^\d{1,20}$/.test(String(event.id)) && !/^\d{1,20}$/.test(String(event.assignment_id ?? ''))) events.push({ sectionId, event });
+          if (/^\d{1,20}$/.test(String(event.id)) && !/^[1-9]\d{0,19}$/.test(String(event.assignment_id ?? ''))) events.push({ sectionId, event });
         }
         for (const assignment of await this.pages(`${this.api}/sections/${sectionId}/assignments?limit=200`, 'assignment', token)) {
           if (/^\d{1,20}$/.test(String(assignment.id))) fetched.push({ sectionId, assignment });
