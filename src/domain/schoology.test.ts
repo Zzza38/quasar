@@ -94,3 +94,10 @@ it('uses local event starts across DST, retains midnight and links event IDs', (
   expect(eventTask({ id: 123, start: '' }, '2026-10-30')).toBeNull();
   expect(schoologyItemUrl({ notes: '' }, 'sgy_event_123')).toBe('https://app.schoology.com/event/123');
 });
+
+it('filters event dates and honors all-day and custom Schoology links', () => {
+  const event = { id: 12, title: 'Visit', start: '2026-11-02', all_day: 1, web_url: 'https://fa.schoology.com/event/12' };
+  expect(eventTask(event, '2026-10-30')).toMatchObject({ dueDate: '2026-11-02', dueTime: null, notes: ' - Link: https://fa.schoology.com/event/12' });
+  for (const start of ['2026-02-30', '2026-11-02 25:30:00', '2026-09-01 10:00:00', '2028-01-01 10:00:00']) expect(eventTask({ ...event, start }, '2026-10-30')).toBeNull();
+  expect(eventTask({ ...event, published: 0 }, '2026-10-30')).toBeNull();
+});

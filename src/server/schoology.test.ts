@@ -497,9 +497,11 @@ describe('assignments straight from Schoology', () => {
 
   it('does neither with both switches off', async () => {
     const { db, student, schoology } = await setup();
+    biologyEvents = [{ id: 901, title: 'Disabled event', start: '2026-11-02 08:00:00' }];
     expect(schoology.setSettings(student, { importAssignments: false, autoComplete: false }).connected).toMatchObject({ importAssignments: false, autoComplete: false });
     await schoology.sync(student);
     expect(task(db, student, 'sgy_601')).toBeNull();
+    expect(task(db, student, 'sgy_event_901')).toBeNull();
     expect(task(db, student, 'feed501')!.data.completed).toBe(false);
   });
 });
