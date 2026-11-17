@@ -571,6 +571,11 @@ test('remaining screens render without horizontal overflow on desktop and mobile
     await expect(page.getByRole('heading', { name: fixture.school.name })).toBeVisible();
     await fits();
     await page.screenshot({ path: testInfo.outputPath(`school-${name}.png`), fullPage: true });
+    // A phone shows the list of sections alone; the shared schedule is in the Rotation section.
+    if (name === 'mobile') {
+      await page.getByRole('navigation', { name: 'School sections' }).getByRole('button', { name: /^(Rotation|Bell schedule)/ }).click();
+      await fits();
+    }
     await page.getByRole('button', { name: 'Edit shared schedule' }).click();
     await dialog(page).getByRole('tab', { name: /^Days/ }).click();
     await page.screenshot({ path: testInfo.outputPath(`editor-${name}.png`) });
@@ -983,10 +988,13 @@ test('edits one high-school grade and copies its schedule to other grades', asyn
   await dialog(page).getByRole('group', { name: 'Copy to', exact: true }).getByRole('button', { name: 'Grade 10', exact: true }).click();
   await dialog(page).getByRole('button', { name: 'Publish revision' }).click();
   await expect(dialog(page)).toHaveCount(0);
+  // The grade is in Your setup; the shared schedule is with the rotation.
+  await page.goto('/school?section=setup');
   await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 9', exact: true }).click();
   await expect(saved(page)).toBeVisible();
   await page.reload();
   await expect(page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 9', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue('Junior day');
@@ -997,8 +1005,10 @@ test('edits one high-school grade and copies its schedule to other grades', asyn
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);
   await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.goto('/school?section=setup');
   await page.getByRole('radiogroup', { name: 'Your grade', exact: true }).getByRole('radio', { name: 'Grade 11', exact: true }).click();
   await expect(saved(page)).toBeVisible();
+  await page.goto('/school');
   await page.getByRole('button', { name: 'Edit shared schedule' }).click();
   await dialog(page).getByRole('tab', { name: /Days ·/ }).click();
   await expect(dialog(page).getByLabel('Day 1 name', { exact: true })).toHaveValue(fixture.school.schedule.cycleDays[0].label);

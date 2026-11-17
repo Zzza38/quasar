@@ -4,11 +4,11 @@ import { useCallback, useEffect, useId, useReducer, useState, type ReactNode } f
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { MENU_URL_HELP, menuChoiceName, menuDayCount, menuDayPreview, menuWeekStart, type MenuDay } from '@/domain/menu';
 import { addDays, formatDate, relativeDate } from '@/lib/format';
-import { cn, scrollToId } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { AppState, WorkspaceContext } from './app-state';
 import { hasPermission } from '@/domain/staff';
 import { Icon } from './icon';
-import { Button, Callout, Chip, ChoiceGroup, EmptyState, Eyebrow, Field, Hint, IconButton, Input, Modal, OptionCard, Section } from './primitives';
+import { Button, Callout, Chip, ChoiceGroup, EmptyState, Field, Hint, IconButton, Input, Modal, OptionCard, Section } from './primitives';
 
 export type MenuWeek = RouterOutput['school']['menu'];
 type MenuLookup = RouterOutput['school']['menuSources'];
@@ -103,7 +103,7 @@ function MenuCard({ day }: { day: MenuDay }) {
 }
 
 /**
- * The week as one row per day (the School page redesign). A row previews one dish from each station; tapping it
+ * The week as one row per day. A row previews one dish from each station; tapping it
  * opens that day's full menu, one day at a time. Today starts open when it has a menu. A day with only a note
  * shows the note, and a day with nothing shows that nothing is posted; neither opens.
  */
@@ -172,9 +172,9 @@ export function LunchDay({ state, date }: { state: AppState; date: string }) {
 
 /**
  * The School view's Lunch menu card: the week's menus with week navigation, where the menu comes from, and set-up for
- * those who may change it. `redesign` (the School page redesign) draws the week as MenuWeekList instead of every day open.
+ * those who may change it. "Full week" on Today lands here through the School page's `?section=lunch`.
  */
-export function LunchMenuSection({ state, redesign }: { state: AppState; redesign?: boolean }) {
+export function LunchMenuSection({ state }: { state: AppState }) {
   const { context, online, today } = state;
   // Weeks relative to today, not a stored date: the first render's `today` is the server's (renderedAt in the tracker),
   // and a browser in another zone or a page left open overnight follows the real day.
@@ -183,14 +183,6 @@ export function LunchMenuSection({ state, redesign }: { state: AppState; redesig
   const { menu, loading, error, reload } = useLunchMenu(state, weekDate);
   const [editing, setEditing] = useState(false);
   const editable = canEditMenu(context);
-  // "Full week" on Today lands here; the one-shot param is stripped so Back and reloads do not scroll again.
-  const wantsOpen = state.params.get('menu') === 'open';
-  const { navigate } = state;
-  useEffect(() => {
-    if (!wantsOpen) return;
-    scrollToId('lunch-menu-title', true);
-    navigate('school', {}, { replace: true });
-  }, [wantsOpen, navigate]);
   const weekStart = menuWeekStart(weekDate);
   const thisWeek = menuWeekStart(today) === weekStart;
   // One narrowing for both: `loaded` is the week when the school has a menu.
@@ -218,20 +210,7 @@ export function LunchMenuSection({ state, redesign }: { state: AppState; redesig
         </div>
         <IconButton label="Next week" icon="chevronRight" onClick={() => setWeekOffset(weekOffset + 1)} />
       </div>
-      {redesign ? <div className={cn(loading && 'opacity-70')} aria-busy={loading || undefined}><MenuWeekList key={loaded.weekStart} days={menuWeekDays(loaded.weekStart, loaded.days)} today={today} /></div>
-      : <ul className={cn('grid gap-2', loading && 'opacity-70')} aria-busy={loading || undefined}>
-        {menuWeekDays(loaded.weekStart, loaded.days).map(({ date, day }) => {
-          const isToday = date === today;
-          const empty = !day || (day.sections.length === 0 && day.notes.length === 0);
-          return <li key={date} className={cn('grid gap-2 rounded-2xl bg-muted/70 p-3.5 ring-1 ring-inset ring-foreground/[0.04]', isToday && 'bg-primary-soft/60 ring-primary/30')}>
-            <div className="flex items-baseline justify-between gap-2">
-              <strong className="text-sm font-bold">{formatDate(date, { weekday: 'long' }).split(',')[0]}{isToday && <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-primary-foreground">Today</span>}</strong>
-              <Eyebrow>{formatDate(date)}</Eyebrow>
-            </div>
-            {empty ? <p className="text-sm text-muted-foreground">No menu posted.</p> : <DayMenu day={day} />}
-          </li>;
-        })}
-      </ul>}
+      <div className={cn(loading && 'opacity-70')} aria-busy={loading || undefined}><MenuWeekList key={loaded.weekStart} days={menuWeekDays(loaded.weekStart, loaded.days)} today={today} /></div>
       <Hint>{loaded.stale ? `The menu site could not be reached; showing the copy from ${stamp(loaded.fetchedAt)}.` : `Updated ${stamp(loaded.fetchedAt)}.`}{error ? ` ${error}` : ''}</Hint>
     </>}
     {editable && <MenuSourceDialog open={editing} onClose={() => setEditing(false)} state={state} current={source} />}

@@ -117,9 +117,13 @@ test('blocking hides both members and reports reach support', async ({ browser }
 test('verified members of a locked school propose and vote on schedule changes', async ({ browser }, testInfo) => {
   const f = seed(true);
   const page = await signedIn(browser, f.alice);
+  // The shared schedule sits with the rotation, and a locked school offers no direct edit there.
   await page.goto('/school');
-  await expect(page.getByRole('heading', { name: 'Proposed changes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Shared schedule' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit shared schedule' })).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'School sections' }).getByRole('button', { name: /Proposed changes/ }).click();
+  await expect(page).toHaveURL(/\/school\?section=changes$/);
+  await expect(page.getByRole('heading', { name: 'Proposed changes' })).toBeVisible();
   await page.getByRole('button', { name: 'Propose a change' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('What changes and why?').fill('Rename period A to Block A to match the new bell schedule.');
@@ -136,7 +140,7 @@ test('verified members of a locked school propose and vote on schedule changes',
   await page.screenshot({ path: testInfo.outputPath('school-proposal-open.png'), fullPage: true });
 
   const bob = await signedIn(browser, f.bob);
-  await bob.goto('/school');
+  await bob.goto('/school?section=changes');
   const bobCard = bob.getByRole('listitem').filter({ hasText: 'Rename period A to Block A' });
   await bobCard.getByRole('button', { name: 'See proposed schedule' }).click();
   await expect(bobCard).toContainText('Proposed');

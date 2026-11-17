@@ -2,10 +2,7 @@ import { test, expect, hydrating } from './fixtures';
 import type { BrowserContext, Page } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import { openDatabase } from '../../src/server/db';
-import { createBeta, readBetaRegistry, writeBetaRegistry } from '../../src/server/beta-registry';
-import { BetaService } from '../../src/server/betas';
 import { Service } from '../../src/server/service';
 import { SchoolLogoService } from '../../src/server/school-logos';
 import sharp from 'sharp';
@@ -13,9 +10,9 @@ import { exampleSchedule } from '../../src/domain/example';
 
 /**
  * A student in a ten-member school (so changes go through proposals), with four classes on the example rotation
- * and four days off on the calendar, one of which (tomorrow) uses up a day of the rotation. `beta` joins the school-hub beta, the key the School redesign is gated on.
+ * and four days off on the calendar, one of which (tomorrow) uses up a day of the rotation. `menu` gives the school a lunch menu for the week.
  */
-function seed(beta: boolean, menu = false) {
+function seed(menu = false) {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
   try {
     const service = new Service(db, 'browser-owner@example.com');
@@ -60,18 +57,6 @@ function seed(beta: boolean, menu = false) {
       ];
       db.prepare('INSERT INTO menu_weeks(school_id,week_start,source,days,fetched_at) VALUES(?,?,?,?,?)').run(school.id, '2026-09-13', JSON.stringify(source), JSON.stringify(days), new Date().toISOString());
     }
-    if (beta) {
-      // What `npm run beta -- create` writes, then the student joins with the code.
-      const key = 'school-hub';
-      const code = `HUB-${id.slice(0, 4)}`;
-      const listPath = join(dirname(process.env.E2E_DATABASE_PATH!), 'betas.json');
-      const registry = readBetaRegistry(listPath);
-      writeBetaRegistry(createBeta({ ...registry, betas: registry.betas.filter((entry) => entry.key !== key) }, { key, name: 'New School page', code }), listPath);
-      // The service in this process resolves the list beside DATABASE_PATH, like the server's.
-      const previous = process.env.DATABASE_PATH;
-      process.env.DATABASE_PATH = process.env.E2E_DATABASE_PATH;
-      try { new BetaService(service).join(id, { code }); } finally { if (previous === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = previous; }
-    }
     return { id, name, members, schoolId: school.id };
   } finally { db.close(); }
 }
@@ -87,7 +72,7 @@ async function open(page: Page, context: BrowserContext, id: string, path = '/sc
 
 test('the redesigned School page shows one section beside the school card, and the rotation as a Today-style timeline', async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  const { id, name } = seed(true);
+  const { id, name } = seed();
   await open(page, context, id);
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
   const menu = page.getByRole('navigation', { name: 'School sections' });
@@ -157,7 +142,7 @@ test('the redesigned School page shows one section beside the school card, and t
 
 test('on a phone the redesigned School page is a list that opens one section at a time', async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const { id, name } = seed(true);
+  const { id, name } = seed();
   await open(page, context, id);
   const menu = page.getByRole('navigation', { name: 'School sections' });
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
@@ -181,7 +166,7 @@ test('on a phone the redesigned School page is a list that opens one section at 
 test('a member proposes a school logo and the school votes it in; support can force a vote, revert a logo, and lock one it set', async ({ page, context, browser }, testInfo) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1280, height: 900 });
-  const { id, name, members, schoolId } = seed(true);
+  const { id, name, members, schoolId } = seed();
   await open(page, context, id, '/school?section=logo');
   const card = page.getByRole('region', { name: 'School logo' });
   const header = page.locator('header').filter({ has: page.getByRole('heading', { name, level: 1 }) });
@@ -296,7 +281,8 @@ test('a member proposes a school logo and the school votes it in; support can fo
   // It waits in the /admin inbox until support answers it. Approving it publishes it, and the logo stays locked.
   await admin.goto('/admin');
   await expect(queue).toContainText('Requested by Maya');
-  await expect(admin.getByRole('tab', { name: 'Inbox · 1', exact: true })).toBeVisible();
+  // The request counts as an open item. Other tests share the database, so only the count's presence is checked.
+  await expect(admin.getByRole('tab', { name: /^Inbox · \d+$/ })).toBeVisible();
   await admin.screenshot({ path: testInfo.outputPath('admin-logo-request.png') });
   await queue.getByRole('button', { name: `Approve the logo request for ${name}` }).click();
   await expect(queue).toContainText('No open votes or requests');
@@ -312,7 +298,7 @@ test('a member proposes a school logo and the school votes it in; support can fo
 for (const width of [1280, 390]) {
   test(`the redesigned lunch menu is a week of rows that open into a menu card at ${width}px`, async ({ page, context }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
-    const { id } = seed(true, true);
+    const { id } = seed(true);
     await open(page, context, id, '/school?section=lunch');
     const card = page.getByRole('region', { name: 'Lunch menu' });
     await expect(card).toContainText('Upper School Lunch');
@@ -360,15 +346,3 @@ for (const width of [1280, 390]) {
     await expect(days.nth(1).getByRole('button')).toHaveAttribute('aria-expanded', 'false');
   });
 }
-
-test('without the beta the School page keeps its single column of cards', async ({ page, context }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  const { id, name } = seed(false);
-  await open(page, context, id);
-  await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'School sections' })).toHaveCount(0);
-  for (const title of ['How this schedule is managed', 'Your schedule source', 'Shared schedule', 'Rotation', 'Lunch menu', 'Proposed changes', 'School class directory', 'Request a correction'])
-    await expect(page.getByRole('region', { name: title })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Rotation' }).locator('button[aria-expanded]')).toHaveCount(10);
-  await expect(page.getByRole('region', { name: 'Shared schedule' })).toContainText('Eastern Time');
-});

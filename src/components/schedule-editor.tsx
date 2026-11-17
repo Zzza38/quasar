@@ -469,7 +469,7 @@ export function Preview({ value }: { value: Schedule }) {
 /* ---------- Read-only summary ---------- */
 
 /**
- * The schedule's shape as chips. `brief` is for a member reading their own school (the School page redesign): it
+ * The schedule's shape as chips. `brief` is for a member reading their own school (the School page): it
  * leaves out what they already know, that the school has a lunch and which time zone it is in. Several lunch waves
  * still show, since that is something to know. Setup and support screens show everything.
  */

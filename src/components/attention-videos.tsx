@@ -19,7 +19,7 @@ const TILES: Record<string, { count: number; direction: 'rows' | 'columns' }> = 
   'right-gutter': { count: 4, direction: 'rows' },
   'page-header': { count: 2, direction: 'columns' },
   'today-tasks': { count: 2, direction: 'rows' },
-  'school-directory': { count: 2, direction: 'rows' },
+  'school-sections': { count: 2, direction: 'rows' },
   'account-look': { count: 2, direction: 'columns' },
 };
 // Tiles alternate between these muted clips, offset per zone so single-tile zones differ too.
