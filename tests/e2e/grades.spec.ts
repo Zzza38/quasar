@@ -147,7 +147,8 @@ test('schoology-connect beta: grades, a saved custom goal, and what-ifs on a wid
   await expect(biology.getByRole('img')).toHaveAttribute('aria-label', 'Now 92.79%, goal 90.0%');
   await expect(cards(page).getByRole('listitem').filter({ hasText: 'Precalculus' })).toContainText('1 missing');
   await expect(cards(page).getByRole('listitem').filter({ hasText: 'Studio Art' })).toContainText('No grade yet');
-  await expect(page.getByText(/Schoology, checked Today/)).toBeVisible();
+  await expect(page.getByText(/Schoology, checked/)).toHaveCount(0);
+  await expect(page.getByText(/Letters use common cutoffs/)).toHaveCount(0);
   expect(goalRow(id, '11')).toBeNull();
   await shot(page, '1-desktop-overview');
 
@@ -165,6 +166,7 @@ test('schoology-connect beta: grades, a saved custom goal, and what-ifs on a wid
   await expect(rail.getByRole('button', { name: /AP Biology/ })).toHaveAttribute('aria-current', 'true');
   await expect(rail.getByRole('button', { name: /AP Biology/ })).toContainText('A · 0.2 to go');
   await expect(rail.getByRole('button', { name: /Precalculus/ })).toContainText('No goal set');
+  await expect(detail.getByText(/Letters use common cutoffs/)).toHaveCount(0);
   await expect(detail.getByRole('list', { name: 'Categories' })).toContainText('Tests');
   await expect(detail.getByRole('list', { name: 'Coming up' }).getByRole('listitem')).toHaveCount(3);
   await expect(detail.getByRole('list', { name: 'Graded' }).getByRole('listitem')).toHaveCount(6);
