@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   const body = await request.text();
   if (body.length > MAX_BODY_BYTES) return new Response('Too large', { status: 413 });
   try {
-    const result = new BillingService(new Service(getDb())).webhook(body, request.headers.get('stripe-signature'));
+    const result = await new BillingService(new Service(getDb())).webhook(body, request.headers.get('stripe-signature'));
     return Response.json({ received: true, handled: result.handled });
   } catch (error) {
     if (error instanceof WebhookSignatureError) return new Response(error.message, { status: 400 });

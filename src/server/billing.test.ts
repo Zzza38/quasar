@@ -90,36 +90,92 @@ describe('Quasar AI Plus billing', () => {
     const f = fixture(vi.fn<StripeFetch>().mockImplementation(async () => json({ unit_amount: 500, currency: 'usd' })));
     const ada = f.user();
     expect(f.billing.isPlus(ada)).toBe(false);
-    expect(deliver(f.billing, { id: 'evt_c', type: 'checkout.session.completed', created: 100, data: { object: { client_reference_id: ada, customer: 'cus_1' } } })).toEqual({ handled: true, type: 'checkout.session.completed' });
-    deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, {}));
+    expect(await deliver(f.billing, { id: 'evt_c', type: 'checkout.session.completed', created: 100, data: { object: { client_reference_id: ada, customer: 'cus_1' } } })).toEqual({ handled: true, type: 'checkout.session.completed' });
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_1', 'customer.subscription.created', 101, {}).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, {}));
     expect(f.billing.isPlus(ada)).toBe(true);
     expect(await f.billing.status(ada)).toMatchObject({ enabled: true, plan: 'plus', status: 'active', cancelAtPeriodEnd: false, renewsAt: new Date(1_795_000_000_000).toISOString(),
       prices: [{ interval: 'month', amount: 500, currency: 'usd' }, { interval: 'year', amount: 500, currency: 'usd' }] });
     // The same event again does nothing; an older event arriving late can't undo a newer one.
-    expect(deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, {})).handled).toBe(false);
-    deliver(f.billing, subscriptionEvent('evt_3', 'customer.subscription.updated', 103, { cancel_at_period_end: true }));
-    deliver(f.billing, subscriptionEvent('evt_2', 'customer.subscription.updated', 102, { status: 'incomplete' }));
+    expect((await deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, {}))).handled).toBe(false);
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_3', 'customer.subscription.updated', 103, { cancel_at_period_end: true }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_3', 'customer.subscription.updated', 103, { cancel_at_period_end: true }));
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_3', 'customer.subscription.updated', 103, { cancel_at_period_end: true }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_2', 'customer.subscription.updated', 102, { status: 'incomplete' }));
     expect(await f.billing.status(ada)).toMatchObject({ plan: 'plus', cancelAtPeriodEnd: true });
     // A failed renewal keeps Plus while Stripe retries; deletion ends it.
-    deliver(f.billing, subscriptionEvent('evt_4', 'customer.subscription.updated', 104, { status: 'past_due' }));
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_4', 'customer.subscription.updated', 104, { status: 'past_due' }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_4', 'customer.subscription.updated', 104, { status: 'past_due' }));
     expect(f.billing.isPlus(ada)).toBe(true);
-    deliver(f.billing, subscriptionEvent('evt_5', 'customer.subscription.deleted', 105, { status: 'canceled' }));
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_5', 'customer.subscription.deleted', 105, { status: 'canceled' }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_5', 'customer.subscription.deleted', 105, { status: 'canceled' }));
     expect(f.billing.isPlus(ada)).toBe(false);
     const audit = f.db.prepare("SELECT action FROM audit_log WHERE actor_id=? AND action LIKE 'billing.%' ORDER BY rowid").pluck().all(ada);
     expect(audit).toEqual(['billing.plusStart', 'billing.plusEnd']);
   });
 
-  it('never lets subscription metadata move Plus onto another account', () => {
+  it('never lets subscription metadata move Plus onto another account', async () => {
     const f = fixture();
     const ada = f.user(), eve = f.user();
-    deliver(f.billing, { id: 'evt_c', type: 'checkout.session.completed', created: 100, data: { object: { client_reference_id: ada, customer: 'cus_1' } } });
-    deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, { metadata: { user_id: eve } }));
+    await deliver(f.billing, { id: 'evt_c', type: 'checkout.session.completed', created: 100, data: { object: { client_reference_id: ada, customer: 'cus_1' } } });
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_1', 'customer.subscription.created', 101, { metadata: { user_id: eve } }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_1', 'customer.subscription.created', 101, { metadata: { user_id: eve } }));
     expect(f.billing.isPlus(ada)).toBe(true);
     expect(f.billing.isPlus(eve)).toBe(false);
     // A subscription for a customer nobody knows, naming no real account, is ignored.
-    deliver(f.billing, subscriptionEvent('evt_2', 'customer.subscription.created', 102, { id: 'sub_2', customer: 'cus_9', metadata: { user_id: 'nobody' } }));
+    f.fetcher.mockResolvedValueOnce(json(subscriptionEvent('evt_2', 'customer.subscription.created', 102, { id: 'sub_2', customer: 'cus_9', metadata: { user_id: 'nobody' } }).data.object));
+    await deliver(f.billing, subscriptionEvent('evt_2', 'customer.subscription.created', 102, { id: 'sub_2', customer: 'cus_9', metadata: { user_id: 'nobody' } }));
     expect(f.db.prepare("SELECT count(*) FROM billing_subscriptions WHERE subscription_id='sub_2'").pluck().get()).toBe(0);
-    expect(() => f.billing.webhook('{"id":"evt_x"}', 't=1,v1=00')).toThrow(WebhookSignatureError);
+    await expect(f.billing.webhook('{"id":"evt_x"}', 't=1,v1=00')).rejects.toThrow(WebhookSignatureError);
+  });
+
+  it('keeps portal access after beta exit without allowing another checkout', async () => {
+    const f = fixture(vi.fn<StripeFetch>().mockResolvedValue(json({ url: 'https://billing.stripe.com/session' })), false);
+    const ada = f.user(), other = f.user();
+    f.db.prepare('INSERT INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(ada, 'cus_1', NOW.toISOString());
+    expect(await f.billing.status(ada)).toMatchObject({ enabled: true, hasCustomer: true, prices: [] });
+    expect(await f.billing.portal(ada)).toEqual({ url: 'https://billing.stripe.com/session' });
+    expect(new URLSearchParams(String(f.fetcher.mock.calls[0][1].body)).get('customer')).toBe('cus_1');
+    await expect(f.billing.checkout(ada, { interval: 'month' })).rejects.toThrow('beta');
+    await expect(f.billing.portal(other)).rejects.toThrow('no billing account');
+    await expect(f.billing.portal('missing')).rejects.toThrow();
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles reversed equal-second snapshots and serializes across service instances', async () => {
+    let release!: (response: Response) => void;
+    const current = subscriptionEvent('unused', 'customer.subscription.updated', 100, {}).data.object;
+    const fetcher = vi.fn<StripeFetch>()
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }))
+      .mockResolvedValue(json(current));
+    const f = fixture(fetcher);
+    const ada = f.user();
+    f.db.prepare('INSERT INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(ada, 'cus_1', NOW.toISOString());
+    const second = new BillingService(f.service, { config, fetcher, now: () => NOW });
+    const active = deliver(f.billing, subscriptionEvent('evt_active', 'customer.subscription.updated', 100, {}));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    const stale = deliver(second, subscriptionEvent('evt_incomplete', 'customer.subscription.updated', 100, { status: 'incomplete' }));
+    await Promise.resolve();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    release(json(current));
+    await Promise.all([active, stale]);
+    expect(f.billing.isPlus(ada)).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.every(([url]) => url.endsWith('/subscriptions/sub_1'))).toBe(true);
+    expect(f.db.prepare('SELECT status FROM billing_subscriptions').pluck().get()).toBe('active');
+  });
+
+  it('retries reconciliation failures without recording the event or blocking the subscription queue', async () => {
+    const event = subscriptionEvent('evt_retry', 'customer.subscription.updated', 100, {});
+    const f = fixture(vi.fn<StripeFetch>().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(json(event.data.object)));
+    const ada = f.user();
+    f.db.prepare('INSERT INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(ada, 'cus_1', NOW.toISOString());
+    await expect(deliver(f.billing, event)).rejects.toThrow('reach Stripe');
+    expect(f.db.prepare('SELECT count(*) FROM stripe_events').pluck().get()).toBe(0);
+    expect(await deliver(f.billing, event)).toMatchObject({ handled: true });
+    expect(f.billing.isPlus(ada)).toBe(true);
+    expect(await deliver(f.billing, event)).toMatchObject({ handled: false });
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('raises the AI daily quota for Plus members', () => {

@@ -12,7 +12,7 @@ import type { Service } from './service';
  *
  * Stripe is called over its REST API with fetch, and webhook signatures are checked here (HMAC-SHA256 of
  * "<timestamp>.<raw body>"), so there is no SDK dependency. Checkout and the billing portal are Stripe-hosted pages:
- * no card data touches this server. Subscription state comes only from signed webhooks at /api/stripe/webhook.
+ * no card data touches this server. Subscription state is reconciled with Stripe after signed webhooks at /api/stripe/webhook.
  */
 
 export type StripeConfig = { secretKey: string; webhookSecret: string; prices: { month: string; year?: string }; origin: string };
@@ -47,6 +47,8 @@ type StripeSubscription = { id: string; customer: string; status: string; cancel
 type StripeEvent = { id: string; type: string; created: number; data: { object: Record<string, unknown> } };
 
 const fail = (code: TRPCError['code'], message: string): never => { throw new TRPCError({ code, message }); };
+// Route handlers create separate services; share the queue for their database connection.
+const subscriptionQueues = new WeakMap<Service['db'], Map<string, Promise<unknown>>>();
 const priceCache = new Map<string, { at: number; price: Price | null }>();
 
 export class BillingService {
@@ -77,10 +79,11 @@ export class BillingService {
   async status(userId: string) {
     this.service.user(userId);
     const config = this.config();
-    if (!config || !this.inBeta(userId)) return { enabled: false as const };
+    const canCheckout = this.inBeta(userId);
+    if (!config || (!canCheckout && !this.customerId(userId))) return { enabled: false as const };
     const row = this.subscription(userId);
     const plus = !!row && PLUS_STATUSES.has(row.status);
-    const prices = (await Promise.all((Object.entries(config.prices) as Array<['month' | 'year', string]>).map(([interval, id]) => this.price(config, interval, id)))).filter((price): price is Price => price !== null);
+    const prices = canCheckout ? (await Promise.all((Object.entries(config.prices) as Array<['month' | 'year', string]>).map(([interval, id]) => this.price(config, interval, id)))).filter((price): price is Price => price !== null) : [];
     return {
       enabled: true as const,
       plan: plus ? 'plus' as const : 'free' as const,
@@ -121,7 +124,8 @@ export class BillingService {
   /** Stripe's billing portal: change card, switch period, cancel, download receipts. */
   async portal(userId: string): Promise<{ url: string }> {
     this.service.user(userId);
-    const config = this.ready(userId);
+    const config = this.config();
+    if (!config) return fail('PRECONDITION_FAILED', 'Plus isn’t available on this server.');
     const customer = this.customerId(userId);
     if (!customer) fail('BAD_REQUEST', 'There’s no billing account yet. Get Plus first.');
     const session = await this.stripe(config, '/billing_portal/sessions', { customer: customer!, return_url: `${config.origin}/tasks` }) as { url?: string };
@@ -133,27 +137,47 @@ export class BillingService {
    * Handles one webhook delivery. The event ID is recorded in the same transaction as its effect, so a retry after a
    * failure runs again and a duplicate delivery does nothing. Throws WebhookSignatureError for anything unsigned.
    */
-  webhook(body: string, signature: string | null): { handled: boolean; type: string } {
+  async webhook(body: string, signature: string | null): Promise<{ handled: boolean; type: string }> {
     const config = this.config();
     if (!config) throw new WebhookSignatureError('Billing is not configured.');
     verifySignature(body, signature, config.webhookSecret, this.now());
     const event = JSON.parse(body) as StripeEvent;
     if (!event?.id || !event.type || !event.data?.object) throw new WebhookSignatureError('Not a Stripe event.');
-    return this.db.transaction(() => {
-      if (!this.db.prepare('INSERT OR IGNORE INTO stripe_events(id,type,received_at) VALUES(?,?,?)').run(event.id, event.type, this.now().toISOString()).changes) return { handled: false, type: event.type };
-      const object = event.data.object;
-      if (event.type === 'checkout.session.completed') {
-        const userId = typeof object.client_reference_id === 'string' ? object.client_reference_id : null;
-        const customer = typeof object.customer === 'string' ? object.customer : null;
-        if (userId && customer && this.userExists(userId)) this.db.prepare('INSERT OR IGNORE INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(userId, customer, this.now().toISOString());
-      } else if (event.type.startsWith('customer.subscription.')) {
-        this.applySubscription(object as unknown as StripeSubscription, event.created, event.type === 'customer.subscription.deleted');
+    const process = async () => {
+      if (this.db.prepare('SELECT 1 FROM stripe_events WHERE id=?').get(event.id)) return { handled: false, type: event.type };
+      let subscription: StripeSubscription | undefined;
+      if (event.type.startsWith('customer.subscription.')) {
+        const id = event.data.object.id;
+        if (typeof id !== 'string' || !id) throw new WebhookSignatureError('Missing subscription ID.');
+        subscription = await this.stripe(config, `/subscriptions/${encodeURIComponent(id)}`) as StripeSubscription;
+        if (subscription?.id !== id || typeof subscription.customer !== 'string' || typeof subscription.status !== 'string') {
+          throw new Error('Stripe returned an invalid subscription.');
+        }
       }
-      return { handled: true, type: event.type };
-    }).immediate();
+      return this.db.transaction(() => {
+        if (!this.db.prepare('INSERT OR IGNORE INTO stripe_events(id,type,received_at) VALUES(?,?,?)').run(event.id, event.type, this.now().toISOString()).changes) return { handled: false, type: event.type };
+        const object = event.data.object;
+        if (event.type === 'checkout.session.completed') {
+          const userId = typeof object.client_reference_id === 'string' ? object.client_reference_id : null;
+          const customer = typeof object.customer === 'string' ? object.customer : null;
+          if (userId && customer && this.userExists(userId)) this.db.prepare('INSERT OR IGNORE INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(userId, customer, this.now().toISOString());
+        } else if (event.type.startsWith('customer.subscription.')) {
+          this.applySubscription(subscription!, event.created);
+        }
+        return { handled: true, type: event.type };
+      }).immediate();
+    };
+    if (!event.type.startsWith('customer.subscription.')) return process();
+    let queues = subscriptionQueues.get(this.db);
+    if (!queues) { queues = new Map(); subscriptionQueues.set(this.db, queues); }
+    const key = String(event.data.object.id);
+    const pending = (queues.get(key) ?? Promise.resolve()).catch(() => {}).then(process);
+    queues.set(key, pending);
+    try { return await pending; }
+    finally { if (queues.get(key) === pending) queues.delete(key); }
   }
 
-  private applySubscription(sub: StripeSubscription, created: number, deleted: boolean): void {
+  private applySubscription(sub: StripeSubscription, created: number): void {
     // The customer mapping decides the account; metadata is only trusted when it agrees or the customer is new to us.
     const mapped = this.db.prepare('SELECT user_id FROM billing_customers WHERE customer_id=?').pluck().get(sub.customer) as string | undefined;
     const claimed = sub.metadata?.user_id;
@@ -161,17 +185,17 @@ export class BillingService {
     if (!userId) { console.error(`[billing] subscription ${sub.id} has no matching account; ignored`); return; }
     if (!mapped) this.db.prepare('INSERT OR IGNORE INTO billing_customers(user_id,customer_id,created_at) VALUES(?,?,?)').run(userId, sub.customer, this.now().toISOString());
     const existing = this.db.prepare('SELECT event_created FROM billing_subscriptions WHERE subscription_id=?').get(sub.id) as { event_created: number } | undefined;
-    if (existing && existing.event_created > created) return;
+    created = Math.max(existing?.event_created ?? created, created);
     // Newer API versions moved the period end onto the subscription item.
     const periodEnd = sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end;
     const was = this.isPlus(userId);
     this.db.prepare(`INSERT INTO billing_subscriptions(subscription_id,user_id,customer_id,price_id,status,current_period_end,cancel_at_period_end,event_created,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(subscription_id) DO UPDATE SET status=excluded.status, price_id=excluded.price_id, current_period_end=excluded.current_period_end,
       cancel_at_period_end=excluded.cancel_at_period_end, event_created=excluded.event_created, updated_at=excluded.updated_at`)
-      .run(sub.id, userId, sub.customer, sub.items?.data?.[0]?.price?.id ?? null, deleted ? 'canceled' : sub.status,
+      .run(sub.id, userId, sub.customer, sub.items?.data?.[0]?.price?.id ?? null, sub.status,
         periodEnd ? new Date(periodEnd * 1000).toISOString() : null, sub.cancel_at_period_end ? 1 : 0, created, this.now().toISOString());
     const now = this.isPlus(userId);
-    if (was !== now) this.service.audit(userId, now ? 'billing.plusStart' : 'billing.plusEnd', null, { subscription: sub.id, status: deleted ? 'canceled' : sub.status });
+    if (was !== now) this.service.audit(userId, now ? 'billing.plusStart' : 'billing.plusEnd', null, { subscription: sub.id, status: sub.status });
   }
 
   private ready(userId: string): StripeConfig {

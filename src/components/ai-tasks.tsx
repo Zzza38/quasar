@@ -211,7 +211,8 @@ export function AiSettings() {
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<'remove' | 'connect' | null>(null);
   const [error, setError] = useState('');
-  if (!beta || !account) return null;
+  if (!account) return null;
+  if (!beta) return <PlusBlock online={account.online} accountId={account.accountId} onChanged={reload} />;
   const online = account.online;
   const remove = async () => {
     setPending('remove'); setError('');

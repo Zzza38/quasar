@@ -410,8 +410,8 @@ export function CenteredNotice({ title, children, action }: { title: ReactNode; 
   </div>;
 }
 
-/** The AI block (ai-tasks beta). AiSettings renders nothing outside the beta, so the heading goes with it. */
+/** The AI block (ai-tasks beta). Existing customers retain billing management outside the beta. */
 function AiAccountBlock() {
   const beta = useBeta(AI_BETA);
-  return beta ? <div className="grid gap-3"><Eyebrow>AI</Eyebrow><AiSettings /></div> : null;
+  return <div className="grid gap-3">{beta && <Eyebrow>AI</Eyebrow>}<AiSettings /></div>;
 }
