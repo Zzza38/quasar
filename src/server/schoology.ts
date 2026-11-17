@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { personalScheduleSchema } from '@/domain/schedule';
-import { SCHOOLOGY_BETA, SCHOOLOGY_IMPORT_PAST_DAYS, SCHOOLOGY_RETURN_PARAM, assignmentMatchKey, assignmentTask, matchSectionClass, schoologyItemKey, turnedIn, type AssignmentFields, type SchoologyAssignment } from '@/domain/schoology';
+import { SCHOOLOGY_BETA, SCHOOLOGY_IMPORT_PAST_DAYS, SCHOOLOGY_RETURN_PARAM, assignmentMatchKey, assignmentTask, eventTask, type SchoologyEvent, matchSectionClass, schoologyItemKey, turnedIn, type AssignmentFields, type SchoologyAssignment } from '@/domain/schoology';
 import { stampCompletion, taskSchema } from '@/domain/task';
 import { classGradesFromSchoology, type ClassGrades } from '@/domain/grade-math';
 import { gradeGoalSchema, planTargetSchema, type GradeGoal, type PlanTarget, type SavedGoal } from '@/domain/grade-goals';
@@ -640,19 +640,27 @@ export class SchoologyService {
       this.db.prepare('UPDATE schoology_connections SET synced_at=? WHERE user_id=?').run(this.now().toISOString(), userId);
       const token = this.token(userId, row);
       const fetched: Fetched[] = [];
+      const events: { sectionId: string; event: SchoologyEvent }[] = [];
       const { grades, sections } = await this.gradesAndSections(userId, row, token, true);
       const graded = new Set<string>();
       for (const section of (grades as { section?: { period?: { assignment?: { assignment_id?: unknown; grade?: unknown }[] }[] }[] })?.section ?? []) {
         for (const item of (section.period ?? []).flatMap(period => period.assignment ?? [])) if (item.grade !== null && item.grade !== undefined && item.grade !== '') graded.add(String(item.assignment_id));
       }
       for (const sectionId of this.rememberSections(userId, sections)) {
+        if (row.import_assignments === 1) for (const event of await this.pages(`${this.api}/sections/${sectionId}/events?limit=200`, 'event', token)) {
+          if (/^\d{1,20}$/.test(String(event.id)) && !/^\d{1,20}$/.test(String(event.assignment_id ?? ''))) events.push({ sectionId, event });
+        }
         for (const assignment of await this.pages(`${this.api}/sections/${sectionId}/assignments?limit=200`, 'assignment', token)) {
           if (/^\d{1,20}$/.test(String(assignment.id))) fetched.push({ sectionId, assignment });
         }
       }
       syncSignal.getStore()?.throwIfAborted();
       this.rememberItems(userId, new Map(fetched.map(entry => [`assignment:${entry.assignment.id}`, entry.sectionId])));
-      if (row.import_assignments === 1) changed += this.importAssignments(userId, fetched, graded);
+      if (row.import_assignments === 1) {
+        this.rememberItems(userId, new Map(events.map(entry => [`event:${entry.event.id}`, entry.sectionId])));
+        changed += this.importAssignments(userId, fetched, graded);
+        changed += this.importAssignments(userId, events.map(({ sectionId, event }) => ({ sectionId, assignment: event })), new Set(), true);
+      }
       if (row.auto_complete === 1) changed += await this.checkTurnIns(userId, row.schoology_uid, fetched, token);
     }
     syncSignal.getStore()?.throwIfAborted();
@@ -661,38 +669,40 @@ export class SchoologyService {
   }
 
   /**
-   * Adds assignments as tasks (entity `sgy_<assignment id>`) unless the calendar feed already brought them, matched by
+   * Adds assignments (`sgy_<id>`) or events (`sgy_event_<id>`) as tasks unless the calendar feed already brought them, matched by
    * the assignment link or by title and due date. Later reads update a field only while it still holds what Schoology
    * last said, so the member's edits stay. A task the member deleted isn't brought back, and an untouched one is
    * removed if the feed brings the same assignment later. Past-due assignments that already have a grade are skipped.
    */
-  private importAssignments(userId: string, fetched: Fetched[], graded: ReadonlySet<string>): number {
+  private importAssignments(userId: string, fetched: Fetched[], graded: ReadonlySet<string>, events = false): number {
     const today = this.now().toISOString().slice(0, 10);
     return this.db.transaction(() => {
-      const fed = this.db.prepare(`SELECT data FROM entities WHERE owner_id=? AND kind='task' AND deleted=0 AND json_extract(data,'$.imported') IS NOT NULL`).all(userId) as { data: string }[];
+      const fed = this.db.prepare(`SELECT data FROM entities WHERE owner_id=? AND kind='task' AND (deleted=0 OR ?=1) AND json_extract(data,'$.imported') IS NOT NULL`).all(userId, events ? 1 : 0) as { data: string }[];
       const fedKeys = new Set<string>(), fedMatches = new Set<string>();
       for (const { data } of fed) {
         const task = JSON.parse(data) as { title?: string; dueDate?: string | null; notes?: string; imported?: { url?: string | null } };
         const key = schoologyItemKey(task);
         if (key) fedKeys.add(key);
-        if (typeof task.title === 'string') fedMatches.add(assignmentMatchKey(task.title, task.dueDate ?? null));
+        if (typeof task.title === 'string' && (!events || !key)) fedMatches.add(assignmentMatchKey(task.title, task.dueDate ?? null));
       }
-      const fromFeed = (id: string, fields: AssignmentFields) => fedKeys.has(`assignment:${id}`) || fedMatches.has(assignmentMatchKey(fields.title, fields.dueDate));
+      const fromFeed = (id: string, fields: AssignmentFields) => fedKeys.has(`${events ? 'event' : 'assignment'}:${id}`) || fedMatches.has(assignmentMatchKey(fields.title, fields.dueDate));
       const importRow = this.db.prepare('SELECT entity_id, source, written_version FROM schoology_imports WHERE user_id=? AND assignment_id=?');
       const saveRow = this.db.prepare(`INSERT INTO schoology_imports(user_id,assignment_id,entity_id,section_id,source,written_version) VALUES(?,?,?,?,?,?)
         ON CONFLICT(user_id,assignment_id) DO UPDATE SET section_id=excluded.section_id,source=excluded.source,written_version=excluded.written_version`);
       let changed = 0;
       for (const { sectionId, assignment } of fetched) {
         const id = String(assignment.id);
-        const fields = assignmentTask(assignment, today);
+        const fields = events ? eventTask(assignment, today) : assignmentTask(assignment, today);
+        const sourceId = events ? `event:${id}` : id;
+        const entityId = events ? `sgy_event_${id}` : `sgy_${id}`;
         if (!fields) continue;
-        const existing = importRow.get(userId, id) as { entity_id: string; source: string; written_version: number } | undefined;
+        const existing = importRow.get(userId, sourceId) as { entity_id: string; source: string; written_version: number } | undefined;
         if (!existing) {
           // Already past due and graded means it's done: not a task to add.
-          if (fromFeed(id, fields) || (graded.has(id) && fields.dueDate !== null && fields.dueDate < today) || readEntity(this.db, userId, `sgy_${id}`)) continue;
+          if (fromFeed(id, fields) || (graded.has(id) && fields.dueDate !== null && fields.dueDate < today) || readEntity(this.db, userId, entityId)) continue;
           const data = taskSchema.parse({ ...fields, classId: null, completed: false });
-          writeEntity(this.db, userId, { id: `sgy_${id}`, kind: 'task', version: 1, data, deleted: false });
-          saveRow.run(userId, id, `sgy_${id}`, sectionId, JSON.stringify(fields), 1);
+          writeEntity(this.db, userId, { id: entityId, kind: 'task', version: 1, data, deleted: false });
+          saveRow.run(userId, sourceId, entityId, sectionId, JSON.stringify(fields), 1);
           changed++;
           continue;
         }
@@ -714,7 +724,7 @@ export class SchoologyService {
             changed++;
           }
         }
-        saveRow.run(userId, id, existing.entity_id, sectionId, JSON.stringify(fields), written);
+        saveRow.run(userId, sourceId, existing.entity_id, sectionId, JSON.stringify(fields), written);
       }
       return changed;
     }).immediate();

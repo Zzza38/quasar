@@ -377,11 +377,12 @@ describe('assignments straight from Schoology', () => {
   const assignment = (id: number, title: string, due: string, extra: Record<string, unknown> = {}) =>
     ({ id, title, due, description: '', web_url: `https://fa.schoology.com/assignment/${id}`, published: '1', allow_dropbox: '1', grade_item_id: 7000 + id, last_updated: String(Date.parse('2026-10-28T12:00:00Z') / 1000), ...extra });
   let biologyAssignments: Record<string, unknown>[] = [];
+  let biologyEvents: Record<string, unknown>[] = [];
   const routes = {
     'users/4242/grades': () => json({ section: [{ section_id: '11', final_grade: [], period: [{ assignment: [{ assignment_id: 604, grade: 9 }] }] }] }),
     'users/4242/sections': () => json({ section: [{ id: '11', course_title: 'Biology', section_title: '' }] }),
     'sections/11/assignments': () => json({ assignment: biologyAssignments }),
-    'sections/11/events': () => json({ event: [] }),
+    'sections/11/events': () => json({ event: biologyEvents }),
     'sections/11/submissions/7605/4242': () => json({ revision: [{ draft: 0 }] }),
     'sections/11/submissions/7601/4242': () => json({ revision: [{ draft: 1 }] }),
   };
@@ -389,6 +390,7 @@ describe('assignments straight from Schoology', () => {
     imported: { subscriptionId: 'feed', uid: `${title}@schoology.com`, recurrenceId: null, startDate: dueDate, startTime: null, endDate: null, endTime: null, timeZone: 'America/New_York', allDay: true, sourceRemoved: false, sourceUpdatedAt: '2026-10-30T12:00:00.000Z', url } });
 
   async function setup() {
+    biologyEvents = [];
     biologyAssignments = [
       assignment(601, 'Lab report', '2026-10-31 23:59:00'),
       assignment(602, 'Reading log', ''),
@@ -424,6 +426,40 @@ describe('assignments straight from Schoology', () => {
     for (const id of ['sgy_603', 'sgy_604', 'sgy_501', 'sgy_606', 'sgy_607']) expect(task(db, student, id)).toBeNull();
     // The feed's own copy gets the class too, and stays open: its dropbox answered 404.
     expect(task(db, student, 'feed501')!.data).toMatchObject({ classId: bio, completed: false });
+  });
+
+  it('imports events beside assignments, preserves edits and deletions, and yields to feed copies', async () => {
+    const { db, student, schoology, now } = await setup();
+    biologyEvents = [
+      { id: 601, title: 'Lab visit', description: '<p>Bring goggles</p>', start: '2026-11-01 00:30:00', end: '2026-11-02 03:00:00' },
+      { id: 602, title: 'Field day', start: '2026-11-02 00:00:00', all_day: 1 },
+      { id: 77, title: 'Feed event', start: '2026-11-02 10:00:00' },
+      { id: 90, title: 'Assignment wrapper', start: '2026-11-02 10:00:00', assignment_id: 601 },
+    ];
+    await schoology.sync(student);
+    expect(task(db, student, 'sgy_601')!.data.title).toBe('Lab report');
+    const visit = task(db, student, 'sgy_event_601')!;
+    expect(visit.data).toMatchObject({ title: 'Lab visit', dueDate: '2026-11-01', dueTime: '00:30', classId: bio });
+    expect(visit.data.notes).toContain('Bring goggles');
+    expect(visit.data.notes).toContain('/event/601');
+    expect(task(db, student, 'sgy_event_602')!.data.dueTime).toBeNull();
+    expect(task(db, student, 'sgy_event_77')).toBeNull();
+    expect(task(db, student, 'sgy_event_90')).toBeNull();
+    now.at = new Date(now.at.getTime() + 16 * 60_000);
+    await schoology.sync(student);
+    expect(task(db, student, visit.id)!.version).toBe(visit.version);
+    writeEntity(db, student, { ...visit, version: visit.version + 1, data: { ...visit.data, title: 'My visit' } });
+    biologyEvents[0] = { ...biologyEvents[0], title: 'Updated visit', start: '2026-11-03 09:00:00' };
+    writeEntity(db, student, { id: 'feedEvent602', kind: 'task', version: 1, data: feedTask('Field day', 'https://fa.schoology.com/event/602'), deleted: false });
+    now.at = new Date(now.at.getTime() + 16 * 60_000);
+    await schoology.sync(student);
+    expect(task(db, student, visit.id)!.data).toMatchObject({ title: 'My visit', dueDate: '2026-11-03', dueTime: '09:00' });
+    expect(task(db, student, 'sgy_event_602')!.deleted).toBe(true);
+    const edited = task(db, student, visit.id)!;
+    writeEntity(db, student, { ...edited, version: edited.version + 1, deleted: true, data: {} });
+    now.at = new Date(now.at.getTime() + 16 * 60_000);
+    await schoology.sync(student);
+    expect(task(db, student, visit.id)!.deleted).toBe(true);
   });
 
   it('reads Schoology at most every 15 minutes, or a minute apart when asked', async () => {

@@ -23,7 +23,8 @@ export function schoologyItemKey(task: { notes?: string; imported?: { url?: stri
 /** Assignment links live in calendar metadata or in Schoology's description footer on older/API imports. */
 export function schoologyItemUrl(task: { notes?: string; imported?: { url?: string | null } | null }, taskId?: string | null): string | null {
   const assignmentId = /^sgy_(\d{1,20})$/.exec(taskId ?? '')?.[1];
-  const fallback = assignmentId ? `https://app.schoology.com/assignment/${assignmentId}` : null;
+  const eventId = /^sgy_event_(\d{1,20})$/.exec(taskId ?? '')?.[1];
+  const fallback = eventId ? `https://app.schoology.com/event/${eventId}` : assignmentId ? `https://app.schoology.com/assignment/${assignmentId}` : null;
   const sourceLinks = [...(task.notes ?? '').matchAll(/(?:^|\n)\s*-?\s*Link:\s*(https?:\/\/[^\s<>"']+)/gi)].map(match => match[1]);
   const candidates = [task.imported?.url ?? '', ...sourceLinks, fallback ?? '', ...(task.notes?.match(/https?:\/\/[^\s<>"']+/gi) ?? [])];
   for (const candidate of candidates) {
@@ -105,3 +106,17 @@ export function turnedIn(submissions: unknown): boolean {
 
 /** Title and due date as a duplicate check between a feed import and an API import of the same assignment. */
 export const assignmentMatchKey = (title: string, dueDate: string | null) => `${title.replace(/\s+/g, ' ').trim().toLowerCase()}\0${dueDate ?? ''}`;
+
+/** Events use their start, not their end, as the task deadline. Schoology returns local wall-clock dates. */
+export type SchoologyEvent = SchoologyAssignment & { start?: unknown; end?: unknown; all_day?: unknown; assignment_id?: unknown };
+export function eventTask(event: SchoologyEvent, today: string): AssignmentFields | null {
+  const start = typeof event.start === 'string' ? /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?(?::\d{2})?$/.exec(event.start) : null;
+  if (!start || !Number.isFinite(Date.parse(`${start[1]}T00:00:00Z`)) || new Date(`${start[1]}T00:00:00Z`).toISOString().slice(0, 10) !== start[1] || (start[2] && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start[2]))) return null;
+  const fields = assignmentTask({ ...event, due: `${start[1]} ${start[2] ?? '00:00'}`, web_url: `https://app.schoology.com/event/${event.id}` }, today);
+  if (!fields) return null;
+  fields.title = (typeof event.title === 'string' ? event.title : '').replace(/\s+/g, ' ').trim().slice(0, 300) || 'Untitled event';
+  fields.dueTime = String(event.all_day ?? '0') === '1' ? null : start[2] ?? null;
+  const url = schoologyItemUrl({ imported: { url: typeof event.web_url === 'string' ? event.web_url : null } });
+  if (url && new URL(url).pathname === `/event/${event.id}`) fields.notes = fields.notes.replace(/ - Link: .*$/, ` - Link: ${url}`);
+  return fields;
+}

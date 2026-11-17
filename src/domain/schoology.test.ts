@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assignmentTask, matchSectionClass, schoologyItemKey, schoologyItemUrl, turnedIn } from './schoology';
+import { eventTask, assignmentTask, matchSectionClass, schoologyItemKey, schoologyItemUrl, turnedIn } from './schoology';
 
 const classes = [
   { id: 'english', name: 'Foundations in Literature: Inquiry and Analysis' },
@@ -86,4 +86,11 @@ describe('turnedIn', () => {
     expect(turnedIn({ revision: [] })).toBe(false);
     expect(turnedIn(null)).toBe(false);
   });
+});
+
+it('uses local event starts across DST, retains midnight and links event IDs', () => {
+  expect(eventTask({ id: 123, title: 'DST visit', start: '2026-11-01 01:30:00', end: '2026-11-01 02:30:00' }, '2026-10-30')).toMatchObject({ dueDate: '2026-11-01', dueTime: '01:30' });
+  expect(eventTask({ id: 123, start: '2026-11-01 00:00:00' }, '2026-10-30')?.dueTime).toBe('00:00');
+  expect(eventTask({ id: 123, start: '' }, '2026-10-30')).toBeNull();
+  expect(schoologyItemUrl({ notes: '' }, 'sgy_event_123')).toBe('https://app.schoology.com/event/123');
 });
