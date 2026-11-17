@@ -51,6 +51,33 @@ function fixture(options: { fetcher?: Mock<AiFetch>; inBeta?: boolean; plus?: bo
 }
 
 describe('plan slots', () => {
+  it('subtracts overlapping retained intervals, including ones starting before the slot', () => {
+    const slot = { id: 'slot', date: MONDAY, start: '15:00', end: '17:00', minutes: 120, kind: 'after' as const, label: 'After school' };
+    const task = { title: 'Essay', notes: '', dueDate: '2026-11-06', dueTime: null, classId: null, completed: false };
+    const retained = [['14:30', '15:10'], ['15:30', '16:00'], ['15:50', '16:10']].map(([start, end], i) => ({
+      id: String(i), date: MONDAY, start, end, minutes: 30, slotKind: 'after' as const, slotLabel: 'After school', taskId: 't', title: 'Done', kind: 'work' as const, status: 'done' as const,
+    }));
+    const result = interpretPlan(JSON.stringify({ blocks: Array.from({ length: 3 }, () => ({ slotId: 'slot', taskId: 't', minutes: 60, kind: 'work' })) }), [slot], [{ id: 't', task }], retained);
+    expect(result.blocks.map(({ start, end }) => [start, end])).toEqual([['15:10', '15:30'], ['16:10', '17:00']]);
+    expect(result.dropped).toBe(1);
+  });
+
+  it('reserves a block marked done while the model is pending', async () => {
+    const f = fixture();
+    const id = f.addTask('Essay', { dueDate: '2026-11-06' });
+    const slot = planSlots(exampleSchedule, personal, MONDAY, '07:00').find(slot => slot.kind === 'after')!;
+    f.db.prepare(`INSERT INTO ai_plan_blocks(owner_id,id,date,start,end,slot_kind,slot_label,task_id,title,kind,minutes,status,created_at,updated_at)
+      VALUES(?,'existing',?,?,?,'after','After school',?,'Existing','work',30,'planned',?,?)`).run(f.student, slot.date, slot.start, '12:35', id, NOW.toISOString(), NOW.toISOString());
+    f.fetcher.mockImplementation(async () => {
+      await Promise.resolve();
+      f.plan.mark(f.student, { blockId: 'existing', status: 'done' });
+      return reply({ blocks: [{ slotId: slot.id, taskId: id, minutes: 60, kind: 'work' }] });
+    });
+    const result = await f.plan.make(f.student);
+    expect(result.blocks.find(block => block.id === 'existing')?.status).toBe('done');
+    expect(result.blocks.find(block => block.status === 'planned')?.start).toBe('12:35');
+  });
+
   it('offers free periods and after school on open days, never a class, lunch or a weekend', () => {
     const slots = planSlots(exampleSchedule, personal, MONDAY, '07:00');
     expect(new Set(slots.map((slot) => slot.date))).toEqual(new Set(['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']));

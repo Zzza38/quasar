@@ -294,3 +294,39 @@ describe('SCHOOLOGY_API_URL', () => {
     }
   });
 });
+
+it('serializes goal validation and persistence across service instances', async () => {
+  const f = world();
+  const user = f.member('4242');
+  const original = f.fetcher.getMockImplementation()!;
+  let release!: () => void;
+  let started!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  f.fetcher.mockImplementation(async (url, init) => {
+    if (new URL(url).pathname.endsWith('/grades')) { started(); await pending; }
+    return original(url, init);
+  });
+  const first = f.schoology.setGoal(user, { sectionId: '11', goal: { kind: 'percent', percent: 80 } });
+  await entered;
+  const otherService = new SchoologyService(f.service, { config, fetcher: schoologyServer(), secret: SECRET, inBeta: () => true, gradebooks: { done: new Map(), reading: new Map() } });
+  const second = otherService.setGoal(user, { sectionId: '11', goal: { kind: 'percent', percent: 95 } });
+  await Promise.resolve();
+  expect(f.rows()).toEqual([]);
+  release();
+  await Promise.all([first, second]);
+  expect(JSON.parse(f.rows()[0].goal!)).toEqual({ kind: 'percent', percent: 95 });
+});
+
+it('rejects goal writes after replacing the connection with the same Schoology id', async () => {
+  const f = world();
+  const user = f.member('4242');
+  const original = f.fetcher.getMockImplementation()!;
+  f.fetcher.mockImplementation(async (url, init) => {
+    const response = await original(url, init);
+    if (new URL(url).pathname.endsWith('/grades')) f.db.prepare('UPDATE schoology_connections SET token_encrypted=token_encrypted WHERE user_id=?').run(user);
+    return response;
+  });
+  await expect(f.schoology.setGoal(user, { sectionId: '11', goal: { kind: 'percent', percent: 95 } })).rejects.toMatchObject({ code: 'CONFLICT' });
+  expect(f.rows()).toEqual([]);
+});

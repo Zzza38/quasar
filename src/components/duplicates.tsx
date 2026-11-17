@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
+import { accountStore } from '@/client/account-store';
 import { AI_BETA, AI_DEDUP_RECENT_DAYS } from '@/domain/ai';
 import type { Task } from '@/domain/task';
-import { MERGE_MAX, mergeTasks, pickKeep } from '@/domain/task-merge';
+import { MERGE_MAX, mergeBlocked, mergeTasks, pickKeep } from '@/domain/task-merge';
 import { addDays, chatTime, classColor, formatTime, relativeDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { sortByDue, taskItems, type AppState, type TaskItem } from './app-state';
-import { useBeta } from './betas';
+import { useBeta, useBetaAccount } from './betas';
 import { Icon } from './icon';
 import { Button, Callout, ColorDot, Hint, Input, Modal, Segmented, Select } from './primitives';
 import { Checkbox } from './ui/checkbox';
@@ -26,16 +27,21 @@ export type DuplicatesTab = 'find' | 'history';
 
 /** What the automatic check did in this tab: merges to point out, and groups it wasn't sure enough to merge. */
 type AutoDedupState = { merged: MergeEntry[]; groups: Group[]; error: string };
-let autoDedup: AutoDedupState = { merged: [], groups: [], error: '' };
-const listeners = new Set<() => void>();
-const setAutoDedup = (next: Partial<AutoDedupState>) => { autoDedup = { ...autoDedup, ...next }; listeners.forEach((listener) => listener()); };
-export const useAutoDedup = () => useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => autoDedup, () => autoDedup);
+const dedupStore = accountStore<AutoDedupState>(() => ({ merged: [], groups: [], error: '' }));
+const setAutoDedup = dedupStore.update;
+export const useAutoDedup = () => {
+  const account = useBetaAccount();
+  dedupStore.select(account?.accountId ?? null);
+  return useSyncExternalStore(dedupStore.subscribe, dedupStore.get, dedupStore.get);
+};
 /** Longer than auto-sort's wait, so a calendar refresh that adds several tasks is one check. */
 const AUTO_DEDUP_DELAY_MS = 4000;
 
 /** One per signed-in app (tracker.tsx). The server only asks the model when a task is new or edited since its last check. */
 export function AiAutoDedup({ state }: { state: AppState }) {
   const beta = useBeta(AI_BETA);
+  useAutoDedup();
+  const accountId = state.context.user.id;
   const latest = useRef(state);
   latest.current = state;
   const key = useMemo(() => taskItems(state.snapshot.entities).map((item) => item.id).sort().join(','), [state.snapshot.entities]);
@@ -43,16 +49,17 @@ export function AiAutoDedup({ state }: { state: AppState }) {
   useEffect(() => {
     if (!enabled || !key) return;
     let cancelled = false;
+    const current = dedupStore.capture();
     const timer = setTimeout(() => void (async () => {
       try {
-        const result = await api.ai.duplicates.mutate({ accountId: latest.current.context.user.id, auto: true });
-        if (cancelled || !result.checked) return;
-        setAutoDedup({ merged: [...result.merged, ...autoDedup.merged], groups: result.groups, error: '' });
+        const result = await api.ai.duplicates.mutate({ accountId, auto: true });
+        if (cancelled || !current() || !result.checked) return;
+        setAutoDedup({ merged: [...result.merged, ...dedupStore.get().merged], groups: result.groups, error: '' });
         if (result.merged.length) await latest.current.refresh();
-      } catch (err) { if (!cancelled) setAutoDedup({ error: errorMessage(err) }); }
+      } catch (err) { if (!cancelled && current()) setAutoDedup({ error: errorMessage(err) }); }
     })(), AUTO_DEDUP_DELAY_MS);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [enabled, key]);
+  }, [enabled, key, accountId]);
   return null;
 }
 
@@ -102,6 +109,7 @@ export function DuplicatesSheet({ state, tab: initialTab, onClose }: { state: Ap
   const [note, setNote] = useState('');
   const [pending, setPending] = useState<string | null>(null);
   const auto = useAutoDedup();
+  const currentAccount = dedupStore.capture();
   const [groups, setGroups] = useState<Group[]>(auto.groups);
   const [checked, setChecked] = useState(false);
   const items = useMemo(() => taskItems(state.snapshot.entities), [state.snapshot.entities]);
@@ -121,13 +129,13 @@ export function DuplicatesSheet({ state, tab: initialTab, onClose }: { state: Ap
     await state.refresh();
     void loadHistory();
     setGroups((current) => current.filter((group) => !group.ids.includes(keepId)));
-    setAutoDedup({ groups: autoDedup.groups.filter((group) => !group.ids.includes(keepId)) });
+    if (currentAccount()) setAutoDedup({ groups: dedupStore.get().groups.filter((group) => !group.ids.includes(keepId)) });
     return `Merged into “${byId.get(keepId)?.task.title ?? 'the kept task'}”. Undo it under History.`;
   });
   const apart = (group: Group) => run(`apart-${group.ids.join()}`, async () => {
     await api.merges.notDuplicates.mutate({ accountId, ids: group.ids });
     setGroups((current) => current.filter((entry) => entry !== group));
-    setAutoDedup({ groups: autoDedup.groups.filter((entry) => entry.ids.join() !== group.ids.join()) });
+    if (currentAccount()) setAutoDedup({ groups: dedupStore.get().groups.filter((entry) => entry.ids.join() !== group.ids.join()) });
   });
   const check = () => run('check', async () => {
     const result = await api.ai.duplicates.mutate({ accountId, auto: false });
@@ -230,6 +238,8 @@ function TaskLine({ item, state }: { item: TaskItem; state: AppState }) {
 function AiGroup({ group, state, byId, pending, onMerge, onApart }: { group: Group; state: AppState; byId: Map<string, TaskItem>; pending: string | null; onMerge: (keepId: string) => void; onApart: () => void }) {
   const [keepId, setKeepId] = useState(group.keepId);
   const members = group.ids.map((id) => byId.get(id)!);
+  const keep = members.find(item => item.id === keepId)!;
+  const blocked = mergeBlocked(mergeTasks(keep.task, members.filter(item => item !== keep).map(item => item.task)));
   return <li className="grid gap-2 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
     {group.reason && <Hint>{group.reason}</Hint>}
     <ul className="grid gap-1">{members.map((item) => <li key={item.id} className="flex items-start justify-between gap-3 rounded-xl bg-card px-3 py-2">
@@ -237,8 +247,9 @@ function AiGroup({ group, state, byId, pending, onMerge, onApart }: { group: Gro
       {item.id === keepId ? <span className="shrink-0 rounded-md bg-primary-soft px-1.5 py-0.5 text-xs font-bold text-primary-soft-foreground">Keep</span>
         : <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setKeepId(item.id)}>Keep this<span className="sr-only">: {item.task.title}</span></Button>}
     </li>)}</ul>
+    {blocked && <Hint tone="danger" role="alert">{blocked}</Hint>}
     <div className="flex flex-wrap gap-2">
-      <Button size="sm" variant="primary" busy={pending === `merge-${group.ids.join()}`} disabled={!state.online || pending !== null} onClick={() => onMerge(keepId)}>Merge</Button>
+      <Button size="sm" variant="primary" busy={pending === `merge-${group.ids.join()}`} disabled={!!blocked || !state.online || pending !== null} onClick={() => onMerge(keepId)}>Merge</Button>
       <Button size="sm" variant="ghost" disabled={!state.online || pending !== null} onClick={onApart}>Not duplicates</Button>
     </div>
   </li>;
@@ -252,7 +263,9 @@ function ManualMerge({ state, items, pending, onMerge }: { state: AppState; item
   const chosen = picked.map((id) => candidates.find((item) => item.id === id)).filter((item): item is TaskItem => !!item);
   const keep = chosen.find((item) => item.id === keepChoice) ?? (chosen.length ? pickKeep(chosen) : null);
   const others = chosen.filter((item) => item !== keep);
-  const summary = keep && others.length ? mergeSummary(keep.task, mergeTasks(keep.task, others.map((item) => item.task))) : '';
+  const merged = keep && others.length ? mergeTasks(keep.task, others.map(item => item.task)) : null;
+  const blocked = merged ? mergeBlocked(merged) : '';
+  const summary = keep && merged ? mergeSummary(keep.task, merged) : '';
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   // Picked tasks stay listed while the search changes.
   const shown = candidates.filter((item) => picked.includes(item.id) || words.every((word) => item.task.title.toLowerCase().includes(word))).slice(0, 60);
@@ -279,9 +292,10 @@ function ManualMerge({ state, items, pending, onMerge }: { state: AppState; item
         <Select id="merge-keep" small className="w-auto max-w-full" value={keep.id} onChange={(event) => setKeepChoice(event.target.value)}>
           {chosen.map((item) => <option key={item.id} value={item.id}>{item.task.title}{item.task.imported ? ' (calendar)' : ''}</option>)}
         </Select></div>
+      {blocked && <Hint tone="danger" role="alert">{blocked}</Hint>}
       <Hint>{others.length === 1 ? 'The other task is' : `The other ${others.length} tasks are`} deleted.{summary ? ` Copied over: ${summary}.` : ''}{keep.task.imported ? ' The kept task keeps updating from its calendar.' : ''}</Hint>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="primary" busy={pending === 'manual'} disabled={!state.online || pending !== null} onClick={() => void onMerge(keep.id, chosen.map((item) => item.id)).then((merged) => { if (merged) { setPicked([]); setKeepChoice(null); } })}>Merge {chosen.length} tasks</Button>
+        <Button size="sm" variant="primary" busy={pending === 'manual'} disabled={!!blocked || !state.online || pending !== null} onClick={() => void onMerge(keep.id, chosen.map((item) => item.id)).then((merged) => { if (merged) { setPicked([]); setKeepChoice(null); } })}>Merge {chosen.length} tasks</Button>
         <Button size="sm" variant="ghost" disabled={pending !== null} onClick={() => { setPicked([]); setKeepChoice(null); }}>Clear</Button>
       </div>
     </div>}

@@ -1,4 +1,4 @@
-import { taskSchema, type Task } from './task';
+import type { Task } from './task';
 
 /**
  * Merging duplicate tasks (src/server/merges.ts): one task is kept and the rest are folded into it and deleted.
@@ -49,8 +49,12 @@ export function mergeTasks(keep: Task, others: Task[]): Task {
     }
     if (other.completed && !merged.completed) Object.assign(merged, { completed: true, ...(other.completedAt ? { completedAt: other.completedAt } : {}) });
   }
-  merged.notes = merged.notes.slice(0, 10000);
-  if (merged.subtasks) merged.subtasks = merged.subtasks.slice(0, 100);
-  const parsed = taskSchema.safeParse(merged);
-  return parsed.success ? parsed.data : keep;
+  return merged;
+}
+
+/** Shared by the preview and server before any source task can be deleted. */
+export function mergeBlocked(task: Task): string {
+  if (task.notes.length > 10000) return 'These notes exceed the 10,000 character limit. Shorten them before merging.';
+  if ((task.subtasks?.length ?? 0) > 100) return 'These tasks have more than 100 checklist steps. Remove steps before merging.';
+  return '';
 }

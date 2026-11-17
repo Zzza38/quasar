@@ -30,6 +30,32 @@ function fixture() {
 }
 
 describe('Merging tasks', () => {
+  it.each(['notes', 'steps'])('rejects overflowing %s without writing or deleting anything', field => {
+    const f = fixture();
+    const steps = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => ({ id: randomUUID(), title: `${prefix}${i}`, completed: false }));
+    f.put('a', field === 'notes' ? { notes: 'a'.repeat(6000) } : { subtasks: steps('a', 80) });
+    f.put('b', field === 'notes' ? { notes: 'b'.repeat(6000) } : { subtasks: steps('b', 40) });
+    const before = [f.read('a'), f.read('b')];
+    expect(() => f.merges.merge(f.student, { keepId: 'a', removeIds: ['b'] })).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }));
+    expect([f.read('a'), f.read('b')]).toEqual(before);
+    expect(f.db.prepare('SELECT count(*) n FROM task_merges').get()).toEqual({ n: 0 });
+  });
+
+  it('leaves an automatic over-capacity group for review without losing any checklist steps', async () => {
+    const f = fixture();
+    f.put('a', { title: 'Lab', subtasks: Array.from({ length: 80 }, (_, i) => ({ id: randomUUID(), title: `a${i}`, completed: false })) });
+    f.put('b', { title: 'Lab', subtasks: Array.from({ length: 40 }, (_, i) => ({ id: randomUUID(), title: `b${i}`, completed: false })) });
+    const fetcher = vi.fn<AiFetch>(async () => reply({ groups: [{ ids: ['a', 'b'], sure: true, reason: 'Same lab' }] }));
+    const ai = new AiService(f.service, { config: server, fetcher, inBeta: () => true, codex: null });
+    const result = await ai.duplicates(f.student, { auto: true });
+    expect(result.merged).toEqual([]);
+    expect(result.groups).toHaveLength(1);
+    expect(f.read('a').deleted).toBe(false);
+    expect(f.read('b').deleted).toBe(false);
+    expect(f.read('a').data.subtasks).toHaveLength(80);
+    expect(f.read('b').data.subtasks).toHaveLength(40);
+  });
+
   it.each(['deleted', 'changed'])('skips only a %s duplicate group after the model wait', async mutation => {
     const f = fixture();
     for (const id of ['a', 'b', 'c', 'd']) f.put(id, { title: 'Lab' });

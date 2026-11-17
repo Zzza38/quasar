@@ -87,16 +87,21 @@ export class PlanService {
     const estimates = this.storedEstimates(userId, tasks);
     const body = await this.ai.ask(userId, 'ai.plan', { schema: PLAN_SCHEMA, system: PLAN_SYSTEM, prompt: planPrompt({ today, nowTime, personal, slots, tasks, kinds, estimates, kept, missed }), deadlineMs: PLAN_DEADLINE_MS,
       detail: { tasks: tasks.length, slots: slots.length } });
-    const { blocks, dropped } = interpretPlan(body, slots, tasks, kept);
+    let dropped = 0;
     const at = this.now().toISOString();
     const insert = this.db.prepare(`INSERT INTO ai_plan_blocks(owner_id,id,date,start,end,slot_kind,slot_label,task_id,title,kind,minutes,status,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,'planned',?,?)`);
     this.db.transaction(() => {
+      const retained = (this.db.prepare("SELECT * FROM ai_plan_blocks WHERE owner_id=? AND status!='planned' AND date>=?").all(userId, addDays(today, -KEEP_DAYS)) as BlockRow[]).map(toBlock);
+      const currentTasks = new Set(this.openTasks(userId, today).map(task => task.id));
+      const result = interpretPlan(body, slots, tasks.filter(task => currentTasks.has(task.id)), retained);
+      const blocks = result.blocks;
+      dropped = result.dropped;
       this.db.prepare("DELETE FROM ai_plan_blocks WHERE owner_id=? AND (status='planned' OR date<?)").run(userId, addDays(today, -KEEP_DAYS));
       for (const block of blocks) insert.run(userId, block.id, block.date, block.start, block.end, block.slotKind, block.slotLabel, block.taskId, block.title, block.kind, block.minutes, at, at);
       this.db.prepare(`INSERT INTO ai_plans(owner_id,start_date,end_date,created_at) VALUES(?,?,?,?)
         ON CONFLICT(owner_id) DO UPDATE SET start_date=excluded.start_date, end_date=excluded.end_date, created_at=excluded.created_at`).run(userId, today, addDays(today, PLAN_DAYS - 1), at);
-    })();
+    }).immediate();
     return { ...this.get(userId), dropped };
   }
 
@@ -187,11 +192,15 @@ export function interpretPlan(body: string, slots: PlanSlot[], tasks: PlanTask[]
   if (!parsed.success) fail('SERVICE_UNAVAILABLE', 'The AI answered in an unexpected format. Try again.');
   const slotById = new Map(slots.map((slot) => [slot.id, slot]));
   const taskById = new Map(tasks.map((entry) => [entry.id, entry.task]));
-  const used = new Map<string, number>();
-  for (const block of kept) {
-    const slot = slots.find((entry) => entry.date === block.date && entry.start <= block.start && block.start < entry.end);
-    if (slot) used.set(slot.id, Math.min(slot.minutes, (used.get(slot.id) ?? 0) + block.minutes));
-  }
+  const free = new Map(slots.map(slot => {
+    let intervals = [[toMinutes(slot.start), toMinutes(slot.end)]];
+    for (const block of kept.filter(block => block.date === slot.date)) {
+      const start = toMinutes(block.start), end = toMinutes(block.end);
+      intervals = intervals.flatMap(([a, b]) => end <= a || start >= b ? [[a, b]] :
+        [...(start > a ? [[a, start]] : []), ...(end < b ? [[end, b]] : [])]);
+    }
+    return [slot.id, intervals] as const;
+  }));
   const blocks: PlanBlock[] = [];
   let dropped = 0;
   for (const candidate of parsed.data!.blocks) {
@@ -199,13 +208,17 @@ export function interpretPlan(body: string, slots: PlanSlot[], tasks: PlanTask[]
     const slot = row.success ? slotById.get(row.data.slotId) : undefined;
     const task = row.success ? taskById.get(row.data.taskId) : undefined;
     if (!row.success || !slot || !task || blocks.length >= PLAN_BLOCKS_MAX) { dropped += 1; continue; }
-    const taken = used.get(slot.id) ?? 0;
-    const room = Math.min(BLOCK_MAX_MINUTES, slot.minutes - taken);
+    const intervals = free.get(slot.id)!;
+    const interval = intervals.find(([start, end]) => end - start >= BLOCK_MIN_MINUTES &&
+      beforeDue({ date: slot.date, end: toTime(start + BLOCK_MIN_MINUTES) }, task.dueDate, task.dueTime));
+    if (!interval) { dropped += 1; continue; }
+    const start = interval[0];
+    const dueEnd = slot.date === task.dueDate && task.dueTime ? toMinutes(task.dueTime) : interval[1];
+    const room = Math.min(BLOCK_MAX_MINUTES, interval[1] - start, dueEnd - start);
     const minutes = Math.min(room, Math.max(BLOCK_MIN_MINUTES, Math.round(row.data.minutes / 5) * 5));
-    const start = toMinutes(slot.start) + taken;
     const end = toTime(start + minutes);
-    if (room < BLOCK_MIN_MINUTES || !beforeDue({ date: slot.date, end }, task.dueDate, task.dueTime)) { dropped += 1; continue; }
-    used.set(slot.id, taken + minutes);
+    if (minutes < BLOCK_MIN_MINUTES || !beforeDue({ date: slot.date, end }, task.dueDate, task.dueTime)) { dropped += 1; continue; }
+    interval[0] += minutes;
     const fallback = `${row.data.kind === 'review' ? 'Review for' : 'Work on'} ${oneLine(task.title)}`;
     blocks.push({ id: randomUUID(), date: slot.date, start: toTime(start), end, slotKind: slot.kind, slotLabel: slot.label, taskId: row.data.taskId,
       title: (oneLine(row.data.title ?? '') || fallback).slice(0, 80), kind: row.data.kind, minutes, status: 'planned' });

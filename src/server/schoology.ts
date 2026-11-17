@@ -27,6 +27,7 @@ const REQUEST_DEADLINE_MS = 15_000;
 /** Total network budget for one member, including paginated reads and turn-in checks. */
 export const SCHOOLOGY_MEMBER_DEADLINE_MS = 2 * 60_000;
 const syncSignal = new AsyncLocalStorage<AbortSignal>();
+const goalQueues = new WeakMap<object, Map<string, Promise<unknown>>>();
 /** Graded sections missing from the member's section list that are looked up by id, per grade load. */
 const MISSING_SECTION_LOOKUPS = 10;
 /** How often the section index may be rebuilt while some imported task's assignment is still unknown. */
@@ -81,7 +82,7 @@ export const sectionClassSchema = z.object({ sectionId: z.string().regex(/^\d{1,
 type RawSection = { id?: unknown; course_title?: unknown; section_title?: unknown };
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 
-type FailCode = 'BAD_REQUEST' | 'FORBIDDEN' | 'PRECONDITION_FAILED' | 'SERVICE_UNAVAILABLE' | 'UNAUTHORIZED';
+type FailCode = 'CONFLICT' | 'BAD_REQUEST' | 'FORBIDDEN' | 'PRECONDITION_FAILED' | 'SERVICE_UNAVAILABLE' | 'UNAUTHORIZED';
 const fail = (code: FailCode, message: string): never => { throw new TRPCError({ code, message }); };
 
 export type SchoologyFetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -192,19 +193,27 @@ export class SchoologyService {
     return token && secret ? { token, secret } : fail('SERVICE_UNAVAILABLE', 'Schoology didn’t send a token back. Try again.');
   }
   private async json(userId: string, path: string, token: Token): Promise<unknown> {
+    const generation = this.connection(userId)?.generation;
     const response = await this.call(`${this.api}/${path}`, token);
     if (response.status === 403) fail('FORBIDDEN', 'Schoology did not permit this request.');
     if (response.status === 401) {
-      this.db.prepare('DELETE FROM schoology_connections WHERE user_id=?').run(userId);
-      this.forgetGradebook(userId);
+      const current = this.connection(userId);
+      if (current && current.generation === generation && JSON.stringify(this.token(userId, current)) === JSON.stringify(token)) {
+        this.db.prepare('DELETE FROM schoology_connections WHERE user_id=? AND generation=?').run(userId, current.generation);
+        this.forgetGradebook(userId);
+      }
       fail('UNAUTHORIZED', 'Schoology no longer lets Quasar in. Connect it again.');
     }
     if (!response.ok) { console.error(`[schoology] ${path.split('?')[0].replace(/\d+/g, ':id')} returned HTTP ${response.status}`); fail('SERVICE_UNAVAILABLE', 'Schoology didn’t answer. Try again in a minute.'); }
     return response.json().catch(() => fail('SERVICE_UNAVAILABLE', 'Schoology sent something Quasar couldn’t read.'));
   }
   private connection(userId: string) {
-    return this.db.prepare('SELECT token_encrypted, schoology_uid, name, connected_at, synced_at, import_assignments, auto_complete FROM schoology_connections WHERE user_id=?').get(userId) as
-      { token_encrypted: string; schoology_uid: string; name: string; connected_at: string; synced_at: string | null; import_assignments: number; auto_complete: number } | undefined;
+    return this.db.prepare('SELECT token_encrypted, schoology_uid, name, connected_at, synced_at, import_assignments, auto_complete, generation FROM schoology_connections WHERE user_id=?').get(userId) as
+      { token_encrypted: string; schoology_uid: string; name: string; connected_at: string; synced_at: string | null; import_assignments: number; auto_complete: number; generation: string } | undefined;
+  }
+
+  private currentConnection(userId: string, generation: string): boolean {
+    return this.connection(userId)?.generation === generation;
   }
 
   status(userId: string) {
@@ -469,9 +478,22 @@ export class SchoologyService {
   async setGoal(userId: string, raw: z.input<typeof gradeGoalInputSchema>): Promise<{ sectionId: string } & SavedGoal> {
     this.requireBeta(userId);
     const input = gradeGoalInputSchema.parse(raw);
+    const generation = this.connection(userId)?.generation ?? fail('BAD_REQUEST', 'Connect Schoology first.');
+    let queues = goalQueues.get(this.db);
+    if (!queues) { queues = new Map(); goalQueues.set(this.db, queues); }
+    const key = `${userId}\0${input.sectionId}`;
+    const pending = (queues.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.saveGoal(userId, input, generation));
+    queues.set(key, pending);
+    try { return await pending; }
+    finally { if (queues.get(key) === pending) queues.delete(key); }
+  }
+
+  private async saveGoal(userId: string, input: z.infer<typeof gradeGoalInputSchema>, generation: string): Promise<{ sectionId: string } & SavedGoal> {
     const row = this.connection(userId) ?? fail('BAD_REQUEST', 'Connect Schoology first.');
+    if (row.generation !== generation) fail('CONFLICT', 'The Schoology connection changed. Refresh and try again.');
     const mine = (await this.cachedGradebook(userId, row, false)).classes.find(entry => entry.detail.sectionId === input.sectionId)?.detail
       ?? fail('FORBIDDEN', 'That class isn’t in your Schoology grades. Refresh and try again.');
+    if (!this.currentConnection(userId, generation)) fail('CONFLICT', 'The Schoology connection changed. Refresh and try again.');
     const plan = input.plan;
     if (plan?.kind === 'item' && !mine.items.some(item => item.id === plan.id) && !mine.exams.some(exam => exam.id === plan.id)) fail('BAD_REQUEST', 'That assignment isn’t in this class any more. Pick another one.');
     if (plan?.kind === 'extra' && !mine.categories.some(category => category.id === plan.categoryId)) fail('BAD_REQUEST', 'That category isn’t in this class any more. Pick another one.');
@@ -488,10 +510,12 @@ export class SchoologyService {
    * Which section every assignment and event the member can see belongs to, read section by section (Schoology has no
    * lookup by assignment id). A section that refuses (403) or fails is skipped; it never disconnects the member.
    */
-  private async index(userId: string, row: { schoology_uid: string; token_encrypted: string }): Promise<void> {
+  private async index(userId: string, row: { schoology_uid: string; token_encrypted: string; generation: string }): Promise<void> {
     const token = this.token(userId, row);
     const items = new Map<string, string>();
-    for (const id of this.rememberSections(userId, (await this.gradesAndSections(userId, row, token, true)).sections)) {
+    const { sections } = await this.gradesAndSections(userId, row, token, true);
+    if (!this.currentConnection(userId, row.generation)) return;
+    for (const id of this.rememberSections(userId, sections)) {
       for (const entry of await this.pages(`${this.api}/sections/${id}/events?limit=200`, 'event', token)) {
         if (/^\d{1,20}$/.test(String(entry.id))) items.set(`event:${entry.id}`, id);
         if (/^\d{1,20}$/.test(String(entry.assignment_id ?? ''))) items.set(`assignment:${entry.assignment_id}`, id);
@@ -501,6 +525,7 @@ export class SchoologyService {
       }
     }
     syncSignal.getStore()?.throwIfAborted();
+    if (!this.currentConnection(userId, row.generation)) return;
     this.rememberItems(userId, items);
     this.db.prepare('UPDATE schoology_connections SET indexed_at=? WHERE user_id=?').run(this.now().toISOString(), userId);
   }
@@ -548,14 +573,14 @@ export class SchoologyService {
    * nothing outside the beta or without a connection, so the worker can call it for anyone.
    */
   async tagClasses(userId: string): Promise<{ tagged: number }> {
-    const row = this.db.prepare('SELECT token_encrypted, schoology_uid, indexed_at FROM schoology_connections WHERE user_id=?').get(userId) as { token_encrypted: string; schoology_uid: string; indexed_at: string | null } | undefined;
+    const row = this.db.prepare('SELECT token_encrypted, schoology_uid, indexed_at, generation FROM schoology_connections WHERE user_id=?').get(userId) as { token_encrypted: string; schoology_uid: string; indexed_at: string | null; generation: string } | undefined;
     if (!row || !this.config() || !this.inBeta(userId)) return { tagged: 0 };
     const pending = this.untagged(userId);
     if (pending.length === 0) return { tagged: 0 };
     const known = this.db.prepare('SELECT 1 FROM schoology_items WHERE user_id=? AND item_key=?');
     const stale = !row.indexed_at || this.now().getTime() - Date.parse(row.indexed_at) >= SCHOOLOGY_INDEX_EVERY_MS;
     if (stale && pending.some(task => !known.get(userId, task.key))) await this.index(userId, row);
-    return { tagged: this.applyTags(userId) };
+    return { tagged: this.currentConnection(userId, row.generation) ? this.applyTags(userId) : 0 };
   }
 
   private applyTags(userId: string): number {
@@ -642,6 +667,7 @@ export class SchoologyService {
       const fetched: Fetched[] = [];
       const events: { sectionId: string; event: SchoologyEvent }[] = [];
       const { grades, sections } = await this.gradesAndSections(userId, row, token, true);
+      if (!this.currentConnection(userId, row.generation)) return { changed };
       const graded = new Set<string>();
       for (const section of (grades as { section?: { period?: { assignment?: { assignment_id?: unknown; grade?: unknown }[] }[] }[] })?.section ?? []) {
         for (const item of (section.period ?? []).flatMap(period => period.assignment ?? [])) if (item.grade !== null && item.grade !== undefined && item.grade !== '') graded.add(String(item.assignment_id));
@@ -655,15 +681,17 @@ export class SchoologyService {
         }
       }
       syncSignal.getStore()?.throwIfAborted();
+      if (!this.currentConnection(userId, row.generation)) return { changed };
       this.rememberItems(userId, new Map(fetched.map(entry => [`assignment:${entry.assignment.id}`, entry.sectionId])));
       if (row.import_assignments === 1) {
         this.rememberItems(userId, new Map(events.map(entry => [`event:${entry.event.id}`, entry.sectionId])));
         changed += this.importAssignments(userId, fetched, graded);
         changed += this.importAssignments(userId, events.map(({ sectionId, event }) => ({ sectionId, assignment: event })), new Set(), true);
       }
-      if (row.auto_complete === 1) changed += await this.checkTurnIns(userId, row.schoology_uid, fetched, token);
+      if (row.auto_complete === 1) changed += await this.checkTurnIns(userId, row.schoology_uid, fetched, token, row.generation);
     }
     syncSignal.getStore()?.throwIfAborted();
+    if (!this.currentConnection(userId, row.generation)) return { changed };
     changed += (await this.tagClasses(userId)).tagged;
     return { changed };
   }
@@ -735,7 +763,7 @@ export class SchoologyService {
    * is acted on once: a task the member reopens stays open. Checks at most SUBMISSION_CHECKS dropboxes, soonest due
    * first, among tasks due from SCHOOLOGY_IMPORT_PAST_DAYS ago to SUBMISSION_AHEAD_DAYS ahead or with no due date.
    */
-  private async checkTurnIns(userId: string, uid: string, fetched: Fetched[], token: Token): Promise<number> {
+  private async checkTurnIns(userId: string, uid: string, fetched: Fetched[], token: Token, generation: string): Promise<number> {
     const today = this.now().toISOString().slice(0, 10);
     const from = dayOffset(today, -SCHOOLOGY_IMPORT_PAST_DAYS), to = dayOffset(today, SUBMISSION_AHEAD_DAYS);
     const byId = new Map(fetched.map(entry => [String(entry.assignment.id), entry]));
@@ -758,7 +786,9 @@ export class SchoologyService {
     for (const key of keys) {
       const { sectionId, assignment } = byId.get(key.slice('assignment:'.length))!;
       const response = await this.call(`${this.api}/sections/${sectionId}/submissions/${assignment.grade_item_id}/${uid}`, token).catch(() => null);
-      if (!response?.ok || !turnedIn(await response.json().catch(() => null))) continue;
+      const submitted = response?.ok && turnedIn(await response.json().catch(() => null));
+      if (!this.currentConnection(userId, generation)) return changed;
+      if (!submitted) continue;
       syncSignal.getStore()?.throwIfAborted();
       changed += this.db.transaction(() => {
         this.db.prepare(`INSERT INTO schoology_items(user_id,item_key,section_id,submitted) VALUES(?,?,?,1)

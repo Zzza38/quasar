@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
-import { AiService, CodexError, aiConfig, decryptKey, interpretSort, ownerCodexConfig, type AiConfig, type AiFetch, type CodexConfig, type CodexRun } from './ai';
+import { AiService, CodexError, runCodex, aiConfig, decryptKey, interpretSort, ownerCodexConfig, type AiConfig, type AiFetch, type CodexConfig, type CodexRun } from './ai';
 import { AI_BREAKDOWN_DAILY_LIMIT, AI_HOURLY_LIMIT, AI_PROVIDERS, AI_SORT_DAILY_LIMIT } from '@/domain/ai';
 import { exampleSchedule } from '@/domain/example';
 import { emptyPersonalSchedule, type PersonalSchedule } from '@/domain/schedule';
@@ -252,4 +255,14 @@ describe('AI task helpers', () => {
     expect(sentBody(fetcher, 1).messages[1].content).toContain('Unit 2 Test');
     expect(sentBody(fetcher, 1).messages[1].content).not.toContain('Vocab check');
   });
+});
+
+it('handles a real child exiting before it reads the prompt', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'quasar-epipe-test-'));
+  try {
+    const bin = join(dir, 'exit-immediately');
+    await writeFile(bin, '#!/bin/sh\nexit 7\n', { mode: 0o700 });
+    await expect(runCodex({ bin, home: dir, model: 'test', reasoning: 'low' }, 'x'.repeat(4_000_000), {}, 5000))
+      .rejects.toMatchObject({ kind: 'failed' });
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

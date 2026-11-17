@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
+import { accountStore } from '@/client/account-store';
 import { AI_BETA } from '@/domain/ai';
 import { workLocationOf } from '@/domain/task-work';
 import { PLAN_DAYS, PLAN_LOOKAHEAD_DAYS, PLAN_TASKS_MAX, crunchDays, formatLoad, isMissed, type PlanBlock } from '@/domain/plan';
@@ -24,23 +25,34 @@ type Plan = RouterOutput['plan']['get'];
 
 /** One small store for the AI status, the plan and the estimates, shared by every view in the tab. */
 type Store = { status: AiStatus | null; plan: Plan | null; planError: string; estimates: ReadonlyMap<string, number | null>; estimateError: string };
-let store: Store = { status: null, plan: null, planError: '', estimates: new Map(), estimateError: '' };
-const listeners = new Set<() => void>();
-const update = (next: Partial<Store>) => { store = { ...store, ...next }; listeners.forEach((listener) => listener()); };
-const useStore = () => useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => store, () => store);
-
+const planStore = accountStore<Store>(() => ({ status: null, plan: null, planError: '', estimates: new Map(), estimateError: '' }));
+const update = planStore.update;
 let statusLoad: Promise<void> | null = null;
+const useStore = () => {
+  const account = useBetaAccount();
+  const previous = planStore.get();
+  if (planStore.select(account?.accountId ?? null) !== previous) statusLoad = null;
+  return useSyncExternalStore(planStore.subscribe, planStore.get, planStore.get);
+};
 const loadStatus = (force = false) => {
-  if (!statusLoad || force) statusLoad = api.ai.status.query().then((status) => update({ status: status.beta ? status : null }), () => { statusLoad = null; });
+  const current = planStore.capture();
+  if (!statusLoad || force) statusLoad = api.ai.status.query().then((status) => {
+    if (current()) update({ status: status.beta ? status : null });
+  }, () => { if (current()) statusLoad = null; });
   return statusLoad;
 };
-const loadPlan = () => api.plan.get.query().then((plan) => update({ plan, planError: '' }), (err) => update({ planError: errorMessage(err) }));
+const loadPlan = () => {
+  const current = planStore.capture();
+  return api.plan.get.query().then((plan) => { if (current()) update({ plan, planError: '' }); },
+    (err) => { if (current()) update({ planError: errorMessage(err) }); });
+};
 
 /** The AI is on for this member: in the beta, and something to run it on. */
 function useAiReady(): AiStatus | null {
   const beta = useBeta(AI_BETA);
+  const account = useBetaAccount();
   const { status } = useStore();
-  useEffect(() => { if (beta) void loadStatus(); }, [beta]);
+  useEffect(() => { if (beta) void loadStatus(); }, [beta, account?.accountId]);
   return beta && status?.available ? status : null;
 }
 
@@ -79,19 +91,22 @@ function useEstimates(state: AppState, enabled: boolean) {
   useEffect(() => {
     if (!enabled || !key || !account?.online) return;
     let cancelled = false;
+    const current = planStore.capture();
     const timer = setTimeout(() => void (async () => {
       const batch = missing.slice(0, PLAN_TASKS_MAX);
       try {
         const { minutes } = await api.plan.estimate.mutate({ accountId: account.accountId, tasks: batch.map(({ id, task }) => ({ id, title: task.title, notes: task.notes, classId: task.classId, dueDate: task.dueDate })) });
-        const next = new Map(store.estimates);
+        if (cancelled || !current()) return;
+        const next = new Map(planStore.get().estimates);
         for (const item of batch) next.set(estimateKey(item), minutes[item.id] ?? null);
         update({ estimates: next, estimateError: '' });
         void loadStatus(true);
       } catch (err) {
         // Not asked again in this tab: a used-up quota would otherwise retry on every render.
-        const next = new Map(store.estimates);
+        if (cancelled || !current()) return;
+        const next = new Map(planStore.get().estimates);
         for (const item of batch) next.set(estimateKey(item), null);
-        if (!cancelled) update({ estimates: next, estimateError: errorMessage(err) });
+        if (!cancelled && current()) update({ estimates: next, estimateError: errorMessage(err) });
       }
     })(), 1200);
     return () => { cancelled = true; clearTimeout(timer); };
@@ -161,7 +176,9 @@ function usePlanState(state: AppState) {
 }
 
 async function makePlan(accountId: string): Promise<string> {
+  const current = planStore.capture();
   const result = await api.plan.make.mutate({ accountId });
+  if (!current()) return '';
   update({ plan: result, planError: '' });
   void loadStatus(true);
   const count = result.blocks.filter((block) => block.status === 'planned').length;
@@ -169,7 +186,9 @@ async function makePlan(accountId: string): Promise<string> {
 }
 
 async function markBlock(accountId: string, blockId: string, status: PlanBlock['status']) {
-  update({ plan: await api.plan.mark.mutate({ accountId, blockId, status }) });
+  const current = planStore.capture();
+  const plan = await api.plan.mark.mutate({ accountId, blockId, status });
+  if (current()) update({ plan });
 }
 
 /** Today: today's study blocks, a missed-block nudge, and the week sheet. The crunch warning sits above it. */

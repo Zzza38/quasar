@@ -529,6 +529,7 @@ export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode })
   // Goals as shown (saved plus edits on their way to the server), the last ones the server confirmed, and edits not yet sent.
   const shown = useRef(goals), confirmed = useRef(goals);
   const unsent = useRef(new Map<string, SavedGoal>()), timers = useRef(new Map<string, number>());
+  const requests = useRef(new Map<string, number>());
   const show = (next: Goals) => { shown.current = next; setGoals(next); };
   const loadRef = useRef<(force?: boolean) => Promise<void>>(async () => undefined);
   const connection = useSchoologyConnection(state, () => void loadRef.current(true));
@@ -568,16 +569,18 @@ export function GradesTab({ state, tabs }: { state: AppState; tabs: ReactNode })
     const generation = receivedGeneration();
     const value = unsent.current.get(sectionId);
     if (!value) return;
+    const request = (requests.current.get(sectionId) ?? 0) + 1;
+    requests.current.set(sectionId, request);
     setGoalNote('saving'); setGoalError('');
     try {
       const saved = await api.schoology.setGoal.mutate({ accountId, sectionId, goal: value.goal, plan: value.plan });
-      if (accountRef.current !== accountId || generation !== receivedGeneration()) return;
+      if (accountRef.current !== accountId || generation !== receivedGeneration() || requests.current.get(sectionId) !== request) return;
       confirmed.current = { ...confirmed.current, [sectionId]: { goal: saved.goal, plan: saved.plan } };
       const cached = readGradeCache(accountId);
       if (cached) writeGradeCache(accountId, { ...cached, goals: confirmed.current });
       if (unsent.current.get(sectionId) === value) { unsent.current.delete(sectionId); setGoalNote('saved'); }
     } catch (err) {
-      if (unsent.current.get(sectionId) !== value) return;
+      if (accountRef.current !== accountId || generation !== receivedGeneration() || requests.current.get(sectionId) !== request || unsent.current.get(sectionId) !== value) return;
       // Back to what the server has, so the page never shows a goal that didn't save.
       unsent.current.delete(sectionId);
       const { [sectionId]: _dropped, ...rest } = shown.current;
