@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * The weekly parent summary (src/server/parent-summary.ts): public, no sign-in, read-only. next.config.ts adds
- * no-store, no-referrer and X-Robots-Tag for /summary/*, and robots.ts keeps crawlers out. The title and link preview
+ * no-store, no-referrer and X-Robots-Tag for /summary/*, so crawlers can read its noindex instruction. The title and link preview
  * are generic on purpose, so a chat app's preview of the link shows no name.
  */
 export const metadata: Metadata = {

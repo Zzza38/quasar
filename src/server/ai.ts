@@ -92,6 +92,8 @@ export const runCodex: CodexRun = async (config, prompt, schema, deadline) => {
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, deadline);
       child.on('error', error => { clearTimeout(timer); reject(error); });
       child.on('close', code => { clearTimeout(timer); resolve({ code, stderr, timedOut }); });
+      // A child can exit before reading the prompt. Its close event still determines the result.
+      child.stdin.on('error', () => {});
       child.stdin.end(prompt);
     });
     if (timedOut) throw new CodexError('timeout', 'Codex took too long.');
