@@ -1,11 +1,15 @@
 import type { Metadata } from 'next';
 import { Tracker } from '@/components/tracker';
-import { SITE_TITLE, structuredData } from '@/server/site';
-import { initialBoot, queryOf, type SearchParams } from './boot';
+import { SITE_NAME, SITE_TITLE, structuredData } from '@/server/site';
+import { bootUserId, initialBoot, queryOf, type SearchParams } from './boot';
 
 // Rendered per request: the session cookie decides between the landing page and the signed-in workspace (see boot.ts).
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: SITE_TITLE };
+export async function generateMetadata(): Promise<Metadata> {
+  // If the session check fails, boot shows a neutral screen while the client retries.
+  const userId = await bootUserId().catch(() => undefined);
+  return { title: userId === null ? SITE_TITLE : SITE_NAME };
+}
 
 /** Today lives at `/`; the other views are served by [view]/page.tsx. */
 export default async function HomePage({ searchParams }: { searchParams: Promise<SearchParams> }) {

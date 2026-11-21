@@ -3,7 +3,6 @@ import { ArrowUpRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export const metadata: Metadata = {
-  title: 'Quasar has moved',
   description: 'Quasar now lives at getquasarapp.com. Sign in with the same Google account to find your saved schedule and tasks.',
   alternates: { canonical: 'https://getquasarapp.com/' },
   robots: { index: false, follow: true },

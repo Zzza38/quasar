@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import type { InitialBoot } from '@/components/use-workspace';
 import { signInErrorMessage, signInReturnPath } from '@/lib/sign-in';
 import { getUserId } from '@/server/auth';
@@ -8,6 +9,9 @@ import { siteOrigin } from '@/server/site';
 
 export type SearchParams = Record<string, string | string[] | undefined>;
 const first = (value: string | string[] | undefined): string | null => (Array.isArray(value) ? value[0] ?? null : value ?? null);
+
+/** Share the validated session between homepage metadata and the first render of the app. */
+export const bootUserId = cache(getUserId);
 
 /** The query string a page was requested with, for the client's route state. */
 export function queryOf(searchParams: SearchParams): string {
@@ -26,7 +30,7 @@ export function queryOf(searchParams: SearchParams): string {
 export async function initialBoot(searchParams: SearchParams): Promise<InitialBoot> {
   const renderedAt = Date.now();
   try {
-    const userId = await getUserId();
+    const userId = await bootUserId();
     if (!userId) {
       return { kind: 'signed-out', signInError: signInErrorMessage(first(searchParams.error)), callbackPath: signInReturnPath(first(searchParams.callbackUrl), siteOrigin()), renderedAt };
     }

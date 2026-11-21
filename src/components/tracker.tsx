@@ -1,11 +1,13 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { usePathname } from 'next/navigation';
 import { api } from '@/client/api';
 import { serviceWorkerEnabled } from '@/client/service-worker-support';
 import { effectiveSchedule, scheduleForGrade, emptyPersonalSchedule, personalScheduleSchema, type PersonalSchedule } from '@/domain/schedule';
 import type { Task } from '@/domain/task';
 import { todayIn } from '@/lib/format';
+import { SITE_NAME, SITE_TITLE } from '@/server/site';
 import { VIEWS, personalSaver, taskItems, type AppState, type View } from './app-state';
 import { DeviceConflicts, SchoolReview } from './conflicts';
 import { Onboarding, SignOutButton } from './onboarding';
@@ -138,6 +140,11 @@ function useHydrated(): boolean {
 export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; initialRoute?: Route }) {
   const session = useWorkspace(initial);
   const route = usePathRoute(initialRoute);
+  const pathname = usePathname();
+  // The session can expire, and the URL can change, without a new document or server metadata.
+  useEffect(() => {
+    document.title = session.authRequired && window.location.pathname === '/' ? SITE_TITLE : SITE_NAME;
+  }, [session.authRequired, pathname]);
   const now = useNow(30_000, initial?.kind === 'workspace' ? initial.renderedAt : undefined);
   const hydrated = useHydrated();
   const { context, snapshot } = session;
