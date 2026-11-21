@@ -7,7 +7,6 @@ import { cn, scrollToId } from '@/lib/utils';
 import type { WorkspaceContext, View } from './app-state';
 import { VIEWS } from './app-state';
 import { viewPath } from '@/lib/routes';
-import { SITE_TITLE } from '@/server/site';
 import { Icon, Spinner, type IconName } from './icon';
 import { ThemePicker } from './theme-picker';
 import { NowCardSetting } from './now-card-setting';
@@ -206,11 +205,10 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
   const displayName = context.user.displayName || 'Your account';
   const conflictsAnchor = () => scrollToId('conflicts', true);
   const retry = () => void session.synchronize();
-  // Keep the workspace tab named Quasar. After a view change (not the first render), move focus to the
-  // view's heading so screen readers announce the page. A dialog or field the view focused itself wins.
+  // Move focus to the heading after a view change so screen readers announce it. Keep focus in a dialog
+  // or field the view focused itself.
   const shownView = useRef<View | null>(null);
   useEffect(() => {
-    document.title = 'Quasar';
     const previous = shownView.current;
     shownView.current = view;
     if (!previous || previous === view) return;
@@ -223,7 +221,6 @@ export function Shell({ session, context, view, navigate, taskCount, chatUnread,
     target.classList.add('outline-none');
     target.focus({ preventScroll: true });
   }, [view]);
-  useEffect(() => () => { document.title = window.location.pathname === '/' ? SITE_TITLE : 'Quasar'; }, []);
 
   const skipToMain = (event: MouseEvent<HTMLAnchorElement>) => {
     // #main is not a route; changing the hash would open Today.

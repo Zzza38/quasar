@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/server/db';
 import { Service } from '../../src/server/service';
 import { exampleSchedule } from '../../src/domain/example';
+import { SITE_NAME, SITE_TITLE } from '../../src/server/site';
 
 function seed() {
   const db = openDatabase(process.env.E2E_DATABASE_PATH!);
@@ -60,12 +61,22 @@ test('the first visit is rendered by the server: the landing page signed out, th
   // Signed out, the HTML itself carries the landing page (no client round trip decides it).
   const anonymous = await page.request.get('/');
   expect(anonymous.ok()).toBe(true);
-  expect(await anonymous.text()).toContain('Continue with Google');
+  const landing = await anonymous.text();
+  expect(landing).toContain('Continue with Google');
+  expect(landing).toContain(`<title>${SITE_TITLE}</title>`);
+  for (const path of ['/today', '/classes', '/help', '/moved', '/offline']) {
+    expect(await (await page.request.get(path)).text(), path).toContain(`<title>${SITE_NAME}</title>`);
+  }
+  await page.goto('/');
+  await expect(page).toHaveTitle(SITE_TITLE);
+  await page.goto('/today');
+  await expect(page).toHaveTitle(SITE_NAME);
   await authenticate(context, seed());
   // Signed in, the HTML carries the workspace, and it is never cached by the browser.
   const signedIn = await context.request.get('/');
   expect(signedIn.headers()['cache-control']).toMatch(/no-store/);
   const html = await signedIn.text();
+  expect(html).toContain(`<title>${SITE_NAME}</title>`);
   expect(html).not.toContain('Continue with Google');
   expect(html).toContain('Reload High');
   // Held API replies cannot delay the paint: the screen comes from the server-rendered page on a device with no cache.
@@ -77,6 +88,7 @@ test('the first visit is rendered by the server: the landing page signed out, th
   });
   await page.goto('/classes');
   await expect(page.getByRole('heading', { name: 'Classes', exact: true })).toBeVisible({ timeout: 1500 });
+  await expect(page).toHaveTitle(SITE_NAME);
   expect(released).toBe(0);
 });
 
