@@ -64,7 +64,7 @@ test('the first visit is rendered by the server: the landing page signed out, th
   const landing = await anonymous.text();
   expect(landing).toContain('Continue with Google');
   expect(landing).toContain(`<title>${SITE_TITLE}</title>`);
-  for (const path of ['/today', '/classes', '/help', '/moved', '/offline']) {
+  for (const path of ['/today', '/classes', '/help', '/moved', '/offline', '/update']) {
     expect(await (await page.request.get(path)).text(), path).toContain(`<title>${SITE_NAME}</title>`);
   }
   await page.goto('/');

@@ -1,10 +1,12 @@
+import { SITE_NAME } from '@/server/site';
+
 export const dynamic = 'force-dynamic';
 
 // This recovery page deliberately has no application bundles. It can run even
 // when an older offline shell references JavaScript from a previous deployment.
 export function GET() {
   return new Response(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Updating Quasar</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${SITE_NAME}</title>
 <style>body{font:16px system-ui,sans-serif;background:#0b0d12;color:#f4f5f9;max-width:32rem;margin:15vh auto;padding:24px}a{color:#67d8ec}</style></head>
 <body><h1>Updating Quasar</h1><p id="status">Fetching the latest app. Your account and saved work stay on this device.</p><noscript><p>Enable JavaScript, then reload this page.</p></noscript>
 <script>
