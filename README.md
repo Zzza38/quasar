@@ -168,7 +168,7 @@ The owner is the account in `OWNER_EMAIL` (pinned by `OWNER_GOOGLE_SUB`). Other 
 | Role | Can do |
 | --- | --- |
 | School Manager (`school-manager`) | Manage the assigned school's timetable, directory, lunch menu, guides, logos, and proposals. Handle school requests, verification, member reports, removals, and removal appeals. Moderate the school's chat room. School activity shows the last 100 school content and membership changes with their timestamps. |
-| Chat Moderation (`chat-moderation`) | Review chat reports and their evidence, hide reported messages, edit or remove posts in Global chat, and handle messaging pauses and pause appeals. |
+| Chat Moderation (`chat-moderation`) | Review chat reports and their evidence, hide reported messages, edit or remove posts in Global chat and their own school room, and handle messaging pauses and pause appeals. |
 | Support (`support`) | Answer correction requests and beta feedback, handle verification, search members, open a member's record with a reason, sign a member out, or forget their reminder browsers. |
 | `administrator` | All staff permissions across schools, including account suspension |
 | `moderator` | Reports and their chat messages, messaging pauses, removals from a school, Global chat moderation, and the appeals against pauses and removals |
@@ -189,12 +189,12 @@ Give each staff account one role with the command below. For the live site, run 
 School Manager and Chat Moderation require membership in the `staff-roles` beta. Joining the beta alone gives an account no staff permissions. Before granting School Manager, check the member has joined the intended school. The grant records that school's ID. Switching schools never transfers the grant. To assign the new school, run the grant command again. The command and `list` both print the assigned school's name and ID.
 
 ```sh
-pnpm staff roles
-pnpm staff list
-pnpm staff grant principal@example.com school-manager
-pnpm staff grant moderator@example.com chat-moderation
-pnpm staff grant helper@example.com support
-pnpm staff revoke principal@example.com
+npm run staff -- roles
+npm run staff -- list
+npm run staff -- grant principal@example.com school-manager
+npm run staff -- grant moderator@example.com chat-moderation
+npm run staff -- grant helper@example.com support
+npm run staff -- revoke principal@example.com
 ```
 
 ## Continuous integration
