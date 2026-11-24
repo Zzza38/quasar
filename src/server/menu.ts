@@ -60,11 +60,11 @@ export class MenuService {
   }
 
   /**
-   * Who may point the school at a menu: staff with schools.edit (Service.canEditAnySchool), and any member while the shared schedule is open to
+   * Who may point the school at a menu: staff with schools.edit (Service.canEditSchool), and any member while the shared schedule is open to
    * member edits (the same rule as Service.updateSchool). A locked school's members send a correction request.
    */
   canEdit(userId: string, school: School): boolean {
-    if (this.service.canEditAnySchool(userId)) return true;
+    if (this.service.canEditSchool(userId, school.id)) return true;
     if (this.service.user(userId).schoolId !== school.id) return false;
     return !school.memberLocked && !school.supportLocked && school.memberCount < 10;
   }
@@ -107,7 +107,6 @@ export class MenuService {
   async set(userId: string, raw: z.infer<typeof menuSetSchema>): Promise<MenuSource | null> {
     const input = menuSetSchema.parse(raw);
     const school = this.editableSchool(userId, input.schoolId);
-    const previous = this.source(school.id);
     let next: MenuSource | null = null;
     if (input.source) {
       this.limit(userId);
@@ -116,6 +115,8 @@ export class MenuService {
       next = { org: input.source.org, domain: input.source.domain, school: choice.school, menu: choice.menu, name: menuChoiceName(choice) };
     }
     this.db.transaction(() => {
+      this.editableSchool(userId, school.id);
+      const previous = this.source(school.id);
       this.db.prepare('UPDATE schools SET menu_source=? WHERE id=?').run(next ? JSON.stringify(next) : '', school.id);
       this.db.prepare('DELETE FROM menu_weeks WHERE school_id=?').run(school.id);
       this.audit(userId, 'school.menu', school.id, { from: previous && menuPageUrl(previous), to: next && menuPageUrl(next) });

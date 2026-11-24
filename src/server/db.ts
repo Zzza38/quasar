@@ -717,6 +717,21 @@ function migrate(db: Db): void {
       granted_at TEXT NOT NULL
     );
   `);
+  // SQLite cannot extend the role CHECK in place. Existing grants keep their original date and global scope.
+  if (!(db.pragma('table_info(staff_roles)') as { name: string }[]).some(column => column.name === 'school_id')) {
+    db.exec(`
+      CREATE TABLE staff_roles_next (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('administrator','moderator','support','schedule-editor','school-manager','chat-moderation')),
+        granted_at TEXT NOT NULL,
+        school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+        CHECK ((role='school-manager') = (school_id IS NOT NULL))
+      );
+      INSERT INTO staff_roles_next(user_id,role,granted_at) SELECT user_id,role,granted_at FROM staff_roles;
+      DROP TABLE staff_roles;
+      ALTER TABLE staff_roles_next RENAME TO staff_roles;
+    `);
+  }
   const addColumn = (table: string, column: string) => {
     if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
   };

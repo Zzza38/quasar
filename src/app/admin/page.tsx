@@ -5,7 +5,6 @@ import { getAuth } from '@/server/auth';
 import { getDb } from '@/server/db';
 import { BetaService } from '@/server/betas';
 import { Service } from '@/server/service';
-import { staffAccess } from '@/domain/staff';
 
 // Rendered per request: the session cookie decides between the sign-in notice, the refusal and the support tools.
 // Per request is also what lets the proxy's per-request CSP nonce (src/proxy.ts) reach Next's scripts here.
@@ -20,7 +19,7 @@ export default async function AdminPage() {
     const { userId, authAt } = await getAuth();
     const service = new Service(getDb());
     const isAdmin = !!userId && service.isAdmin(userId);
-    const staff = userId ? staffAccess(service.staffRank(userId)) : null;
+    const staff = userId ? service.staffAccess(userId) : null;
     initial = { accountId: userId, isAdmin, staff, adminReady: !!staff && adminSignInAllowed(authAt), betas: staff && userId ? new BetaService(service).joined(userId) : [] };
   } catch {
     initial = undefined; // The client checks the session itself.

@@ -274,9 +274,9 @@ export class CommunityService {
   /* ---------- Support (staff roles, src/domain/staff.ts) ---------- */
 
   verificationRequests(adminId: string) {
-    this.service.permit(adminId, 'verification');
+    const scope = this.service.requiredStaffScope(adminId, 'verification');
     return (this.db.prepare(`SELECT r.id, r.user_id userId, r.school_id schoolId, r.proof, r.created_at createdAt, u.display_name displayName, u.full_name fullName, u.email, s.name schoolName
-      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL ORDER BY r.created_at`).all() as
+      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL AND (? IS NULL OR r.school_id=?) ORDER BY r.created_at`).all(scope, scope) as
       { id: string; userId: string; schoolId: string; proof: string; createdAt: string; displayName: string; fullName: string; email: string; schoolName: string }[])
       .filter(row => this.service.canTarget(adminId, row.userId));
   }
@@ -285,6 +285,7 @@ export class CommunityService {
     const banned = this.db.transaction(() => {
       const request = this.db.prepare('SELECT user_id, school_id FROM verification_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already handled.');
+      this.service.requireSchoolScope(adminId, request.school_id, 'verification');
       this.service.guardTarget(adminId, request!.user_id);
       // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
       const banned = approve && this.isBanned(request.user_id, request.school_id);
@@ -297,9 +298,9 @@ export class CommunityService {
     if (banned) fail('CONFLICT', 'This student was removed from this school, so the request was declined.');
   }
   revokeVerification(adminId: string, userId: string, schoolId: string): void {
-    this.service.permit(adminId, 'verification');
-    this.service.guardTarget(adminId, userId);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, schoolId, 'verification');
+      this.service.guardTarget(adminId, userId);
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.withdrawProposals(userId, schoolId);
       this.service.audit(adminId, 'support.unverify', schoolId, { userId });
@@ -310,20 +311,32 @@ export class CommunityService {
    * report that involves a staff account, as reporter, reported or a sender in its group snapshot, is left to the
    * owner (Service.canTarget).
    */
-  reports(adminId: string): ReportSummary[] {
-    this.service.permit(adminId, 'reports');
+  reports(adminId: string, filter: { reportId?: string; reportedId?: string } = {}): ReportSummary[] {
+    const access = this.service.staffAccess(adminId);
+    if (!access?.permissions.includes('reports')) fail('FORBIDDEN', access ? 'Your staff role doesn’t include this.' : 'Staff access is required.');
+    const school = access.schoolId ?? null;
+    if (access.role === 'school-manager' && !school) fail('FORBIDDEN', 'This role needs an assigned school.');
+    const chatOnly = access.role === 'chat-moderation';
     const rows = this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
         r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName,
         (r.thread_id IS NOT NULL OR r.group_id IS NOT NULL) isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
         (SELECT json_group_array(DISTINCT json_extract(e.value, '$.senderId')) FROM json_each(coalesce(r.evidence, '[]')) e WHERE json_extract(e.value, '$.senderId') IS NOT NULL) evidenceSenders,
-        (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id) historyReports,
-        (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
-        (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
+        (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id
+          AND (@school IS NULL OR (h.school_id=@school AND h.thread_id IS NULL AND h.group_id IS NULL
+            AND EXISTS (SELECT 1 FROM users hr WHERE hr.id=h.reporter_id AND hr.school_id=@school)))
+          AND (@chatOnly=0 OR h.thread_id IS NOT NULL OR h.group_id IS NOT NULL)) historyReports,
+        (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND @chatOnly=0 AND (@school IS NULL OR a.school_id=@school) AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
+        (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND @school IS NULL AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
         p.user_id pausedId, p.until pausedUntil, p.reason pausedReason,
         EXISTS (SELECT 1 FROM support_requests a WHERE a.user_id=r.reported_id AND a.kind='appeal:pause' AND a.resolved_at IS NULL) pausedAppealed
       FROM reports r JOIN users ru ON ru.id=r.reported_id JOIN users pu ON pu.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
-      LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND (p.until IS NULL OR p.until>?)
-      WHERE r.resolved_at IS NULL ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all(now()) as
+      LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND @school IS NULL AND (p.until IS NULL OR p.until>@now)
+      WHERE r.resolved_at IS NULL AND (@id IS NULL OR r.id=@id) AND (@subject IS NULL OR r.reported_id=@subject)
+        AND (@chatOnly=0 OR r.thread_id IS NOT NULL OR r.group_id IS NOT NULL)
+        AND (@school IS NULL OR (r.school_id=@school AND ru.school_id=@school AND pu.school_id=@school AND r.thread_id IS NULL AND r.group_id IS NULL))
+      ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all({
+        school, chatOnly: Number(chatOnly), id: filter.reportId ?? null, subject: filter.reportedId ?? null, now: now(),
+      }) as
       (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; evidenceSenders: string; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null; pausedReason: string | null; pausedAppealed: number })[];
     const visible = rows.filter(row => [row.reportedId, row.reporterId, ...(JSON.parse(row.evidenceSenders) as string[])].every(id => this.service.canTarget(adminId, id)));
     return visible.map(({ isChat, evidenceSenders: _senders, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, pausedReason, pausedAppealed, ...row }) => ({
@@ -338,29 +351,36 @@ export class CommunityService {
       if (!report) return;
       this.service.guardTarget(adminId, report.reported_id);
       this.service.guardTarget(adminId, report.reporter_id);
+      if (!this.reports(adminId, { reportId }).length) fail('FORBIDDEN', 'This report is outside your role.');
+      if (outcome === 'removed') this.service.permit(adminId, 'members.remove');
       this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=?').run(now(), adminId, outcome, reportId);
       this.service.audit(adminId, 'report.resolve', report.school_id, { reportId, userId: report.reported_id, outcome });
     }).immediate();
   }
   /**
    * Support removal: the member leaves the school, loses their verification and any open verification request there,
-   * and cannot rejoin. Every friendship they have ends, at any school, which closes all of their chats (docs/CHAT.md D4).
+   * and cannot rejoin. Only site staff also close friendships, groups and reports outside the school's authority.
    */
   removeFromSchool(adminId: string, userId: string, schoolId: string, reason: string): void {
-    this.service.permit(adminId, 'members.remove');
-    this.service.guardTarget(adminId, userId);
     const text = z.string().trim().min(3).max(2000).parse(reason);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, schoolId, 'members.remove');
+      this.service.guardTarget(adminId, userId);
       const user = this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined;
+      this.service.requireSchoolScope(adminId, user?.school_id ?? null);
       if (!user) fail('NOT_FOUND', 'Member not found.');
       this.db.prepare('INSERT OR REPLACE INTO school_bans(school_id,user_id,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(schoolId, userId, adminId, text, now());
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.db.prepare("UPDATE verification_requests SET resolved_at=?, decision='declined', actor_id=? WHERE user_id=? AND school_id=? AND resolved_at IS NULL").run(now(), adminId, userId, schoolId);
       this.withdrawProposals(userId, schoolId);
-      this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
-      // Their friend groups end too (docs/CHAT.md §12): a group admin hands over to the longest-standing member.
-      leaveAllGroups(this.db, userId, now());
-      this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
+      if (this.service.requiredStaffScope(adminId, 'members.remove')) {
+        const close = this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE id=?");
+        for (const report of this.reports(adminId, { reportedId: userId })) close.run(now(), adminId, report.id);
+      } else {
+        this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
+        leaveAllGroups(this.db, userId, now());
+        this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
+      }
       if (user.school_id === schoolId) this.db.prepare('UPDATE users SET school_id=NULL, reviewed_version=NULL WHERE id=?').run(userId);
       this.service.audit(adminId, 'member.remove', schoolId, { userId, reason: text });
     }).immediate();

@@ -11,7 +11,7 @@ import { activePause, countUnreadChats, listPreview, type ChatPause, type Receip
 import type { Db } from './db';
 import { avatarUrl } from './avatars';
 import type { Service } from './service';
-import { isModerationRank, moderationRank, moderationTier, type StaffRank } from '@/domain/staff';
+import { isModerationRank, moderationTier, type StaffRank } from '@/domain/staff';
 
 /**
  * The global chat (docs/CHAT.md §11) and the school chats (§16). Both are rooms: one is open to every member with
@@ -236,12 +236,6 @@ export function seedSchoolMember(db: Db, userId: string, schoolId: string): void
 class RoomChatService {
   constructor(protected readonly service: Service, protected readonly now: () => Date = () => new Date()) {}
   protected get db() { return this.service.db; }
-  private readonly reveals = new Map<string, Reveal>();
-  private reveal(viewerId: string): Reveal {
-    let reveal = this.reveals.get(viewerId);
-    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
-    return reveal;
-  }
   protected iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
 
   /* ---------- Helpers ---------- */
@@ -263,20 +257,25 @@ class RoomChatService {
     if (room.kind === 'school') this.db.prepare('INSERT OR IGNORE INTO school_chats(id) VALUES(?)').run(room.scope);
     return (this.db.prepare(ROOMS[room.kind].bump).get(this.params(room)) as { revision: number }).revision;
   }
+  private roomModerator(room: Room, actorId: string): StaffRank | null {
+    const access = this.service.staffAccess(actorId);
+    if (!access) return null;
+    if (access.permissions.includes('global.moderate')) return access.role;
+    return room.kind === 'school' && access.role === 'school-manager' && access.schoolId === room.scope ? access.role : null;
+  }
   private roomInfo(room: Room, viewerId: string): GlobalRoom {
     const members = this.db.prepare(ROOMS[room.kind].population).get(this.params(room)) as { n: number };
-    // Staff who moderate the Global chat moderate the school rooms too.
-    const moderator = this.service.can(viewerId, 'global.moderate') ? this.service.staffRank(viewerId) : null;
+    const moderator = this.roomModerator(room, viewerId);
     return { members: members.n, canModerate: moderator !== null, moderator };
   }
-  private message(room: Room, viewerId: string, row: MessageRow): GlobalMessage {
+  private message(room: Room, viewerId: string, row: MessageRow, reveal = new Reveal(this.service, viewerId, room.kind === 'school' ? room.scope : undefined)): GlobalMessage {
     return {
       ...messageExtras(this.db, room.kind, viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at,
       reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null, moderatedBy: moderatedBy(row),
       sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }), staff: this.service.staffRank(row.sender_id) },
-      original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, room.kind), editedFrom: this.reveal(viewerId).editedFrom(row),
+      original: reveal.original(row), removed: reveal.removed(row, room.kind), editedFrom: reveal.editedFrom(row),
       editedBySender: !row.deleted_at && !!row.edited_at && row.edited_rank === 'member',
     };
   }
@@ -330,7 +329,8 @@ class RoomChatService {
     const revision = this.revision(room);
     // Rooms have no read receipts or typing signals (§13): with hundreds of members they would mean nothing.
     const base = { peer: null, room: this.roomInfo(room, viewerId), revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts: [] as Receipt[] };
-    const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(room, viewerId, row));
+    const reveal = new Reveal(this.service, viewerId, room.kind === 'school' ? room.scope : undefined);
+    const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(room, viewerId, row, reveal));
     if (cursor.after !== undefined) {
       const changes = cursor.after > revision || cursor.after < visibilityResetRevision(this.db, room.kind, viewerId, room.scope) ? null
         : this.db.prepare(this.visible(room, 'AND c.revision>@after ORDER BY c.seq LIMIT @limit')).all(this.params(room, { viewer: viewerId, after: cursor.after, limit: CHAT.maxChanges + 1 })) as MessageRow[];
@@ -401,12 +401,12 @@ class RoomChatService {
       const row = this.find(room, messageId);
       if (!row) return fail('NOT_FOUND', MISSING);
       if (row.sender_id !== viewerId) {
-        if (!this.service.can(viewerId, 'global.moderate')) fail('FORBIDDEN', 'Only moderators can delete other people’s messages.');
+        if (!this.roomModerator(room, viewerId)) fail('FORBIDDEN', 'Only moderators can delete other people’s messages.');
         this.service.guardTarget(viewerId, row.sender_id);
       }
       if (row.deleted_at) return { deleted: true as const, message: this.message(room, viewerId, row) };
       const by = row.sender_id === viewerId ? 'sender' : 'owner';
-      this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET deleted_at=?, deleted_by=?, reason=?, deleted_rank=?, revision=? WHERE seq=?`).run(this.iso(), by, by === 'owner' ? reason : null, actorRank(this.service, viewerId), this.bumpRevision(room), row.seq);
+      this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET deleted_at=?, deleted_by=?, reason=?, deleted_rank=?, revision=? WHERE seq=?`).run(this.iso(), by, by === 'owner' ? reason : null, actorRank(this.service, viewerId, room.kind === 'school' ? room.scope : undefined), this.bumpRevision(room), row.seq);
       if (by === 'owner') this.audit(room, viewerId, 'delete', { seq: row.seq, senderId: row.sender_id, reason });
       return { deleted: true as const, message: this.message(room, viewerId, this.find(room, messageId)!) };
     }).immediate();
@@ -419,10 +419,11 @@ class RoomChatService {
    * everyone can see. The filter applies to the new text; the edit is audited.
    */
   protected roomEdit(room: Room, admit: () => void, adminId: string, messageId: string, raw: string, rawReason = ''): { message: GlobalMessage } {
-    this.service.permit(adminId, 'global.moderate');
     const reason = reasonSchema.parse(rawReason);
     const result = this.db.transaction(() => {
       admit();
+      const rank = this.roomModerator(room, adminId);
+      if (!rank) return fail('FORBIDDEN', 'Only moderators can edit other people’s messages.');
       const row = this.find(room, messageId);
       if (!row || row.deleted_at) return fail('NOT_FOUND', MISSING);
       this.service.guardTarget(adminId, row.sender_id);
@@ -430,9 +431,9 @@ class RoomChatService {
       if (row.body !== body || (row.reason ?? '') !== reason) {
         // The sender's own text stays as it was before the first edit, and the rank kept is the highest that has edited,
         // so a later edit from a lower tier cannot show that tier what a higher one took out.
-        const higher = row.edited_at && moderationTier(editorRank(row)) > moderationTier(moderationRank(this.service.staffRank(adminId)));
+        const higher = row.edited_at && moderationTier(editorRank(row)) > moderationTier(rank);
         this.db.prepare(`UPDATE ${ROOMS[room.kind].messages} SET body=?, original=?, edited_at=?, edited_from=coalesce(edited_from, ?), edited_rank=?, reason=?, mentions=?, revision=? WHERE seq=?`)
-          .run(body, original, this.iso(), row.edited_at ? null : row.original ?? row.body, higher ? editorRank(row) : actorRank(this.service, adminId), reason, keptMentions(row.mentions, body), this.bumpRevision(room), row.seq);
+          .run(body, original, this.iso(), row.edited_at ? null : row.original ?? row.body, higher ? editorRank(row) : rank, reason, keptMentions(row.mentions, body), this.bumpRevision(room), row.seq);
         this.audit(room, adminId, 'edit', { seq: row.seq, senderId: row.sender_id, reason });
       }
       return { message: this.message(room, adminId, this.find(room, messageId)!) };

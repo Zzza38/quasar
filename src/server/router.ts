@@ -26,7 +26,7 @@ import { SupportService, accountEditSchema, auditQuerySchema, feedActionSchema, 
 import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } from './mods';
 import { NOW_CARD_STYLES } from '@/lib/now-split';
 import { BetaService, betaEnrollSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
-import { staffAccess, type StaffPermission } from '@/domain/staff';
+import type { StaffPermission } from '@/domain/staff';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -121,7 +121,7 @@ export const appRouter = t.router({
   session: t.procedure.query(({ ctx }) => {
     if (!ctx.userId) return null;
     const isAdmin = ctx.service.isAdmin(ctx.userId);
-    const access = staffAccess(ctx.service.staffRank(ctx.userId));
+    const access = ctx.service.staffAccess(ctx.userId);
     // /admin is outside the workspace, so staff betas (for <Beta> in the school review) come with the session.
     return { user: ctx.service.user(ctx.userId), isAdmin, staff: access, adminReady: !!access && adminSignInAllowed(ctx.authAt), betas: access ? betas(ctx.service).joined(ctx.userId) : [] };
   }),
@@ -222,7 +222,7 @@ export const appRouter = t.router({
     send: accountScoped.input(schoolSendSchema).mutation(async ({ ctx, input }) => schoolRoom(ctx.service).send(ctx.userId, input.schoolId, input.clientId, input.body, input.replyTo, await prepareChatImage(input.image), input.mentions)),
     react: accountScoped.input(schoolReactSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).react(ctx.userId, input.schoolId, input.seq, input.emoji)),
     delete: accountScoped.input(schoolDeleteSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).delete(ctx.userId, input.schoolId, input.messageId, input.reason)),
-    edit: moderatorScoped.input(schoolEditSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).edit(ctx.userId, input.schoolId, input.messageId, input.body, input.reason)),
+    edit: accountScoped.input(schoolEditSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).edit(ctx.userId, input.schoolId, input.messageId, input.body, input.reason)),
     editOwn: accountScoped.input(schoolEditOwnSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).editOwn(ctx.userId, input.schoolId, input.messageId, input.body)),
     search: accountScoped.input(schoolSearchSchema).query(({ ctx, input }) => schoolRoom(ctx.service).search(ctx.userId, input.schoolId, input.query)),
     read: accountScoped.input(schoolReadSchema).mutation(({ ctx, input }) => schoolRoom(ctx.service).read(ctx.userId, input.schoolId, input.seq)),
@@ -306,8 +306,11 @@ export const appRouter = t.router({
       return readModOverrides(ctx.service, input.userId);
     }),
     setModOverride: adminScoped.input(modOverrideSchema).mutation(({ ctx, input }) => setModOverride(ctx.service, ctx.userId, input)),
-    // Every staff role reads the school list: the console names schools in its queues and filters.
-    schools: staff('staff').query(({ctx}) => ctx.service.schools('', -1)),
+    // School Managers only see their assigned school in the console.
+    schools: staff('staff').query(({ctx}) => {
+      const scope = ctx.service.requiredStaffScope(ctx.userId);
+      return scope ? [ctx.service.school(scope)] : ctx.service.schools('', -1);
+    }),
     update: staff('schools.edit').input(adminUpdateSchema).mutation(({ctx, input}) => ctx.service.updateSchool(ctx.userId, input, true)),
     // Each staff role gets the requests it handles (Service.requests).
     requests: staff('staff').query(({ctx}) => ctx.service.requests(ctx.userId)),
@@ -349,6 +352,7 @@ export const appRouter = t.router({
     setGuidePlatforms: staffScoped('schools.edit').input(guidePlatformsUpdateSchema).mutation(({ ctx, input }) => guides(ctx.service).setPlatforms(ctx.userId, input)),
     uploadGuideImage: staffScoped('schools.edit').input(guideImageUploadSchema).mutation(({ ctx, input }) => guides(ctx.service).uploadImage(ctx.userId, input)),
     renameSchool: staffScoped('schools.edit').input(schoolDetailsSchema).mutation(({ ctx, input }) => { support(ctx.service).renameSchool(ctx.userId, input); }),
+    schoolActivity: staff('staff').query(({ ctx }) => support(ctx.service).schoolActivity(ctx.userId)),
     // Whole-log view, owner only; each member's own rows come with admin.users.view.
     auditLog: admin.input(auditQuerySchema).query(({ ctx, input }) => support(ctx.service).auditLog(ctx.userId, input)),
     // The user console (src/server/support.ts). A member's record is a mutation because opening it is audited. It carries

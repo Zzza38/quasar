@@ -37,8 +37,8 @@ const LEGENDS: Record<GuideKind, string> = { calendar: 'Where this school puts h
  * Rewords one guide and adds screenshots, with the student's view beside it. Step text takes the chat markdown subset,
  * so `**Calendar**` comes out bold. Screenshots are resized on the device and re-encoded by the server.
  */
-function GuideEditor({ kind, platform, draft, onChange, accountId, disabled, idPrefix }: {
-  kind: GuideKind; platform: string; draft: Draft; onChange: (draft: Draft) => void; accountId: string; disabled?: boolean; idPrefix: string;
+function GuideEditor({ kind, platform, draft, onChange, accountId, schoolId, disabled, idPrefix }: {
+  kind: GuideKind; platform: string; draft: Draft; onChange: (draft: Draft) => void; accountId: string; schoolId?: string; disabled?: boolean; idPrefix: string;
 }) {
   const file = useRef<HTMLInputElement>(null);
   const target = useRef<string | null>(null);
@@ -59,7 +59,7 @@ function GuideEditor({ kind, platform, draft, onChange, accountId, disabled, idP
     if (!picked || !key) return;
     setError(''); setUploading(key);
     try {
-      const { id } = await api.admin.uploadGuideImage.mutate({ accountId, data: await chatImage(picked) });
+      const { id } = await api.admin.uploadGuideImage.mutate({ accountId, schoolId, data: await chatImage(picked) });
       updateStep(key, { image: id });
     } catch (err) { setError(errorMessage(err)); }
     finally { setUploading(null); }
@@ -248,9 +248,9 @@ export function SchoolGuideSheet({ school, accountId, onClose, onSaved }: { scho
       </fieldset>
       {editable.map((key) => <Panel key={key} className="grid gap-3">
         <Toggle label={`Different ${names[key]} steps for this school`} checked={!!current.custom[key]} disabled={pending}
-          description={current.custom[key] ? 'Only this school sees these steps.' : `Shows the ${names[key]} steps every school gets. Edit those in the Setup guides tab.`}
+          description={current.custom[key] ? 'Only this school sees these steps.' : `Shows the ${names[key]} steps shared across schools.`}
           onChange={(on) => update((draft) => { const custom = { ...draft.custom }; if (on) custom[key] = toDraft(shared(kind, key)); else delete custom[key]; return { ...draft, custom }; })} />
-        {current.custom[key] && <GuideEditor kind={kind} platform={key} draft={current.custom[key]} accountId={accountId} disabled={pending} idPrefix={`school-guide-${kind}-${key}`}
+        {current.custom[key] && <GuideEditor kind={kind} platform={key} draft={current.custom[key]} accountId={accountId} schoolId={school.id} disabled={pending} idPrefix={`school-guide-${kind}-${key}`}
           onChange={(next) => update((draft) => ({ ...draft, custom: { ...draft.custom, [key]: next } }))} />}
       </Panel>)}
       <Panel className="grid gap-2">

@@ -137,8 +137,10 @@ export class SchoolLogoService {
     const voting = this.votes(school);
     const verified = this.community.isVerified(viewerId, school.id);
     const verifiedMembers = this.verifiedMembers(school.id);
-    const canSet = this.service.can(viewerId, 'schools.edit');
-    const canForce = this.service.can(viewerId, 'proposals');
+    const access = this.service.staffAccess(viewerId);
+    const inScope = access?.role !== 'school-manager' || access.schoolId === school.id;
+    const canSet = inScope && !!access?.permissions.includes('schools.edit');
+    const canForce = inScope && !!access?.permissions.includes('proposals');
     const locked = this.locked(school.id);
     const proposals = canForce ? this.rows('p.school_id=?', [school.id], viewerId) : this.rows('p.school_id=? AND (p.request=0 OR p.proposer_id=?)', [school.id, viewerId], viewerId);
     return { logo: schoolLogoUrl(school.id, this.logoVersion(school.id)), proposals, voting, locked,
@@ -229,12 +231,12 @@ export class SchoolLogoService {
 
   /** Every logo still waiting, across all schools, oldest first: open votes staff may want to force, and requests only staff can answer. */
   openVotes(adminId: string): LogoProposal[] {
-    this.service.permit(adminId, 'proposals');
-    return this.rows(`p.status IN ${PENDING}`, [], adminId).reverse();
+    const scope = this.service.requiredStaffScope(adminId, 'proposals');
+    return this.rows(`p.status IN ${PENDING} AND (? IS NULL OR p.school_id=?)`, [scope, scope], adminId).reverse();
   }
   /** One school's logo and proposals for the /admin review sheet, whether or not the staff member belongs to it. */
   forSchool(adminId: string, schoolId: string): { logo: string | null; locked: boolean; canRevert: boolean; proposals: LogoProposal[] } {
-    this.service.permit(adminId, 'schools.edit');
+    this.service.requireSchoolScope(adminId, schoolId, 'schools.edit');
     const school = this.service.school(schoolId);
     return { logo: schoolLogoUrl(school.id, this.logoVersion(school.id)), locked: this.locked(school.id), canRevert: this.canRevert(school.id), proposals: this.rows('p.school_id=?', [school.id], adminId) };
   }
@@ -248,6 +250,7 @@ export class SchoolLogoService {
     this.db.transaction(() => {
       const row = this.db.prepare('SELECT id, school_id, proposer_id, status FROM school_logo_proposals WHERE id=?').get(proposalId) as { id: string; school_id: string; proposer_id: string; status: LogoProposalStatus } | undefined;
       if (!row) return fail('NOT_FOUND', 'Logo proposal not found.');
+      this.service.requireSchoolScope(adminId, row.school_id, 'proposals');
       if (win) {
         if (!WINNABLE.includes(row.status)) fail('CONFLICT', row.status === 'published' ? 'This logo was already published.' : 'Its proposer withdrew this logo.');
         this.publish(row.id, adminId);
@@ -264,8 +267,8 @@ export class SchoolLogoService {
    * logo votes are deleted, and any request still waiting is closed.
    */
   set(adminId: string, raw: z.infer<typeof logoSetSchema>): { logo: string | null } {
-    this.service.permit(adminId, 'schools.edit');
     const input = logoSetSchema.parse(raw);
+    this.service.requireSchoolScope(adminId, input.schoolId, 'schools.edit');
     const bytes = picture(input);
     return this.db.transaction(() => {
       const school = this.service.school(input.schoolId);
@@ -278,7 +281,7 @@ export class SchoolLogoService {
   }
   /** Staff with `schools.edit` remove a school's logo; the school shows its initials again. */
   remove(adminId: string, schoolId: string): void {
-    this.service.permit(adminId, 'schools.edit');
+    this.service.requireSchoolScope(adminId, schoolId, 'schools.edit');
     this.db.transaction(() => {
       const school = this.service.school(schoolId);
       if (this.logoVersion(school.id) === null) return fail('NOT_FOUND', 'This school has no logo.');
@@ -292,7 +295,7 @@ export class SchoolLogoService {
    * further. A proposal undone this way is marked `reverted`, and staff can still force it to win later.
    */
   revert(adminId: string, schoolId: string): { logo: string | null } {
-    this.service.permit(adminId, 'schools.edit');
+    this.service.requireSchoolScope(adminId, schoolId, 'schools.edit');
     return this.db.transaction(() => {
       const school = this.service.school(schoolId);
       const latest = "SELECT id, image, mime, proposal_id FROM school_logo_history WHERE school_id=? AND reverted_at IS NULL ORDER BY id DESC LIMIT 1";
@@ -325,7 +328,11 @@ export class SchoolLogoService {
     const row = this.db.prepare('SELECT school_id, proposer_id, request, image, mime FROM school_logo_proposals WHERE id=?').get(proposalId) as { school_id: string; proposer_id: string; request: number; image: Buffer; mime: string } | undefined;
     if (!row) return null;
     const member = (row.request === 0 || row.proposer_id === viewerId) && (this.db.prepare('SELECT school_id FROM users WHERE id=?').get(viewerId) as { school_id: string | null } | undefined)?.school_id === row.school_id;
-    if (!member && !this.service.can(viewerId, 'proposals') && !this.service.can(viewerId, 'schools.edit')) return null;
+    if (!member) {
+      const access = this.service.staffAccess(viewerId);
+      if (!access || (!access.permissions.includes('proposals') && !access.permissions.includes('schools.edit'))) return null;
+      if (access.role === 'school-manager' && access.schoolId !== row.school_id) return null;
+    }
     return { bytes: row.image, mime: row.mime };
   }
 }

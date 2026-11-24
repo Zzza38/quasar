@@ -32,6 +32,37 @@ export const VIEW_AUDIT_WINDOW_MS = 10 * 60_000;
 /** How many rows each list in a member's record shows (the newest first). */
 const LIST_LIMIT = 200;
 
+/** Only these school events appear in a manager's activity list. Account and support records also carry school IDs. */
+const SCHOOL_ACTIVITY = {
+  'school.create': 'School created',
+  'school.join': 'Member joined',
+  'school.update': 'Member updated the timetable',
+  'school.adminUpdate': 'Staff published a timetable revision',
+  'school.proposalApplied': 'Timetable proposal published',
+  'proposal.decline': 'Timetable proposal declined',
+  'support.renameSchool': 'School details updated',
+  'school.menu': 'Lunch menu source changed',
+  'school.logoSet': 'School logo set',
+  'school.logoRemoved': 'School logo removed',
+  'school.logoReverted': 'School logo reverted',
+  'school.logoForcedWin': 'School logo proposal published',
+  'school.logoForcedLoss': 'School logo proposal declined',
+  'directory.create': 'Class added to the directory',
+  'directory.update': 'Directory class updated',
+  'directory.remove': 'Directory class removed',
+  'support.resolveMerge': 'Directory merge request resolved',
+  'setupGuide.save': 'School setup guide saved',
+  'setupGuide.reset': 'School setup guide reset',
+  'setupGuide.platforms': 'School setup platforms changed',
+  'verification.approve': 'Enrollment proof approved',
+  'verification.decline': 'Enrollment proof declined',
+  'support.verify': 'Member verified',
+  'support.unverify': 'Member verification removed',
+  'member.remove': 'Member removed from school',
+  'member.restore': 'School removal lifted',
+  'support.unban': 'School removal lifted',
+} as const;
+
 /** Why the owner made a destructive change; kept in the audit log. */
 export const supportReasonSchema = z.string().trim().min(3, 'Give a reason of at least 3 characters for the audit log.').max(500);
 const userIdSchema = z.object({ userId: z.uuid() });
@@ -119,19 +150,20 @@ export class SupportService {
 
   /** Members matching an email, a name or an exact ID, optionally at one school; newest accounts first. */
   search(adminId: string, raw: z.input<typeof userSearchSchema>): SupportUserRow[] {
-    this.service.permit(adminId, 'members.search');
+    const scope = this.service.requiredStaffScope(adminId, 'members.search');
     const input = userSearchSchema.parse(raw);
+    if (input.schoolId) this.service.requireSchoolScope(adminId, input.schoolId);
     const rows = this.db.prepare(`SELECT u.id, u.email, u.display_name displayName, u.full_name fullName, u.created_at createdAt, u.school_id schoolId, s.name schoolName,
         EXISTS (SELECT 1 FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) verified,
-        u.suspended_at IS NOT NULL suspended,
-        EXISTS (SELECT 1 FROM chat_pauses p WHERE p.user_id=u.id AND (p.until IS NULL OR p.until>@now)) paused,
-        (SELECT count(*) FROM reports r WHERE r.reported_id=u.id AND r.resolved_at IS NULL) openReports
+        @scope IS NULL AND u.suspended_at IS NOT NULL suspended,
+        @scope IS NULL AND EXISTS (SELECT 1 FROM chat_pauses p WHERE p.user_id=u.id AND (p.until IS NULL OR p.until>@now)) paused,
+        (SELECT count(*) FROM reports r WHERE @scope IS NULL AND r.reported_id=u.id AND r.resolved_at IS NULL) openReports
       FROM users u LEFT JOIN schools s ON s.id=u.school_id
       WHERE (@school IS NULL OR u.school_id=@school)
         AND (@query='' OR u.id=@query OR instr(lower(u.email || ' ' || u.display_name || ' ' || u.full_name || ' ' || u.google_name), lower(@query)) > 0)
-      ORDER BY u.created_at DESC, u.id LIMIT 100`).all({ query: input.query, school: input.schoolId ?? null, now: now() }) as
+      ORDER BY u.created_at DESC, u.id LIMIT 100`).all({ query: input.query, scope, school: scope ?? input.schoolId ?? null, now: now() }) as
       (Omit<SupportUserRow, 'verified' | 'suspended' | 'paused'> & { verified: number; suspended: number; paused: number })[];
-    return rows.map(row => ({ ...row, verified: !!row.verified, suspended: !!row.suspended, paused: !!row.paused }));
+    return rows.filter(row => !scope || this.service.canTarget(adminId, row.id)).map(row => ({ ...row, verified: !!row.verified, suspended: !!row.suspended, paused: !!row.paused }));
   }
 
   /**
@@ -223,6 +255,18 @@ export class SupportService {
       supportRequests, verificationRequests, bans, proposals, feeds,
       activity: full ? this.auditRows({ userId }) : this.auditRows({ userId }).map(row => ({ ...row, ip: null, userAgent: null })),
     };
+  }
+
+  schoolActivity(managerId: string) {
+    const schoolId = this.service.requiredStaffScope(managerId);
+    if (!schoolId) return fail('FORBIDDEN', 'School activity requires a School Manager role.');
+    const actions = Object.keys(SCHOOL_ACTIVITY);
+    const rows = this.db.prepare(`SELECT a.id, a.action, a.created_at AS createdAt, s.name AS schoolName
+      FROM audit_log a JOIN schools s ON s.id=a.school_id
+      WHERE a.school_id=? AND a.action IN (${actions.map(() => '?').join(',')})
+      ORDER BY a.id DESC LIMIT 100`).all(schoolId, ...actions) as
+      { id: number; action: keyof typeof SCHOOL_ACTIVITY; createdAt: string; schoolName: string }[];
+    return rows.map(row => ({ ...row, action: SCHOOL_ACTIVITY[row.action] }));
   }
 
   /**
@@ -340,9 +384,10 @@ export class SupportService {
   setVerified(adminId: string, raw: z.input<typeof verificationSetSchema>): void {
     this.service.permit(adminId, 'verification');
     const input = verificationSetSchema.parse(raw);
-    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
+      this.service.guardTarget(adminId, input.userId);
       const user = this.row(input.userId);
+      this.service.requireSchoolScope(adminId, user.school_id, 'verification');
       if (!user.school_id) fail('BAD_REQUEST', 'This member has no school to be verified at.');
       if (input.verified) {
         if (this.community.isBanned(input.userId, user.school_id!)) fail('CONFLICT', 'Support removed this member from this school.');
@@ -361,8 +406,9 @@ export class SupportService {
   unban(adminId: string, raw: z.input<typeof unbanSchema>): void {
     this.service.permit(adminId, 'members.remove');
     const input = unbanSchema.parse(raw);
-    this.service.guardTarget(adminId, input.userId);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, input.schoolId, 'members.remove');
+      this.service.guardTarget(adminId, input.userId);
       this.row(input.userId);
       const { changes } = this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(input.userId, input.schoolId);
       if (!changes) fail('NOT_FOUND', 'This member is not removed from that school.');
@@ -457,9 +503,9 @@ export class SupportService {
   /* ---------- Schools ---------- */
 
   renameSchool(adminId: string, raw: z.input<typeof schoolDetailsSchema>): void {
-    this.service.permit(adminId, 'schools.edit');
     const input = schoolDetailsSchema.parse(raw);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, input.schoolId, 'schools.edit');
       const school = this.service.school(input.schoolId);
       this.db.prepare('UPDATE schools SET name=?, location=? WHERE id=?').run(input.name, input.location, school.id);
       this.audit(adminId, 'support.renameSchool', school.id, { from: { name: school.name, location: school.location }, to: { name: input.name, location: input.location } });

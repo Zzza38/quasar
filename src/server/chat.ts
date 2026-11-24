@@ -575,6 +575,7 @@ export class ChatService {
    * the reported member and, in a group snapshot, every other sender (Service.canTarget).
    */
   private guardEvidence(adminId: string, report: { reporter_id: string; reported_id: string; items: StoredItem[] }): void {
+    if (this.service.requiredStaffScope(adminId, 'reports') !== null) fail('FORBIDDEN', 'Private chat reports are outside your school role.');
     for (const id of new Set([report.reporter_id, report.reported_id, ...report.items.flatMap(item => item.senderId ? [item.senderId] : [])])) this.service.guardTarget(adminId, id);
   }
   /**
@@ -634,7 +635,9 @@ export class ChatService {
       if (!user) return fail('NOT_FOUND', 'Member not found.');
       const until = input.days === null ? null : this.iso(input.days * DAY);
       this.db.prepare('INSERT OR REPLACE INTO chat_pauses(user_id,until,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(input.userId, until, adminId, input.reason, this.iso());
-      this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='paused' WHERE reported_id=? AND resolved_at IS NULL").run(this.iso(), adminId, input.userId);
+      const community = new CommunityService(this.service);
+      const resolve = this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='paused' WHERE id=?");
+      for (const report of community.reports(adminId, { reportedId: input.userId })) resolve.run(this.iso(), adminId, report.id);
       this.audit(adminId, 'chat.pause', user.school_id, { userId: input.userId, days: input.days, reason: input.reason });
     }).immediate();
   }

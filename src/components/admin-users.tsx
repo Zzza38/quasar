@@ -80,12 +80,25 @@ export function OpenMemberModal({ target, onOpen, onClose }: { target: MemberTar
 
 /* ---------- Search ---------- */
 
-export function PeopleSection({ schools, canOpen = true, onOpen }: { schools: School[]; canOpen?: boolean; onOpen: (target: MemberTarget) => void }) {
+export function PeopleSection({ schools, canOpen = true, schoolManagerAccountId, onOpen }: { schools: School[]; canOpen?: boolean; schoolManagerAccountId?: string; onOpen: (target: MemberTarget) => void }) {
   const [query, setQuery] = useState('');
   const [schoolId, setSchoolId] = useState('');
   const [rows, setRows] = useState<SearchRow[] | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [pending, setPending] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<SearchRow | null>(null);
+  const verify = async (row: SearchRow) => {
+    if (!schoolManagerAccountId || pending) return;
+    setPending(row.id);
+    setError('');
+    try {
+      await api.admin.users.setVerified.mutate({ accountId: schoolManagerAccountId, userId: row.id, verified: !row.verified });
+      setRefresh(value => value + 1);
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setPending(null); }
+  };
   useEffect(() => {
     let live = true;
     // Typing waits a moment so each keystroke is not a request.
@@ -96,14 +109,14 @@ export function PeopleSection({ schools, canOpen = true, onOpen }: { schools: Sc
       finally { if (live) setLoading(false); }
     }, query ? 300 : 0);
     return () => { live = false; clearTimeout(timer); };
-  }, [query, schoolId]);
-  return <Section id="people-title" title="People" icon="users" description="Find any member by email, name or account ID. The newest 100 matches are shown.">
-    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_240px]">
+  }, [query, schoolId, refresh, schoolManagerAccountId]);
+  return <Section id="people-title" title="People" icon="users" description={schoolManagerAccountId ? `Search members at ${schools[0]?.name ?? "your school"} by name, email or account ID.` : "Find any member by email, name or account ID. The newest 100 matches are shown."}>
+    <div className={schoolManagerAccountId ? "grid gap-2" : "grid gap-2 sm:grid-cols-[minmax(0,1fr)_240px]"}>
       <div className="relative"><Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" aria-label="Search members" placeholder="Email, name or account ID" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-      <Select aria-label="School" value={schoolId} onChange={(event) => setSchoolId(event.target.value)}>
+      {!schoolManagerAccountId && <Select aria-label="School" value={schoolId} onChange={(event) => setSchoolId(event.target.value)}>
         <option value="">Every school</option>
         {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
-      </Select>
+      </Select>}
     </div>
     {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
     {rows && rows.length === 0 && !loading && <Hint>No members match.</Hint>}
@@ -114,9 +127,20 @@ export function PeopleSection({ schools, canOpen = true, onOpen }: { schools: Sc
         <TableCell className="whitespace-normal text-sm">{row.schoolName ?? <span className="text-muted-foreground">None</span>}</TableCell>
         <TableCell><div className="flex flex-wrap gap-1">{row.verified && <Chip tone="success" icon="check">Verified</Chip>}{row.suspended && <Chip tone="danger" icon="lock">Suspended</Chip>}{row.paused && <Chip tone="warning" icon="lock">Paused</Chip>}{row.openReports > 0 && <Chip tone="danger" icon="alert">{pluralize(row.openReports, 'report')}</Chip>}</div></TableCell>
         <TableCell className="text-sm tabular-nums">{shortDate(row.createdAt)}</TableCell>
-        <TableCell className="text-right">{canOpen && <Button size="sm" variant="soft" onClick={() => onOpen({ userId: row.id, name: row.displayName || row.email })} aria-label={`Open ${row.displayName || row.email}`}>Open</Button>}</TableCell>
+        <TableCell className="text-right">{canOpen && <Button size="sm" variant="soft" onClick={() => onOpen({ userId: row.id, name: row.displayName || row.email })} aria-label={`Open ${row.displayName || row.email}`}>Open</Button>}
+          {schoolManagerAccountId && <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="soft" disabled={pending !== null} busy={pending === row.id} onClick={() => void verify(row)}>{row.verified ? 'Unverify' : 'Verify'}</Button>
+            <Button size="sm" variant="danger" onClick={() => setRemoving(row)}>Remove</Button>
+          </div>}</TableCell>
       </TableRow>)}</TableBody>
     </Table></div>}
+    {schoolManagerAccountId && removing?.schoolId && <ReasonModal title={`Remove ${removing.displayName || removing.email} from ${removing.schoolName}?`}
+      description="The member leaves this school and must appeal to rejoin. They can see your reason." confirm="Remove from school" tone="danger"
+      onClose={() => setRemoving(null)} onConfirm={async reason => {
+        await api.admin.removeMember.mutate({ userId: removing.id, schoolId: removing.schoolId!, reason });
+        setRemoving(null);
+        setRefresh(value => value + 1);
+      }} />}
   </Section>;
 }
 

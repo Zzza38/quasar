@@ -5,12 +5,13 @@ import webpush from 'web-push';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { GlobalChatService, SchoolChatService, countUnreadSchool, pruneGlobalChat, NOT_IN_SCHOOL } from './global-chat';
-import { countUnreadChats } from './chat';
+import { ChatService, countUnreadChats } from './chat';
 import { CommunityService } from './community';
 import { NotificationService } from './notifications';
 import { appRouter } from './router';
 import { exampleSchedule } from '@/domain/example';
 import { grantStaffRole } from './staff';
+import { joinStaffBeta, useStaffBetaFixture } from './staff-beta-fixture';
 
 const DAY = 86_400_000;
 const databases: Db[] = [];
@@ -110,6 +111,72 @@ describe('school chat', () => {
     expect(f.rooms.thread(f.bob, f.school.id).messages[0]!.original).toBeNull();
     expect(f.rooms.delete(mod, f.school.id, message.id, 'slur').message).toMatchObject({ deletedBy: 'owner', moderatedBy: 'moderator', reason: 'slur' });
     expect(f.rooms.summary(f.bob)!.lastMessage).toMatchObject({ preview: null, moderatedBy: 'moderator' });
+  });
+
+  describe('delegated room moderation', () => {
+    useStaffBetaFixture();
+
+    it('lets managers moderate and read removed messages only in their assigned school room', async () => {
+      const f = fixture();
+      const manager = f.nina;
+      grantStaffRole(f.service, manager, 'school-manager');
+      const schoolMessage = f.send(f.alice, 'local post');
+      fails(() => f.rooms.delete(manager, f.school.id, schoolMessage.id), 'FORBIDDEN');
+      joinStaffBeta(f.service, manager);
+      expect(f.rooms.thread(manager, f.school.id).room).toMatchObject({ canModerate: true, moderator: 'school-manager' });
+      await f.caller(manager).schoolChat.edit({ accountId: manager, schoolId: f.school.id, messageId: schoolMessage.id, body: 'local', reason: 'Personal information' });
+      const removed = f.rooms.delete(manager, f.school.id, schoolMessage.id, 'Spam').message;
+      expect(removed).toMatchObject({ moderatedBy: 'school-manager', removed: { body: 'local' } });
+
+      f.tick(4000);
+      const globalPost = f.global.send(f.bob, randomUUID(), 'global post').message;
+      fails(() => f.global.delete(manager, globalPost.id), 'FORBIDDEN');
+      f.global.delete(f.bob, globalPost.id);
+      expect(f.global.thread(manager).messages[0]!.removed).toBeNull();
+
+      f.service.join(manager, { schoolId: f.other.id, choice: 'community', grade: '11' });
+      const elsewhere = f.send(f.outsider, 'other school', f.other.id);
+      fails(() => f.rooms.delete(manager, f.other.id, elsewhere.id), 'FORBIDDEN');
+      fails(() => f.rooms.thread(manager, f.school.id), 'NOT_FOUND');
+    });
+
+    it('separates chat cases and local profile reports, including actions taken by case ID', () => {
+      const f = fixture();
+      const manager = f.nina;
+      const chatMod = f.user('chat-mod@example.com', 'Chat Mod');
+      grantStaffRole(f.service, manager, 'school-manager');
+      grantStaffRole(f.service, chatMod, 'chat-moderation');
+      joinStaffBeta(f.service, manager);
+      joinStaffBeta(f.service, chatMod);
+      const post = f.global.send(f.alice, randomUUID(), 'spam').message;
+      expect(f.global.delete(chatMod, post.id, 'Spam').message).toMatchObject({ moderatedBy: 'chat-moderation', removed: { body: 'spam' } });
+      expect(f.global.thread(manager).messages[0]!.removed).toBeNull();
+      const community = new CommunityService(f.service);
+      community.report(f.alice, { userId: f.bob, reason: 'A problem with their profile' });
+      community.request(f.alice, f.bob);
+      community.respond(f.bob, f.alice, true);
+      const chat = new ChatService(f.service);
+      const direct = chat.send(f.bob, f.alice, randomUUID(), 'spam message').message;
+      chat.report(f.alice, f.bob, { category: 'bullying', seq: direct.seq, block: false });
+
+      const profileReport = community.reports(manager);
+      const chatReport = community.reports(chatMod);
+      expect(profileReport.map(row => row.isChat)).toEqual([false]);
+      expect(chatReport.map(row => row.isChat)).toEqual([true]);
+      const profileId = profileReport[0]!.id, chatId = chatReport[0]!.id;
+      fails(() => community.resolveReport(chatMod, profileId, 'dismissed'), 'FORBIDDEN');
+      fails(() => community.resolveReport(manager, chatId, 'dismissed'), 'FORBIDDEN');
+      fails(() => chat.showEvidence(manager, chatId), 'FORBIDDEN');
+      fails(() => chat.redactMessage(manager, chatId, direct.seq), 'FORBIDDEN');
+      expect(chat.showEvidence(chatMod, chatId).items[0]!.body).toBe('spam message');
+      chat.redactMessage(chatMod, chatId, direct.seq);
+      chat.pauseChat(chatMod, { userId: f.bob, days: 1, reason: 'Repeated spam' });
+      expect(community.reports(chatMod)).toEqual([]);
+      expect(community.reports(manager)).toMatchObject([{ id: profileId, pause: null }]);
+      f.service.join(f.alice, { schoolId: f.other.id, choice: 'community', grade: '11' });
+      expect(community.reports(manager)).toEqual([]);
+      fails(() => community.resolveReport(manager, profileId, 'dismissed'), 'FORBIDDEN');
+    });
   });
 
   it('counts toward the badge for the school’s members, respects mute and marks read', () => {

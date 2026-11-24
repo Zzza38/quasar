@@ -15,6 +15,29 @@ const plan = (db: Database.Database, sql: string, ...params: unknown[]) =>
   (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[]).map(row => row.detail).join('\n');
 
 describe('openDatabase migrations', () => {
+  it('preserves legacy staff grants and requires school scope for manager grants', () => {
+    const path = tempPath();
+    const before = openDatabase(path);
+    before.exec(`
+      INSERT INTO users(id,google_sub,email,created_at) VALUES('helper','helper','helper@example.com','today');
+      DROP TABLE staff_roles;
+      CREATE TABLE staff_roles (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('administrator','moderator','support','schedule-editor')),
+        granted_at TEXT NOT NULL
+      );
+      INSERT INTO staff_roles VALUES('helper','support','yesterday');
+    `);
+    before.close();
+    const db = openDatabase(path);
+    try {
+      expect(db.prepare('SELECT * FROM staff_roles').get()).toEqual({ user_id: 'helper', role: 'support', school_id: null, granted_at: 'yesterday' });
+      expect(() => db.exec("UPDATE staff_roles SET role='school-manager'")).toThrow(/CHECK/);
+      db.exec("UPDATE staff_roles SET role='chat-moderation'");
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally { db.close(); }
+  });
+
   it('rolls a failed migration back as a whole and closes the handle', () => {
     const path = tempPath();
     // A users table from something else: the users_school index cannot be created on it.

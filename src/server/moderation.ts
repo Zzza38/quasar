@@ -1,5 +1,5 @@
 import { censorBody } from '@/domain/chat';
-import { canSeeCensored, canSeeEdited, canSeeRemoved, isModerationRank, moderationRank, type StaffRank } from '@/domain/staff';
+import { canSeeCensored, canSeeEdited, canSeeRemoved, isModerationRank, moderationRank, type ModerationRank, type StaffRank } from '@/domain/staff';
 import type { Service } from './service';
 
 /**
@@ -10,9 +10,15 @@ import type { Service } from './service';
  */
 
 /** The rank stored with a removal or an edit. 'member' says a member (or support) did it, so it never falls back. */
-export type ActorRank = 'owner' | 'administrator' | 'moderator' | 'member';
-export function actorRank(service: Service, actorId: string): ActorRank {
-  return moderationRank(service.staffRank(actorId)) ?? 'member';
+export type ActorRank = ModerationRank | 'member';
+
+/** A school manager has a moderation tier only inside the school room named in the grant. */
+function chatRank(service: Service, actorId: string, schoolId?: string): StaffRank | null {
+  const rank = service.staffRank(actorId);
+  return rank === 'school-manager' && (!schoolId || service.managedSchoolId(actorId) !== schoolId) ? null : rank;
+}
+export function actorRank(service: Service, actorId: string, schoolId?: string): ActorRank {
+  return moderationRank(chatRank(service, actorId, schoolId)) ?? 'member';
 }
 
 /** Text a viewer may read: `body` censored like any message, `original` the uncensored text for the owner. */
@@ -28,11 +34,11 @@ type EditableRow = { edited_at: string | null; edited_from?: string | null; edit
  * Who removed a message, as a moderation rank (null for a member). For a row removed before ranks were stored,
  * support's and staff removals were the owner's and a sender's own ranks as the sender does now.
  */
-export function removerRank(service: Service, row: RemovableRow): StaffRank | null {
+export function removerRank(service: Service, row: RemovableRow, schoolId?: string): StaffRank | null {
   if (row.deleted_rank === 'member') return null;
   if (isModerationRank(row.deleted_rank)) return row.deleted_rank;
   if (row.deleted_by === 'support' || row.deleted_by === 'owner') return 'owner';
-  if (row.deleted_by === 'sender') return moderationRank(service.staffRank(row.sender_id));
+  if (row.deleted_by === 'sender') return moderationRank(chatRank(service, row.sender_id, schoolId));
   return null;
 }
 /** Who edited a message, as a moderation rank. A Global edit made before ranks were stored was the owner's. */
@@ -44,8 +50,8 @@ export function editorRank(row: EditableRow): StaffRank | null {
 /** One viewer's reveal rules, with their rank looked up once. */
 export class Reveal {
   readonly rank: StaffRank | null;
-  constructor(private readonly service: Service, viewerId: string) {
-    this.rank = service.staffRank(viewerId);
+  constructor(private readonly service: Service, viewerId: string, private readonly schoolId?: string) {
+    this.rank = chatRank(service, viewerId, schoolId);
   }
   /** The uncensored text of a message still showing: the owner only, when the filter changed something. */
   original(row: { original?: string | null; deleted_at: string | null }): string | null {
@@ -54,7 +60,7 @@ export class Reveal {
   /** A removed message's text and photo, when the viewer's tier may read it and retention has not cleared them. */
   removed(row: RemovableRow, kind: 'peer' | 'group' | 'global' | 'school'): RemovedText | null {
     if (!row.deleted_at || (!row.body && !row.image)) return null;
-    if (!canSeeRemoved(this.rank, removerRank(this.service, row))) return null;
+    if (!canSeeRemoved(this.rank, removerRank(this.service, row, this.schoolId))) return null;
     return { body: row.body, original: canSeeCensored(this.rank) ? row.original ?? null : null, image: row.image ? `/api/chat/images/${kind}/${row.seq}` : null };
   }
   /** A room message's (Global or school) text from before its first edit, when the viewer's tier may read it. */
