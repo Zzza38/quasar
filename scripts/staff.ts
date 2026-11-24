@@ -5,8 +5,8 @@ import { Service } from '../src/server/service';
 import { StaffError, grantStaffRole, listStaff, revokeStaffRole, type StaffMember } from '../src/server/staff';
 
 /**
- * Grants and revokes staff roles (README "Staff roles"). This is the only way to change a role: the app has no
- * procedure for it, so nobody can grant one from /admin. For the live site, run it in the production checkout; a
+ * Grants and revokes staff roles (README "Staff roles"). The owner can also change roles from /admin.
+ * For the live site, run this command in the production checkout; a
  * change takes effect at the account's next request, without a deploy or restart.
  *
  *   npm run staff -- list

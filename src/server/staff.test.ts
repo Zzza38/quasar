@@ -66,10 +66,51 @@ describe('staff roles', () => {
     expect(f.service.isAdmin(f.admin)).toBe(false);
   });
 
-  it('has no procedure that grants or changes a role', () => {
-    const paths = Object.keys((appRouter as unknown as { _def: { procedures: Record<string, unknown> } })._def.procedures);
-    expect(paths.length).toBeGreaterThan(50);
-    expect(paths.filter(path => /staff|role|grant/i.test(path))).toEqual([]);
+  it('requires the owner, beta membership and recent sign-in to manage assignments in the console', async () => {
+    const f = fixture();
+    const input = { accountId: f.owner, userId: f.alice, role: 'school-manager' as const, expectedGrant: null, expectedSchoolId: f.school.id };
+    const revoke = { ...input, expectedGrant: { role: 'school-manager' as const, schoolId: f.school.id } };
+    const owner = f.caller(f.owner).admin.roles;
+    await expect(owner.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(owner.grant(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(owner.revoke(revoke)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    joinStaffBeta(f.service, f.admin);
+    const administrator = f.caller(f.admin).admin.roles;
+    await expect(administrator.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.candidate({ userId: f.alice })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.revoke({ ...revoke, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    joinStaffBeta(f.service, f.owner);
+    const stale = f.caller(f.owner, ADMIN_SIGN_IN_MAX_AGE_MS + 1000).admin.roles;
+    await expect(stale.grant(input)).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(owner.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(owner.candidate({ userId: f.alice })).resolves.toMatchObject({ schoolId: f.school.id, joinedBeta: false, grant: null });
+    await expect(owner.grant({ ...input, userId: f.owner, expectedSchoolId: null })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(owner.grant(input)).resolves.toMatchObject({ member: { role: 'school-manager', schoolId: f.school.id } });
+    expect(f.service.staffRank(f.alice)).toBeNull();
+    joinStaffBeta(f.service, f.alice);
+    expect(f.service.staffRank(f.alice)).toBe('school-manager');
+    expect(await owner.list()).toContainEqual(expect.objectContaining({ userId: f.alice, currentSchoolId: f.school.id, schoolId: f.school.id }));
+    expect(f.audit('staff.grant').at(-1)).toMatchObject({ actor_id: f.owner, detail: expect.stringContaining('"via":"console"') });
+    await owner.revoke(revoke);
+    expect(f.service.staffRank(f.alice)).toBeNull();
+    expect(f.audit('staff.revoke').at(-1)).toMatchObject({ actor_id: f.owner, detail: expect.stringContaining('"via":"console"') });
+  });
+
+  it('rejects assignment changes if the target changed schools or another grant replaced the one on screen', async () => {
+    const f = fixture();
+    joinStaffBeta(f.service, f.owner);
+    const roles = f.caller(f.owner).admin.roles;
+    const stale = { accountId: f.owner, userId: f.helper, expectedSchoolId: f.school.id, expectedGrant: { role: 'support' as const, schoolId: null } };
+    grantStaffRole(f.service, f.helper, 'school-manager');
+    await expect(roles.revoke(stale)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(roles.grant({ ...stale, role: 'administrator' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const manager = { ...stale, expectedGrant: { role: 'school-manager' as const, schoolId: f.school.id } };
+    await expect(roles.revoke({ ...manager, expectedGrant: { ...manager.expectedGrant, schoolId: null } })).rejects.toMatchObject({ code: 'CONFLICT' });
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.helper);
+    await expect(roles.revoke(manager)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(roles.grant({ ...manager, role: 'support' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(listStaff(f.service).find(member => member.userId === f.helper)).toMatchObject({ role: 'school-manager', currentSchoolId: null, schoolId: f.school.id });
   });
 
   it('keeps the owner-only tools from every role, administrator included', async () => {

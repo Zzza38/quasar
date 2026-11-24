@@ -705,7 +705,7 @@ function migrate(db: Db): void {
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(28, datetime('now'));
   `);
 
-  // Migration 29: staff roles (src/server/staff.ts), granted only with `npm run staff`. The owner is never a row here;
+  // Migration 29: staff grants (src/server/staff.ts). The owner is never a row here;
   // it stays OWNER_EMAIL. Every message table also keeps what moderation needs to show text to the tiers that may read
   // it (src/domain/staff.ts): `original` is the text as sent when the slur filter changed it (the owner reads it),
   // `deleted_rank` the moderation rank of whoever removed the message (null for a member), and in Global chat

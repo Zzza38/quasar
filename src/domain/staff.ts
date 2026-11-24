@@ -1,8 +1,8 @@
 /**
  * Staff roles (src/server/staff.ts). The owner is the account in OWNER_EMAIL and holds every permission plus the
  * owner-only tools (betas, mod overrides, the whole audit log, editing a member's classes, tasks, feeds, friendships
- * and profile, moving a member between schools). Every other role is a fixed bundle of permissions, granted only with
- * `npm run staff` on the server. No role can grant roles in the app, administrator included.
+ * and profile, moving a member between schools). Every other role is a fixed bundle of permissions, assigned by the owner in
+ * the staff console or by the operator with `npm run staff`.
  */
 export const STAFF_ROLES = ['administrator', 'moderator', 'support', 'schedule-editor', 'school-manager', 'chat-moderation'] as const;
 export type StaffRole = typeof STAFF_ROLES[number];

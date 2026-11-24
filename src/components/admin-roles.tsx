@@ -58,7 +58,7 @@ export function AdminRoles({ access }: { access: StaffAccess }) {
       <summary className="cursor-pointer text-sm font-semibold">Administrator, Moderator and Schedule editor</summary>
       <div className="mt-3 grid gap-3 md:grid-cols-3">{(['administrator', 'moderator', 'schedule-editor'] as const).map(role => <RoleCard key={role} role={role} permissions={ROLE_PERMISSIONS[role]} />)}</div>
     </details>
-    <Hint>Grant or revoke roles with the staff command on the server. A School Manager grant records the school their account belongs to at the time.</Hint>
+    <Hint>A School Manager grant records the school their account belongs to at the time.</Hint>
   </Section>;
 }
 
