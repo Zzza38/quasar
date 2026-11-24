@@ -109,7 +109,7 @@ function GrantEditor({ target, accountId, schools, onClose, onSaved, onAccessLos
           </Select>
         </Field>
         {role === 'school-manager' && (missingSchool ? <Callout tone="warning">This member must join a school before they can become its manager.</Callout>
-          : <Callout icon="school" title={candidate.schoolName || 'Assigned school'}>This grant is pinned to this school. Switching schools disables it.</Callout>)}
+          : <Callout icon="school" title={candidate.schoolName || 'Assigned school'}>{grant?.role === 'school-manager' && grant.schoolId !== candidate.schoolId ? 'Saving moves their manager assignment to this school.' : 'School Manager access applies only here.'} The member must stay enrolled at this school to use the role.</Callout>)}
         {needsBeta && <Hint>{candidate.joinedBeta ? 'This member has joined the Staff roles beta.' : 'This member must join the Staff roles beta in Account before they can use this role.'}</Hint>}
       </>)}
   </Modal>;

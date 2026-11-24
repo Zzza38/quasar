@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { staffAccess } from '@/domain/staff';
 import { Admin, type AdminBoot } from './admin';
+import { AdminRoleGrants } from './admin-role-grants';
 import { AdminRoles } from './admin-roles';
 
 describe('staff console presentation', () => {
@@ -15,6 +16,14 @@ describe('staff console presentation', () => {
     expect(html).toContain('Review school member reports');
     expect(html).not.toContain('Open a member record');
     expect(html).not.toContain('Global chat posts');
+  });
+
+  it('gives the owner an assignment control while staff see their own capabilities', () => {
+    const controls = renderToStaticMarkup(createElement(AdminRoleGrants, { accountId: 'owner', schools: [], onAccessLost: async () => false }));
+    expect(controls).toContain('>Assigned roles<');
+    expect(controls).toContain('Assign a role</button>');
+    const staff = renderToStaticMarkup(createElement(AdminRoles, { access: schoolManager }));
+    expect(staff).not.toContain('Assign a role');
   });
 
   it('shows managers school tools and hides shared guide and owner tools', () => {
