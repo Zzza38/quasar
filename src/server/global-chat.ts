@@ -1,6 +1,6 @@
 import { chatImageSchema, mentionIdsSchema, searchQuerySchema, type SearchHit } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHit, searchSql, searchTerms } from './chat-extras';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHits, searchSql, searchTerms } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -50,7 +50,7 @@ export type GlobalMessage = MessageExtras & { id: string; seq: number; revision:
 /** `moderator` is the viewer's own rank when they may moderate the room, so the app can say what members will see. */
 export type GlobalRoom = { members: number; canModerate: boolean; moderator: StaffRank | null };
 export type GlobalSummary = {
-  lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GlobalDeletedBy; moderatedBy: StaffRank | null } | null;
+  lastMessage: { staff?: StaffRank; senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GlobalDeletedBy; moderatedBy: StaffRank | null } | null;
   unread: number; muted: boolean;
   /** An unread message here mentions the viewer. */
   mentioned: boolean;
@@ -268,13 +268,13 @@ class RoomChatService {
     const moderator = this.roomModerator(room, viewerId);
     return { members: members.n, canModerate: moderator !== null, moderator };
   }
-  private message(room: Room, viewerId: string, row: MessageRow, reveal = new Reveal(this.service, viewerId, room.kind === 'school' ? room.scope : undefined)): GlobalMessage {
+  private message(room: Room, viewerId: string, row: MessageRow, reveal = new Reveal(this.service, viewerId, room.kind === 'school' ? room.scope : undefined), staff = this.service.staffRank(row.sender_id)): GlobalMessage {
     return {
-      ...messageExtras(this.db, room.kind, viewerId, row.seq),
+      ...messageExtras(this.service, room.kind, viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at,
       reason: (row.deleted_at ? row.deleted_by === 'owner' : !!row.edited_at) ? row.reason ?? '' : null, moderatedBy: moderatedBy(row),
-      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }), staff: this.service.staffRank(row.sender_id) },
+      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }), staff },
       original: reveal.original(row), removed: reveal.removed(row, room.kind), editedFrom: reveal.editedFrom(row),
       editedBySender: !row.deleted_at && !!row.edited_at && row.edited_rank === 'member',
     };
@@ -316,7 +316,7 @@ class RoomChatService {
     const last = this.db.prepare(this.visible(room, 'ORDER BY c.seq DESC LIMIT 1')).get(this.params(room, { viewer: viewerId })) as MessageRow | undefined;
     const deleted = !!last?.deleted_at;
     return {
-      lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null, moderatedBy: deleted ? moderatedBy(last) : null } : null,
+      lastMessage: last ? { staff: this.service.staffRank(last.sender_id) ?? undefined, senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null, moderatedBy: deleted ? moderatedBy(last) : null } : null,
       unread: countUnreadRoom(this.db, room, viewerId),
       muted: !!member.muted,
       mentioned: mentionedInRoom(this.db, room, viewerId),
@@ -330,7 +330,10 @@ class RoomChatService {
     // Rooms have no read receipts or typing signals (§13): with hundreds of members they would mean nothing.
     const base = { peer: null, room: this.roomInfo(room, viewerId), revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts: [] as Receipt[] };
     const reveal = new Reveal(this.service, viewerId, room.kind === 'school' ? room.scope : undefined);
-    const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(room, viewerId, row, reveal));
+    const toMessages = (rows: MessageRow[]) => {
+      const roles = this.service.staffRanks(rows.map(row => row.sender_id));
+      return rows.map(row => this.message(room, viewerId, row, reveal, roles.get(row.sender_id) ?? null));
+    };
     if (cursor.after !== undefined) {
       const changes = cursor.after > revision || cursor.after < visibilityResetRevision(this.db, room.kind, viewerId, room.scope) ? null
         : this.db.prepare(this.visible(room, 'AND c.revision>@after ORDER BY c.seq LIMIT @limit')).all(this.params(room, { viewer: viewerId, after: cursor.after, limit: CHAT.maxChanges + 1 })) as MessageRow[];
@@ -470,7 +473,7 @@ class RoomChatService {
     if (!terms) return { results: [] };
     const rows = this.db.prepare(this.visible(room, `AND ${searchSql('@pattern')} ORDER BY c.seq DESC LIMIT @limit`))
       .all(this.params(room, { viewer: viewerId, pattern: terms.pattern, limit: CHAT.searchResults })) as MessageRow[];
-    return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
+    return { results: searchHits(this.service, rows, viewerId, terms.query) };
   }
 
   /** Also returns the Messages badge count (each room counts as one chat), stamped like chat.read's, so the badge updates at once. */

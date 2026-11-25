@@ -1,8 +1,9 @@
+import type { StaffRank } from '@/domain/staff';
 import type { WorkspaceContext } from '@/components/app-state';
 import { resolveDay, type ResolvedPeriod, type Schedule } from '@/domain/schedule';
 import { classMatcher } from '@/domain/class-match';
 
-export type Classmate = { id: string; displayName: string; avatar: string | null };
+export type Classmate = { id: string; staff?: StaffRank; displayName: string; avatar: string | null };
 
 /** Friends whose resolved timetable has this same class (classMatcher, through the school directory) at this same time on this date. */
 export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, schedule: Schedule, date: string, period: Pick<ResolvedPeriod, 'periodId' | 'startAt' | 'endAt' | 'class'>): Classmate[] {
@@ -17,7 +18,7 @@ export function classmatesFor(context: Pick<WorkspaceContext, 'community'>, sche
       } catch { return false; }
     })
     // A workspace cached before avatars were sent has none.
-    .map((friend) => ({ id: friend.id, displayName: friend.displayName, avatar: friend.avatar ?? null }));
+    .map((friend) => ({ id: friend.id, staff: friend.staff, displayName: friend.displayName, avatar: friend.avatar ?? null }));
 }
 
 /** Where some classmates go once a period ends: their next period's class (or label), its room, and when it starts. */

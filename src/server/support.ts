@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { personalScheduleSchema, emptyPersonalSchedule, type PersonalSchedule } from '@/domain/schedule';
 import { stampCompletion, taskSchema, type Task } from '@/domain/task';
+import type { StaffRank } from '@/domain/staff';
 import type { Entity } from '@/domain/sync';
 import { CalendarService, listSubscriptions, type FeedSubscription } from './calendar';
 import { CommunityService } from './community';
@@ -91,6 +92,7 @@ export const schoolDetailsSchema = z.object({ schoolId: z.uuid(), name: z.string
 export const auditQuerySchema = z.object({ userId: z.uuid().optional(), before: z.number().int().positive().optional() });
 
 export type SupportUserRow = {
+  staff: StaffRank | null;
   id: string; email: string; displayName: string; fullName: string; createdAt: string;
   schoolId: string | null; schoolName: string | null; verified: boolean; suspended: boolean; paused: boolean; openReports: number;
 };
@@ -162,8 +164,10 @@ export class SupportService {
       WHERE (@school IS NULL OR u.school_id=@school)
         AND (@query='' OR u.id=@query OR instr(lower(u.email || ' ' || u.display_name || ' ' || u.full_name || ' ' || u.google_name), lower(@query)) > 0)
       ORDER BY u.created_at DESC, u.id LIMIT 100`).all({ query: input.query, scope, school: scope ?? input.schoolId ?? null, now: now() }) as
-      (Omit<SupportUserRow, 'verified' | 'suspended' | 'paused'> & { verified: number; suspended: number; paused: number })[];
-    return rows.filter(row => !scope || this.service.canTarget(adminId, row.id)).map(row => ({ ...row, verified: !!row.verified, suspended: !!row.suspended, paused: !!row.paused }));
+      (Omit<SupportUserRow, 'staff' | 'verified' | 'suspended' | 'paused'> & { verified: number; suspended: number; paused: number })[];
+    const visible = rows.filter(row => !scope || this.service.canTarget(adminId, row.id));
+    const ranks = this.service.staffRanks(visible.map(row => row.id));
+    return visible.map(row => ({ ...row, staff: ranks.get(row.id) ?? null, verified: !!row.verified, suspended: !!row.suspended, paused: !!row.paused }));
   }
 
   /**

@@ -1,3 +1,4 @@
+import type { StaffRank } from './staff';
 import { z } from 'zod';
 import { censorSlurs, joinsIntoSlur, slurRanges } from './chat-filter';
 
@@ -251,16 +252,16 @@ export type Reaction = typeof REACTIONS[number];
 export const QUICK_REACTIONS: readonly Reaction[] = REACTIONS.slice(0, 6);
 export type MessageReaction = { emoji: Reaction; count: number; mine: boolean };
 /** One person's tapback, for the list of who reacted. `me` marks the viewer, whose row reads "You". */
-export type MessageReactor = { emoji: Reaction; name: string; avatar: string | null; me: boolean };
+export type MessageReactor = { staff?: StaffRank; emoji: Reaction; name: string; avatar: string | null; me: boolean };
 /** Someone a group or room message mentions: `name` is the display name as it was written after the "@". */
 export type MessageMention = { id: string; name: string; me: boolean };
-export type MessageReply = { seq: number; fromMe: boolean; senderName: string; preview: string | null };
+export type MessageReply = { staff?: StaffRank; seq: number; fromMe: boolean; senderName: string; preview: string | null };
 export const chatImageSchema = z.string().max(Math.ceil(Math.max(CHAT.imageMaxBytes, CHAT.gifMaxBytes) * 4 / 3) + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional();
 export type MessageExtras = { image?: string | null; replyTo: MessageReply | null; reactions: MessageReaction[]; reactors: MessageReactor[]; mentions: MessageMention[] };
 export const mentionIdsSchema = z.array(z.uuid()).max(CHAT.mentionsPerMessage).optional();
 export const searchQuerySchema = z.string().max(CHAT.searchMaxLength * 4);
 /** One search match inside a conversation: enough to list it and to jump to it. */
-export type SearchHit = { seq: number; fromMe: boolean; senderName: string; createdAt: string; preview: string };
+export type SearchHit = { staff?: StaffRank; seq: number; fromMe: boolean; senderName: string; createdAt: string; preview: string };
 
 /** "Messages can be edited for 15 minutes after they are sent." for the default CHAT.editWindowMs. */
 export const EDIT_WINDOW_MESSAGE: `Messages can be edited for ${number} minutes after they are sent.` = `Messages can be edited for ${Math.round(CHAT.editWindowMs / 60_000)} minutes after they are sent.`;

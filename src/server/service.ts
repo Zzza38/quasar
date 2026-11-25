@@ -282,33 +282,52 @@ export class Service {
     if (!user.displayName || !user.fullName) fail('BAD_REQUEST', 'Enter your display name and full name first.');
     return user;
   }
+  private matchesOwner(email: string, googleSub: string): boolean {
+    const ownerEmail = this.ownerEmail.trim().toLowerCase();
+    const ownerSub = this.ownerSub.trim();
+    return !!ownerEmail && email.toLowerCase() === ownerEmail && (!ownerSub || googleSub === ownerSub);
+  }
   isAdmin(id: string): boolean {
-    if (!this.ownerEmail || this.user(id).email.toLowerCase() !== this.ownerEmail.trim().toLowerCase()) return false;
-    if (!this.ownerSub.trim()) return true;
-    const row = this.db.prepare('SELECT google_sub FROM users WHERE id=?').get(id) as { google_sub: string };
-    return row.google_sub === this.ownerSub.trim();
+    if (!this.ownerEmail) return false;
+    const row = this.db.prepare('SELECT email, google_sub FROM users WHERE id=?').get(id) as { email: string; google_sub: string } | undefined;
+    if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
+    return this.matchesOwner(row.email, row.google_sub);
   }
   /** Owner-only tools. Staff roles (src/domain/staff.ts) never pass this; they go through `permit`. */
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
-  /** A School Manager grant only works while the account belongs to the school named at grant time. */
-  private activeGrant(id: string) {
-    const row = this.db.prepare(`SELECT r.role, r.school_id schoolId, s.name schoolName
-      FROM staff_roles r JOIN users u ON u.id=r.user_id LEFT JOIN schools s ON s.id=r.school_id
-      WHERE r.user_id=?
-        AND (r.role <> 'school-manager' OR r.school_id=u.school_id)`).get(id) as
-      { role: string; schoolId: string | null; schoolName: string | null } | undefined;
-    if (!row || !isStaffRole(row.role)) return null;
-    if (row.role === 'school-manager' || row.role === 'chat-moderation') {
-      const joined = this.db.prepare("SELECT 1 FROM beta_members WHERE user_id=? AND beta_key='staff-roles'").get(id);
-      if (!joined || !currentBetaRegistry().betas.some(beta => beta.key === 'staff-roles')) return null;
+  private activeGrants(ids: readonly string[]) {
+    const rows = this.db.prepare(`SELECT u.id, u.email, u.google_sub googleSub, r.role, r.school_id schoolId, s.name schoolName,
+        EXISTS (SELECT 1 FROM beta_members b WHERE b.user_id=u.id AND b.beta_key='staff-roles') joined
+      FROM users u LEFT JOIN staff_roles r ON r.user_id=u.id AND (r.role <> 'school-manager' OR r.school_id=u.school_id)
+      LEFT JOIN schools s ON s.id=r.school_id WHERE u.id IN (SELECT value FROM json_each(?))`)
+      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; joined: number }[];
+    const grants = new Map<string, { role: StaffRank; schoolId: string | null; schoolName: string | null }>();
+    let betaExists: boolean | undefined;
+    for (const row of rows) {
+      if (this.matchesOwner(row.email, row.googleSub)) {
+        grants.set(row.id, { role: 'owner', schoolId: null, schoolName: null });
+        continue;
+      }
+      if (!isStaffRole(row.role)) continue;
+      if (row.role === 'school-manager' || row.role === 'chat-moderation') {
+        if (!row.joined) continue;
+        betaExists ??= currentBetaRegistry().betas.some(beta => beta.key === 'staff-roles');
+        if (!betaExists) continue;
+      }
+      grants.set(row.id, { role: row.role, schoolId: row.schoolId, schoolName: row.schoolName });
     }
-    return { ...row, role: row.role };
+    return grants;
   }
+  /** Resolve just the public role labels for everyone on a page in a single query. */
+  staffRanks(ids: readonly string[]): Map<string, StaffRank> {
+    if (!ids.length) return new Map();
+    return new Map(Array.from(this.activeGrants(ids), ([id, grant]) => [id, grant.role]));
+  }
+  private activeGrant(id: string) { return this.activeGrants([id]).get(id); }
   staffRank(id: string): StaffRank | null {
-    return this.isAdmin(id) ? 'owner' : this.activeGrant(id)?.role ?? null;
+    return this.activeGrant(id)?.role ?? null;
   }
   staffAccess(id: string) {
-    if (this.isAdmin(id)) return staffAccess('owner');
     const grant = this.activeGrant(id);
     if (!grant) return null;
     const access = staffAccess(grant.role)!;

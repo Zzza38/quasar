@@ -3,6 +3,7 @@
  * the quote shown for a reply, and the maths behind swipe-to-reply. Kept free of React so they can be unit tested.
  */
 
+import type { StaffRank } from '@/domain/staff';
 import { type MessageReaction, type MessageReactor, type MessageReply, type Reaction } from '@/domain/chat';
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
@@ -75,9 +76,9 @@ export function sendParts(body: string, images: string[]): Array<{ body: string;
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */
-export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; image?: string | null; sender?: { displayName: string } }, peerName: string): MessageReply {
+export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; image?: string | null; sender?: { displayName: string; staff?: StaffRank | null } }, peerName: string): MessageReply {
   const preview = message.body === null ? null : censorSlurs(plainText(message.body)).replace(/\s+/g, ' ').trim().slice(0, 140) || (message.image ? 'Photo' : '');
-  return { seq: message.seq, fromMe: message.fromMe, senderName: message.sender?.displayName ?? peerName, preview };
+  return { ...(preview !== null && message.sender?.staff && { staff: message.sender.staff }), seq: message.seq, fromMe: message.fromMe, senderName: message.sender?.displayName ?? peerName, preview };
 }
 
 /** "You" for the viewer's own message; the sender's name otherwise (a hard-deleted sender has none). */
@@ -85,7 +86,7 @@ export function quoteName(reply: MessageReply): string {
   return reply.fromMe ? 'You' : reply.senderName || 'Someone';
 }
 
-type QuotableRow = { seq: number; fromMe: boolean; body: string | null; deletedBy: string | null; image?: string | null; sender?: { displayName: string } };
+type QuotableRow = { seq: number; fromMe: boolean; body: string | null; deletedBy: string | null; image?: string | null; sender?: { displayName: string; staff?: StaffRank | null } };
 
 /**
  * The quote the composer's strip and a pending bubble show for a reply target right now. `reply` is the snapshot

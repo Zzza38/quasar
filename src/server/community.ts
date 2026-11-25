@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
+import type { StaffRank } from '@/domain/staff';
 import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import { leaveAllGroups } from './group-chat';
@@ -36,8 +37,8 @@ export const FRIEND_REQUEST_LIMIT = 30;
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
 /** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
-export type Classmate = { id: string; displayName: string; avatar: string | null; personal: PersonalSchedule };
-export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
+export type Classmate = { id: string; staff?: StaffRank; displayName: string; avatar: string | null; personal: PersonalSchedule };
+export type MemberSummary = { id: string; staff: StaffRank | null; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
 type MemberRow = AvatarRow & { display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
@@ -137,10 +138,10 @@ export class CommunityService {
     const parsed = personalScheduleSchema.safeParse(entity && !entity.deleted ? entity.data : emptyPersonalSchedule());
     return parsed.success ? parsed.data : emptyPersonalSchedule();
   }
-  private summarize(viewerId: string, viewerVerified: boolean, row: MemberRow): MemberSummary {
+  private summarize(viewerId: string, viewerVerified: boolean, row: MemberRow, staff: StaffRank | null): MemberSummary {
     const verified = !!row.verified;
     return {
-      id: row.id, displayName: row.display_name, fullName: viewerVerified && verified ? row.full_name : null,
+      id: row.id, staff, displayName: row.display_name, fullName: viewerVerified && verified ? row.full_name : null,
       grade: this.personalOf(row.id).grade ?? null, verified, joinedAt: row.created_at,
       friendState: this.friendState(viewerId, row.id), blocked: !!this.db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(viewerId, row.id),
       avatar: avatarUrl(row),
@@ -153,7 +154,8 @@ export class CommunityService {
       FROM users u WHERE u.school_id=? AND u.id<>? AND u.display_name<>'' AND instr(lower(u.display_name), lower(?)) > 0
       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id=? AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=?))
       ORDER BY u.display_name COLLATE NOCASE, u.id LIMIT 200`).all(viewer.schoolId, viewerId, query.trim(), viewerId, viewerId) as MemberRow[];
-    return { members: rows.map(row => this.summarize(viewerId, viewerVerified, row)), viewerVerified };
+    const ranks = this.service.staffRanks(rows.map(row => row.id));
+    return { members: rows.map(row => this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null)), viewerVerified };
   }
   friends(viewerId: string): { friends: MemberSummary[]; incoming: MemberSummary[]; outgoing: MemberSummary[]; blocked: MemberSummary[] } {
     const viewer = this.service.ready(viewerId);
@@ -161,13 +163,14 @@ export class CommunityService {
     const rows = this.db.prepare(`SELECT u.*, (SELECT count(*) FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) verified, f.status, f.requester_id
       FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       WHERE (f.user_low=? OR f.user_high=?) ORDER BY u.display_name COLLATE NOCASE`).all(viewerId, viewerId, viewerId) as (MemberRow & { status: string; requester_id: string })[];
-    const summaries = rows.map(row => ({ row, summary: this.summarize(viewerId, viewerVerified, row) }));
     const blockedRows = this.db.prepare('SELECT u.*, 0 verified FROM blocks b JOIN users u ON u.id=b.blocked_id WHERE b.blocker_id=? ORDER BY u.display_name COLLATE NOCASE').all(viewerId) as MemberRow[];
+    const ranks = this.service.staffRanks([...rows, ...blockedRows].map(row => row.id));
+    const summaries = rows.map(row => ({ row, summary: this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null) }));
     return {
       friends: summaries.filter(entry => entry.row.status === 'accepted').map(entry => entry.summary),
       incoming: summaries.filter(entry => entry.row.status === 'pending' && entry.row.requester_id !== viewerId).map(entry => entry.summary),
       outgoing: summaries.filter(entry => entry.row.status === 'pending' && entry.row.requester_id === viewerId).map(entry => entry.summary),
-      blocked: blockedRows.map(row => ({ ...this.summarize(viewerId, viewerVerified, row), fullName: null })),
+      blocked: blockedRows.map(row => ({ ...this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null), fullName: null })),
     };
   }
   /** A profile. Friends additionally receive classes and the full personal schedule so the client can render their day. */
@@ -181,7 +184,7 @@ export class CommunityService {
     const friends = this.areFriends(viewerId, otherId);
     const sameSchool = viewer.schoolId !== null && viewer.schoolId === row.school_id;
     if (!sameSchool && !friends) fail('NOT_FOUND', 'This member is not available.');
-    const summary = this.summarize(viewerId, this.isVerified(viewerId, viewer.schoolId), row);
+    const summary = this.summarize(viewerId, this.isVerified(viewerId, viewer.schoolId), row, this.service.staffRank(row.id));
     const school = this.service.school(row.school_id);
     const shared = friends ? this.personalOf(otherId) : null;
     // True when the pair's thread holds at least one message; the report panel then offers to include them.
@@ -413,6 +416,7 @@ export class CommunityService {
       JOIN users me ON me.id=?
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
       ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as (AvatarRow & { display_name: string })[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
+    const ranks = this.service.staffRanks(rows.map(row => row.id));
+    return rows.map(row => ({ id: row.id, staff: ranks.get(row.id), displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
   }
 }

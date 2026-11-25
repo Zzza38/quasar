@@ -49,6 +49,20 @@ function fixture() {
 }
 
 describe('staff roles', () => {
+  it('shows only current grants and honors the Google ID pinned to the owner badge', () => {
+    const f = fixture();
+    const service = new Service(f.db, 'OWNER@example.com', `sub-${f.owner}`);
+    const ids = [f.owner, f.helper, f.alice, f.bob];
+    grantStaffRole(service, f.alice, 'school-manager');
+    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner'], [f.helper, 'support']]));
+    joinStaffBeta(service, f.alice);
+    expect(service.staffRanks(ids).get(f.alice)).toBe('school-manager');
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.alice);
+    revokeStaffRole(service, f.helper);
+    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner']]));
+    expect(new Service(f.db, 'OWNER@example.com', 'different-sub').staffRanks(ids).size).toBe(0);
+  });
+
   it('gives each role its bundle and the owner everything', () => {
     const f = fixture();
     expect(f.service.staffRank(f.owner)).toBe('owner');

@@ -23,6 +23,8 @@ import { Label } from '../ui/label';
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
 import { Toggle } from '../ui/toggle';
 import { Button as MenuRow } from '../ui/button';
+import { useBeta } from '../betas';
+import { StaffBadge } from '../staff-badge';
 import { STAFF_LABELS, STAFF_NOUNS, type StaffRank } from '@/domain/staff';
 import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatTarget, type ChatThread, type GlobalSummary, type GroupInfo, type GroupSummary, type Outgoing, type Receipt, type SchoolSummary } from '../use-chat';
 
@@ -436,6 +438,14 @@ const liveTitle = (live: boolean) => (live ? 'Live updates connected' : 'Live up
 /** Section labels in the chat list: a quiet 13 px semibold line, like an inbox. */
 const SECTION_LABEL = 'text-[13px] font-semibold text-muted-foreground';
 
+function ChatStaffBadge({ rank }: { rank?: StaffRank | null }) {
+  return useBeta('staff-roles') ? <StaffBadge rank={rank} /> : null;
+}
+
+function senderPreview(last: { fromMe: boolean; senderName: string; staff?: StaffRank }, preview: string) {
+  return <>{last.fromMe ? 'You' : last.senderName}<ChatStaffBadge rank={last.staff} />: {censorSlurs(preview)}</>;
+}
+
 function previewText(row: OpenRow): string {
   const last = row.lastMessage;
   if (!last) return 'No messages yet';
@@ -444,29 +454,29 @@ function previewText(row: OpenRow): string {
   return last.fromMe ? `You: ${preview}` : preview;
 }
 
-function globalPreview(summary: GlobalSummary): string {
+function globalPreview(summary: GlobalSummary): ReactNode {
   const last = summary.lastMessage;
   if (!last) return 'Everyone on Quasar can post here';
   if (last.preview === null) return last.deletedBy === 'owner' ? `Removed by ${STAFF_NOUNS[last.moderatedBy ?? 'owner']}` : 'Message deleted';
-  return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
+  return senderPreview(last, last.preview);
 }
 
-function schoolPreview(summary: SchoolSummary): string {
+function schoolPreview(summary: SchoolSummary): ReactNode {
   const last = summary.lastMessage;
   if (!last) return `Everyone at ${summary.schoolName} can post here`;
   if (last.preview === null) return last.deletedBy === 'owner' ? `Removed by ${STAFF_NOUNS[last.moderatedBy ?? 'owner']}` : 'Message deleted';
-  return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
+  return senderPreview(last, last.preview);
 }
 
-function groupPreview(group: GroupSummary): string {
+function groupPreview(group: GroupSummary): ReactNode {
   const last = group.lastMessage;
   if (!last) return pluralize(group.memberCount, 'member');
   if (last.preview === null) return last.deletedBy === 'support' ? 'Hidden by support' : last.deletedBy === 'admin' ? 'Removed by the group admin' : 'Message deleted';
-  return `${last.fromMe ? 'You' : last.senderName}: ${censorSlurs(last.preview)}`;
+  return senderPreview(last, last.preview);
 }
 
 /** The parts every list row shares: bold name while unread, mute icon, time, preview and the unread pill. */
-function RowBody({ id, name, unread, muted, time, preview, verified, extra, mentioned = false }: { id: string; name: string; unread: number; muted: boolean; time: string | null; preview: string; verified?: boolean; extra?: ReactNode; mentioned?: boolean }) {
+function RowBody({ id, name, unread, muted, time, preview, verified, extra, mentioned = false }: { id: string; name: string; unread: number; muted: boolean; time: string | null; preview: ReactNode; verified?: boolean; extra?: ReactNode; mentioned?: boolean }) {
   return <span className="grid min-w-0 flex-1 gap-0.5">
     <span className="flex min-w-0 items-center gap-1.5">
       <strong className={cn('truncate text-[15px]', unread > 0 ? 'font-bold' : 'font-semibold')}>{name}</strong>
@@ -536,11 +546,12 @@ function GroupChatRow({ group, state, selected }: { group: GroupSummary; state: 
 function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; selected: boolean }) {
   const id = useId();
   const name = row.peer.displayName;
+  const staff = useBeta('staff-roles') ? row.peer.staff : null;
   return <li className={ROW_ITEM}>
-    <button type="button" data-chat-row={row.peer.id} aria-label={`Open chat with ${name}`} aria-describedby={describedBy(id, [row.peer.verified && 'verified', 'preview', row.lastMessage && 'time', row.unread > 0 && 'unread', row.muted && 'muted'])} aria-current={selected ? 'true' : undefined}
+    <button type="button" data-chat-row={row.peer.id} aria-label={`Open chat with ${name}`} aria-describedby={describedBy(id, [row.peer.verified && 'verified', staff && 'role', 'preview', row.lastMessage && 'time', row.unread > 0 && 'unread', row.muted && 'muted'])} aria-current={selected ? 'true' : undefined}
       onClick={() => state.navigate('messages', { with: row.peer.id })} className={ROW}>
       <MemberAvatar name={name} src={row.peer.avatar} className="size-11 text-[15px]" />
-      <RowBody id={id} name={name} verified={row.peer.verified} unread={row.unread} muted={row.muted} time={row.lastMessage ? chatTime(row.lastMessage.createdAt, state.timeZone, state.now) : null} preview={previewText(row)} />
+      <RowBody id={id} name={name} extra={staff && <span id={`${id}-role`}><StaffBadge rank={staff} /></span>} verified={row.peer.verified} unread={row.unread} muted={row.muted} time={row.lastMessage ? chatTime(row.lastMessage.createdAt, state.timeZone, state.now) : null} preview={previewText(row)} />
     </button>
   </li>;
 }
@@ -569,7 +580,7 @@ function ClosedChatRow({ row, online, onReport, onReopen }: { row: ClosedRow; on
   return <li className={cn(ROW_ITEM, 'flex min-w-0 items-center gap-3 rounded-2xl px-2 py-2.5')}>
     <MemberAvatar name={row.displayName} muted className="size-11 text-[15px]" />
     <span className="grid min-w-0 flex-1 gap-0.5">
-      <strong className="truncate text-[15px] font-semibold">{row.displayName}</strong>
+      <strong className="truncate text-[15px] font-semibold">{row.displayName}<ChatStaffBadge rank={row.staff} /></strong>
       <span className="text-[13.5px] leading-snug text-muted-foreground">Chat closed</span>
     </span>
     <ReopenButton row={row} online={online} onReopen={onReopen} />
@@ -650,6 +661,7 @@ function Thread({ state, userId, phone, nudge, fallbackName, closedRow, onChange
 }) {
   const chat = useChatThread(state, { kind: 'peer', userId }, { onChange });
   const name = chat.peer?.displayName ?? fallbackName;
+  const peerRole = useBeta('staff-roles') ? chat.peer?.staff : null;
   const [modal, setModal] = useState<ThreadModal>(null);
   const [actionError, setActionError] = useState('');
   const [reported, setReported] = useState(false);
@@ -687,7 +699,7 @@ function Thread({ state, userId, phone, nudge, fallbackName, closedRow, onChange
       {back}
       <MemberAvatar name={name} src={peer.avatar} size="md" />
       <div className="grid min-w-0 flex-1 gap-0.5">
-        <button type="button" aria-label={`Open ${name}’s profile`} onClick={() => state.navigate('people', { member: userId })} className={HEADER_NAME}>{name}</button>
+        <button type="button" aria-label={`Open ${name}’s profile`} title={peerRole ? STAFF_LABELS[peerRole] : undefined} onClick={() => state.navigate('people', { member: userId })} className={HEADER_NAME}>{name}<StaffBadge rank={peerRole} /></button>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {peer.verified ? <Chip tone="success" icon="checkCircle" className="min-h-5 px-2 text-[11px]">Verified</Chip> : <Chip tone="outline" className="min-h-5 px-2 text-[11px]">Not verified</Chip>}
           {peer.fullName && <Hint className="truncate text-[12.5px]">{peer.fullName}</Hint>}
@@ -833,10 +845,10 @@ function GroupMembersModal({ state, group, friends, onClose, onChanged }: { stat
     <ul className="grid gap-1" aria-label="Members">
       {group.members.map((member) => <li key={member.id} className="flex items-center gap-3 rounded-2xl px-2 py-2">
         {member.id === me
-          ? <><MemberAvatar name={member.displayName} src={member.avatar} /><span className="grid min-w-0 flex-1"><strong className="truncate text-sm font-bold">{member.displayName} <span className="font-medium text-muted-foreground">(you)</span></strong></span></>
+          ? <><MemberAvatar name={member.displayName} src={member.avatar} /><span className="grid min-w-0 flex-1"><strong className="truncate text-sm font-bold">{member.displayName}<ChatStaffBadge rank={member.staff} /> <span className="font-medium text-muted-foreground">(you)</span></strong></span></>
           : <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Open ${member.displayName}’s profile`} onClick={() => { onClose(); state.navigate('people', { member: member.id }); }}>
             <MemberAvatar name={member.displayName} src={member.avatar} />
-            <span className="grid min-w-0 flex-1"><strong className="flex items-center gap-1.5 truncate text-sm font-bold">{member.displayName}{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong></span>
+            <span className="grid min-w-0 flex-1"><strong className="flex items-center gap-1.5 truncate text-sm font-bold">{member.displayName}<ChatStaffBadge rank={member.staff} />{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong></span>
           </button>}
         {member.role === 'admin' && <Chip tone="accent" icon="crown">Admin</Chip>}
         {admin && member.id !== me && <Button size="sm" variant="ghost" icon="userMinus" aria-label={`Remove ${member.displayName} from the group`} busy={pending === member.id} disabled={!state.online || pending !== null}
@@ -865,7 +877,7 @@ function FriendPicker({ friends, picked, onChange, disabled, limit }: { friends:
         <Label htmlFor={`${id}-${friend.id}`} className={cn('flex cursor-pointer items-center gap-3 rounded-2xl px-2 py-2 hover:bg-muted', full && 'opacity-50')}>
           <Checkbox id={`${id}-${friend.id}`} checked={checked} disabled={disabled || full} onCheckedChange={(value) => onChange(value === true ? [...picked, friend.id] : picked.filter((entry) => entry !== friend.id))} />
           <MemberAvatar name={friend.displayName} src={friend.avatar} size="sm" />
-          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span>{friend.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span><ChatStaffBadge rank={friend.staff} />{friend.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</span>
         </Label>
       </li>;
     })}
@@ -1037,6 +1049,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
   searching?: boolean; onSearchClose?: () => void;
 }) {
   const named = mode !== 'peer';
+  const showStaff = useBeta('staff-roles');
   /** The viewer's own message already rose in as a pending bubble, so its confirmed copy appears in place. */
   const { messages, outgoing, receipts } = chat;
   const scroller = useRef<HTMLDivElement>(null);
@@ -1256,7 +1269,10 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
           if (item.kind === 'unread') return <li key={item.key} role="none" className="flex items-center gap-2 py-2 text-[11.5px] font-bold text-primary"><span aria-hidden="true" className="h-px flex-1 bg-primary/40" />New messages<span aria-hidden="true" className="h-px flex-1 bg-primary/40" /></li>;
           const { message } = item;
           const status = message.fromMe && message.seq === lastMineSeq ? receiptStatus(message.seq, receiptsFor(message.createdAt, receipts), mode === 'group') : null;
-          return <Bubble key={item.key} message={message} date={item.date} time={item.time} startsRun={item.startsRun} endsRun={item.endsRun} showName={item.showName} status={status} online={state.online} mode={mode} canModerate={canModerate}
+          const staff = message.fromMe ? state.context.staff?.role : 'sender' in message ? message.sender.staff : chat.peer?.staff;
+          const showRole = showStaff || mode === 'global' || mode === 'school';
+          return <Bubble sender={message.fromMe ? state.context.user.displayName : 'sender' in message ? message.sender.displayName : name}
+            staff={showRole ? staff : null} key={item.key} message={message} date={item.date} time={item.time} startsRun={item.startsRun} endsRun={item.endsRun} showName={item.showName || (showStaff && !!staff && item.startsRun)} status={status} online={state.online} mode={mode} canModerate={canModerate}
             fresh={mountedNewest.current !== null && message.seq > mountedNewest.current && !message.fromMe}
             open={openActions === message.seq} onOpenChange={(next) => setOpenActions((current) => (next ? message.seq : current === message.seq ? null : current))}
             added={added[message.seq]} copied={copied === message.seq} onAddTask={() => void addTask(message)} onCopy={() => void copy(message)} onDelete={() => onDelete(message)} onEdit={onEdit && (() => onEdit(message))} onReport={onReport && (() => onReport(message.seq))}
@@ -1351,7 +1367,7 @@ function SearchPanel({ chat, state, onClose, onPick }: { chat: ChatThread; state
         {results.map((hit) => <li key={hit.seq}>
           <button type="button" disabled={jumping !== null} onClick={() => void pick(hit)} className="grid w-full gap-0.5 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
             <span className="flex items-baseline gap-2 text-[12px] text-muted-foreground">
-              <strong className="truncate font-semibold text-foreground/80">{hit.fromMe ? 'You' : hit.senderName}</strong>
+              <strong className="truncate font-semibold text-foreground/80">{hit.fromMe ? 'You' : hit.senderName}<ChatStaffBadge rank={hit.staff} /></strong>
               <span className="ml-auto shrink-0 tabular-nums">{chatTime(hit.createdAt, state.timeZone, state.now)}</span>
               {jumping === hit.seq && <Spinner />}
             </span>
@@ -1416,7 +1432,7 @@ function QuoteCard({ reply, mine, onClick }: { reply: MessageReply; mine: boolea
   const className = cn('mb-1.5 block w-full min-w-40 rounded-xl px-2.5 py-1.5 text-left outline-none',
     mine ? 'bg-primary-foreground/15' : 'bg-foreground/[0.08]', onClick && 'focus-visible:ring-2 focus-visible:ring-ring');
   const body = <>
-    <span className={cn('block text-[12px] font-semibold leading-tight', mine ? 'text-primary-foreground/90' : 'text-primary')}>{quoteName(reply)}</span>
+    <span className={cn('block text-[12px] font-semibold leading-tight', mine ? 'text-primary-foreground/90' : 'text-primary')}>{quoteName(reply)}{reply.preview !== null && <ChatStaffBadge rank={reply.staff} />}</span>
     <span className={cn('block truncate text-[13px] leading-snug', mine ? 'text-primary-foreground/85' : 'text-foreground/80', reply.preview === null && 'italic')}>{text}</span>
   </>;
   return onClick
@@ -1486,7 +1502,7 @@ function ReactorList({ reactions, reactors, canReact, onRemove }: { reactions: C
       const body = <>
         <MemberAvatar name={reactor.name} src={reactor.avatar} size="sm" />
         <span className="grid min-w-0 flex-1">
-          <span className="truncate font-medium">{reactor.me ? 'You' : reactor.name}</span>
+          <span className="truncate font-medium">{reactor.me ? 'You' : reactor.name}<ChatStaffBadge rank={reactor.staff} /></span>
           {reactor.me && canReact && <span className="text-[12px] leading-tight text-muted-foreground">Tap to remove</span>}
         </span>
         <span aria-hidden="true" className="text-[17px] leading-none">{reactor.emoji}</span>
@@ -1511,15 +1527,15 @@ function ReaderList({ seq, receipts }: { seq: number; receipts: Receipt[] }) {
       <h3 className="px-2 pt-1 pb-0.5 text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{title}</h3>
       <ul className="grid">
         {people.map((person) => <li key={person.id} className="flex min-h-9 items-center gap-2.5 px-2 py-1 text-[14px]">
-          <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span>
+          <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><ChatStaffBadge rank={person.staff} />
         </li>)}
       </ul>
     </section>)}
   </div>;
 }
 
-function Bubble({ message, date, time, startsRun, endsRun, showName, status, online, mode, canModerate, fresh, open, onOpenChange, added, copied, onAddTask, onCopy, onDelete, onEdit, onEditOwn, editing = false, onReport, highlighted, canReact, reactError, onReact, onReply, onJump, receipts }: {
-  message: ChatMessage; date: string; time: string; startsRun: boolean; endsRun: boolean; showName: boolean; status: ReturnType<typeof receiptStatus>; online: boolean; mode: Mode; canModerate: boolean; fresh: boolean;
+function Bubble({ message, sender, staff, date, time, startsRun, endsRun, showName, status, online, mode, canModerate, fresh, open, onOpenChange, added, copied, onAddTask, onCopy, onDelete, onEdit, onEditOwn, editing = false, onReport, highlighted, canReact, reactError, onReact, onReply, onJump, receipts }: {
+  message: ChatMessage; sender: string; staff?: StaffRank | null; date: string; time: string; startsRun: boolean; endsRun: boolean; showName: boolean; status: ReturnType<typeof receiptStatus>; online: boolean; mode: Mode; canModerate: boolean; fresh: boolean;
   open: boolean; onOpenChange: (open: boolean) => void; added: 'saving' | 'added' | string | undefined; copied: boolean; onAddTask: () => void; onCopy: () => void; onDelete: () => void; onEdit?: () => void; onReport?: () => void;
   /** The sender may still rewrite this message (`onEditOwn`), and the composer is rewriting it right now (`editing`). */
   onEditOwn?: () => void; editing?: boolean;
@@ -1532,7 +1548,7 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
   const kept = message.removed ?? null;
   const before = 'editedFrom' in message ? message.editedFrom : null;
   const [showBefore, setShowBefore] = useState(false);
-  const name = senderName(message);
+  const name = sender;
   const withAvatar = mode !== 'peer' && !mine;
   const sheetId = useId();
   const reacted = message.reactions.find((reaction) => reaction.mine)?.emoji ?? null;
@@ -1639,7 +1655,7 @@ function Bubble({ message, date, time, startsRun, endsRun, showName, status, onl
     {/* In a room or group, the sender's picture sits beside the last bubble of their run; the others keep the space. */}
     {withAvatar && <span className="mr-2 w-7 shrink-0 self-end">{endsRun && <MemberAvatar name={name} src={senderAvatar(message)} size="sm" />}</span>}
     <div className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
-      {showName && <span className="mb-0.5 px-2 text-[12px] font-semibold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <><Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" /><span className="sr-only"> (verified)</span></>}{'sender' in message && 'staff' in message.sender && message.sender.staff && <StaffBadge rank={message.sender.staff} />}</span>}
+      {showName && <span className="mb-0.5 px-2 text-[12px] font-semibold text-muted-foreground">{name}{'sender' in message && message.sender.verified && <><Icon name="checkCircle" size={12} className="ml-1 inline-block align-[-1px] text-success" /><span className="sr-only"> (verified)</span></>}<StaffBadge rank={staff} /></span>}
       {removed
         ? <div title={formatDateTime(date, time)} className={cn(BUBBLE, 'max-w-[80%] border border-dashed border-foreground/20 bg-transparent text-muted-foreground lg:max-w-[75%]', kept ? 'grid gap-1.5' : 'italic')}>
           {label && <span className="sr-only">{label}</span>}
@@ -1801,7 +1817,7 @@ function MessageImage({ src }: { src: string }) {
 }
 
 /** Someone the composer's "@" picker can offer: a group's members, or the people who have posted in a room lately. */
-type Mentionable = { id: string; displayName: string; avatar: string | null };
+type Mentionable = { staff?: StaffRank | null; id: string; displayName: string; avatar: string | null };
 
 /** The people who posted in the loaded part of a room, newest first, without the viewer: the room's "@" suggestions. */
 function recentSenders(messages: ChatMessage[], me: string): Mentionable[] {
@@ -1809,7 +1825,7 @@ function recentSenders(messages: ChatMessage[], me: string): Mentionable[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     if (!('sender' in message) || message.sender.id === me || seen.has(message.sender.id)) continue;
-    seen.set(message.sender.id, { id: message.sender.id, displayName: message.sender.displayName, avatar: message.sender.avatar });
+    seen.set(message.sender.id, message.sender);
   }
   return [...seen.values()];
 }
@@ -2097,7 +2113,7 @@ function Composer({ chat, name, online, filtered = false, people }: { chat: Chat
     {editError && <Hint tone="danger" role="alert" className="ml-11">{editError}</Hint>}
     {reply && !editing && <div role="status" className={strip}>
       <span className="grid min-w-0 flex-1">
-        <span className="text-[12px] font-semibold leading-tight text-primary">{quoteName(reply)}</span>
+        <span className="text-[12px] font-semibold leading-tight text-primary">{quoteName(reply)}{reply.preview !== null && <ChatStaffBadge rank={reply.staff} />}</span>
         <span className={cn('truncate text-[13px] leading-snug text-muted-foreground', reply.preview === null && 'italic')}>{reply.preview ?? 'Message unavailable'}</span>
       </span>
       <IconButton label="Cancel reply" icon="x" size="sm" className="rounded-full" onClick={() => chat.setReply(null)} />
@@ -2128,7 +2144,7 @@ function Composer({ chat, name, online, filtered = false, people }: { chat: Chat
             {matches.map((person, index) => <li key={person.id} id={`${mentionList}-${index}`} role="option" aria-selected={index === mentionIndex}
               onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setMentionAt(index)} onClick={() => pickMention(person)}
               className={cn('flex min-h-10 cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1 text-[14px]', index === mentionIndex && 'bg-muted')}>
-              <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span>
+              <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><ChatStaffBadge rank={person.staff} />
             </li>)}
           </ul>}
           <Textarea ref={field} aria-label={editing ? 'Edit your message' : `Message ${name}`} rows={1} autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}
@@ -2158,11 +2174,6 @@ function ConfirmModal({ title, description, confirm, online, onClose, onConfirm 
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>Cancel</Button><Spacer /><Button variant="danger" busy={pending} disabled={!online} onClick={() => void run()}>{confirm}</Button></>}>
     {error ? <Callout tone="danger" icon="alert" role="alert">{error}</Callout> : null}
   </Modal>;
-}
-
-/** Who on Quasar staff is speaking in the room: the role from src/domain/staff.ts, so nobody can pass as the owner. */
-function StaffBadge({ rank }: { rank: StaffRank }) {
-  return <span className="ml-1.5 inline-flex items-center rounded-full bg-primary-soft px-1.5 align-[1px] text-[10px] font-semibold leading-4 text-primary-soft-foreground ring-1 ring-inset ring-primary/15">{STAFF_LABELS[rank]}</span>;
 }
 
 /** A moderator removes someone's room message, with an optional reason everyone sees in its place. */

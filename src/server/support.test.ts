@@ -172,6 +172,8 @@ describe('member records', () => {
   it('finds members by email, name or ID, optionally at one school', async () => {
     const f = fixture();
     const search = (query: string, schoolId?: string) => f.caller(f.owner).admin.users.search({ query, ...(schoolId ? { schoolId } : {}) });
+    expect(await search(f.owner)).toMatchObject([{ id: f.owner, staff: 'owner' }]);
+    expect(await search(f.alice)).toMatchObject([{ id: f.alice, staff: null }]);
     expect((await search('STUDENTS.example')).map(row => row.id)).toEqual([f.alice]);
     expect((await search('bob fullname')).map(row => row.id)).toEqual([f.bob]);
     expect((await search(f.owner)).map(row => row.id)).toEqual([f.owner]);
