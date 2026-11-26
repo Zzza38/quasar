@@ -1213,7 +1213,7 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
     setReactError(null);
     try { await chat.react(seq, emoji); } catch (err) { setReactError({ seq, text: errorMessage(err) }); }
   };
-  const reply = (message: ChatMessage) => chat.setReply(quoteOf(message, name));
+  const reply = (message: ChatMessage) => chat.setReply(quoteOf(message, name, message.fromMe ? state.context.staff?.role : chat.peer?.staff));
   /**
    * A tapped quote scrolls its target into view and pulses it. A target older than the loaded pages is fetched one
    * page at a time (up to JUMP_PAGES) until it appears or there is nothing older; each page commits before the next look.

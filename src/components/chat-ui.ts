@@ -76,9 +76,10 @@ export function sendParts(body: string, images: string[]): Array<{ body: string;
 }
 
 /** The quote the composer and bubbles show for a reply target: its sender's name and a one-line preview. */
-export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; image?: string | null; sender?: { displayName: string; staff?: StaffRank | null } }, peerName: string): MessageReply {
+export function quoteOf(message: { seq: number; fromMe: boolean; body: string | null; image?: string | null; sender?: { displayName: string; staff?: StaffRank | null } }, peerName: string, peerStaff?: StaffRank | null): MessageReply {
   const preview = message.body === null ? null : censorSlurs(plainText(message.body)).replace(/\s+/g, ' ').trim().slice(0, 140) || (message.image ? 'Photo' : '');
-  return { ...(preview !== null && message.sender?.staff && { staff: message.sender.staff }), seq: message.seq, fromMe: message.fromMe, senderName: message.sender?.displayName ?? peerName, preview };
+  const staff = message.sender ? message.sender.staff : peerStaff;
+  return { ...(preview !== null && staff && { staff }), seq: message.seq, fromMe: message.fromMe, senderName: message.sender?.displayName ?? peerName, preview };
 }
 
 /** "You" for the viewer's own message; the sender's name otherwise (a hard-deleted sender has none). */
@@ -101,7 +102,7 @@ export function liveQuote(reply: MessageReply, messages: QuotableRow[], peerName
   if (!first || reply.seq < first.seq) return reply;
   const row = messages.find((message) => message.seq === reply.seq);
   if (!row) return { ...reply, preview: null };
-  const quote = quoteOf(row, peerName);
+  const quote = quoteOf(row, peerName, reply.staff);
   return row.deletedBy !== null ? { ...quote, preview: null } : quote;
 }
 
