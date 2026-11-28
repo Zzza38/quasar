@@ -494,7 +494,6 @@ export class OfflineWorkspace {
           if (state.lease && state.lease.owner !== owner && state.lease.until > Date.now()) return null;
           // Another tab is signing out: a change it chose to discard must not be uploaded from here.
           if (this.signingOutElsewhere(state)) return null;
-          state.lease = { owner, until: Date.now() + LEASE_MS };
           const blocked = new Set<string>();
           for (const item of state.queue) {
             const key = keyOf(item.mutation);
@@ -532,6 +531,8 @@ export class OfflineWorkspace {
               item.mutation.data = data;
               item.state = "sending";
             }
+            // An idle page may close mid-sync. Only hold the cross-tab lease for an actual upload.
+            state.lease = { owner, until: Date.now() + LEASE_MS };
             return clone(item.mutation);
           }
           // Nothing is left to upload, so no stored failure still applies. Without this, an error kept from an
@@ -580,6 +581,7 @@ export class OfflineWorkspace {
             }
           }
           state.lastError = null;
+          if (state.lease?.owner === owner) state.lease = null;
         });
       }
     } catch (error) {
