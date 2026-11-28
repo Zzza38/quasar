@@ -558,8 +558,12 @@ test('manually placed videos use existing blank space without changing layout', 
   for (const name of ['Schedule', 'Tasks', 'Classes', 'School', 'People']) {
     await page.getByRole('link', { name, exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
-    if (name === 'School') await expect(page.getByRole('navigation', { name: 'School sections' })).toBeVisible();
-    else await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
+    if (name === 'School') {
+      await expect(page.getByRole('navigation', { name: 'School sections' })).toBeVisible();
+      // Expand the schedule so there is blank space under the navigation for the videos to fill.
+      await page.getByRole('button', { name: 'Preview on real dates' }).click();
+      await expect(page.getByRole('button', { name: 'Hide preview' })).toBeVisible();
+    } else await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
     await enterCode(page);
     await page.getByRole('switch', { name: 'What Is an Attention Span', exact: true }).click();
     await page.keyboard.press('Escape');
