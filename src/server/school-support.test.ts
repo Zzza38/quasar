@@ -6,9 +6,7 @@ import { openDatabase, type Db } from './db';
 import { appRouter } from './router';
 import { Service } from './service';
 import { grantStaffRole } from './staff';
-import { joinStaffBeta, useStaffBetaFixture } from './staff-beta-fixture';
 
-useStaffBetaFixture();
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
@@ -28,7 +26,6 @@ function fixture() {
   service.join(local, { schoolId: school.id, choice: 'community' });
   service.join(helper, { schoolId: school.id, choice: 'community' });
   service.join(foreign, { schoolId: other.id, choice: 'community' });
-  joinStaffBeta(service, helper);
   grantStaffRole(service, helper, 'support', undefined, 'school');
   const admin = (actor: string) => appRouter.createCaller({ service, userId: actor, authAt: Date.now() }).admin;
   return { db, service, owner, helper, local, foreign, school, other, community: new CommunityService(service), as: admin(helper), asOwner: admin(owner) };
@@ -41,7 +38,7 @@ describe('school-scoped Support', () => {
     f.service.requestCorrection(f.foreign, 'Our lunch period has moved.');
     f.service.feedback(f.local, 'A private sitewide support question.');
     const seeded = f.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind) VALUES(?,?,?,?,?,?)');
-    for (const kind of ['appeal:ban', 'appeal:pause', 'beta:staff-roles']) seeded.run(randomUUID(), f.school.id, f.local, 'Private support case', new Date().toISOString(), kind);
+    for (const kind of ['appeal:ban', 'appeal:pause', 'beta:month-days']) seeded.run(randomUUID(), f.school.id, f.local, 'Private support case', new Date().toISOString(), kind);
     const visible = await f.as.requests();
     expect(visible).toMatchObject([{ userId: f.local, kind: 'school:correction' }]);
     const hidden = (await f.asOwner.requests()).filter(row => row.id !== visible[0].id);

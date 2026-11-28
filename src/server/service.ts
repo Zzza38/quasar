@@ -14,7 +14,6 @@ import { parsePlatforms, SetupGuideService } from './setup-guides';
 import { foldConfusables } from '@/domain/chat-filter';
 import { avatarUrl, usableGooglePicture } from './avatars';
 import { BetaService } from './betas';
-import { currentBetaRegistry } from './beta-registry';
 import { seedSchoolMember } from './global-chat';
 import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
@@ -298,13 +297,11 @@ export class Service {
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
   private activeGrants(ids: readonly string[]) {
     const rows = this.db.prepare(`SELECT u.id, u.email, u.google_sub googleSub, r.role, r.school_id schoolId, s.name schoolName,
-        EXISTS (SELECT 1 FROM staff_role_blacklist b WHERE b.user_id=u.id AND b.role=CASE r.role WHEN 'school-support' THEN 'support' WHEN 'school-chat-moderation' THEN 'chat-moderation' ELSE r.role END) blocked,
-        EXISTS (SELECT 1 FROM beta_members b WHERE b.user_id=u.id AND b.beta_key='staff-roles') joined
+        EXISTS (SELECT 1 FROM staff_role_blacklist b WHERE b.user_id=u.id AND b.role=CASE r.role WHEN 'school-support' THEN 'support' WHEN 'school-chat-moderation' THEN 'chat-moderation' ELSE r.role END) blocked
       FROM users u LEFT JOIN staff_roles r ON r.user_id=u.id AND (r.school_id IS NULL OR r.school_id=u.school_id)
       LEFT JOIN schools s ON s.id=r.school_id WHERE u.id IN (SELECT value FROM json_each(?))`)
-      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; joined: number; blocked: number }[];
+      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; blocked: number }[];
     const grants = new Map<string, { role: StaffRank; schoolId: string | null; schoolName: string | null }>();
-    let betaExists: boolean | undefined;
     for (const row of rows) {
       if (this.matchesOwner(row.email, row.googleSub)) {
         grants.set(row.id, { role: 'owner', schoolId: null, schoolName: null });
@@ -312,11 +309,6 @@ export class Service {
       }
       const role = decodeStoredRole(row.role);
       if (!role || row.blocked) continue;
-      if (row.schoolId || role === 'chat-moderation') {
-        if (!row.joined) continue;
-        betaExists ??= currentBetaRegistry().betas.some(beta => beta.key === 'staff-roles');
-        if (!betaExists) continue;
-      }
       grants.set(row.id, { role, schoolId: row.schoolId, schoolName: row.schoolName });
     }
     return grants;

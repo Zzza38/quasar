@@ -9,7 +9,6 @@ import { classColor, formatRoom, formatTime, pluralize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
-import { useBeta } from '../betas';
 import { StaffBadge } from '../staff-badge';
 import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, EmptyState, Eyebrow, Hint, IconButton, Input, PageHeader, Section } from '../primitives';
@@ -207,11 +206,10 @@ function byBlock(classes: ClassGroup[]): Block[] {
 
 /** Friends as small name chips; a tap opens the profile, which has their day and Message. */
 function FriendChips({ people, friends, label }: { people: People; friends: Member[]; label: string }) {
-  const showRoles = useBeta('staff-roles');
   return <ul className="flex flex-wrap gap-1.5" aria-label={label}>{friends.map(friend => <li key={friend.id}>
-    <button type="button" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`} aria-description={showRoles && friend.staff ? STAFF_LABELS[friend.staff] : undefined}
+    <button type="button" onClick={() => people.openProfile(friend.id)} aria-label={`Open ${friend.displayName}’s profile`} aria-description={friend.staff ? STAFF_LABELS[friend.staff] : undefined}
       className="flex items-center gap-1.5 rounded-full bg-card/80 py-0.5 pl-0.5 pr-2.5 text-xs font-semibold ring-1 ring-inset ring-foreground/[0.06] outline-none hover:bg-card focus-visible:ring-2 focus-visible:ring-ring">
-      <MemberAvatar name={friend.displayName} src={friend.avatar} size="xs" />{friend.displayName}{showRoles && friend.staff && <StaffBadge rank={friend.staff} />}
+      <MemberAvatar name={friend.displayName} src={friend.avatar} size="xs" />{friend.displayName}{friend.staff && <StaffBadge rank={friend.staff} />}
     </button>
   </li>)}</ul>;
 }

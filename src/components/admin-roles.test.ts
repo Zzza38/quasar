@@ -7,7 +7,6 @@ import { AdminRoleGrants } from './admin-role-grants';
 import { AdminRoles } from './admin-roles';
 
 describe('staff console presentation', () => {
-  const beta = { key: 'staff-roles', name: 'Staff roles', description: '', public: false, joinedAt: '2026-01-01T00:00:00Z' };
   const schoolManager = { ...staffAccess('school-manager')!, schoolId: 'school-1', schoolName: 'Harbor High' };
 
   it('shows managers their assigned school and school actions', () => {
@@ -27,7 +26,7 @@ describe('staff console presentation', () => {
   });
 
   it('shows managers school tools and hides shared guide and owner tools', () => {
-    const initial: AdminBoot = { accountId: 'manager', isAdmin: false, staff: schoolManager, betas: [beta], adminReady: true };
+    const initial: AdminBoot = { accountId: 'manager', isAdmin: false, staff: schoolManager, betas: [], adminReady: true };
     const html = renderToStaticMarkup(createElement(Admin, { initial }));
     expect(html).toContain('School Manager · Harbor High');
     expect(html).toContain('>People<');
@@ -38,7 +37,7 @@ describe('staff console presentation', () => {
   });
 
   it('opens school Chat Moderation directly on its room tools', () => {
-    const initial: AdminBoot = { accountId: 'moderator', isAdmin: false, staff: staffAccess('chat-moderation', { schoolId: 'school-1', schoolName: 'Harbor High' }), betas: [beta], adminReady: true };
+    const initial: AdminBoot = { accountId: 'moderator', isAdmin: false, staff: staffAccess('chat-moderation', { schoolId: 'school-1', schoolName: 'Harbor High' }), betas: [], adminReady: true };
     const html = renderToStaticMarkup(createElement(Admin, { initial }));
     expect(html).toContain('Chat Moderation · Harbor High');
     expect(html).toContain('href="/messages?room=school"');
@@ -66,9 +65,8 @@ describe('staff console presentation', () => {
     expect(manager).toContain('Assign Support or Chat Moderation to members of East High');
   });
 
-  it('keeps the role catalog behind its beta', () => {
+  it('shows the role catalog to an owner with no beta memberships', () => {
     const initial: AdminBoot = { accountId: 'owner', isAdmin: true, staff: staffAccess('owner'), betas: [], adminReady: true };
-    expect(renderToStaticMarkup(createElement(Admin, { initial }))).not.toContain('>Staff roles<');
-    expect(renderToStaticMarkup(createElement(Admin, { initial: { ...initial, betas: [beta] } }))).toContain('>Staff roles<');
+    expect(renderToStaticMarkup(createElement(Admin, { initial }))).toContain('>Staff roles<');
   });
 });

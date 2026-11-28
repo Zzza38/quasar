@@ -23,7 +23,6 @@ import { Label } from '../ui/label';
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
 import { Toggle } from '../ui/toggle';
 import { Button as MenuRow } from '../ui/button';
-import { useBeta } from '../betas';
 import { StaffBadge } from '../staff-badge';
 import { STAFF_LABELS, STAFF_NOUNS, type StaffRank } from '@/domain/staff';
 import { GLOBAL_TARGET, useChatInbox, useChatThread, useChatViewport, type ChatInboxRow, type ChatMessage, type ChatPause, type ChatTarget, type ChatThread, type GlobalSummary, type GroupInfo, type GroupSummary, type Outgoing, type Receipt, type SchoolSummary } from '../use-chat';
@@ -438,12 +437,8 @@ const liveTitle = (live: boolean) => (live ? 'Live updates connected' : 'Live up
 /** Section labels in the chat list: a quiet 13 px semibold line, like an inbox. */
 const SECTION_LABEL = 'text-[13px] font-semibold text-muted-foreground';
 
-function ChatStaffBadge({ rank }: { rank?: StaffRank | null }) {
-  return useBeta('staff-roles') ? <StaffBadge rank={rank} /> : null;
-}
-
 function senderPreview(last: { fromMe: boolean; senderName: string; staff?: StaffRank }, preview: string) {
-  return <>{last.fromMe ? 'You' : last.senderName}<ChatStaffBadge rank={last.staff} />: {censorSlurs(preview)}</>;
+  return <>{last.fromMe ? 'You' : last.senderName}<StaffBadge rank={last.staff} />: {censorSlurs(preview)}</>;
 }
 
 function previewText(row: OpenRow): string {
@@ -546,7 +541,7 @@ function GroupChatRow({ group, state, selected }: { group: GroupSummary; state: 
 function OpenChatRow({ row, state, selected }: { row: OpenRow; state: AppState; selected: boolean }) {
   const id = useId();
   const name = row.peer.displayName;
-  const staff = useBeta('staff-roles') ? row.peer.staff : null;
+  const staff = row.peer.staff;
   return <li className={ROW_ITEM}>
     <button type="button" data-chat-row={row.peer.id} aria-label={`Open chat with ${name}`} aria-describedby={describedBy(id, [row.peer.verified && 'verified', staff && 'role', 'preview', row.lastMessage && 'time', row.unread > 0 && 'unread', row.muted && 'muted'])} aria-current={selected ? 'true' : undefined}
       onClick={() => state.navigate('messages', { with: row.peer.id })} className={ROW}>
@@ -580,7 +575,7 @@ function ClosedChatRow({ row, online, onReport, onReopen }: { row: ClosedRow; on
   return <li className={cn(ROW_ITEM, 'flex min-w-0 items-center gap-3 rounded-2xl px-2 py-2.5')}>
     <MemberAvatar name={row.displayName} muted className="size-11 text-[15px]" />
     <span className="grid min-w-0 flex-1 gap-0.5">
-      <strong className="truncate text-[15px] font-semibold">{row.displayName}<ChatStaffBadge rank={row.staff} /></strong>
+      <strong className="truncate text-[15px] font-semibold">{row.displayName}<StaffBadge rank={row.staff} /></strong>
       <span className="text-[13.5px] leading-snug text-muted-foreground">Chat closed</span>
     </span>
     <ReopenButton row={row} online={online} onReopen={onReopen} />
@@ -661,7 +656,7 @@ function Thread({ state, userId, phone, nudge, fallbackName, closedRow, onChange
 }) {
   const chat = useChatThread(state, { kind: 'peer', userId }, { onChange });
   const name = chat.peer?.displayName ?? fallbackName;
-  const peerRole = useBeta('staff-roles') ? chat.peer?.staff : null;
+  const peerRole = chat.peer?.staff;
   const [modal, setModal] = useState<ThreadModal>(null);
   const [actionError, setActionError] = useState('');
   const [reported, setReported] = useState(false);
@@ -845,10 +840,10 @@ function GroupMembersModal({ state, group, friends, onClose, onChanged }: { stat
     <ul className="grid gap-1" aria-label="Members">
       {group.members.map((member) => <li key={member.id} className="flex items-center gap-3 rounded-2xl px-2 py-2">
         {member.id === me
-          ? <><MemberAvatar name={member.displayName} src={member.avatar} /><span className="grid min-w-0 flex-1"><strong className="truncate text-sm font-bold">{member.displayName}<ChatStaffBadge rank={member.staff} /> <span className="font-medium text-muted-foreground">(you)</span></strong></span></>
+          ? <><MemberAvatar name={member.displayName} src={member.avatar} /><span className="grid min-w-0 flex-1"><strong className="truncate text-sm font-bold">{member.displayName}<StaffBadge rank={member.staff} /> <span className="font-medium text-muted-foreground">(you)</span></strong></span></>
           : <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Open ${member.displayName}’s profile`} onClick={() => { onClose(); state.navigate('people', { member: member.id }); }}>
             <MemberAvatar name={member.displayName} src={member.avatar} />
-            <span className="grid min-w-0 flex-1"><strong className="flex items-center gap-1.5 truncate text-sm font-bold">{member.displayName}<ChatStaffBadge rank={member.staff} />{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong></span>
+            <span className="grid min-w-0 flex-1"><strong className="flex items-center gap-1.5 truncate text-sm font-bold">{member.displayName}<StaffBadge rank={member.staff} />{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</strong></span>
           </button>}
         {member.role === 'admin' && <Chip tone="accent" icon="crown">Admin</Chip>}
         {admin && member.id !== me && <Button size="sm" variant="ghost" icon="userMinus" aria-label={`Remove ${member.displayName} from the group`} busy={pending === member.id} disabled={!state.online || pending !== null}
@@ -877,7 +872,7 @@ function FriendPicker({ friends, picked, onChange, disabled, limit }: { friends:
         <Label htmlFor={`${id}-${friend.id}`} className={cn('flex cursor-pointer items-center gap-3 rounded-2xl px-2 py-2 hover:bg-muted', full && 'opacity-50')}>
           <Checkbox id={`${id}-${friend.id}`} checked={checked} disabled={disabled || full} onCheckedChange={(value) => onChange(value === true ? [...picked, friend.id] : picked.filter((entry) => entry !== friend.id))} />
           <MemberAvatar name={friend.displayName} src={friend.avatar} size="sm" />
-          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span><ChatStaffBadge rank={friend.staff} />{friend.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold"><span className="truncate">{friend.displayName}</span><StaffBadge rank={friend.staff} />{friend.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}</span>
         </Label>
       </li>;
     })}
@@ -1049,7 +1044,6 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
   searching?: boolean; onSearchClose?: () => void;
 }) {
   const named = mode !== 'peer';
-  const showStaff = useBeta('staff-roles');
   /** The viewer's own message already rose in as a pending bubble, so its confirmed copy appears in place. */
   const { messages, outgoing, receipts } = chat;
   const scroller = useRef<HTMLDivElement>(null);
@@ -1270,9 +1264,8 @@ function MessageLog({ state, chat, name, mode, canModerate = false, onDelete, on
           const { message } = item;
           const status = message.fromMe && message.seq === lastMineSeq ? receiptStatus(message.seq, receiptsFor(message.createdAt, receipts), mode === 'group') : null;
           const staff = message.fromMe ? state.context.staff?.role : 'sender' in message ? message.sender.staff : chat.peer?.staff;
-          const showRole = showStaff || mode === 'global' || mode === 'school';
           return <Bubble sender={message.fromMe ? state.context.user.displayName : 'sender' in message ? message.sender.displayName : name}
-            staff={showRole ? staff : null} key={item.key} message={message} date={item.date} time={item.time} startsRun={item.startsRun} endsRun={item.endsRun} showName={item.showName || (showStaff && !!staff && item.startsRun)} status={status} online={state.online} mode={mode} canModerate={canModerate}
+            staff={staff} key={item.key} message={message} date={item.date} time={item.time} startsRun={item.startsRun} endsRun={item.endsRun} showName={item.showName || (!!staff && item.startsRun)} status={status} online={state.online} mode={mode} canModerate={canModerate}
             fresh={mountedNewest.current !== null && message.seq > mountedNewest.current && !message.fromMe}
             open={openActions === message.seq} onOpenChange={(next) => setOpenActions((current) => (next ? message.seq : current === message.seq ? null : current))}
             added={added[message.seq]} copied={copied === message.seq} onAddTask={() => void addTask(message)} onCopy={() => void copy(message)} onDelete={() => onDelete(message)} onEdit={onEdit && (() => onEdit(message))} onReport={onReport && (() => onReport(message.seq))}
@@ -1367,7 +1360,7 @@ function SearchPanel({ chat, state, onClose, onPick }: { chat: ChatThread; state
         {results.map((hit) => <li key={hit.seq}>
           <button type="button" disabled={jumping !== null} onClick={() => void pick(hit)} className="grid w-full gap-0.5 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
             <span className="flex items-baseline gap-2 text-[12px] text-muted-foreground">
-              <strong className="truncate font-semibold text-foreground/80">{hit.fromMe ? 'You' : hit.senderName}<ChatStaffBadge rank={hit.staff} /></strong>
+              <strong className="truncate font-semibold text-foreground/80">{hit.fromMe ? 'You' : hit.senderName}<StaffBadge rank={hit.staff} /></strong>
               <span className="ml-auto shrink-0 tabular-nums">{chatTime(hit.createdAt, state.timeZone, state.now)}</span>
               {jumping === hit.seq && <Spinner />}
             </span>
@@ -1432,7 +1425,7 @@ function QuoteCard({ reply, mine, onClick }: { reply: MessageReply; mine: boolea
   const className = cn('mb-1.5 block w-full min-w-40 rounded-xl px-2.5 py-1.5 text-left outline-none',
     mine ? 'bg-primary-foreground/15' : 'bg-foreground/[0.08]', onClick && 'focus-visible:ring-2 focus-visible:ring-ring');
   const body = <>
-    <span className={cn('block text-[12px] font-semibold leading-tight', mine ? 'text-primary-foreground/90' : 'text-primary')}>{quoteName(reply)}{reply.preview !== null && <ChatStaffBadge rank={reply.staff} />}</span>
+    <span className={cn('block text-[12px] font-semibold leading-tight', mine ? 'text-primary-foreground/90' : 'text-primary')}>{quoteName(reply)}{reply.preview !== null && <StaffBadge rank={reply.staff} />}</span>
     <span className={cn('block truncate text-[13px] leading-snug', mine ? 'text-primary-foreground/85' : 'text-foreground/80', reply.preview === null && 'italic')}>{text}</span>
   </>;
   return onClick
@@ -1502,7 +1495,7 @@ function ReactorList({ reactions, reactors, canReact, onRemove }: { reactions: C
       const body = <>
         <MemberAvatar name={reactor.name} src={reactor.avatar} size="sm" />
         <span className="grid min-w-0 flex-1">
-          <span className="truncate font-medium">{reactor.me ? 'You' : reactor.name}<ChatStaffBadge rank={reactor.staff} /></span>
+          <span className="truncate font-medium">{reactor.me ? 'You' : reactor.name}<StaffBadge rank={reactor.staff} /></span>
           {reactor.me && canReact && <span className="text-[12px] leading-tight text-muted-foreground">Tap to remove</span>}
         </span>
         <span aria-hidden="true" className="text-[17px] leading-none">{reactor.emoji}</span>
@@ -1527,7 +1520,7 @@ function ReaderList({ seq, receipts }: { seq: number; receipts: Receipt[] }) {
       <h3 className="px-2 pt-1 pb-0.5 text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{title}</h3>
       <ul className="grid">
         {people.map((person) => <li key={person.id} className="flex min-h-9 items-center gap-2.5 px-2 py-1 text-[14px]">
-          <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><ChatStaffBadge rank={person.staff} />
+          <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><StaffBadge rank={person.staff} />
         </li>)}
       </ul>
     </section>)}
@@ -2113,7 +2106,7 @@ function Composer({ chat, name, online, filtered = false, people }: { chat: Chat
     {editError && <Hint tone="danger" role="alert" className="ml-11">{editError}</Hint>}
     {reply && !editing && <div role="status" className={strip}>
       <span className="grid min-w-0 flex-1">
-        <span className="text-[12px] font-semibold leading-tight text-primary">{quoteName(reply)}{reply.preview !== null && <ChatStaffBadge rank={reply.staff} />}</span>
+        <span className="text-[12px] font-semibold leading-tight text-primary">{quoteName(reply)}{reply.preview !== null && <StaffBadge rank={reply.staff} />}</span>
         <span className={cn('truncate text-[13px] leading-snug text-muted-foreground', reply.preview === null && 'italic')}>{reply.preview ?? 'Message unavailable'}</span>
       </span>
       <IconButton label="Cancel reply" icon="x" size="sm" className="rounded-full" onClick={() => chat.setReply(null)} />
@@ -2144,7 +2137,7 @@ function Composer({ chat, name, online, filtered = false, people }: { chat: Chat
             {matches.map((person, index) => <li key={person.id} id={`${mentionList}-${index}`} role="option" aria-selected={index === mentionIndex}
               onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setMentionAt(index)} onClick={() => pickMention(person)}
               className={cn('flex min-h-10 cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1 text-[14px]', index === mentionIndex && 'bg-muted')}>
-              <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><ChatStaffBadge rank={person.staff} />
+              <MemberAvatar name={person.displayName} src={person.avatar} size="sm" /><span className="truncate font-medium">{person.displayName}</span><StaffBadge rank={person.staff} />
             </li>)}
           </ul>}
           <Textarea ref={field} aria-label={editing ? 'Edit your message' : `Message ${name}`} rows={1} autoComplete="off" maxLength={COMPOSER_MAX_LENGTH}

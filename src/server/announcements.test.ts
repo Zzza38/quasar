@@ -1,17 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ADMIN_SIGN_IN_MAX_AGE_MS, ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { exampleSchedule } from '@/domain/example';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
-import { BetaService } from './betas';
-import { createBeta, currentBetaRegistry, removeBeta, writeBetaRegistry } from './beta-registry';
-import { useStaffBetaFixture, joinStaffBeta } from './staff-beta-fixture';
 import { grantStaffRole, revokeStaffRole } from './staff';
 import { appRouter } from './router';
 
-useStaffBetaFixture();
 const dbs: Db[] = [];
 afterEach(() => { vi.useRealTimers(); for (const db of dbs.splice(0)) if (db.open) db.close(); });
 
@@ -19,13 +17,10 @@ function fixture(path = ':memory:') {
   const db = openDatabase(path);
   dbs.push(db);
   const service = new Service(db, 'owner@example.org');
-  writeBetaRegistry(createBeta(currentBetaRegistry(), { key: 'announcements', name: 'Announcements', code: 'BOARDFIXTURE' }));
-  const enroll = (id: string) => new BetaService(service).join(id, { code: 'BOARDFIXTURE' });
   function user(name: string) {
     const id = randomUUID();
     db.prepare('INSERT INTO users(id,google_sub,email,display_name,full_name,created_at) VALUES(?,?,?,?,?,?)')
       .run(id, id, name.toLowerCase() + '@example.org', name, name, new Date().toISOString());
-    enroll(id);
     return id;
   }
   const owner = user('Owner'), manager = user('Manager'), student = user('Student'), other = user('Other');
@@ -34,13 +29,12 @@ function fixture(path = ':memory:') {
   for (const id of [manager, student]) service.join(id, { schoolId: east, choice: 'community' });
   service.join(other, { schoolId: west, choice: 'community' });
   grantStaffRole(service, manager, 'school-manager');
-  joinStaffBeta(service, manager);
   const api = (id: string | null, age = 0) => appRouter.createCaller({ userId: id, authAt: Date.now() - age, service }).announcements;
   const post = (id: string, schoolId: string | null, title: string, publishAt?: string) =>
     api(id).publish({ accountId: id, requestId: randomUUID(), schoolId, title, publishAt, body: 'Further details.' });
   const list = (id: string, before?: number) => api(id).list({ accountId: id, before });
   const unread = (id: string) => api(id).unread({ accountId: id });
-  return { db, service, owner, manager, student, other, east, west, api, post, list, unread };
+  return { db, service, owner, manager, student, other, east, west, user, api, post, list, unread };
 }
 
 describe('announcements', () => {
@@ -66,8 +60,22 @@ describe('announcements', () => {
     await expect(f.api(f.student).dismiss({ accountId: f.student, id: local.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('shows platform announcements to a newly signed-in member before they join a school', async () => {
+    const f = fixture();
+    const member = f.user('New member');
+    const global = await f.post(f.owner, null, 'Registration dates');
+    const local = await f.post(f.manager, f.east, 'East High registration');
+    expect((await f.list(member)).items.map(row => row.id)).toEqual([global.id]);
+    expect(await f.unread(member)).toMatchObject({ id: global.id, canDelete: false });
+    await expect(f.api(member).dismiss({ accountId: member, id: local.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await f.api(member).dismiss({ accountId: member, id: global.id });
+    expect(await f.unread(member)).toBeNull();
+  });
+
   it('keeps the posted text and each account’s dismissal when the app reopens its database', async () => {
-    const path = join(dirname(process.env.BETAS_PATH!), 'announcement-restart.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'quasar-announcements-'));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const path = join(directory, 'announcement-restart.sqlite');
     const f = fixture(path);
     const post = await f.post(f.manager, f.east, 'School doors open at nine');
     await f.api(f.student).dismiss({ accountId: f.student, id: post.id });
@@ -81,30 +89,26 @@ describe('announcements', () => {
     expect(await api.announcements.unread({ accountId: f.student })).toBeNull();
   });
 
-  it('requires current audience authority, recent Google sign-in and both applicable betas', async () => {
+  it('requires current audience authority and recent Google sign-in to publish', async () => {
     const f = fixture();
     const input = { accountId: f.manager, requestId: randomUUID(), schoolId: f.east, title: 'Update', body: 'Details.' };
     await expect(f.api(f.student).publish({ ...input, accountId: f.student })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     for (const scope of [null, f.west]) await expect(f.api(f.manager).publish({ ...input, schoolId: scope })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.api(f.manager, ADMIN_SIGN_IN_MAX_AGE_MS + 1_000).publish(input)).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
     const local = await f.api(f.manager).publish(input);
-    new BetaService(f.service).leave(f.manager, 'staff-roles');
-    await expect(f.api(f.manager).publish(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect((await f.list(f.manager)).items[0].id).toBe(local.id);
-    joinStaffBeta(f.service, f.manager);
     f.service.join(f.manager, { schoolId: f.west, choice: 'community' });
     await expect(f.post(f.manager, f.west, 'New school')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     f.service.join(f.manager, { schoolId: f.east, choice: 'community' });
     revokeStaffRole(f.service, f.manager);
     await expect(f.api(f.manager).publish(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    new BetaService(f.service).leave(f.owner, 'announcements');
+    await expect(f.api(null).list({ accountId: f.owner })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(f.list(f.student)).resolves.toMatchObject({ items: [{ id: local.id }] });
+    f.db.prepare("UPDATE users SET suspended_at=datetime('now') WHERE id=?").run(f.owner);
     await expect(f.list(f.owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.unread(f.owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.post(f.owner, null, 'Platform news')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.api(f.owner).dismiss({ accountId: f.owner, id: local.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.api(null).list({ accountId: f.owner })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
-    writeBetaRegistry(removeBeta(currentBetaRegistry(), 'announcements'));
-    await expect(f.list(f.student)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('activates a scheduled post at its UTC instant and keeps retries idempotent after release', async () => {
@@ -156,9 +160,6 @@ describe('announcements', () => {
     for (let retry = 0; retry < 2; retry++) await f.api(f.manager).cancel({ accountId: f.manager, id: local.id });
     expect(await queue(f.manager)).toEqual([]);
     expect(f.db.prepare("SELECT count(*) AS n FROM audit_log WHERE action='announcement.cancel' AND actor_id=? AND school_id=?").get(f.manager, f.east)).toEqual({ n: 1 });
-    new BetaService(f.service).leave(f.owner, 'announcements');
-    await expect(queue(f.owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.api(f.owner).cancel({ accountId: f.owner, id: global.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     vi.setSystemTime(when);
     expect((await f.list(f.student)).items.map(row => row.id)).toEqual([global.id]);
     expect((await f.unread(f.student))?.id).toBe(global.id);
@@ -168,7 +169,6 @@ describe('announcements', () => {
   it('lets the owner manage all published posts and managers only their own at their assigned school', async () => {
     const f = fixture();
     grantStaffRole(f.service, f.student, 'school-manager');
-    joinStaffBeta(f.service, f.student);
     const input = { accountId: f.manager, requestId: randomUUID(), schoolId: f.east, title: 'Assembly', body: 'Meet in the gym.' };
     const mine = await f.api(f.manager).publish(input);
     const theirs = await f.post(f.student, f.east, 'After school pickup');
@@ -192,7 +192,6 @@ describe('announcements', () => {
     await expect(f.api(f.manager).remove({ accountId: f.student, id: theirs.id })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     for (const role of ['support', 'chat-moderation', 'administrator']) {
       grantStaffRole(f.service, f.other, role);
-      joinStaffBeta(f.service, f.other);
       await expect(manage(f.other)).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(remove(f.other, away.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }

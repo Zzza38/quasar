@@ -8,7 +8,6 @@ import { CHAT } from '@/domain/chat';
 import { addDays, classColor, formatDate, formatRange, formatRoom, instantParts, pluralize, relativeDate } from '@/lib/format';
 import type { AppState } from '../app-state';
 import { Icon } from '../icon';
-import { useBeta } from '../betas';
 import { StaffBadge } from '../staff-badge';
 import { MemberAvatar } from '../member-avatar';
 import { Button, Callout, Chip, Eyebrow, Field, Hint, IconButton, Modal, Panel, Section, Spacer, Textarea } from '../primitives';
@@ -24,15 +23,14 @@ type Friends = RouterOutput['community']['friends'];
 type Profile = RouterOutput['community']['profile'];
 
 export function MemberRow({ member, onOpen, children }: { member: Member; onOpen: (id: string) => void; children?: React.ReactNode }) {
-  const showRoles = useBeta('staff-roles');
   const detailId = useId();
   const detail = [member.fullName, member.grade ? gradeLabel(member.grade) : null, member.friendState === 'friends' ? 'Friend' : member.friendState === 'requested' ? 'Request sent' : member.friendState === 'incoming' ? 'Wants to be friends' : null].filter(Boolean).join(' · ') || 'Member';
   // The short label keeps the button name stable; the details (verified, full name, grade, friend state) are its description.
   return <li className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3 ring-1 ring-inset ring-foreground/[0.04]">
-    <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(member.id)} aria-label={`Open ${member.displayName}’s profile`} aria-describedby={showRoles && member.staff ? `${detailId} ${detailId}-role` : detailId}>
+    <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(member.id)} aria-label={`Open ${member.displayName}’s profile`} aria-describedby={member.staff ? `${detailId} ${detailId}-role` : detailId}>
       <MemberAvatar name={member.displayName} src={member.avatar} />
       <span className="grid min-w-0">
-        <strong className="flex min-w-0 items-center gap-1.5 text-sm font-bold"><span className="truncate">{member.displayName}</span>{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}{showRoles && member.staff && <span id={`${detailId}-role`}><StaffBadge rank={member.staff} /></span>}</strong>
+        <strong className="flex min-w-0 items-center gap-1.5 text-sm font-bold"><span className="truncate">{member.displayName}</span>{member.verified && <Icon name="checkCircle" size={14} className="shrink-0 text-success" />}{member.staff && <span id={`${detailId}-role`}><StaffBadge rank={member.staff} /></span>}</strong>
         <Hint className="truncate"><span id={detailId}>{member.verified && <span className="sr-only">Verified · </span>}{detail}</span></Hint>
       </span>
     </button>
@@ -184,7 +182,6 @@ function dayPhrase(date: string, today: string): string {
 }
 
 function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; state: AppState; onClose: () => void; onChanged: () => Promise<void> }) {
-  const showRoles = useBeta('staff-roles');
   const accountId = state.context.user.id;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState('');
@@ -296,7 +293,7 @@ function ProfileSheet({ userId, state, onClose, onChanged }: { userId: string; s
       </li>;
     })}</ul>}
   </Section>;
-  return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={<>{name}{showRoles && <StaffBadge rank={profile?.staff} />}</>} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(instantParts(profile.joinedAt, state.timeZone).date, { year: true })}`].filter(Boolean).join(' · ') : undefined}
+  return <Modal open onClose={onClose} busy={pending} dirty={reporting && reason.trim().length > 0} title={<>{name}<StaffBadge rank={profile?.staff} /></>} description={profile ? [profile.fullName, profile.grade ? gradeLabel(profile.grade) : null, profile.school.name, `Joined ${formatDate(instantParts(profile.joinedAt, state.timeZone).date, { year: true })}`].filter(Boolean).join(' · ') : undefined}
     footer={nextStep ? <><Spacer />{nextStep}</> : undefined}>
     {(!profile || resultAt === 'top') && result}
     {!profile && !error && <Hint role="status">Loading profile…</Hint>}

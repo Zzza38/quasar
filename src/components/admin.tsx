@@ -23,7 +23,7 @@ import { ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
 import { GuideAdmin, SchoolGuideSheet } from './admin-guides';
 import { guideName } from '@/domain/setup-guides';
-import { Beta, BetaProvider, type JoinedBeta } from './betas';
+import { BetaProvider, type JoinedBeta } from './betas';
 import { AdminRoleGrants } from './admin-role-grants';
 import { AdminRoles, SchoolActivity } from './admin-roles';
 import { STAFF_LABELS, hasPermission, type StaffAccess, type StaffPermission } from '@/domain/staff';
@@ -154,9 +154,6 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       accountRef.current = nextAccount; setAccountId(nextAccount);
       setReauth(!!session?.staff && !session.adminReady);
       setBetas(session?.betas ?? []);
-      if (!session?.betas.some(beta => beta.key === 'staff-roles')) {
-        setTab(current => current === 'roles' || current === 'school-activity' ? 'inbox' : current);
-      }
       setAccess(session?.staff ?? null);
       if (!session?.adminReady) { revoke(); return; }
       // Only the lists this role may read are asked for; the rest stay empty.
@@ -284,8 +281,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         {may('members.search') && <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>}
         {may('schools.edit') && <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>}
         {globalGuides && <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>}
-        {schoolManager && <Beta id="staff-roles"><TabsTrigger value="school-activity" className={TAB_CLASS}>School activity</TabsTrigger></Beta>}
-        <Beta id="staff-roles"><TabsTrigger value="roles" className={TAB_CLASS}>{owner || schoolManager ? 'Staff roles' : 'Your access'}</TabsTrigger></Beta>
+        {schoolManager && <TabsTrigger value="school-activity" className={TAB_CLASS}>School activity</TabsTrigger>}
+        <TabsTrigger value="roles" className={TAB_CLASS}>{owner || schoolManager ? 'Staff roles' : 'Your access'}</TabsTrigger>
         {owner && <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>}
         {owner && <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>}
       </TabsList></div>
@@ -420,11 +417,11 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </TabsContent>
       {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} scopedAccountId={access?.schoolId ? accountId ?? undefined : undefined} canRemoveFromSchool={schoolManager && may('members.remove')} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
       {globalGuides && <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
-      {schoolManager && <Beta id="staff-roles"><TabsContent value="school-activity">{tab === 'school-activity' && <SchoolActivity key={access?.schoolId} onAccessLost={accessLost} />}</TabsContent></Beta>}
-      <Beta id="staff-roles">{access && <TabsContent value="roles" className="grid gap-5">
+      {schoolManager && <TabsContent value="school-activity">{tab === 'school-activity' && <SchoolActivity key={access?.schoolId} onAccessLost={accessLost} />}</TabsContent>}
+      {access && <TabsContent value="roles" className="grid gap-5">
         {(owner || schoolManager) && accountId && tab === 'roles' && <AdminRoleGrants key={accountId} accountId={accountId} schools={schools} managerSchool={schoolManager ? access.schoolName || 'your school' : undefined} onAccessLost={accessLost} />}
         <AdminRoles access={access} />
-      </TabsContent>}</Beta>
+      </TabsContent>}
       {owner && <TabsContent value="betas" className="grid gap-5">{tab === 'betas' && <BetaAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
       {owner && <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>}
       </Tabs>

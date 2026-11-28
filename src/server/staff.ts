@@ -1,7 +1,6 @@
 import { SCHOOL_DELEGABLE_ROLES, STAFF_LABELS, isStaffRole, type StaffRole } from '@/domain/staff';
 import { decodeStoredRole, encodeStoredRole } from '@/domain/stored-staff';
 import { TRPCError } from '@trpc/server';
-import { BetaService } from './betas';
 import type { Service } from './service';
 
 /**
@@ -54,9 +53,6 @@ export function requireRoleConsole(service: Service, actorId: string): string | 
   if (access?.role !== 'owner' && !(access?.role === 'school-manager' && access.schoolId)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner or a School Manager can manage staff assignments.' });
   }
-  if (!new BetaService(service).joined(actorId).some(beta => beta.key === 'staff-roles')) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Join the Staff roles beta to manage assignments here.' });
-  }
   return access.schoolId ?? null;
 }
 
@@ -101,7 +97,7 @@ export function staffCandidate(service: Service, actorId: string, userId: string
   checkDelegateTarget(service, actorId, scope, account, grant);
   const blocked = blockedRoles(service, userId);
   return { userId: account.id, schoolId: account.schoolId, schoolName: account.schoolName, suspended: account.suspended,
-    owner: service.isAdmin(account.id), joinedBeta: new BetaService(service).joined(userId).some(beta => beta.key === 'staff-roles'), grant,
+    owner: service.isAdmin(account.id), grant,
     blockedRoles: scope ? blocked.filter(delegable) : blocked };
 }
 

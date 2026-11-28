@@ -52,7 +52,6 @@ function main(): void {
       if (scope !== undefined && scope !== 'school' && scope !== 'global') throw new StaffError('Choose school or global for the assignment scope.');
       const { member, previous } = grantStaffRole(service, who, role, undefined, scope);
       console.log(`${member.email} is now ${roleWithScope(member)}${previous ? ` (was ${STAFF_LABELS[previous]})` : ''}.`);
-      if (member.schoolId || role === 'chat-moderation') console.log('They must join the Staff roles beta to use this role.');
       console.log('They open the support tools at /admin. They sign in with Google again there if their last sign-in is over two hours old.');
       return;
     }

@@ -71,7 +71,6 @@ function GrantEditor({ target, accountId, schools, managerSchool, mode, onClose,
   const grant = candidate?.grant;
   const flexibleScope = role === 'support' || role === 'chat-moderation';
   const scope = managerSchool || role === 'school-manager' ? 'school' : flexibleScope ? scopeChoice : 'global';
-  const needsBeta = scope === 'school' || role === 'chat-moderation';
   const missingSchool = scope === 'school' && !candidate?.schoolId;
   const blockedRole = !!role && !!candidate?.blockedRoles.includes(role);
   const availableRoles = managerSchool ? SCHOOL_DELEGABLE_ROLES : STAFF_ROLES;
@@ -158,7 +157,6 @@ function GrantEditor({ target, accountId, schools, managerSchool, mode, onClose,
             {role === 'support' ? 'Handle school corrections, search the roster and verify students.' : role === 'chat-moderation' ? 'Edit or remove messages and review message changes in this school’s chat room.' : 'Manage this school and assign school Support or Chat Moderation to its members.'} This access applies while the member belongs to this school.
           </Callout>)}
         {role && scope === 'global' && flexibleScope && <Hint>{role === 'support' ? 'Answer support requests across schools, verify members, open account records and reset sessions.' : 'Review chat reports across Quasar, moderate Global chat and handle messaging pauses and appeals.'}</Hint>}
-        {needsBeta && <Hint>{candidate.joinedBeta ? 'This member has joined the Staff roles beta.' : 'This member must join the Staff roles beta in Account before they can use this role.'}</Hint>}
       </>)}
   </Modal>;
 }

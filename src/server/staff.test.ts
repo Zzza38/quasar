@@ -6,16 +6,12 @@ import { CommunityService } from './community';
 import { GlobalChatService } from './global-chat';
 import { DirectoryService } from './directory';
 import { SchoolLogoService } from './school-logos';
-import { useStaffBetaFixture, joinStaffBeta } from './staff-beta-fixture';
 import { GroupChatService } from './group-chat';
 import { appRouter } from './router';
 import { StaffError, grantStaffRole, listStaff, revokeStaffRole } from './staff';
 import { ADMIN_REAUTH_MESSAGE, ADMIN_SIGN_IN_MAX_AGE_MS } from '@/lib/admin-session';
 import { ROLE_PERMISSIONS, STAFF_PERMISSIONS } from '@/domain/staff';
-import { BetaService } from './betas';
 import { exampleSchedule } from '@/domain/example';
-
-useStaffBetaFixture();
 
 const databases: Db[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.restoreAllMocks(); });
@@ -54,20 +50,17 @@ describe('staff roles', () => {
     const service = new Service(f.db, 'OWNER@example.com', `sub-${f.owner}`);
     const ids = [f.owner, f.helper, f.alice, f.bob];
     grantStaffRole(service, f.alice, 'school-manager');
-    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner'], [f.helper, 'support']]));
-    joinStaffBeta(service, f.alice);
-    expect(service.staffRanks(ids).get(f.alice)).toBe('school-manager');
+    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner'], [f.helper, 'support'], [f.alice, 'school-manager']]));
     f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.alice);
     revokeStaffRole(service, f.helper);
     expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner']]));
     expect(new Service(f.db, 'OWNER@example.com', 'different-sub').staffRanks(ids).size).toBe(0);
   });
 
-  it.each(['support', 'chat-moderation'] as const)('applies school %s badges and powers only while enrolled and in the assigned school', role => {
+  it.each(['support', 'chat-moderation'] as const)('applies school %s badges and powers only in the assigned school', role => {
     const f = fixture();
     grantStaffRole(f.service, f.alice, role, undefined, 'school');
-    expect(f.service.staffAccess(f.alice)).toBeNull();
-    joinStaffBeta(f.service, f.alice);
+
     expect(f.service.staffAccess(f.alice)).toEqual({
       role, schoolId: f.school.id, schoolName: f.school.name,
       permissions: role === 'support' ? ['requests', 'verification', 'members.search'] : [],
@@ -97,29 +90,23 @@ describe('staff roles', () => {
     expect(f.service.isAdmin(f.admin)).toBe(false);
   });
 
-  it('requires beta membership and recent sign-in to manage assignments in the console', async () => {
+  it('requires a recent sign-in and checks which accounts can manage assignments', async () => {
     const f = fixture();
     const input = { accountId: f.owner, userId: f.alice, role: 'school-manager' as const, expectedGrant: null, expectedSchoolId: f.school.id };
     const revoke = { ...input, expectedGrant: { role: 'school-manager' as const, schoolId: f.school.id } };
     const owner = f.caller(f.owner).admin.roles;
-    await expect(owner.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(owner.grant(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(owner.revoke(revoke)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    joinStaffBeta(f.service, f.admin);
     const administrator = f.caller(f.admin).admin.roles;
     await expect(administrator.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(administrator.candidate({ userId: f.alice })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(administrator.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(administrator.revoke({ ...revoke, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    joinStaffBeta(f.service, f.owner);
     const stale = f.caller(f.owner, ADMIN_SIGN_IN_MAX_AGE_MS + 1000).admin.roles;
     await expect(stale.grant(input)).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
     await expect(owner.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
-    await expect(owner.candidate({ userId: f.alice })).resolves.toMatchObject({ schoolId: f.school.id, joinedBeta: false, grant: null });
+    await expect(owner.candidate({ userId: f.alice })).resolves.toMatchObject({ schoolId: f.school.id, grant: null });
     await expect(owner.grant({ ...input, userId: f.owner, expectedSchoolId: null })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(owner.grant(input)).resolves.toMatchObject({ member: { role: 'school-manager', schoolId: f.school.id } });
-    expect(f.service.staffRank(f.alice)).toBeNull();
-    joinStaffBeta(f.service, f.alice);
+
     expect(f.service.staffRank(f.alice)).toBe('school-manager');
     expect(await owner.list()).toContainEqual(expect.objectContaining({ userId: f.alice, currentSchoolId: f.school.id, schoolId: f.school.id }));
     expect(f.audit('staff.grant').at(-1)).toMatchObject({ actor_id: f.owner, detail: expect.stringContaining('"via":"console"') });
@@ -131,7 +118,6 @@ describe('staff roles', () => {
   it('lets a manager delegate and change only the two school roles in their own school', async () => {
     const f = fixture();
     grantStaffRole(f.service, f.alice, 'school-manager');
-    joinStaffBeta(f.service, f.alice);
     const roles = f.caller(f.alice).admin.roles;
     const input = { accountId: f.alice, userId: f.bob, expectedSchoolId: f.school.id, expectedGrant: null };
     await expect(roles.grant({ ...input, role: 'administrator' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -164,8 +150,6 @@ describe('staff roles', () => {
   it('blocks one account and role across scopes, revokes it, and requires a fresh assignment after unblocking', async () => {
     const f = fixture();
     grantStaffRole(f.service, f.alice, 'school-manager');
-    joinStaffBeta(f.service, f.alice);
-    joinStaffBeta(f.service, f.owner);
     const manager = f.caller(f.alice).admin.roles;
     const owner = f.caller(f.owner).admin.roles;
     const input = { accountId: f.alice, userId: f.bob, expectedSchoolId: f.school.id, expectedGrant: null };
@@ -193,7 +177,6 @@ describe('staff roles', () => {
 
   it('rejects assignment changes if the target changed schools or another grant replaced the one on screen', async () => {
     const f = fixture();
-    joinStaffBeta(f.service, f.owner);
     const roles = f.caller(f.owner).admin.roles;
     const stale = { accountId: f.owner, userId: f.helper, expectedSchoolId: f.school.id, expectedGrant: { role: 'support' as const, schoolId: null } };
     grantStaffRole(f.service, f.helper, 'school-manager');
@@ -281,7 +264,6 @@ describe('staff roles', () => {
     const f = fixture();
     const accountId = f.editor;
     grantStaffRole(f.service, accountId, 'school-manager');
-    joinStaffBeta(f.service, accountId);
     const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Boston, MA', schedule: exampleSchedule });
     f.service.join(f.bob, { schoolId: other.id, choice: 'community' });
     const as = f.caller(accountId).admin;
@@ -313,7 +295,6 @@ describe('staff roles', () => {
     const f = fixture();
     const accountId = f.editor;
     grantStaffRole(f.service, accountId, 'school-manager');
-    joinStaffBeta(f.service, accountId);
     f.community.request(f.alice, f.bob);
     f.community.respond(f.bob, f.alice, true);
     const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Boston, MA', schedule: exampleSchedule });
@@ -405,7 +386,6 @@ describe('staff roles', () => {
     const f = fixture();
     const manager = f.editor;
     grantStaffRole(f.service, manager, 'school-manager');
-    joinStaffBeta(f.service, manager);
     const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
     f.db.prepare('UPDATE schools SET support_locked=1').run();
     f.service.request = { authAt: Date.now(), ip: null, userAgent: null };
@@ -433,7 +413,6 @@ describe('staff roles', () => {
   it('shows school content and membership events without exposing audit details or other schools', async () => {
     const f = fixture();
     grantStaffRole(f.service, f.editor, 'school-manager');
-    joinStaffBeta(f.service, f.editor);
     const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
     const as = f.caller(f.editor);
     const before = await as.admin.schoolActivity();
@@ -457,7 +436,6 @@ describe('staff roles', () => {
     const f = fixture();
     const manager = f.editor;
     grantStaffRole(f.service, manager, 'school-manager');
-    joinStaffBeta(f.service, manager);
     const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
     const as = f.caller(manager);
     const schedule = f.db.prepare(`INSERT INTO schedule_proposals(id,school_id,proposer_id,base_version,schedule,summary,status,created_at)
@@ -532,16 +510,14 @@ describe('staff roles', () => {
 
 describe('scoped staff sessions', () => {
 
-  it('requires a grant, beta membership and the assigned school on every request', async () => {
+  it('requires a grant and the assigned school on every request', async () => {
     const f = fixture();
     const manager = f.caller(f.alice);
     const other = f.service.createSchool(f.bob, { name: 'North High', location: 'Boston, MA', schedule: exampleSchedule });
-    grantStaffRole(f.service, f.alice, 'school-manager');
     expect((await manager.session())?.staff).toBeNull();
+    grantStaffRole(f.service, f.alice, 'school-manager');
     expect(f.service.canTarget(f.admin, f.alice)).toBe(false);
-    joinStaffBeta(f.service, f.bob);
     expect((await f.caller(f.bob).session())?.staff).toBeNull();
-    joinStaffBeta(f.service, f.alice);
     expect((await manager.session())?.staff).toMatchObject({ role: 'school-manager', schoolId: f.school.id, schoolName: f.school.name });
     expect((await manager.admin.schools()).map(school => school.id)).toEqual([f.school.id]);
     await expect(manager.admin.users.suspend({ accountId: f.alice, userId: f.bob, suspended: true, reason: 'School issue' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -549,10 +525,6 @@ describe('scoped staff sessions', () => {
     await expect(manager.admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     grantStaffRole(f.service, f.alice, 'school-manager');
     expect((await manager.admin.schools()).map(school => school.id)).toEqual([other.id]);
-    new BetaService(f.service).leave(f.alice, 'staff-roles');
-    expect((await manager.session())?.staff).toBeNull();
-    await expect(manager.admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    joinStaffBeta(f.service, f.alice);
     revokeStaffRole(f.service, f.alice);
     await expect(manager.admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });

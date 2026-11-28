@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { browserTimeZone, formatDate, formatTime, instantParts } from '@/lib/format';
 import { ROLE_PERMISSIONS, STAFF_LABELS, staffAccess, type StaffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
-import { Beta } from './betas';
 import { Icon, type IconName } from './icon';
 import { Button, Callout, Hint, Panel, Section, Segmented } from './primitives';
 
@@ -57,7 +56,7 @@ function RoleCard({ role, permissions, schoolName, preview = false }: { role: St
       {role === 'school-manager' && <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Assign school Support and Chat Moderation to members of the school</li>}
       {role === 'school-manager' && <>
         <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Read the school activity log</li>
-        <Beta id="announcements"><li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Publish announcements to the school board</li></Beta>
+        <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Publish announcements to the school board</li>
       </>}
     </ul>
     {!preview && role === 'chat-moderation' && scoped && <a className="justify-self-start text-sm font-semibold text-primary underline underline-offset-4" href="/messages?room=school">Open school chat</a>}

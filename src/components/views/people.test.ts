@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BetaProvider } from '../betas';
 import { MemberRow, verificationNotice, type Member } from './people';
 
 describe('proof sent notice', () => {
@@ -19,14 +18,10 @@ describe('proof sent notice', () => {
 describe('role badges on People', () => {
   const member: Member = { id: 'student', staff: 'school-manager', displayName: 'Casey', fullName: null, grade: null, verified: true,
     joinedAt: '2026-09-01', friendState: 'none', blocked: false, avatar: null };
-  const badge = (beta: boolean, person: Member) => renderToStaticMarkup(createElement(BetaProvider, {
-    accountId: 'viewer', online: true, refresh: async () => {}, betas: beta ? [{ key: 'staff-roles', name: 'Staff roles', public: false, description: '', joinedAt: '2026-01-01' }] : [],
-    children: createElement(MemberRow, { member: person, onOpen: () => {} }),
-  }));
+  const badge = (person: Member) => renderToStaticMarkup(createElement(MemberRow, { member: person, onOpen: () => {} }));
 
-  it('shows the assigned role beside a member’s name only when the viewer joined the beta', () => {
-    expect(badge(true, member)).toContain('>School Manager<');
-    expect(badge(false, member)).not.toContain('School Manager');
-    expect(badge(true, { ...member, staff: null })).not.toContain('School Manager');
+  it('shows a staff badge beside members who have a role', () => {
+    expect(badge(member)).toContain('>School Manager<');
+    expect(badge({ ...member, staff: null })).not.toContain('School Manager');
   });
 });

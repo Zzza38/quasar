@@ -13,7 +13,6 @@ import { NotificationService } from './notifications';
 import { appRouter } from './router';
 import { exampleSchedule } from '@/domain/example';
 import { grantStaffRole } from './staff';
-import { joinStaffBeta, useStaffBetaFixture } from './staff-beta-fixture';
 
 const DAY = 86_400_000;
 const databases: Db[] = [];
@@ -117,15 +116,13 @@ describe('school chat', () => {
   });
 
   describe('delegated room moderation', () => {
-    useStaffBetaFixture();
 
     it.each(['school-manager', 'chat-moderation'] as const)('lets a school-scoped %s moderate and read removed messages only in the assigned room', async role => {
       const f = fixture();
       const manager = f.nina;
-      grantStaffRole(f.service, manager, role, undefined, 'school');
       const schoolMessage = f.send(f.alice, 'local post');
       fails(() => f.rooms.delete(manager, f.school.id, schoolMessage.id), 'FORBIDDEN');
-      joinStaffBeta(f.service, manager);
+      grantStaffRole(f.service, manager, role, undefined, 'school');
       expect(f.rooms.thread(manager, f.school.id).room).toMatchObject({ canModerate: true, moderator: role });
       await f.caller(manager).schoolChat.edit({ accountId: manager, schoolId: f.school.id, messageId: schoolMessage.id, body: 'local', reason: 'Personal information' });
       const removed = f.rooms.delete(manager, f.school.id, schoolMessage.id, 'Spam').message;
@@ -146,7 +143,6 @@ describe('school chat', () => {
     it('ends platform powers as soon as a chat moderator is reassigned to a school', async () => {
       const f = fixture();
       const moderator = f.nina;
-      joinStaffBeta(f.service, moderator);
       grantStaffRole(f.service, moderator, 'chat-moderation');
       const community = new CommunityService(f.service);
       community.request(f.alice, moderator);
@@ -191,8 +187,6 @@ describe('school chat', () => {
       const chatMod = f.user('chat-mod@example.com', 'Chat Mod');
       grantStaffRole(f.service, manager, 'school-manager');
       grantStaffRole(f.service, chatMod, 'chat-moderation');
-      joinStaffBeta(f.service, manager);
-      joinStaffBeta(f.service, chatMod);
       const post = f.global.send(f.alice, randomUUID(), 'spam').message;
       expect(f.global.delete(chatMod, post.id, 'Spam').message).toMatchObject({ moderatedBy: 'chat-moderation', removed: { body: 'spam' } });
       expect(f.global.thread(manager).messages[0]!.removed).toBeNull();

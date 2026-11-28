@@ -1,6 +1,5 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { currentBetaRegistry } from './beta-registry';
 import type { Service } from './service';
 
 const pageSize = 30;
@@ -34,13 +33,11 @@ export class AnnouncementService {
   constructor(private readonly service: Service) {}
   private get db() { return this.service.db; }
 
-  private requireEnrollment(userId: string) {
-    const joined = this.db.prepare(`SELECT u.school_id AS schoolId FROM users u JOIN beta_members b ON b.user_id=u.id
-      WHERE u.id=? AND u.suspended_at IS NULL AND b.beta_key='announcements'`).get(userId) as { schoolId: string | null } | undefined;
-    if (!joined || !currentBetaRegistry().betas.some(beta => beta.key === 'announcements')) {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Join the Announcements beta to use the board.' });
-    }
-    return joined.schoolId;
+  private readerSchool(userId: string) {
+    const account = this.db.prepare('SELECT school_id FROM users WHERE id=? AND suspended_at IS NULL')
+      .get(userId) as { school_id: string | null } | undefined;
+    if (!account) throw new TRPCError({ code: 'FORBIDDEN', message: 'An active account is required to use announcements.' });
+    return account.school_id;
   }
 
   private authority(userId: string, publisherOnly = false) {
@@ -55,7 +52,7 @@ export class AnnouncementService {
 
   upcoming(userId: string) {
     return this.db.transaction(() => {
-      this.requireEnrollment(userId);
+      this.readerSchool(userId);
       const authority = this.authority(userId, true);
       const rows = this.db.prepare(`${announcementRows} WHERE a.cancelled_at IS NULL AND a.publish_at>@now AND (@isOwner=1 OR a.school_id=@managerSchool)
         ORDER BY a.publish_at, a.id LIMIT 100`).all({ ...authority, now: new Date().toISOString() }) as Row[];
@@ -65,7 +62,7 @@ export class AnnouncementService {
 
   unread(userId: string) {
     return this.db.transaction(() => {
-      const schoolId = this.requireEnrollment(userId);
+      const schoolId = this.readerSchool(userId);
       const row = this.db.prepare(`${announcementRows} WHERE ${audience} AND ${published} AND d.announcement_id IS NULL ORDER BY ${publication} DESC, a.id DESC LIMIT 1`)
         .get({ ...this.authority(userId), schoolId, now: new Date().toISOString() }) as Row | undefined;
       return row ? item(row) : null;
@@ -74,7 +71,7 @@ export class AnnouncementService {
 
   list(userId: string, before?: number, management = false) {
     return this.db.transaction(() => {
-      const schoolId = this.requireEnrollment(userId);
+      const schoolId = this.readerSchool(userId);
       const authority = this.authority(userId, management);
       const scope = management ? manageable : audience;
       // A deleted page boundary keeps its place. A cancelled post that never went live cannot act as a cursor.
@@ -91,7 +88,7 @@ export class AnnouncementService {
   publish(userId: string, raw: z.input<typeof publishAnnouncementSchema>) {
     const input = publishAnnouncementSchema.parse(raw);
     return this.db.transaction(() => {
-      this.requireEnrollment(userId);
+      this.readerSchool(userId);
       const authority = this.authority(userId, true);
       if (!authority.isOwner && authority.managerSchool !== input.schoolId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner or the assigned School Manager can post to this audience.' });
@@ -121,7 +118,7 @@ export class AnnouncementService {
 
   withdraw(userId: string, id: number, action: 'cancel' | 'remove') {
     this.db.transaction(() => {
-      this.requireEnrollment(userId);
+      this.readerSchool(userId);
       const authority = this.authority(userId, true);
       const row = this.db.prepare(`SELECT a.school_id, ${publication} AS publishAt, a.cancelled_at FROM announcements a
         WHERE a.id=@id AND ${manageable}`).get({ id, ...authority }) as
@@ -139,7 +136,7 @@ export class AnnouncementService {
 
   dismiss(userId: string, id: number) {
     this.db.transaction(() => {
-      const schoolId = this.requireEnrollment(userId);
+      const schoolId = this.readerSchool(userId);
       const now = new Date().toISOString();
       const visible = this.db.prepare(`SELECT 1 FROM announcements a WHERE a.id=@id AND ${audience} AND ${published}`)
         .get({ id, schoolId, now });

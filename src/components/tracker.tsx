@@ -17,7 +17,7 @@ import { classesStep, feedStep } from './setup-state';
 import { Icon } from './icon';
 import { CenteredNotice, LogoutDialog, Shell } from './shell';
 import { AnnouncementPopup } from './announcements';
-import { Beta, BetaProvider } from './betas';
+import { BetaProvider } from './betas';
 import { nowCardStyle } from './now-card-setting';
 import type { NowCardStyle } from '@/lib/now-split';
 import { Welcome } from './landing';
@@ -294,7 +294,7 @@ export function Tracker({ initial, initialRoute }: { initial?: InitialBoot; init
     </div>
     {scheduleLock.dialog}
     {state.online && !(route.view === 'school' && route.params.get('section') === 'announcements') &&
-      <Beta id="announcements"><AnnouncementPopup key={school.id} accountId={accountId} openBoard={() => route.navigate('school', { section: 'announcements' })} /></Beta>}
+      <AnnouncementPopup key={school.id} accountId={accountId} openBoard={() => route.navigate('school', { section: 'announcements' })} />}
     {route.view === 'today' && <TodayView state={state} />}
     {route.view === 'schedule' && <ScheduleView state={state} />}
     {route.view === 'tasks' && <TasksView state={state} />}
