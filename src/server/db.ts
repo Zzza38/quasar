@@ -928,6 +928,10 @@ function migrate(db: Db): void {
       PRIMARY KEY(user_id, announcement_id)
     );
   `);
+  const announcementColumns = db.pragma('table_info(announcements)') as { name: string }[];
+  if (!announcementColumns.some(column => column.name === 'publish_at')) db.exec('ALTER TABLE announcements ADD COLUMN publish_at TEXT');
+  if (!announcementColumns.some(column => column.name === 'cancelled_at')) db.exec('ALTER TABLE announcements ADD COLUMN cancelled_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS announcements_school_publication ON announcements(school_id, coalesce(publish_at, created_at), id)');
   chatPolishColumns(db);
 }
 

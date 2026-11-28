@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ADMIN_SIGN_IN_MAX_AGE_MS, ADMIN_REAUTH_MESSAGE } from '@/lib/admin-session';
 import { exampleSchedule } from '@/domain/example';
 import { openDatabase, type Db } from './db';
@@ -13,7 +13,7 @@ import { appRouter } from './router';
 
 useStaffBetaFixture();
 const dbs: Db[] = [];
-afterEach(() => { for (const db of dbs.splice(0)) if (db.open) db.close(); });
+afterEach(() => { vi.useRealTimers(); for (const db of dbs.splice(0)) if (db.open) db.close(); });
 
 function fixture(path = ':memory:') {
   const db = openDatabase(path);
@@ -36,8 +36,8 @@ function fixture(path = ':memory:') {
   grantStaffRole(service, manager, 'school-manager');
   joinStaffBeta(service, manager);
   const api = (id: string | null, age = 0) => appRouter.createCaller({ userId: id, authAt: Date.now() - age, service }).announcements;
-  const post = (id: string, schoolId: string | null, title: string) =>
-    api(id).publish({ accountId: id, requestId: randomUUID(), schoolId, title, body: 'Further details.' });
+  const post = (id: string, schoolId: string | null, title: string, publishAt?: string) =>
+    api(id).publish({ accountId: id, requestId: randomUUID(), schoolId, title, publishAt, body: 'Further details.' });
   const list = (id: string, before?: number) => api(id).list({ accountId: id, before });
   const unread = (id: string) => api(id).unread({ accountId: id });
   return { db, service, owner, manager, student, other, east, west, api, post, list, unread };
@@ -105,6 +105,80 @@ describe('announcements', () => {
     await expect(f.api(null).list({ accountId: f.owner })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     writeBetaRegistry(removeBeta(currentBetaRegistry(), 'announcements'));
     await expect(f.list(f.student)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('activates a scheduled post at its UTC instant and keeps retries idempotent after release', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2030-01-01T10:00:00Z');
+    const f = fixture();
+    const input = { accountId: f.manager, requestId: randomUUID(), schoolId: f.east, title: 'Assembly', body: 'Meet in the gym.', publishAt: '2030-01-01T12:00:00Z' };
+    for (const publishAt of ['2030-01-01T10:00:00Z', '2029-01-01T00:00:00Z', '2030-01-01T11:00:00', '2030-13-01T11:00:00Z']) {
+      await expect(f.api(f.manager).publish({ ...input, publishAt })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    const queued = await f.api(f.manager).publish(input);
+    await expect(f.api(f.manager).publish({ ...input, publishAt: '2030-01-01T11:00:00Z' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const now = await f.post(f.owner, f.east, 'Immediate post');
+    await f.api(f.student).dismiss({ accountId: f.student, id: now.id });
+    vi.setSystemTime('2030-01-01T11:59:59.999Z');
+    expect((await f.list(f.student)).items.map(row => row.id)).toEqual([now.id]);
+    expect(await f.unread(f.student)).toBeNull();
+    await expect(f.api(f.student).dismiss({ accountId: f.student, id: queued.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await f.api(f.manager).upcoming({ accountId: f.manager })).toMatchObject([{ id: queued.id, publishAt: '2030-01-01T12:00:00.000Z' }]);
+    vi.setSystemTime('2030-01-01T12:00:00.000Z');
+    expect(await f.api(f.manager).publish(input)).toEqual(queued);
+    expect(await f.api(f.manager).upcoming({ accountId: f.manager })).toEqual([]);
+    expect((await f.list(f.student)).items.map(row => row.id)).toEqual([queued.id, now.id]);
+    expect(await f.unread(f.student)).toMatchObject({ id: queued.id, createdAt: '2030-01-01T10:00:00.000Z', publishAt: '2030-01-01T12:00:00.000Z' });
+    await expect(f.api(f.manager).cancel({ accountId: f.manager, id: queued.id })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await f.api(f.student).dismiss({ accountId: f.student, id: queued.id });
+    expect(await f.unread(f.student)).toBeNull();
+    expect(await f.unread(f.other)).toBeNull();
+  });
+
+  it('shows or cancels upcoming posts only within the current publisher’s audience', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2030-01-01T10:00:00Z');
+    const f = fixture();
+    const when = '2030-01-02T12:00:00.000Z';
+    const global = await f.post(f.owner, null, 'Platform', when);
+    const local = await f.post(f.owner, f.east, 'East', when);
+    const away = await f.post(f.owner, f.west, 'West', '2030-01-02T11:00:00.000Z');
+    const queue = (userId: string) => f.api(userId).upcoming({ accountId: userId });
+    expect((await queue(f.owner)).map(row => row.id)).toEqual([away.id, global.id, local.id]);
+    expect((await queue(f.manager)).map(row => row.id)).toEqual([local.id]);
+    for (const id of [global.id, away.id]) await expect(f.api(f.manager).cancel({ accountId: f.manager, id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(queue(f.student)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.api(f.student).cancel({ accountId: f.student, id: local.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.api(f.manager).upcoming({ accountId: f.owner })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    const stale = f.api(f.manager, ADMIN_SIGN_IN_MAX_AGE_MS + 1000);
+    await expect(stale.upcoming({ accountId: f.manager })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(stale.cancel({ accountId: f.manager, id: local.id })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    for (let retry = 0; retry < 2; retry++) await f.api(f.manager).cancel({ accountId: f.manager, id: local.id });
+    expect(await queue(f.manager)).toEqual([]);
+    expect(f.db.prepare("SELECT count(*) AS n FROM audit_log WHERE action='announcement.cancel' AND actor_id=? AND school_id=?").get(f.manager, f.east)).toEqual({ n: 1 });
+    new BetaService(f.service).leave(f.owner, 'announcements');
+    await expect(queue(f.owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.api(f.owner).cancel({ accountId: f.owner, id: global.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.setSystemTime(when);
+    expect((await f.list(f.student)).items.map(row => row.id)).toEqual([global.id]);
+    expect((await f.unread(f.student))?.id).toBe(global.id);
+    await expect(f.api(f.student).dismiss({ accountId: f.student, id: local.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('uses publication time and the ID tie breaker across page boundaries', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2030-01-01T10:00:00Z');
+    const f = fixture();
+    const latest = await f.post(f.owner, null, 'Scheduled first, released last', '2030-01-01T13:00:00Z');
+    const tie = [];
+    for (let i = 0; i < 31; i++) tie.push((await f.post(f.owner, null, 'Noon ' + i, '2030-01-01T12:00:00Z')).id);
+    const immediate = await f.post(f.owner, null, 'Immediate and oldest');
+    vi.setSystemTime('2030-01-01T14:00:00Z');
+    const first = await f.list(f.student);
+    const second = await f.list(f.student, first.nextBefore!);
+    expect(first.items).toHaveLength(30);
+    expect(second.nextBefore).toBeNull();
+    expect([...first.items, ...second.items].map(row => row.id)).toEqual([latest.id, ...tie.reverse(), immediate.id]);
   });
 
   it('validates text, keeps publishing idempotent and pages history without dropping older unread posts', async () => {

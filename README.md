@@ -204,7 +204,7 @@ npm run staff -- revoke principal@example.com
 
 Members of the private `announcements` beta see a board in School and a popup for unread announcements. Dismissing a popup saves that choice for the signed-in account across devices. The post stays on the board. Platform posts reach every enrolled member. School posts appear only to enrolled members who currently belong to that school.
 
-The owner can publish to the whole platform or to one school. A School Manager enrolled in both Announcements and Staff roles can publish to their assigned school. Publishing requires a recent Google sign-in.
+The owner can publish to the whole platform or to one school. A School Manager enrolled in both Announcements and Staff roles can publish to their assigned school. Publishing requires a recent Google sign-in. In **School → Announcements**, publish immediately or schedule a date and time in your device's timezone. Publishers can review and cancel upcoming posts for audiences they manage. At the scheduled time, the post becomes available on the board and eligible for the next popup check, even if its author is offline.
 
 ## Continuous integration
 

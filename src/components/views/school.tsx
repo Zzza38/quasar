@@ -125,7 +125,7 @@ export function SchoolView({ state }: { state: AppState }) {
       {shared}
       {!voting && signals}
     </>,
-    announcements: <AnnouncementBoard key={school.id} state={state} />,
+    announcements: <AnnouncementBoard key={JSON.stringify([school.id, context.isAdmin, context.staff?.role, context.staff?.schoolId])} state={state} />,
     lunch: <LunchMenuSection state={state} />,
     changes: <>{signals}<ProposalsSection state={state} /></>,
     setup: source,
