@@ -26,7 +26,7 @@ export const saveGuideSchema = z.object({ kind: kindSchema, schoolId: z.uuid().n
 export const guidePlatformsUpdateSchema = z.object({ kind: kindSchema, schoolId: z.uuid(), platforms: z.array(z.string().max(40)).max(12) })
   .refine((input) => input.platforms.every((platform) => GUIDES[input.kind].platforms.includes(platform)), { message: 'Unknown platform.', path: ['platforms'] })
   .transform((input) => ({ ...input, platforms: knownPlatforms(input.kind, input.platforms) }));
-export const guideImageUploadSchema = z.object({ data: z.string() });
+export const guideImageUploadSchema = z.object({ data: z.string(), schoolId: z.uuid().nullable().optional() });
 
 type GuideRow = { platform: string; guide: string };
 /** Support's view of one scope: the guide saved there for each guide key, or null where the next level down applies. */
@@ -69,7 +69,7 @@ export class SetupGuideService {
   }
 
   adminView(adminId: string, schoolId: string | null): AdminGuides {
-    this.service.permit(adminId, 'schools.edit');
+    this.service.requireSchoolScope(adminId, schoolId, 'schools.edit');
     const view = (kind: GuideKind): AdminGuideKind => ({
       platforms: schoolId ? this.platforms(kind, schoolId) : [], global: this.overrides(kind, ''), school: schoolId ? this.overrides(kind, schoolId) : null,
     });
@@ -78,8 +78,8 @@ export class SetupGuideService {
 
   /** Saves a guide for every school (`schoolId` null) or one school. A null guide goes back to the next level down. */
   save(adminId: string, raw: z.input<typeof saveGuideSchema>): void {
-    this.service.permit(adminId, 'schools.edit');
     const input = saveGuideSchema.parse(raw);
+    this.service.requireSchoolScope(adminId, input.schoolId, 'schools.edit');
     const scope = input.schoolId ?? '';
     const { table } = STORE[input.kind];
     this.db.transaction(() => {
@@ -100,8 +100,8 @@ export class SetupGuideService {
   }
 
   setPlatforms(adminId: string, raw: z.input<typeof guidePlatformsUpdateSchema>): string[] {
-    this.service.permit(adminId, 'schools.edit');
     const input = guidePlatformsUpdateSchema.parse(raw);
+    this.service.requireSchoolScope(adminId, input.schoolId, 'schools.edit');
     return this.db.transaction(() => {
       const from = this.platforms(input.kind, input.schoolId);
       this.db.prepare(`UPDATE schools SET ${STORE[input.kind].column}=? WHERE id=?`).run(input.platforms.join(','), input.schoolId);
@@ -112,8 +112,10 @@ export class SetupGuideService {
 
   /** Re-encodes a screenshot the way chat images are (metadata stripped, at most 1600 px) and returns its id. */
   async uploadImage(adminId: string, raw: z.input<typeof guideImageUploadSchema>): Promise<{ id: string }> {
-    this.service.permit(adminId, 'schools.edit');
-    const data = await prepareChatImage(guideImageUploadSchema.parse(raw).data);
+    const input = guideImageUploadSchema.parse(raw);
+    this.service.requireSchoolScope(adminId, input.schoolId ?? null, 'schools.edit');
+    const data = await prepareChatImage(input.data);
+    this.service.requireSchoolScope(adminId, input.schoolId ?? null, 'schools.edit');
     const id = randomUUID();
     this.db.prepare('INSERT INTO feed_guide_images(id,image,created_at,created_by) VALUES(?,?,?,?)').run(id, Buffer.from(data!, 'base64'), now(), adminId);
     return { id };

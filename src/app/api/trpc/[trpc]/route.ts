@@ -50,7 +50,7 @@ async function handler(req: Request) {
       const { userId, authAt } = await getAuth();
       const service = new Service(getDb());
       // authAt lets member procedures that staff can also use (the class directory, the lunch menu) apply the
-      // support tools' recent sign-in rule (Service.canEditAnySchool).
+      // support tools' recent sign-in rule (Service.canEditSchool).
       service.request = { ...requestInfo(req), authAt };
       return { userId, authAt, service };
     },

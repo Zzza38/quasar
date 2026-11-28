@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { emptyPersonalSchedule, personalScheduleSchema, type Grade, type PersonalSchedule } from '@/domain/schedule';
+import type { StaffRank } from '@/domain/staff';
 import type { ReportCategory } from '@/domain/chat';
 import { countUnreadChats, type ChatPause } from './chat';
 import { leaveAllGroups } from './group-chat';
@@ -36,8 +37,8 @@ export const FRIEND_REQUEST_LIMIT = 30;
 export type Verification = { status: 'verified' | 'pending' | 'none'; method: 'domain' | 'support' | null };
 export type FriendState = 'none' | 'requested' | 'incoming' | 'friends';
 /** An accepted friend's timetable, kept in memory on the client for date-specific classmate labels. */
-export type Classmate = { id: string; displayName: string; avatar: string | null; personal: PersonalSchedule };
-export type MemberSummary = { id: string; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
+export type Classmate = { id: string; staff?: StaffRank; displayName: string; avatar: string | null; personal: PersonalSchedule };
+export type MemberSummary = { id: string; staff: StaffRank | null; displayName: string; fullName: string | null; grade: Grade | null; verified: boolean; joinedAt: string; friendState: FriendState; blocked: boolean; avatar: string | null };
 export type ReportSummary = { id: string; reason: string; createdAt: string; schoolId: string | null; schoolName: string | null; reportedId: string; reportedName: string; reportedEmail: string; reporterId: string; reporterName: string;
   isChat: boolean; category: ReportCategory | null; evidenceCount: number; history: { reports: number; removals: number; pauses: number }; pause: ChatPause | null };
 type MemberRow = AvatarRow & { display_name: string; full_name: string; email: string; created_at: string; school_id: string | null; verified: number };
@@ -137,10 +138,10 @@ export class CommunityService {
     const parsed = personalScheduleSchema.safeParse(entity && !entity.deleted ? entity.data : emptyPersonalSchedule());
     return parsed.success ? parsed.data : emptyPersonalSchedule();
   }
-  private summarize(viewerId: string, viewerVerified: boolean, row: MemberRow): MemberSummary {
+  private summarize(viewerId: string, viewerVerified: boolean, row: MemberRow, staff: StaffRank | null): MemberSummary {
     const verified = !!row.verified;
     return {
-      id: row.id, displayName: row.display_name, fullName: viewerVerified && verified ? row.full_name : null,
+      id: row.id, staff, displayName: row.display_name, fullName: viewerVerified && verified ? row.full_name : null,
       grade: this.personalOf(row.id).grade ?? null, verified, joinedAt: row.created_at,
       friendState: this.friendState(viewerId, row.id), blocked: !!this.db.prepare('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(viewerId, row.id),
       avatar: avatarUrl(row),
@@ -153,7 +154,8 @@ export class CommunityService {
       FROM users u WHERE u.school_id=? AND u.id<>? AND u.display_name<>'' AND instr(lower(u.display_name), lower(?)) > 0
       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id=? AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=?))
       ORDER BY u.display_name COLLATE NOCASE, u.id LIMIT 200`).all(viewer.schoolId, viewerId, query.trim(), viewerId, viewerId) as MemberRow[];
-    return { members: rows.map(row => this.summarize(viewerId, viewerVerified, row)), viewerVerified };
+    const ranks = this.service.staffRanks(rows.map(row => row.id));
+    return { members: rows.map(row => this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null)), viewerVerified };
   }
   friends(viewerId: string): { friends: MemberSummary[]; incoming: MemberSummary[]; outgoing: MemberSummary[]; blocked: MemberSummary[] } {
     const viewer = this.service.ready(viewerId);
@@ -161,13 +163,14 @@ export class CommunityService {
     const rows = this.db.prepare(`SELECT u.*, (SELECT count(*) FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) verified, f.status, f.requester_id
       FROM friendships f JOIN users u ON u.id = CASE WHEN f.user_low=? THEN f.user_high ELSE f.user_low END
       WHERE (f.user_low=? OR f.user_high=?) ORDER BY u.display_name COLLATE NOCASE`).all(viewerId, viewerId, viewerId) as (MemberRow & { status: string; requester_id: string })[];
-    const summaries = rows.map(row => ({ row, summary: this.summarize(viewerId, viewerVerified, row) }));
     const blockedRows = this.db.prepare('SELECT u.*, 0 verified FROM blocks b JOIN users u ON u.id=b.blocked_id WHERE b.blocker_id=? ORDER BY u.display_name COLLATE NOCASE').all(viewerId) as MemberRow[];
+    const ranks = this.service.staffRanks([...rows, ...blockedRows].map(row => row.id));
+    const summaries = rows.map(row => ({ row, summary: this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null) }));
     return {
       friends: summaries.filter(entry => entry.row.status === 'accepted').map(entry => entry.summary),
       incoming: summaries.filter(entry => entry.row.status === 'pending' && entry.row.requester_id !== viewerId).map(entry => entry.summary),
       outgoing: summaries.filter(entry => entry.row.status === 'pending' && entry.row.requester_id === viewerId).map(entry => entry.summary),
-      blocked: blockedRows.map(row => ({ ...this.summarize(viewerId, viewerVerified, row), fullName: null })),
+      blocked: blockedRows.map(row => ({ ...this.summarize(viewerId, viewerVerified, row, ranks.get(row.id) ?? null), fullName: null })),
     };
   }
   /** A profile. Friends additionally receive classes and the full personal schedule so the client can render their day. */
@@ -181,7 +184,7 @@ export class CommunityService {
     const friends = this.areFriends(viewerId, otherId);
     const sameSchool = viewer.schoolId !== null && viewer.schoolId === row.school_id;
     if (!sameSchool && !friends) fail('NOT_FOUND', 'This member is not available.');
-    const summary = this.summarize(viewerId, this.isVerified(viewerId, viewer.schoolId), row);
+    const summary = this.summarize(viewerId, this.isVerified(viewerId, viewer.schoolId), row, this.service.staffRank(row.id));
     const school = this.service.school(row.school_id);
     const shared = friends ? this.personalOf(otherId) : null;
     // True when the pair's thread holds at least one message; the report panel then offers to include them.
@@ -274,17 +277,19 @@ export class CommunityService {
   /* ---------- Support (staff roles, src/domain/staff.ts) ---------- */
 
   verificationRequests(adminId: string) {
-    this.service.permit(adminId, 'verification');
+    const scope = this.service.requiredStaffScope(adminId, 'verification');
     return (this.db.prepare(`SELECT r.id, r.user_id userId, r.school_id schoolId, r.proof, r.created_at createdAt, u.display_name displayName, u.full_name fullName, u.email, s.name schoolName
-      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL ORDER BY r.created_at`).all() as
+      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL AND (@scope IS NULL OR (r.school_id=@scope AND u.school_id=@scope)) ORDER BY r.created_at`).all({ scope }) as
       { id: string; userId: string; schoolId: string; proof: string; createdAt: string; displayName: string; fullName: string; email: string; schoolName: string }[])
       .filter(row => this.service.canTarget(adminId, row.userId));
   }
   decideVerification(adminId: string, requestId: string, approve: boolean): void {
     this.service.permit(adminId, 'verification');
     const banned = this.db.transaction(() => {
-      const request = this.db.prepare('SELECT user_id, school_id FROM verification_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string } | undefined;
+      const request = this.db.prepare('SELECT r.user_id, r.school_id, u.school_id currentSchool FROM verification_requests r JOIN users u ON u.id=r.user_id WHERE r.id=? AND r.resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string; currentSchool: string | null } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already handled.');
+      this.service.requireSchoolScope(adminId, request.school_id, 'verification');
+      this.service.requireSchoolScope(adminId, request.currentSchool, 'verification');
       this.service.guardTarget(adminId, request!.user_id);
       // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
       const banned = approve && this.isBanned(request.user_id, request.school_id);
@@ -297,9 +302,9 @@ export class CommunityService {
     if (banned) fail('CONFLICT', 'This student was removed from this school, so the request was declined.');
   }
   revokeVerification(adminId: string, userId: string, schoolId: string): void {
-    this.service.permit(adminId, 'verification');
-    this.service.guardTarget(adminId, userId);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, schoolId, 'verification');
+      this.service.guardTarget(adminId, userId);
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.withdrawProposals(userId, schoolId);
       this.service.audit(adminId, 'support.unverify', schoolId, { userId });
@@ -310,20 +315,32 @@ export class CommunityService {
    * report that involves a staff account, as reporter, reported or a sender in its group snapshot, is left to the
    * owner (Service.canTarget).
    */
-  reports(adminId: string): ReportSummary[] {
-    this.service.permit(adminId, 'reports');
+  reports(adminId: string, filter: { reportId?: string; reportedId?: string } = {}): ReportSummary[] {
+    const access = this.service.staffAccess(adminId);
+    if (!access?.permissions.includes('reports')) fail('FORBIDDEN', access ? 'Your staff role doesn’t include this.' : 'Staff access is required.');
+    const school = access.schoolId ?? null;
+    if (access.role === 'school-manager' && !school) fail('FORBIDDEN', 'This role needs an assigned school.');
+    const chatOnly = access.role === 'chat-moderation';
     const rows = this.db.prepare(`SELECT r.id, r.reason, r.created_at createdAt, r.school_id schoolId, s.name schoolName,
         r.reported_id reportedId, ru.display_name reportedName, ru.email reportedEmail, r.reporter_id reporterId, pu.display_name reporterName,
         (r.thread_id IS NOT NULL OR r.group_id IS NOT NULL) isChat, r.category, coalesce(json_array_length(r.evidence), 0) evidenceCount,
         (SELECT json_group_array(DISTINCT json_extract(e.value, '$.senderId')) FROM json_each(coalesce(r.evidence, '[]')) e WHERE json_extract(e.value, '$.senderId') IS NOT NULL) evidenceSenders,
-        (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id) historyReports,
-        (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
-        (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
+        (SELECT count(*) FROM reports h WHERE h.reported_id=r.reported_id
+          AND (@school IS NULL OR (h.school_id=@school AND h.thread_id IS NULL AND h.group_id IS NULL
+            AND EXISTS (SELECT 1 FROM users hr WHERE hr.id=h.reporter_id AND hr.school_id=@school)))
+          AND (@chatOnly=0 OR h.thread_id IS NOT NULL OR h.group_id IS NOT NULL)) historyReports,
+        (SELECT count(*) FROM audit_log a WHERE a.action='member.remove' AND @chatOnly=0 AND (@school IS NULL OR a.school_id=@school) AND json_extract(a.detail, '$.userId')=r.reported_id) historyRemovals,
+        (SELECT count(*) FROM audit_log a WHERE a.action='chat.pause' AND @school IS NULL AND json_extract(a.detail, '$.userId')=r.reported_id) historyPauses,
         p.user_id pausedId, p.until pausedUntil, p.reason pausedReason,
         EXISTS (SELECT 1 FROM support_requests a WHERE a.user_id=r.reported_id AND a.kind='appeal:pause' AND a.resolved_at IS NULL) pausedAppealed
       FROM reports r JOIN users ru ON ru.id=r.reported_id JOIN users pu ON pu.id=r.reporter_id LEFT JOIN schools s ON s.id=r.school_id
-      LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND (p.until IS NULL OR p.until>?)
-      WHERE r.resolved_at IS NULL ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all(now()) as
+      LEFT JOIN chat_pauses p ON p.user_id=r.reported_id AND @school IS NULL AND (p.until IS NULL OR p.until>@now)
+      WHERE r.resolved_at IS NULL AND (@id IS NULL OR r.id=@id) AND (@subject IS NULL OR r.reported_id=@subject)
+        AND (@chatOnly=0 OR r.thread_id IS NOT NULL OR r.group_id IS NOT NULL)
+        AND (@school IS NULL OR (r.school_id=@school AND ru.school_id=@school AND pu.school_id=@school AND r.thread_id IS NULL AND r.group_id IS NULL))
+      ORDER BY CASE WHEN r.category='danger' THEN 0 ELSE 1 END, r.created_at, r.id`).all({
+        school, chatOnly: Number(chatOnly), id: filter.reportId ?? null, subject: filter.reportedId ?? null, now: now(),
+      }) as
       (Omit<ReportSummary, 'isChat' | 'history' | 'pause'> & { isChat: number; evidenceSenders: string; historyReports: number; historyRemovals: number; historyPauses: number; pausedId: string | null; pausedUntil: string | null; pausedReason: string | null; pausedAppealed: number })[];
     const visible = rows.filter(row => [row.reportedId, row.reporterId, ...(JSON.parse(row.evidenceSenders) as string[])].every(id => this.service.canTarget(adminId, id)));
     return visible.map(({ isChat, evidenceSenders: _senders, historyReports, historyRemovals, historyPauses, pausedId, pausedUntil, pausedReason, pausedAppealed, ...row }) => ({
@@ -338,29 +355,36 @@ export class CommunityService {
       if (!report) return;
       this.service.guardTarget(adminId, report.reported_id);
       this.service.guardTarget(adminId, report.reporter_id);
+      if (!this.reports(adminId, { reportId }).length) fail('FORBIDDEN', 'This report is outside your role.');
+      if (outcome === 'removed') this.service.permit(adminId, 'members.remove');
       this.db.prepare('UPDATE reports SET resolved_at=?, actor_id=?, outcome=? WHERE id=?').run(now(), adminId, outcome, reportId);
       this.service.audit(adminId, 'report.resolve', report.school_id, { reportId, userId: report.reported_id, outcome });
     }).immediate();
   }
   /**
    * Support removal: the member leaves the school, loses their verification and any open verification request there,
-   * and cannot rejoin. Every friendship they have ends, at any school, which closes all of their chats (docs/CHAT.md D4).
+   * and cannot rejoin. Only site staff also close friendships, groups and reports outside the school's authority.
    */
   removeFromSchool(adminId: string, userId: string, schoolId: string, reason: string): void {
-    this.service.permit(adminId, 'members.remove');
-    this.service.guardTarget(adminId, userId);
     const text = z.string().trim().min(3).max(2000).parse(reason);
     this.db.transaction(() => {
+      this.service.requireSchoolScope(adminId, schoolId, 'members.remove');
+      this.service.guardTarget(adminId, userId);
       const user = this.db.prepare('SELECT school_id FROM users WHERE id=?').get(userId) as { school_id: string | null } | undefined;
+      this.service.requireSchoolScope(adminId, user?.school_id ?? null);
       if (!user) fail('NOT_FOUND', 'Member not found.');
       this.db.prepare('INSERT OR REPLACE INTO school_bans(school_id,user_id,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(schoolId, userId, adminId, text, now());
       this.db.prepare('DELETE FROM school_verifications WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.db.prepare("UPDATE verification_requests SET resolved_at=?, decision='declined', actor_id=? WHERE user_id=? AND school_id=? AND resolved_at IS NULL").run(now(), adminId, userId, schoolId);
       this.withdrawProposals(userId, schoolId);
-      this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
-      // Their friend groups end too (docs/CHAT.md §12): a group admin hands over to the longest-standing member.
-      leaveAllGroups(this.db, userId, now());
-      this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
+      if (this.service.requiredStaffScope(adminId, 'members.remove')) {
+        const close = this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE id=?");
+        for (const report of this.reports(adminId, { reportedId: userId })) close.run(now(), adminId, report.id);
+      } else {
+        this.db.prepare('DELETE FROM friendships WHERE user_low=? OR user_high=?').run(userId, userId);
+        leaveAllGroups(this.db, userId, now());
+        this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='removed' WHERE reported_id=? AND resolved_at IS NULL").run(now(), adminId, userId);
+      }
       if (user.school_id === schoolId) this.db.prepare('UPDATE users SET school_id=NULL, reviewed_version=NULL WHERE id=?').run(userId);
       this.service.audit(adminId, 'member.remove', schoolId, { userId, reason: text });
     }).immediate();
@@ -393,6 +417,7 @@ export class CommunityService {
       JOIN users me ON me.id=?
       WHERE f.status='accepted' AND (f.user_low=? OR f.user_high=?) AND me.school_id IS NOT NULL AND u.school_id=me.school_id
       ORDER BY u.display_name COLLATE NOCASE`).all(userId, userId, userId, userId) as (AvatarRow & { display_name: string })[];
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
+    const ranks = this.service.staffRanks(rows.map(row => row.id));
+    return rows.map(row => ({ id: row.id, staff: ranks.get(row.id), displayName: row.display_name, avatar: avatarUrl(row), personal: this.personalOf(row.id) }));
   }
 }

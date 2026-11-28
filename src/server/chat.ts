@@ -1,6 +1,7 @@
+import type { StaffRank } from '@/domain/staff';
 import { chatImageSchema } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, assertOwnEdit, searchTerms, searchSql, searchHit } from './chat-extras';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, assertOwnEdit, searchTerms, searchSql, searchHits } from './chat-extras';
 import type { MessageExtras, Reaction, SearchHit } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
@@ -36,7 +37,7 @@ export const PAUSED = 'Support paused your messaging.';
 const SELF = 'You cannot message yourself.';
 const NOTHING_TO_REPORT = 'This chat has no messages to report.';
 
-export type ChatPeer = { id: string; displayName: string; fullName: string | null; verified: boolean; avatar: string | null };
+export type ChatPeer = { staff?: StaffRank; id: string; displayName: string; fullName: string | null; verified: boolean; avatar: string | null };
 /**
  * `original` and `removed` are what the viewer's tier may read beyond `body` (src/server/moderation.ts): the owner's
  * uncensored text, and a removed message's text and photo.
@@ -52,12 +53,12 @@ export type ChatPause = { until: string | null; reason: string; appealed: boolea
  * device has fetched, `readSeq` the newest they have marked read. `typing` is true while their typing signal is live.
  */
 /** `joinedAt` is sent for groups only: a message sent before a member joined is not theirs to read (docs/CHAT.md §12). */
-export type Receipt = { id: string; displayName: string; avatar: string | null; deliveredSeq: number; readSeq: number; typing: boolean; joinedAt?: string };
+export type Receipt = { staff?: StaffRank; id: string; displayName: string; avatar: string | null; deliveredSeq: number; readSeq: number; typing: boolean; joinedAt?: string };
 export type InboxRow =
   | { state: 'open'; peer: ChatPeer;
       lastMessage: { fromMe: boolean; preview: string | null; createdAt: string; deletedBy: 'sender' | 'support' | null } | null;
       unread: number; muted: boolean }
-  | { state: 'closed'; userId: string; displayName: string; lastAt: string;
+  | { state: 'closed'; staff?: StaffRank; userId: string; displayName: string; lastAt: string;
       /** How the viewer can reopen it: lift their own block (then re-friend), send a friend request, or not at all (other school). */
       reopen: 'unblock' | 'friend' | null };
 export type ReopenResult = { unblocked: boolean; friendState: 'friends' | 'requested' };
@@ -161,12 +162,6 @@ export function countUnreadChats(db: Db, userId: string): number {
 
 export class ChatService {
   constructor(private readonly service: Service, private readonly now: () => Date = () => new Date()) {}
-  private readonly reveals = new Map<string, Reveal>();
-  private reveal(viewerId: string): Reveal {
-    let reveal = this.reveals.get(viewerId);
-    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
-    return reveal;
-  }
   private get db() { return this.service.db; }
   private get community() { return new CommunityService(this.service); }
   private iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
@@ -217,19 +212,19 @@ export class ChatService {
   }
   private peer(viewer: User, otherId: string): ChatPeer {
     const row = this.db.prepare(`SELECT id, display_name, full_name, school_id, ${AVATAR_COLUMNS} FROM users WHERE id=?`).get(otherId) as PeerRow;
-    return this.peerFromRow(viewer, row);
+    return this.peerFromRow(viewer, row, this.service.staffRank(row.id));
   }
-  private peerFromRow(viewer: User, row: PeerRow): ChatPeer {
+  private peerFromRow(viewer: User, row: PeerRow, staff: StaffRank | null): ChatPeer {
     const verified = this.community.isVerified(row.id, row.school_id);
     const viewerVerified = this.community.isVerified(viewer.id, viewer.schoolId);
-    return { id: row.id, displayName: row.display_name, fullName: verified && viewerVerified ? row.full_name : null, verified, avatar: avatarUrl(row) };
+    return { staff: staff ?? undefined, id: row.id, displayName: row.display_name, fullName: verified && viewerVerified ? row.full_name : null, verified, avatar: avatarUrl(row) };
   }
   private memberRow(threadId: string, userId: string): MemberRow | undefined {
     return this.db.prepare('SELECT last_read_seq, delivered_seq, muted, typing_until FROM chat_members WHERE thread_id=? AND user_id=?').get(threadId, userId) as MemberRow | undefined;
   }
   /** The other person's markers for the thread page (§13). A pair with no thread yet has nothing delivered or read. */
   private receipt(peer: ChatPeer, member: MemberRow | undefined): Receipt {
-    return { id: peer.id, displayName: peer.displayName, avatar: peer.avatar, deliveredSeq: member?.delivered_seq ?? 0, readSeq: member?.last_read_seq ?? 0, typing: !!member?.typing_until && member.typing_until > this.iso() };
+    return { staff: peer.staff, id: peer.id, displayName: peer.displayName, avatar: peer.avatar, deliveredSeq: member?.delivered_seq ?? 0, readSeq: member?.last_read_seq ?? 0, typing: !!member?.typing_until && member.typing_until > this.iso() };
   }
   /**
    * Records that the viewer's device now holds every message up to `seq` (§13). A single statement outside the read
@@ -238,9 +233,8 @@ export class ChatService {
   private markDelivered(threadId: string, viewerId: string, seq: number): void {
     this.db.prepare('UPDATE chat_members SET delivered_seq=max(delivered_seq, ?) WHERE thread_id=? AND user_id=? AND delivered_seq<?').run(seq, threadId, viewerId, seq);
   }
-  private message(viewerId: string, row: MessageRow): ChatMessage {
-    const reveal = this.reveal(viewerId);
-    return { ...messageExtras(this.db, 'peer', viewerId, row.seq), id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null,
+  private message(viewerId: string, row: MessageRow, reveal = new Reveal(this.service, viewerId)): ChatMessage {
+    return { ...messageExtras(this.service, 'peer', viewerId, row.seq), id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null,
       original: reveal.original(row), removed: reveal.removed(row, 'peer'),
       editedAt: row.deleted_at ? null : row.edited_at, editedFrom: reveal.editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at };
   }
@@ -277,9 +271,10 @@ export class ChatService {
       const idle: InboxRow[] = [];
       /** Threads whose newest incoming message this device has just fetched (marked delivered after the read, §13). */
       const delivered: { threadId: string; seq: number }[] = [];
+      const friendRoles = this.service.staffRanks(friends.map(row => row.id));
       for (const friend of friends) {
         if (CHAT.requiresVerification && !(this.community.isVerified(viewerId, viewer.schoolId) && this.community.isVerified(friend.id, friend.school_id))) continue;
-        const peer = this.peerFromRow(viewer, friend);
+        const peer = this.peerFromRow(viewer, friend, friendRoles.get(friend.id) ?? null);
         const muted = !!friend.muted;
         const last = friend.thread_id && friend.last_message_at ? latest.get(friend.thread_id) as MessageRow | undefined : undefined;
         if (!friend.thread_id || !friend.last_message_at || !last) {
@@ -305,9 +300,10 @@ export class ChatService {
         { id: string; display_name: string; school_id: string | null; last_message_at: string; blocked_by_me: number }[];
       const reopenOf = (row: { school_id: string | null; blocked_by_me: number }): 'unblock' | 'friend' | null =>
         row.blocked_by_me ? 'unblock' : viewer.schoolId !== null && row.school_id === viewer.schoolId ? 'friend' : null;
+      const closedRoles = this.service.staffRanks(closed.map(row => row.id));
       const rows: InboxRow[] = [
         ...open.map(entry => entry.row),
-        ...closed.map(row => ({ state: 'closed' as const, userId: row.id, displayName: row.display_name, lastAt: row.last_message_at, reopen: reopenOf(row) })),
+        ...closed.map(row => ({ state: 'closed' as const, staff: closedRoles.get(row.id), userId: row.id, displayName: row.display_name, lastAt: row.last_message_at, reopen: reopenOf(row) })),
         ...idle,
       ];
       return { rows, delivered, ...this.unreadChats(viewerId), pause: this.pause(viewerId) };
@@ -333,7 +329,10 @@ export class ChatService {
       }
       const member = this.memberRow(thread.id, viewerId);
       const base = { peer, revision: thread.revision, lastReadSeq: member?.last_read_seq ?? 0, muted: !!member?.muted, pause, receipts: [this.receipt(peer, this.memberRow(thread.id, otherId))] };
-      const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
+      const toMessages = (rows: MessageRow[]) => {
+        const reveal = new Reveal(this.service, viewerId);
+        return rows.map(row => this.message(viewerId, row, reveal));
+      };
       // The newest incoming message this response carries: the viewer's device holds it once the response lands (§13).
       const newest = (rows: MessageRow[]) => {
         const seq = rows.reduce((max, row) => (row.sender_id !== viewerId && row.seq > max ? row.seq : max), 0);
@@ -472,7 +471,7 @@ export class ChatService {
       if (!terms || !thread) return { results: [] };
       const rows = this.db.prepare(`SELECT c.*, u.display_name FROM chat_messages c JOIN users u ON u.id=c.sender_id WHERE c.thread_id=? AND ${searchSql('?')} ORDER BY c.seq DESC LIMIT ?`)
         .all(thread.id, terms.pattern, CHAT.searchResults) as (MessageRow & { display_name: string })[];
-      return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
+      return { results: searchHits(this.service, rows, viewerId, terms.query) };
     })();
   }
 
@@ -575,6 +574,7 @@ export class ChatService {
    * the reported member and, in a group snapshot, every other sender (Service.canTarget).
    */
   private guardEvidence(adminId: string, report: { reporter_id: string; reported_id: string; items: StoredItem[] }): void {
+    if (this.service.requiredStaffScope(adminId, 'reports') !== null) fail('FORBIDDEN', 'Private chat reports are outside your school role.');
     for (const id of new Set([report.reporter_id, report.reported_id, ...report.items.flatMap(item => item.senderId ? [item.senderId] : [])])) this.service.guardTarget(adminId, id);
   }
   /**
@@ -634,7 +634,9 @@ export class ChatService {
       if (!user) return fail('NOT_FOUND', 'Member not found.');
       const until = input.days === null ? null : this.iso(input.days * DAY);
       this.db.prepare('INSERT OR REPLACE INTO chat_pauses(user_id,until,actor_id,reason,created_at) VALUES(?,?,?,?,?)').run(input.userId, until, adminId, input.reason, this.iso());
-      this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='paused' WHERE reported_id=? AND resolved_at IS NULL").run(this.iso(), adminId, input.userId);
+      const community = new CommunityService(this.service);
+      const resolve = this.db.prepare("UPDATE reports SET resolved_at=?, actor_id=?, outcome='paused' WHERE id=?");
+      for (const report of community.reports(adminId, { reportedId: input.userId })) resolve.run(this.iso(), adminId, report.id);
       this.audit(adminId, 'chat.pause', user.school_id, { userId: input.userId, days: input.days, reason: input.reason });
     }).immediate();
   }

@@ -24,6 +24,8 @@ import { BetaAdmin, BetaDiagnosticsDetails } from './admin-betas';
 import { GuideAdmin, SchoolGuideSheet } from './admin-guides';
 import { guideName } from '@/domain/setup-guides';
 import { BetaProvider, type JoinedBeta } from './betas';
+import { AdminRoleGrants } from './admin-role-grants';
+import { AdminRoles, SchoolActivity } from './admin-roles';
 import { STAFF_LABELS, hasPermission, type StaffAccess, type StaffPermission } from '@/domain/staff';
 
 type Request = RouterOutput['admin']['requests'][number];
@@ -79,6 +81,8 @@ export type AdminBoot = { accountId: string | null; isAdmin: boolean; staff: Sta
 const ROLE_DESCRIPTIONS: Record<StaffAccess['role'], string> = {
   owner: 'Handle requests and reports, manage any member’s account, classes and tasks, and review shared schedules.',
   administrator: 'Handle requests, verification, reports, pauses, removals and suspensions, open member records, and review shared schedules.',
+  'school-manager': 'Manage your school’s schedules, setup guides, membership and school chat.',
+  'chat-moderation': 'Review reported chats, moderate Global chat and your school chat, and handle messaging pauses and appeals.',
   moderator: 'Handle reports and their appeals, pause messaging, remove members from a school, and moderate Global chat.',
   support: 'Answer correction requests and feedback, verify students, open member records, and sign members out when an account is at risk.',
   'schedule-editor': 'Answer correction requests, publish passed proposals, and fix shared school schedules, class directories and lunch menus.',
@@ -96,6 +100,8 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   // adminScoped mutations carry the signed-in account, so a switch in another tab can't write under the wrong one.
   const [accountId, setAccountId] = useState<string | null>(initial?.accountId ?? null);
   const accountRef = useRef<string | null>(initial?.accountId ?? null);
+  const grantRef = useRef(initial?.staff);
+  const refreshVersion = useRef(0);
   // Report snapshots stay in memory only, and only while their card is open.
   const [evidence, setEvidence] = useState<Record<string, EvidenceItem[]>>({});
   const [opening, setOpening] = useState<string | null>(null);
@@ -128,6 +134,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const [guideSchool, setGuideSchool] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
     // Losing staff access drops everything support loaded, including student proofs and report snapshots.
     const revoke = () => {
       setAllowed(false); setSchools([]); setRequests([]); setVerifications([]); setReports([]); setProposals([]); setLogos([]); setPauses([]); setBans([]); setEvidence({});
@@ -135,9 +142,15 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
     };
     setLoading(true); setError(''); setFailed(false);
     try {
-      const session = await api.session.query(); setSignedIn(Boolean(session));
+      const session = await api.session.query();
+      if (version !== refreshVersion.current) return;
+      setSignedIn(Boolean(session));
       const nextAccount = session?.user.id ?? null;
-      if (accountRef.current !== nextAccount) setEvidence({});
+      if (accountRef.current !== nextAccount || grantRef.current?.role !== session?.staff?.role || grantRef.current?.schoolId !== session?.staff?.schoolId) {
+        revoke();
+        setTab('inbox'); setFilter('');
+      }
+      grantRef.current = session?.staff;
       accountRef.current = nextAccount; setAccountId(nextAccount);
       setReauth(!!session?.staff && !session.adminReady);
       setBetas(session?.betas ?? []);
@@ -145,21 +158,25 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       if (!session?.adminReady) { revoke(); return; }
       // Only the lists this role may read are asked for; the rest stay empty.
       const may = (permission: StaffPermission) => hasPermission(session.staff, permission);
-      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList, logoList] = await Promise.all([api.admin.schools.query(), api.admin.requests.query(),
+      const roomOnly = session.staff?.role === 'chat-moderation' && !!session.staff.schoolId;
+      const [schoolList, requestList, verificationList, reportList, proposalList, pauseList, securityStatus, banList, logoList] = await Promise.all([roomOnly ? [] : api.admin.schools.query(),
+        roomOnly ? [] : api.admin.requests.query(),
         may('verification') ? api.admin.verificationRequests.query() : [], may('reports') ? api.admin.reports.query() : [], may('proposals') ? api.admin.proposals.query() : [],
         may('chat.pause') ? api.admin.chatPauses.query() : [], api.admin.security.query(), may('members.remove') ? api.admin.bans.query() : [], may('proposals') ? api.admin.logoVotes.query() : []]);
+      if (version !== refreshVersion.current) return;
       setSchools(schoolList); setRequests(requestList); setVerifications(verificationList); setReports(reportList); setProposals(proposalList); setLogos(logoList); setPauses(pauseList); setSecurity(securityStatus); setBans(banList); setAllowed(true);
       // Drop snapshots of reports that are no longer open.
       const open = new Set(reportList.map((report) => report.id));
       setEvidence((current) => Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id))));
     } catch (err) {
+      if (version !== refreshVersion.current) return;
       setError(errorMessage(err));
       // Only a refusal ends access. A network blip or one failing list keeps what is loaded (and any open sheet or
       // report snapshot) on screen with the error above it, so reopening evidence does not write another audit entry.
       if (needsSignIn(err)) setReauth(true);
       if (isAccessDenied(err)) revoke(); else setFailed(true);
     }
-    finally { setLoading(false); setDecided(true); }
+    finally { if (version === refreshVersion.current) { setLoading(false); setDecided(true); } }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   // A section that loads its own data (Betas) hands refusals back here, so losing access clears the whole page.
@@ -216,6 +233,11 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
   const may = (permission: StaffPermission) => hasPermission(access, permission);
   const owner = access?.role === 'owner';
   const role = access?.role ?? 'owner';
+  const schoolManager = role === 'school-manager';
+  const scopedChat = role === 'chat-moderation' && !!access?.schoolId;
+  const scopedSupport = role === 'support' && !!access?.schoolId;
+  const description = scopedChat ? 'Moderate the chat room at your school.' : scopedSupport ? 'Answer school corrections, search your school roster and verify students.' : ROLE_DESCRIPTIONS[role];
+  const globalGuides = may('schools.edit') && !schoolManager;
   const showEvidence = async (reportId: string) => {
     if (!accountId) return;
     setError(''); setOpening(reportId);
@@ -242,23 +264,25 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </div>
     </header>
     <main className="mx-auto grid w-full max-w-[1120px] gap-5 px-4 pb-12 pt-6 lg:px-8 lg:pt-8">
-      <PageHeader title="Support" eyebrow={owner ? 'Owner tools' : `${STAFF_LABELS[role]} tools`} description={`${ROLE_DESCRIPTIONS[role]} Everything you open or change is written to the audit log${owner ? '' : ' with your address and browser, and the owner reviews it'}.`} />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <PageHeader title="Support" eyebrow={owner ? 'Owner tools' : access?.schoolName ? `${STAFF_LABELS[role]} · ${access.schoolName}` : `${STAFF_LABELS[role]} tools`} description={`${description} Everything you open or change is written to the audit log${owner ? '' : ' with your address and browser, and the owner reviews it'}.`} />
+      {!scopedChat && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatTile icon="inbox" tone={openCount ? 'now' : 'success'} value={openCount} label="open items" />
         <StatTile icon="school" tone="accent" value={schools.length} label="schools" />
         <StatTile icon="checkCircle" tone="success" value={approved} label="approved" className="max-sm:col-span-2" />
-      </div>
+      </div>}
       {error && <Callout tone="danger" icon="alert" role="alert">{error}</Callout>}
       {security && security.pinned === false && <Callout tone="warning" icon="lock" title="Pin the owner account">
         The owner is recognized by email alone. Add <code className="break-all font-mono text-[13px]">OWNER_GOOGLE_SUB={security.googleSub}</code> to the server’s .env.local and restart, so only this Google account can open these tools even if the address is ever given to someone else.
       </Callout>}
       {/* min-w-0: without it the tab row widens the page on phones instead of scrolling inside its wrapper. */}
-      <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-5">
+      <Tabs value={scopedChat ? 'roles' : tab} onValueChange={setTab} className="min-w-0 gap-5">
       <div className="overflow-x-auto"><TabsList aria-label="Support section" className="h-10 rounded-xl bg-muted p-1 ring-1 ring-inset ring-foreground/[0.04]">
-        <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>
+        {!scopedChat && <TabsTrigger value="inbox" className={TAB_CLASS}>Inbox{openCount ? ` · ${openCount}` : ''}</TabsTrigger>}
         {may('members.search') && <TabsTrigger value="people" className={TAB_CLASS}>People</TabsTrigger>}
         {may('schools.edit') && <TabsTrigger value="schools" className={TAB_CLASS}>Schools</TabsTrigger>}
-        {may('schools.edit') && <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>}
+        {globalGuides && <TabsTrigger value="guides" className={TAB_CLASS}>Setup guides</TabsTrigger>}
+        {schoolManager && <TabsTrigger value="school-activity" className={TAB_CLASS}>School activity</TabsTrigger>}
+        <TabsTrigger value="roles" className={TAB_CLASS}>{owner || schoolManager ? 'Staff roles' : 'Your access'}</TabsTrigger>
         {owner && <TabsTrigger value="betas" className={TAB_CLASS}>Betas</TabsTrigger>}
         {owner && <TabsTrigger value="audit" className={TAB_CLASS}>Audit log</TabsTrigger>}
       </TabsList></div>
@@ -279,7 +303,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
       </TabsContent>}
 
       <TabsContent value="inbox" className="grid gap-5">
-      <Section id="inbox-title" title="Correction requests and appeals" icon="inbox" description={requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, appeals against a messaging pause or a removal, and feedback on betas they joined.'}>
+      <Section id="inbox-title" title={role === 'chat-moderation' ? 'Messaging appeals' : scopedSupport ? 'School corrections' : 'Correction requests and appeals'} icon="inbox" description={role === 'chat-moderation' ? 'Review requests from members who have appealed a messaging pause.' : scopedSupport ? 'Review correction requests from your school.' : schoolManager ? 'Review corrections, class merges and removal appeals for your school.' : requests.length ? `${pluralize(requests.length, 'open request')}. Resolving a request only closes it; publish the fix from the school review. An appeal is answered by lifting the pause or removal, or by resolving it to keep the sanction.` : 'Students send correction requests from their School view, appeals against a messaging pause or a removal, and feedback on betas they joined.'}>
         {!loading && requests.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />Inbox is empty</Hint>}
         {requests.length > 0 && <ul className="grid gap-2">{requests.map((request) => {
           const appeal = requestKind(request.kind);
@@ -310,7 +334,7 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         </li>)}</ul>}
       </Section>}
 
-      {may('reports') && <Section id="reports-title" title="Member reports" icon="alert" description={`${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, closes their verification request, ends all of their friendships and chats (at any school) and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
+      {may('reports') && <Section id="reports-title" title={role === 'chat-moderation' ? 'Chat reports' : 'Member reports'} icon="alert" description={schoolManager ? 'Review reports about members of your school. Removing a member blocks them from rejoining until you lift the removal. They keep their friendships and private chats.' : role === 'chat-moderation' ? 'Open the messages attached to a report, hide a reported message or pause messaging. Opening evidence is recorded in the audit log.' : `${reports.length ? `${pluralize(reports.length, 'open report')}. Removing a member takes them out of the school, closes their verification request, ends all of their friendships and chats (at any school) and blocks rejoining.` : 'Students report members from a profile or a chat. Reports are private.'} Chat reports include messages from that one chat only, and opening them is logged. Other chats stay private.`}>
         {!loading && reports.length === 0 && <Hint className="flex items-center gap-1.5"><Icon name="check" size={14} />No open reports</Hint>}
         {reports.length > 0 && <ul className="grid gap-2">{reports.map((report) => {
           const items = evidence[report.id];
@@ -391,20 +415,25 @@ export function Admin({ initial }: { initial?: AdminBoot }) {
         })}</ul>}
       </Section>}
       </TabsContent>
-      {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
-      {may('schools.edit') && <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
+      {may('members.search') && <TabsContent value="people" className="grid gap-5"><PeopleSection schools={schools} scopedAccountId={access?.schoolId ? accountId ?? undefined : undefined} canRemoveFromSchool={schoolManager && may('members.remove')} canOpen={may('members.view')} onOpen={openMember} /></TabsContent>}
+      {globalGuides && <TabsContent value="guides" className="grid gap-5">{tab === 'guides' && <GuideAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
+      {schoolManager && <TabsContent value="school-activity">{tab === 'school-activity' && <SchoolActivity key={access?.schoolId} onAccessLost={accessLost} />}</TabsContent>}
+      {access && <TabsContent value="roles" className="grid gap-5">
+        {(owner || schoolManager) && accountId && tab === 'roles' && <AdminRoleGrants key={accountId} accountId={accountId} schools={schools} managerSchool={schoolManager ? access.schoolName || 'your school' : undefined} onAccessLost={accessLost} />}
+        <AdminRoles access={access} />
+      </TabsContent>}
       {owner && <TabsContent value="betas" className="grid gap-5">{tab === 'betas' && <BetaAdmin accountId={accountId} onAccessLost={accessLost} />}</TabsContent>}
       {owner && <TabsContent value="audit" className="grid gap-5">{tab === 'audit' && <AuditLogSection onOpenMember={openMember} />}</TabsContent>}
       </Tabs>
     </main>
-    {directorySchool && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
-    {guideSchool && accountId && schools.some((entry) => entry.id === guideSchool) && <SchoolGuideSheet key={guideSchool} school={schools.find((entry) => entry.id === guideSchool)!} accountId={accountId} onClose={() => setGuideSchool(null)} onSaved={refresh} />}
-    {school && <ReviewSheet key={school.id} school={school} canSetDomains={may('verification')} canForceLogos={may('proposals')} onClose={() => setSelected(null)} onSaved={refresh} />}
-    {openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
+    {may('schools.edit') && directorySchool && schools.some(entry => entry.id === directorySchool) && <SchoolDirectory schoolId={directorySchool} online onClose={() => setDirectorySchool(null)} />}
+    {may('schools.edit') && guideSchool && accountId && schools.some((entry) => entry.id === guideSchool) && <SchoolGuideSheet key={guideSchool} school={schools.find((entry) => entry.id === guideSchool)!} accountId={accountId} onClose={() => setGuideSchool(null)} onSaved={refresh} />}
+    {may('schools.edit') && school && <ReviewSheet key={school.id} school={school} canSetDomains={may('verification')} canForceLogos={may('proposals')} onClose={() => setSelected(null)} onSaved={refresh} />}
+    {may('members.view') && openingMember && <OpenMemberModal key={openingMember.userId} target={openingMember} onClose={() => setOpeningMember(null)}
       onOpen={(reason) => { reasons.current.set(openingMember.userId, reason); setMember({ ...openingMember, reason }); setOpeningMember(null); }} />}
-    {member && accountId && access && <MemberRecord key={member.userId} accountId={accountId} access={access} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
+    {may('members.view') && member && accountId && access && <MemberRecord key={member.userId} accountId={accountId} access={access} target={member} reason={member.reason} schools={schools} refreshKey={memberKey}
       onClose={() => setMember(null)} onOpenMember={openMember} onPause={setPauseTarget} onChanged={refresh} />}
-    {pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={async () => { await refresh(); setMemberKey((key) => key + 1); }} />}
+    {may('chat.pause') && pauseTarget && accountId && <PauseSheet key={pauseTarget.userId} target={pauseTarget} accountId={accountId} onClose={() => setPauseTarget(null)} onPaused={async () => { await refresh(); setMemberKey((key) => key + 1); }} />}
   </div></BetaProvider>;
 }
 

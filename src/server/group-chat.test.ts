@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
+import { grantStaffRole, revokeStaffRole } from './staff';
 import { CommunityService } from './community';
 import { ChatService, countUnreadChats } from './chat';
 import { GroupChatService, countUnreadGroups, GROUP_FULL_MESSAGE, pruneGroupChat, TOO_MANY_GROUPS_MESSAGE } from './group-chat';
@@ -65,6 +66,26 @@ describe('friend groups (docs/CHAT.md §12)', () => {
     fails(() => f.groups.create(f.alice, { name: 'Just me', memberIds: [f.alice] }), 'BAD_REQUEST', 'Add at least one friend.');
     // A slur in the name is censored like a message.
     expect(f.groups.create(f.alice, { name: 'the r3tard squad', memberIds: [f.bob] }).name).toBe('the ****** squad');
+  });
+
+  it('uses active grants for names in direct and group chats, including search, replies and reactions', () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.bob, 'support');
+    const group = f.groups.create(f.alice, { name: 'Crew', memberIds: [f.bob, f.cara] });
+    expect(group.members.find(member => member.id === f.bob)?.staff).toBe('support');
+    expect(f.chat.inbox(f.alice).rows).toContainEqual(expect.objectContaining({ peer: expect.objectContaining({ id: f.bob, staff: 'support' }) }));
+    expect(f.chat.thread(f.alice, f.bob).peer.staff).toBe('support');
+    const sent = f.send(f.bob, group.id, 'Meet after school');
+    expect(sent.sender.staff).toBe('support');
+    expect(f.groups.search(f.alice, group.id, 'Meet').results[0]?.staff).toBe('support');
+    const answer = f.groups.send(f.alice, group.id, randomUUID(), 'Sure', sent.seq).message;
+    expect(answer.replyTo?.staff).toBe('support');
+    expect(f.groups.react(f.bob, group.id, answer.seq, '👍').message.reactors[0]?.staff).toBe('support');
+    revokeStaffRole(f.service, f.bob);
+    const refreshed = f.groups.thread(f.alice, group.id);
+    expect(refreshed.messages.find(row => row.id === sent.id)?.sender.staff).toBeUndefined();
+    expect(refreshed.messages.find(row => row.id === answer.id)?.replyTo?.staff).toBeUndefined();
+    expect(f.chat.thread(f.alice, f.bob).peer.staff).toBeUndefined();
   });
 
   it('caps the size and the number of groups per day', () => {

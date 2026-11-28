@@ -52,7 +52,7 @@ export function readChatImage(service: Service, viewer: string, kind: 'peer' | '
     deleted_at: string | null; deleted_by: string | null; deleted_rank: string | null;
   } | undefined;
   if (!row?.image) return null;
-  if (row.deleted_at && !new Reveal(service, viewer).removed(row, kind)?.image) return null;
+  if (row.deleted_at && !new Reveal(service, viewer, kind === 'school' ? row.school_id : undefined).removed(row, kind)?.image) return null;
   if (kind === 'peer') {
     const thread = db.prepare('SELECT user_low, user_high FROM chat_threads WHERE id=?').get(row.thread_id) as { user_low: string; user_high: string };
     if (viewer !== thread.user_low && viewer !== thread.user_high) return null;

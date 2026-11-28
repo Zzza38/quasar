@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { verificationNotice } from './people';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemberRow, verificationNotice, type Member } from './people';
 
 describe('proof sent notice', () => {
   it('says support has the proof while it waits for review', () => {
@@ -10,5 +12,16 @@ describe('proof sent notice', () => {
   });
   it('says support verified a student whose earlier request was already approved', () => {
     expect(verificationNotice({ status: 'verified', method: 'support' })).toBe('You are already verified by support.');
+  });
+});
+
+describe('role badges on People', () => {
+  const member: Member = { id: 'student', staff: 'school-manager', displayName: 'Casey', fullName: null, grade: null, verified: true,
+    joinedAt: '2026-09-01', friendState: 'none', blocked: false, avatar: null };
+  const badge = (person: Member) => renderToStaticMarkup(createElement(MemberRow, { member: person, onOpen: () => {} }));
+
+  it('shows a staff badge beside members who have a role', () => {
+    expect(badge(member)).toContain('>School Manager<');
+    expect(badge({ ...member, staff: null })).not.toContain('School Manager');
   });
 });

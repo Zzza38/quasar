@@ -17,7 +17,8 @@ import { BetaService } from './betas';
 import { seedSchoolMember } from './global-chat';
 import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
-import { ROLE_PERMISSIONS, isStaffRole, staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
+import { decodeStoredRole } from '@/domain/stored-staff';
+import { staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
 import { adminSignInAllowed } from '@/lib/admin-session';
 import { NOW_CARD_STYLES, type NowCardStyle } from '@/lib/now-split';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
@@ -257,9 +258,9 @@ export class Service {
   }
   /** Staff with members.remove: lifts a removal so the student can join that school again. Audited. */
   liftBan(adminId: string, userId: string, schoolId: string): void {
-    this.permit(adminId, 'members.remove');
-    this.guardTarget(adminId, userId);
     this.db.transaction(() => {
+      this.requireSchoolScope(adminId, schoolId, 'members.remove');
+      this.guardTarget(adminId, userId);
       if (!this.db.prepare('SELECT 1 FROM school_bans WHERE user_id=? AND school_id=?').get(userId, schoolId)) fail('NOT_FOUND', 'This student is not removed from that school.');
       this.db.prepare('DELETE FROM school_bans WHERE user_id=? AND school_id=?').run(userId, schoolId);
       this.db.prepare("UPDATE support_requests SET resolved_at=? WHERE user_id=? AND school_id=? AND kind='appeal:ban' AND resolved_at IS NULL").run(now(), userId, schoolId);
@@ -268,10 +269,10 @@ export class Service {
   }
   /** Staff with members.remove: every current removal they may act on, for the "Removed members" section. */
   bans(adminId: string): { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: boolean }[] {
-    this.permit(adminId, 'members.remove');
+    const scope = this.requiredStaffScope(adminId, 'members.remove');
     return this.db.prepare(`SELECT b.user_id userId, u.display_name displayName, u.email, b.school_id schoolId, s.name schoolName, b.reason, b.created_at createdAt,
         EXISTS (SELECT 1 FROM support_requests r WHERE r.user_id=b.user_id AND r.school_id=b.school_id AND r.kind='appeal:ban' AND r.resolved_at IS NULL) appealed
-      FROM school_bans b JOIN users u ON u.id=b.user_id JOIN schools s ON s.id=b.school_id ORDER BY b.created_at DESC`).all().map((row) => {
+      FROM school_bans b JOIN users u ON u.id=b.user_id JOIN schools s ON s.id=b.school_id WHERE (? IS NULL OR b.school_id=?) ORDER BY b.created_at DESC`).all(scope, scope).map((row) => {
       const entry = row as { userId: string; displayName: string; email: string; schoolId: string; schoolName: string; reason: string; createdAt: string; appealed: number };
       return { ...entry, appealed: !!entry.appealed };
     }).filter(entry => this.canTarget(adminId, entry.userId));
@@ -281,25 +282,72 @@ export class Service {
     if (!user.displayName || !user.fullName) fail('BAD_REQUEST', 'Enter your display name and full name first.');
     return user;
   }
+  private matchesOwner(email: string, googleSub: string): boolean {
+    const ownerEmail = this.ownerEmail.trim().toLowerCase();
+    const ownerSub = this.ownerSub.trim();
+    return !!ownerEmail && email.toLowerCase() === ownerEmail && (!ownerSub || googleSub === ownerSub);
+  }
   isAdmin(id: string): boolean {
-    if (!this.ownerEmail || this.user(id).email.toLowerCase() !== this.ownerEmail.trim().toLowerCase()) return false;
-    if (!this.ownerSub.trim()) return true;
-    const row = this.db.prepare('SELECT google_sub FROM users WHERE id=?').get(id) as { google_sub: string };
-    return row.google_sub === this.ownerSub.trim();
+    if (!this.ownerEmail) return false;
+    const row = this.db.prepare('SELECT email, google_sub FROM users WHERE id=?').get(id) as { email: string; google_sub: string } | undefined;
+    if (!row) return fail('UNAUTHORIZED', 'Sign in with Google to continue.');
+    return this.matchesOwner(row.email, row.google_sub);
   }
   /** Owner-only tools. Staff roles (src/domain/staff.ts) never pass this; they go through `permit`. */
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
-  /** The account's staff rank: 'owner', a role granted with `npm run staff`, or null for a member. */
+  private activeGrants(ids: readonly string[]) {
+    const rows = this.db.prepare(`SELECT u.id, u.email, u.google_sub googleSub, r.role, r.school_id schoolId, s.name schoolName,
+        EXISTS (SELECT 1 FROM staff_role_blacklist b WHERE b.user_id=u.id AND b.role=CASE r.role WHEN 'school-support' THEN 'support' WHEN 'school-chat-moderation' THEN 'chat-moderation' ELSE r.role END) blocked
+      FROM users u LEFT JOIN staff_roles r ON r.user_id=u.id AND (r.school_id IS NULL OR r.school_id=u.school_id)
+      LEFT JOIN schools s ON s.id=r.school_id WHERE u.id IN (SELECT value FROM json_each(?))`)
+      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; blocked: number }[];
+    const grants = new Map<string, { role: StaffRank; schoolId: string | null; schoolName: string | null }>();
+    for (const row of rows) {
+      if (this.matchesOwner(row.email, row.googleSub)) {
+        grants.set(row.id, { role: 'owner', schoolId: null, schoolName: null });
+        continue;
+      }
+      const role = decodeStoredRole(row.role);
+      if (!role || row.blocked) continue;
+      grants.set(row.id, { role, schoolId: row.schoolId, schoolName: row.schoolName });
+    }
+    return grants;
+  }
+  /** Resolve just the public role labels for everyone on a page in a single query. */
+  staffRanks(ids: readonly string[]): Map<string, StaffRank> {
+    if (!ids.length) return new Map();
+    return new Map(Array.from(this.activeGrants(ids), ([id, grant]) => [id, grant.role]));
+  }
+  private activeGrant(id: string) { return this.activeGrants([id]).get(id); }
   staffRank(id: string): StaffRank | null {
-    if (this.isAdmin(id)) return 'owner';
-    const row = this.db.prepare('SELECT role FROM staff_roles WHERE user_id=?').get(id) as { role: string } | undefined;
-    return row && isStaffRole(row.role) ? row.role : null;
+    return this.activeGrant(id)?.role ?? null;
+  }
+  staffAccess(id: string) {
+    const grant = this.activeGrant(id);
+    if (!grant) return null;
+    if (grant.schoolId) return staffAccess(grant.role, { schoolId: grant.schoolId, schoolName: grant.schoolName ?? '' });
+    return staffAccess(grant.role);
+  }
+  managedSchoolId(id: string): string | null {
+    const grant = this.activeGrant(id);
+    return grant?.role === 'school-manager' ? grant.schoolId : null;
+  }
+  /** Null means this staff grant applies across schools. Missing or inactive grants are refused. */
+  requiredStaffScope(id: string, permission?: StaffPermission): string | null {
+    const access = this.staffAccess(id);
+    if (!access) return fail('FORBIDDEN', 'Staff access is required.');
+    if (permission && !access.permissions.includes(permission)) fail('FORBIDDEN', 'Your staff role doesn’t include this.');
+    if (access.role === 'school-manager' && !access.schoolId) return fail('FORBIDDEN', 'This role needs an assigned school.');
+    return access.schoolId ?? null;
+  }
+  requireSchoolScope(id: string, schoolId: string | null, permission?: StaffPermission): void {
+    const scope = this.requiredStaffScope(id, permission);
+    if (scope !== null && scope !== schoolId) fail('FORBIDDEN', 'This role only has access to its assigned school.');
   }
   isStaff(id: string): boolean { return this.staffRank(id) !== null; }
   requireStaff(id: string): void { if (!this.isStaff(id)) fail('FORBIDDEN', 'Staff access is required.'); }
   can(id: string, permission: StaffPermission): boolean {
-    const rank = this.staffRank(id);
-    return !!rank && ROLE_PERMISSIONS[rank].includes(permission);
+    return this.staffAccess(id)?.permissions.includes(permission) ?? false;
   }
   permit(id: string, permission: StaffPermission): void {
     if (!this.can(id, permission)) fail('FORBIDDEN', this.isStaff(id) ? 'Your staff role doesn’t include this.' : 'Staff access is required.');
@@ -310,15 +358,18 @@ export class Service {
    */
   canTarget(actorId: string, targetId: string): boolean {
     if (this.isAdmin(actorId)) return true;
-    return targetId !== actorId && !this.isStaff(targetId);
+    return targetId !== actorId && !this.isAdmin(targetId) && !this.db.prepare('SELECT 1 FROM staff_roles WHERE user_id=?').get(targetId);
   }
   /**
    * schools.edit outside the support console, in member procedures (the class directory, the lunch menu). The owner
    * keeps the access it always had; other staff need a recent Google sign-in there too, as in the console.
    */
-  canEditAnySchool(id: string): boolean {
-    if (this.isAdmin(id)) return true;
-    return this.can(id, 'schools.edit') && adminSignInAllowed(this.request?.authAt ?? null);
+  canEditSchool(id: string, schoolId: string): boolean {
+    const access = this.staffAccess(id);
+    if (access?.role === 'owner') return true;
+    return !!access && access.permissions.includes('schools.edit')
+      && (!access.schoolId || access.schoolId === schoolId)
+      && adminSignInAllowed(this.request?.authAt ?? null);
   }
   guardTarget(actorId: string, targetId: string): void {
     if (this.canTarget(actorId, targetId)) return;
@@ -418,9 +469,9 @@ export class Service {
   }
   updateSchool(id: string, raw: z.infer<typeof schoolUpdateSchema> | z.infer<typeof adminUpdateSchema>, asAdmin = false): School {
     this.ready(id);
-    if (asAdmin) this.permit(id, 'schools.edit');
     const input = asAdmin ? adminUpdateSchema.parse(raw) : schoolUpdateSchema.parse(raw);
     return this.db.transaction(() => {
+      if (asAdmin) this.requireSchoolScope(id, input.schoolId, 'schools.edit');
       const school = this.school(input.schoolId);
       if (!asAdmin) {
         if (this.user(id).schoolId !== school.id) fail('FORBIDDEN', 'Only school members can edit this schedule.');
@@ -472,7 +523,7 @@ export class Service {
     const rows = this.db.prepare('SELECT * FROM entities WHERE owner_id=?').all(id) as EntityRow[];
     // Calendar rows saved before keyed hashes are rekeyed here, by the web bundle that also reads them (see rekeyOnLoad).
     new CalendarService(this.db).rekeyOnLoad(id);
-    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), staff: staffAccess(this.staffRank(id)), subscriptions: listSubscriptions(this.db, id), feedGuides: new SetupGuideService(this).resolved('calendar', school?.id ?? null), scheduleGuides: new SetupGuideService(this).resolved('schedule', school?.id ?? null), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
+    return { user, school, entities: rows.map(row => forClient(entityFromRow(row), options)), review, isAdmin: this.isAdmin(id), staff: this.staffAccess(id), subscriptions: listSubscriptions(this.db, id), feedGuides: new SetupGuideService(this).resolved('calendar', school?.id ?? null), scheduleGuides: new SetupGuideService(this).resolved('schedule', school?.id ?? null), scheduleFeed: scheduleFeedStatus(this.db, id), importConflicts: listImportConflicts(this.db, id), community: new CommunityService(this).summary(id), sanctions: this.sanctions(id), betas: new BetaService(this).joined(id) };
   }
   entity(id: string, entityId: string): Entity | null {
     const row = this.db.prepare('SELECT * FROM entities WHERE owner_id=? AND id=?').get(id, entityId) as EntityRow | undefined;
@@ -630,25 +681,26 @@ export class Service {
   requestCorrection(id: string, message: string) {
     const user = this.ready(id);
     if (!user.schoolId) return fail('BAD_REQUEST', 'Join a school first.');
-    return this.sendSupportRequest(id, user.schoolId, message);
+    return this.sendSupportRequest(id, user.schoolId, message, 'school:correction');
   }
   /** Feedback from any signed-in student, including ones still in setup. Lands in the same support inbox. */
   feedback(id: string, message: string) {
     const user = this.user(id);
     return this.sendSupportRequest(id, user.schoolId, message);
   }
-  private sendSupportRequest(id: string, schoolId: string | null, message: string) {
+  private sendSupportRequest(id: string, schoolId: string | null, message: string, kind: '' | 'school:correction' = '') {
     const text = z.string().trim().min(10).max(5000).parse(message);
     const count = this.db.prepare(`SELECT count(*) n FROM support_requests WHERE user_id=? AND resolved_at IS NULL AND kind<>'${MERGE_KIND}'`).get(id) as {n: number};
     if (count.n >= 5) fail('TOO_MANY_REQUESTS', 'You already have five open requests. Wait for support to review them.');
-    this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at) VALUES(?,?,?,?,?)').run(randomUUID(), schoolId, id, text, now());
+    this.db.prepare('INSERT INTO support_requests(id,school_id,user_id,message,created_at,kind) VALUES(?,?,?,?,?,?)').run(randomUUID(), schoolId, id, text, now(), kind);
   }
   /**
    * Whether this staff account handles requests of `kind`: an appeal goes with the sanction it appeals, beta feedback
    * with support, a class merge with schedule editors, and a correction request (sent from the School view) with
    * support or schedule editors.
    */
-  private handlesRequest(id: string, kind: string, userId: string): boolean {
+  private handlesRequest(id: string, kind: string, userId: string, schoolId: string | null, scope: string | null): boolean {
+    if (scope && (schoolId !== scope || !['school:correction', 'appeal:ban', MERGE_KIND].includes(kind))) return false;
     if (!this.canTarget(id, userId)) return false;
     if (kind === 'appeal:pause') return this.can(id, 'chat.pause');
     if (kind === 'appeal:ban') return this.can(id, 'members.remove');
@@ -658,11 +710,11 @@ export class Service {
   }
   /** Open requests this staff account handles (handlesRequest). */
   requests(id: string) {
-    this.requireStaff(id);
+    const scope = this.requiredStaffScope(id);
     // `detail` is a beta report's diagnostics (src/server/betas.ts) or a class merge (src/server/directory.ts); other kinds have none.
     const rows = this.db.prepare(`SELECT r.id,r.user_id userId,r.school_id schoolId,r.message,r.created_at createdAt,s.name schoolName,u.email email,u.display_name displayName,r.kind,r.detail
-      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL ORDER BY r.created_at`).all() as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'appeal:pause' | 'appeal:ban' | `beta:${string}` | typeof MERGE_KIND; detail: string | null}[];
-    return rows.filter(row => this.handlesRequest(id, row.kind, row.userId)).map(({ detail, ...row }) => row.kind === MERGE_KIND
+      FROM support_requests r LEFT JOIN schools s ON s.id=r.school_id JOIN users u ON u.id=r.user_id WHERE resolved_at IS NULL AND (? IS NULL OR r.school_id=?) ORDER BY r.created_at`).all(scope, scope) as {id: string; userId: string; schoolId: string | null; message: string; createdAt: string; schoolName: string | null; email: string; displayName: string; kind: '' | 'school:correction' | 'appeal:pause' | 'appeal:ban' | `beta:${string}` | typeof MERGE_KIND; detail: string | null}[];
+    return rows.filter(row => this.handlesRequest(id, row.kind, row.userId, row.schoolId, scope)).map(({ detail, ...row }) => row.kind === MERGE_KIND
       ? { ...row, diagnostics: null, merge: detail ? mergeRequestView(this.db, row.schoolId, detail) : null }
       : { ...row, diagnostics: detail ? JSON.parse(detail) as StoredBetaDiagnostics : null, merge: null });
   }
@@ -671,7 +723,7 @@ export class Service {
     this.db.transaction(() => {
       const request = this.db.prepare('SELECT user_id, school_id, kind FROM support_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string | null; kind: string } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already resolved.');
-      if (!this.handlesRequest(id, request!.kind, request!.user_id)) fail('FORBIDDEN', 'Your staff role doesn’t handle this request.');
+      if (!this.handlesRequest(id, request!.kind, request!.user_id, request!.school_id, this.requiredStaffScope(id))) fail('FORBIDDEN', 'Your staff role doesn’t handle this request.');
       this.db.prepare('UPDATE support_requests SET resolved_at=? WHERE id=?').run(now(), requestId);
       this.audit(id, 'support.resolveRequest', request!.school_id, { userId: request!.user_id, requestId });
     }).immediate();

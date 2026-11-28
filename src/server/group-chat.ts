@@ -1,6 +1,7 @@
+import type { StaffRank } from '@/domain/staff';
 import { chatImageSchema, mentionIdsSchema, searchQuerySchema, type SearchHit } from '@/domain/chat';
 import { notifyChat } from './chat-events';
-import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHit, searchSql, searchTerms } from './chat-extras';
+import { messageExtras, validateReply, targetExists, changeReaction, reactionSchema, replySchema, visibilityResetRevision, assertOwnEdit, keptMentions, mentionsUserSql, resolveMentions, searchHits, searchSql, searchTerms } from './chat-extras';
 import type { MessageExtras, Reaction } from '@/domain/chat';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
@@ -41,7 +42,7 @@ export const TOO_MANY_GROUPS_MESSAGE: `You created ${number} groups today. Try a
 
 export type GroupRole = 'admin' | 'member';
 export type GroupDeletedBy = 'sender' | 'admin' | 'support' | null;
-export type GroupSender = { id: string; displayName: string; avatar: string | null; verified: boolean };
+export type GroupSender = { staff?: StaffRank; id: string; displayName: string; avatar: string | null; verified: boolean };
 export type GroupMember = GroupSender & { role: GroupRole; joinedAt: string };
 export type GroupInfo = { id: string; name: string; createdAt: string; role: GroupRole; members: GroupMember[] };
 export type GroupMessage = MessageExtras & { id: string; seq: number; revision: number; fromMe: boolean; body: string | null; createdAt: string; deletedBy: GroupDeletedBy;
@@ -53,7 +54,7 @@ export type GroupSummary = {
   id: string; name: string; memberCount: number; role: GroupRole;
   /** A few members for the stacked avatars in the list (the viewer excluded). */
   members: { id: string; displayName: string; avatar: string | null }[];
-  lastMessage: { senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GroupDeletedBy } | null;
+  lastMessage: { staff?: StaffRank; senderName: string; fromMe: boolean; preview: string | null; createdAt: string; deletedBy: GroupDeletedBy } | null;
   /** When the row was last active, for ordering: the newest message, else creation. */
   lastAt: string; unread: number; muted: boolean;
   /** An unread message here mentions the viewer. */
@@ -130,12 +131,6 @@ function leaveGroup(db: Db, groupId: string, userId: string, nowIso: string): vo
 
 export class GroupChatService {
   constructor(private readonly service: Service, private readonly now: () => Date = () => new Date()) {}
-  private readonly reveals = new Map<string, Reveal>();
-  private reveal(viewerId: string): Reveal {
-    let reveal = this.reveals.get(viewerId);
-    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
-    return reveal;
-  }
   private get db() { return this.service.db; }
   private get community() { return new CommunityService(this.service); }
   private iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
@@ -173,27 +168,28 @@ export class GroupChatService {
   private bumpRevision(groupId: string): number {
     return (this.db.prepare('UPDATE chat_groups SET revision=revision+1 WHERE id=? RETURNING revision').get(groupId) as { revision: number }).revision;
   }
-  private person(row: PersonRow): GroupSender {
-    return { id: row.id, displayName: row.display_name, avatar: avatarUrl(row), verified: !!row.verified };
+  private person(row: PersonRow, staff: StaffRank | undefined): GroupSender {
+    return { staff, id: row.id, displayName: row.display_name, avatar: avatarUrl(row), verified: !!row.verified };
   }
   private members(groupId: string): (GroupMember & { row: MemberRow })[] {
     const rows = this.db.prepare(`SELECT m.*, u.display_name, u.school_id, ${AVATAR_COLUMNS.split(', ').map(column => `u.${column}`).join(', ')}, u.id,
         EXISTS (SELECT 1 FROM school_verifications v WHERE v.user_id=u.id AND v.school_id=u.school_id) AS verified
       FROM chat_group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=? AND m.left_at IS NULL ORDER BY m.role, m.joined_at, u.display_name COLLATE NOCASE`).all(groupId) as (MemberRow & PersonRow)[];
-    return rows.map(row => ({ ...this.person(row), role: row.role, joinedAt: row.joined_at, row }));
+    const roles = this.service.staffRanks(rows.map(row => row.id));
+    return rows.map(row => ({ ...this.person(row, roles.get(row.id)), role: row.role, joinedAt: row.joined_at, row }));
   }
   private info(group: GroupRow, viewerId: string): GroupInfo {
     const members = this.members(group.id);
     return { id: group.id, name: group.name, createdAt: group.created_at, role: members.find(member => member.id === viewerId)?.role ?? 'member', members: members.map(({ row: _row, ...member }) => member) };
   }
-  private message(viewerId: string, row: MessageRow): GroupMessage {
+  private message(viewerId: string, row: MessageRow, staff = this.service.staffRank(row.sender_id), reveal = new Reveal(this.service, viewerId)): GroupMessage {
     return {
-      ...messageExtras(this.db, 'group', viewerId, row.seq),
+      ...messageExtras(this.service, 'group', viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at, reason: null,
-      editedFrom: this.reveal(viewerId).editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at,
-      sender: { id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
-      original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, 'group'),
+      editedFrom: reveal.editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at,
+      sender: { staff: staff ?? undefined, id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
+      original: reveal.original(row), removed: reveal.removed(row, 'group'),
     };
   }
   private latestPage(member: MemberRow, before?: number): { rows: MessageRow[]; hasEarlier: boolean } {
@@ -305,7 +301,7 @@ export class GroupChatService {
         return {
           id: group.id, name: group.name, memberCount: members.length, role: group.role,
           members: members.filter(member => member.id !== viewerId).slice(0, 4).map(member => ({ id: member.id, displayName: member.displayName, avatar: member.avatar })),
-          lastMessage: last ? { senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
+          lastMessage: last ? { staff: this.service.staffRank(last.sender_id) ?? undefined, senderName: last.display_name, fromMe: last.sender_id === viewerId, preview: deleted ? null : listPreview(last.body) || (last.image ? 'Photo' : ''), createdAt: last.created_at, deletedBy: deleted ? last.deleted_by : null } : null,
           lastAt: last?.created_at ?? group.created_at,
           unread: news.n, mentioned: !!news.mentioned,
           muted: !!group.muted,
@@ -324,11 +320,15 @@ export class GroupChatService {
       const members = this.members(group.id);
       const nowIso = this.iso();
       const receipts: Receipt[] = members.filter(entry => entry.id !== viewerId).map(entry => ({
-        id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso, joinedAt: entry.joinedAt,
+        staff: entry.staff, id: entry.id, displayName: entry.displayName, avatar: entry.avatar, deliveredSeq: entry.row.delivered_seq, readSeq: entry.row.last_read_seq, typing: !!entry.row.typing_until && entry.row.typing_until > nowIso, joinedAt: entry.joinedAt,
       }));
       const info: GroupInfo = { id: group.id, name: group.name, createdAt: group.created_at, role: member.role, members: members.map(({ row: _row, ...entry }) => entry) };
       const base = { peer: null, group: info, revision: group.revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts };
-      const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
+      const toMessages = (rows: MessageRow[]) => {
+        const roles = this.service.staffRanks(rows.map(row => row.sender_id));
+        const reveal = new Reveal(this.service, viewerId);
+        return rows.map(row => this.message(viewerId, row, roles.get(row.sender_id) ?? null, reveal));
+      };
       const newest = (rows: MessageRow[]) => {
         const seq = rows.reduce((max, row) => (row.sender_id !== viewerId && row.seq > max ? row.seq : max), 0);
         return seq > member.delivered_seq ? { seq } : null;
@@ -445,7 +445,7 @@ export class GroupChatService {
       if (!terms) return { results: [] };
       const rows = this.db.prepare(`${MESSAGE_SQL} JOIN chat_group_members m ON m.group_id=c.group_id AND m.user_id=? WHERE c.group_id=? AND ${VISIBLE_SQL('m')} AND ${searchSql('?')} ORDER BY c.seq DESC LIMIT ?`)
         .all(viewerId, group.id, terms.pattern, CHAT.searchResults) as MessageRow[];
-      return { results: rows.map(row => searchHit(row, viewerId, terms.query)) };
+      return { results: searchHits(this.service, rows, viewerId, terms.query) };
     })();
   }
 

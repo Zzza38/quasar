@@ -162,29 +162,29 @@ export class ProposalService {
 
   /* ---------- Support ---------- */
 
-  /** Supersedes every open or awaiting proposal whose school revision has moved on, across all schools. */
-  private supersedeStale() {
+  /** Supersedes stale proposals in the schools this staff account manages. */
+  private supersedeStale(scope: string | null) {
     this.db.prepare(`UPDATE schedule_proposals SET status='superseded', closed_at=? WHERE status IN ('open','awaiting-support')
-      AND base_version<>(SELECT s.version FROM schools s WHERE s.id=schedule_proposals.school_id)`).run(now());
+      AND (? IS NULL OR school_id=?) AND base_version<>(SELECT s.version FROM schools s WHERE s.id=schedule_proposals.school_id)`).run(now(), scope, scope);
   }
   awaitingSupport(adminId: string): Proposal[] {
-    this.service.permit(adminId, 'proposals');
     // A proposal built on an older revision can never be published, so it is not offered.
-    this.supersedeStale();
-    return this.rows("p.status='awaiting-support'", [], adminId);
+    const scope = this.service.requiredStaffScope(adminId, 'proposals');
+    this.supersedeStale(scope);
+    return this.rows("p.status='awaiting-support' AND (? IS NULL OR p.school_id=?)", [scope, scope], adminId);
   }
   /** Staff with `proposals` publish a passed proposal on a support-locked school (approval and lock are retained) or decline it. */
   decide(adminId: string, proposalId: string, publish: boolean): void {
-    this.service.permit(adminId, 'proposals');
     // Outside the transaction, so a stale proposal stays superseded even though the lookup below then fails.
-    this.supersedeStale();
+    this.supersedeStale(this.service.requiredStaffScope(adminId, 'proposals'));
     this.db.transaction(() => {
       const row = this.db.prepare('SELECT * FROM schedule_proposals WHERE id=? AND status=?').get(proposalId, 'awaiting-support') as Row | undefined;
-      if (!row) fail('NOT_FOUND', 'This proposal is no longer awaiting support.');
-      if (publish) this.apply(row!, row!.base_version, adminId, true);
+      if (!row) return fail('NOT_FOUND', 'This proposal is no longer awaiting support.');
+      this.service.requireSchoolScope(adminId, row.school_id, 'proposals');
+      if (publish) this.apply(row, row.base_version, adminId, true);
       else {
         this.db.prepare("UPDATE schedule_proposals SET status='declined', closed_at=?, actor_id=? WHERE id=?").run(now(), adminId, proposalId);
-        this.service.audit(adminId, 'proposal.decline', row!.school_id, { proposalId, userId: row!.proposer_id });
+        this.service.audit(adminId, 'proposal.decline', row.school_id, { proposalId, userId: row.proposer_id });
       }
     }).immediate();
   }

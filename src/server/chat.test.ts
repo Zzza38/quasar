@@ -518,12 +518,13 @@ describe('9. reports', () => {
 describe('10. what the owner can see', () => {
   it('pins the admin procedure list', () => {
     expect(Object.keys(appRouter._def.procedures).filter(key => key.startsWith('admin.')).sort()).toEqual([
-      'schools', 'update', 'requests', 'resolveRequest', 'resolveMerge', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
+      'schools', 'schoolActivity', 'update', 'requests', 'resolveRequest', 'resolveMerge', 'verificationRequests', 'decideVerification', 'reports', 'resolveReport', 'modOverrides', 'setModOverride',
       'removeMember', 'proposals', 'decideProposal', 'showEvidence', 'redactMessage', 'pauseChat', 'liftChatPause', 'chatPauses', 'bans', 'liftBan',
       'security', 'renameSchool', 'auditLog', 'users.search', 'users.view', 'users.updateAccount', 'users.suspend', 'users.signOut', 'users.removeBrowsers',
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
       'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
       'betas.list', 'betas.removeMember', 'guides', 'saveGuide', 'setGuidePlatforms', 'uploadGuideImage',
+      'roles.list', 'roles.candidate', 'roles.grant', 'roles.revoke', 'roles.search', 'roles.setBlocked',
       'logoVotes', 'schoolLogos', 'forceLogo', 'setSchoolLogo', 'removeSchoolLogo', 'revertSchoolLogo',
     ].map(name => `admin.${name}`).sort());
   });

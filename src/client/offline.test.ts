@@ -361,6 +361,19 @@ describe("durable offline workspace", () => {
     expect(remote.requests).toHaveLength(1);
   });
 
+  it("can upload immediately after an idle page closes during its sync", async () => {
+    const first = await workspace();
+    const remote = server();
+    first.subscribe(() => queueMicrotask(() => first.close()));
+    await first.sync(remote.send);
+    const next = await openWorkspace(first.accountId);
+    handles.push(next);
+    await next.save("task", "t1", taskData({ title: "After navigation" }));
+    await next.sync(remote.send);
+    expect(remote.requests).toHaveLength(1);
+    expect((await next.read()).pending).toBe(0);
+  });
+
   it("keeps a stored sync error while another tab holds the upload lease", async () => {
     const local = await workspace();
     const other = await openWorkspace(local.accountId);

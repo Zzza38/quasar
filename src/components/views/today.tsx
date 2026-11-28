@@ -15,6 +15,7 @@ import type { AppState, TaskItem } from '../app-state';
 import { clockTime, isOverdue, openBellTimes, sortByDue, taskItems } from '../app-state';
 import { nextSchoolDate } from '../task-groups';
 import { Icon } from '../icon';
+import { StaffBadge } from '../staff-badge';
 import { MemberAvatar } from '../member-avatar';
 import { LunchDay } from '../lunch-menu';
 import { DateAdjustmentSheet } from '../overrides';
@@ -451,7 +452,7 @@ function ClassmatesPopup({ state, date, period, mates }: { state: AppState; date
       <button type="button" className={cn('group', TAG_BUTTON)} aria-label={`In this class with ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]}`}>
         <Chip tone="accent" className="gap-1.5 py-0.5 pl-0.5 transition-colors hover:bg-primary/20 group-data-[state=open]:ring-1 group-data-[state=open]:ring-primary/50">
           <FaceStack mates={mates} ring="ring-primary-soft" />
-          {only ? `With ${only.displayName}` : `${mates.length} friends`}
+          {only ? <>With {only.displayName}<StaffBadge rank={only.staff} /></> : `${mates.length} friends`}
         </Chip>
       </button>
     </PopoverTrigger>
@@ -460,7 +461,7 @@ function ClassmatesPopup({ state, date, period, mates }: { state: AppState; date
         <button type="button" title={`See ${only.displayName}’s day`} onClick={() => go(only.id)} className={cn('flex w-full items-center gap-3 p-2 text-left', POPUP_ROW)}>
           <MemberAvatar name={only.displayName} src={only.avatar} />
           <span className="min-w-0 flex-1">
-            <strong className="block truncate text-sm">{only.displayName}</strong>
+            <strong className="flex flex-wrap items-center gap-1.5 text-sm"><span className="truncate">{only.displayName}</span>{only.staff && <StaffBadge rank={only.staff} />}</strong>
             {stops[0] && <span className="line-clamp-2 text-xs text-muted-foreground">{nextStopText(stops[0])}</span>}
           </span>
           <Icon name="chevronRight" size={16} className="shrink-0 text-muted-foreground" />
@@ -469,9 +470,9 @@ function ClassmatesPopup({ state, date, period, mates }: { state: AppState; date
       : <PopoverContent align="start" sideOffset={8} collisionPadding={12} className="w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl p-0 shadow-pop">
         <ul className="flex gap-1 overflow-x-auto px-2 pt-3 pb-2 [scrollbar-width:none]" aria-label="Friends in this class">
           {mates.map((mate) => <li key={mate.id} className="shrink-0">
-            <button type="button" title={`See ${mate.displayName}’s day`} onClick={() => go(mate.id)} className={cn('grid w-16 justify-items-center gap-1.5 px-0.5 py-1.5', POPUP_ROW)}>
+            <button type="button" title={`See ${mate.displayName}’s day`} onClick={() => go(mate.id)} className={cn('grid min-w-16 justify-items-center gap-1.5 px-0.5 py-1.5', POPUP_ROW)}>
               <MemberAvatar name={mate.displayName} src={mate.avatar} />
-              <span className="max-w-full truncate text-xs font-bold">{firstName(mate)}</span>
+              <span className="flex items-center text-xs font-bold"><span className="max-w-16 truncate">{firstName(mate)}</span><StaffBadge rank={mate.staff} /></span>
             </button>
           </li>)}
         </ul>

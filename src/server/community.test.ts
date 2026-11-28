@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { CommunityService, FRIEND_REQUEST_LIMIT } from './community';
+import { grantStaffRole, revokeStaffRole } from './staff';
 import { ProposalService, voteThreshold } from './proposals';
 import { appRouter } from './router';
 import { exampleSchedule } from '@/domain/example';
@@ -162,6 +163,22 @@ describe('community limits and edge cases', () => {
 });
 
 describe('directory, profiles and friendship', () => {
+  it('shows the member’s active role across People and removes it on revocation', () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.bob, 'support');
+    expect(f.community.members(f.alice).members[0]).toMatchObject({ id: f.bob, staff: 'support' });
+    expect(f.community.profile(f.alice, f.bob).staff).toBe('support');
+    f.community.request(f.bob, f.alice);
+    expect(f.community.friends(f.alice).incoming[0]).toMatchObject({ id: f.bob, staff: 'support' });
+    f.community.respond(f.alice, f.bob, true);
+    expect(f.community.friends(f.alice).friends[0]).toMatchObject({ id: f.bob, staff: 'support' });
+    expect(f.community.classmates(f.alice)[0]).toMatchObject({ id: f.bob, staff: 'support' });
+    revokeStaffRole(f.service, f.bob);
+    expect(f.community.profile(f.alice, f.bob).staff).toBeNull();
+    expect(f.community.friends(f.alice).friends[0].staff).toBeNull();
+    expect(f.community.classmates(f.alice)[0].staff).toBeUndefined();
+  });
+
   it('lists only schoolmates, shows full names only between verified members, and never lets anyone hide', () => {
     const f = fixture();
     const list = f.community.members(f.alice);

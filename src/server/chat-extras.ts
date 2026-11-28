@@ -4,6 +4,7 @@ import { CHAT, EDIT_WINDOW_MESSAGE, REACTIONS, mentionsName, searchSnippet, with
 import { censorSlurs } from '@/domain/chat-filter';
 import { plainText } from '@/domain/markdown';
 import { AVATAR_COLUMNS, avatarUrl, type AvatarRow } from './avatars';
+import type { Service } from './service';
 import type { Db } from './db';
 
 export const reactionSchema = z.object({ seq: z.number().int().positive(), emoji: z.enum(REACTIONS).nullable() });
@@ -46,16 +47,19 @@ export function reactionsFor(db: Db, kind: Kind, viewer: string, seq: number): M
  * Outside a one-to-one chat, people the viewer blocked are left out (their messages are hidden from the viewer too),
  * so the list can be shorter than the counts. Capped at CHAT.reactorsShown names per message.
  */
-export function reactorsFor(db: Db, kind: Kind, viewer: string, seq: number): MessageReactor[] {
+export function reactorsFor(service: Service, kind: Kind, viewer: string, seq: number): MessageReactor[] {
+  const db = service.db;
   const blocked = kind === 'peer' ? '' : 'AND NOT EXISTS(SELECT 1 FROM blocks b WHERE b.blocker_id=@viewer AND b.blocked_id=r.user_id)';
   const rows = db.prepare(`SELECT r.emoji, u.id, u.display_name, ${AVATAR_COLUMNS.split(', ').map(column => `u.${column}`).join(', ')}
     FROM ${tables[kind][1]} r JOIN users u ON u.id=r.user_id WHERE r.message_seq=@seq ${blocked} ORDER BY r.rowid LIMIT @limit`)
     .all({ seq, viewer, limit: CHAT.reactorsShown }) as (AvatarRow & { emoji: Reaction; display_name: string })[];
-  return rows.map(row => ({ emoji: row.emoji, name: row.display_name, avatar: avatarUrl(row), me: row.id === viewer }));
+  const roles = service.staffRanks(rows.map(row => row.id));
+  return rows.map(row => ({ staff: roles.get(row.id), emoji: row.emoji, name: row.display_name, avatar: avatarUrl(row), me: row.id === viewer }));
 }
 
 /** Resolve quotes from a self-join at read time, never from a frozen copy of the target's text. */
-export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): MessageExtras {
+export function messageExtras(service: Service, kind: Kind, viewer: string, seq: number): MessageExtras {
+  const db = service.db;
   const [messages, , key] = tables[kind];
   const row = db.prepare(`SELECT c.reply_to_seq, r.seq target_seq, r.sender_id, r.body, r.image, r.deleted_at, u.display_name,
       ${key ? `c.${key}` : 'NULL'} scope
@@ -71,11 +75,12 @@ export function messageExtras(db: Db, kind: Kind, viewer: string, seq: number): 
   return {
     image: attachment.image && !attachment.deleted_at ? `/api/chat/images/${kind}/${seq}` : null,
     replyTo: row.reply_to_seq === null ? null : {
+      staff: visible && row.sender_id ? service.staffRank(row.sender_id) ?? undefined : undefined,
       seq: row.reply_to_seq, fromMe: visible && row.sender_id === viewer, senderName: visible ? row.display_name ?? '' : '',
       preview: visible ? censorSlurs(plainText(row.body!)).replace(/\s+/g, ' ').trim().slice(0, 140) || (row.image ? 'Photo' : '') : null,
     },
     reactions,
-    reactors: reactions.length ? reactorsFor(db, kind, viewer, seq) : [],
+    reactors: reactions.length ? reactorsFor(service, kind, viewer, seq) : [],
     mentions: attachment.deleted_at ? [] : readMentions(attachment.mentions, viewer),
   };
 }
@@ -144,8 +149,9 @@ export function searchTerms(raw: string): { query: string; pattern: string } | n
 }
 /** The LIKE clause for searchTerms' pattern, bound as `param`. Bodies are stored censored, so a search never reads what the filter hid. */
 export const searchSql = (param: string) => `c.deleted_at IS NULL AND c.body LIKE ${param} ESCAPE '\\'`;
-export function searchHit(row: { seq: number; sender_id: string; body: string; created_at: string; display_name?: string | null }, viewer: string, query: string): SearchHit {
-  return { seq: row.seq, fromMe: row.sender_id === viewer, senderName: row.display_name ?? '', createdAt: row.created_at, preview: searchSnippet(censorSlurs(plainText(row.body)), query) };
+export function searchHits(service: Service, rows: { seq: number; sender_id: string; body: string; created_at: string; display_name?: string | null }[], viewer: string, query: string): SearchHit[] {
+  const roles = service.staffRanks(rows.map(row => row.sender_id));
+  return rows.map(row => ({ staff: roles.get(row.sender_id), seq: row.seq, fromMe: row.sender_id === viewer, senderName: row.display_name ?? '', createdAt: row.created_at, preview: searchSnippet(censorSlurs(plainText(row.body)), query) }));
 }
 
 /** A cursor older than this viewer's last block change must replace its entire loaded window. */

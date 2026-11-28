@@ -5,6 +5,7 @@ import { Service } from './service';
 import { CommunityService } from './community';
 import { GlobalChatService } from './global-chat';
 import { DirectoryService } from './directory';
+import { SchoolLogoService } from './school-logos';
 import { GroupChatService } from './group-chat';
 import { appRouter } from './router';
 import { StaffError, grantStaffRole, listStaff, revokeStaffRole } from './staff';
@@ -44,6 +45,34 @@ function fixture() {
 }
 
 describe('staff roles', () => {
+  it('shows only current grants and honors the Google ID pinned to the owner badge', () => {
+    const f = fixture();
+    const service = new Service(f.db, 'OWNER@example.com', `sub-${f.owner}`);
+    const ids = [f.owner, f.helper, f.alice, f.bob];
+    grantStaffRole(service, f.alice, 'school-manager');
+    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner'], [f.helper, 'support'], [f.alice, 'school-manager']]));
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.alice);
+    revokeStaffRole(service, f.helper);
+    expect(service.staffRanks(ids)).toEqual(new Map([[f.owner, 'owner']]));
+    expect(new Service(f.db, 'OWNER@example.com', 'different-sub').staffRanks(ids).size).toBe(0);
+  });
+
+  it.each(['support', 'chat-moderation'] as const)('applies school %s badges and powers only in the assigned school', role => {
+    const f = fixture();
+    grantStaffRole(f.service, f.alice, role, undefined, 'school');
+
+    expect(f.service.staffAccess(f.alice)).toEqual({
+      role, schoolId: f.school.id, schoolName: f.school.name,
+      permissions: role === 'support' ? ['requests', 'verification', 'members.search'] : [],
+    });
+    expect(f.service.staffRanks([f.owner, f.alice]).get(f.alice)).toBe(role);
+    expect(f.service.can(f.alice, 'members.sessions')).toBe(false);
+    expect(f.service.can(f.alice, 'global.moderate')).toBe(false);
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.alice);
+    expect(f.service.staffAccess(f.alice)).toBeNull();
+    expect(f.service.staffRanks([f.alice]).has(f.alice)).toBe(false);
+  });
+
   it('gives each role its bundle and the owner everything', () => {
     const f = fixture();
     expect(f.service.staffRank(f.owner)).toBe('owner');
@@ -61,10 +90,104 @@ describe('staff roles', () => {
     expect(f.service.isAdmin(f.admin)).toBe(false);
   });
 
-  it('has no procedure that grants or changes a role', () => {
-    const paths = Object.keys((appRouter as unknown as { _def: { procedures: Record<string, unknown> } })._def.procedures);
-    expect(paths.length).toBeGreaterThan(50);
-    expect(paths.filter(path => /staff|role|grant/i.test(path))).toEqual([]);
+  it('requires a recent sign-in and checks which accounts can manage assignments', async () => {
+    const f = fixture();
+    const input = { accountId: f.owner, userId: f.alice, role: 'school-manager' as const, expectedGrant: null, expectedSchoolId: f.school.id };
+    const revoke = { ...input, expectedGrant: { role: 'school-manager' as const, schoolId: f.school.id } };
+    const owner = f.caller(f.owner).admin.roles;
+    const administrator = f.caller(f.admin).admin.roles;
+    await expect(administrator.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.candidate({ userId: f.alice })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(administrator.revoke({ ...revoke, accountId: f.admin })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const stale = f.caller(f.owner, ADMIN_SIGN_IN_MAX_AGE_MS + 1000).admin.roles;
+    await expect(stale.grant(input)).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(owner.grant({ ...input, accountId: f.admin })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(owner.candidate({ userId: f.alice })).resolves.toMatchObject({ schoolId: f.school.id, grant: null });
+    await expect(owner.grant({ ...input, userId: f.owner, expectedSchoolId: null })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(owner.grant(input)).resolves.toMatchObject({ member: { role: 'school-manager', schoolId: f.school.id } });
+
+    expect(f.service.staffRank(f.alice)).toBe('school-manager');
+    expect(await owner.list()).toContainEqual(expect.objectContaining({ userId: f.alice, currentSchoolId: f.school.id, schoolId: f.school.id }));
+    expect(f.audit('staff.grant').at(-1)).toMatchObject({ actor_id: f.owner, detail: expect.stringContaining('"via":"console"') });
+    await owner.revoke(revoke);
+    expect(f.service.staffRank(f.alice)).toBeNull();
+    expect(f.audit('staff.revoke').at(-1)).toMatchObject({ actor_id: f.owner, detail: expect.stringContaining('"via":"console"') });
+  });
+
+  it('lets a manager delegate and change only the two school roles in their own school', async () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.alice, 'school-manager');
+    const roles = f.caller(f.alice).admin.roles;
+    const input = { accountId: f.alice, userId: f.bob, expectedSchoolId: f.school.id, expectedGrant: null };
+    await expect(roles.grant({ ...input, role: 'administrator' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(roles.grant({ ...input, role: 'support', scope: 'global' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    for (const userId of [f.admin, f.helper, f.owner, f.alice]) {
+      await expect(roles.candidate({ userId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(roles.grant({ ...input, userId, role: 'chat-moderation' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(roles.revoke({ ...input, userId, expectedGrant: { role: 'support', schoolId: null } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect((await roles.search({ query: 'example.com' })).map(row => row.id)).toEqual([f.bob]);
+    await expect(roles.list()).resolves.toEqual([]);
+    await roles.grant({ ...input, role: 'support' });
+    expect(f.db.prepare('SELECT role FROM staff_roles WHERE user_id=?').pluck().get(f.bob)).toBe('school-support');
+    expect((await roles.list()).map(row => [row.userId, row.role, row.schoolId])).toEqual([[f.bob, 'support', f.school.id]]);
+    const previous = { role: 'support' as const, schoolId: f.school.id };
+    await roles.grant({ ...input, role: 'chat-moderation', expectedGrant: previous });
+    await expect(roles.revoke({ ...input, expectedGrant: previous })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const chatGrant = { role: 'chat-moderation' as const, schoolId: f.school.id };
+    const separate = f.service.createSchool(f.bob, { name: 'Other High', location: 'Boston', schedule: exampleSchedule });
+    f.service.join(f.bob, { schoolId: separate.id, choice: 'community' });
+    await expect(roles.list()).resolves.toEqual([]);
+    await expect(roles.search({ query: 'bob' })).resolves.toEqual([]);
+    await expect(roles.revoke({ ...input, expectedSchoolId: separate.id, expectedGrant: chatGrant })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(roles.grant({ ...input, role: 'support', expectedSchoolId: separate.id, expectedGrant: chatGrant })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    f.service.join(f.bob, { schoolId: f.school.id, choice: 'community' });
+    await roles.revoke({ ...input, expectedGrant: chatGrant });
+    expect(f.audit('staff.revoke').at(-1)?.actor_id).toBe(f.alice);
+  });
+
+  it('blocks one account and role across scopes, revokes it, and requires a fresh assignment after unblocking', async () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.alice, 'school-manager');
+    const manager = f.caller(f.alice).admin.roles;
+    const owner = f.caller(f.owner).admin.roles;
+    const input = { accountId: f.alice, userId: f.bob, expectedSchoolId: f.school.id, expectedGrant: null };
+    const block = { accountId: f.owner, userId: f.bob, role: 'support' as const, blocked: true };
+    await manager.grant({ ...input, role: 'support' });
+    await expect(manager.setBlocked({ ...block, accountId: f.alice })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await owner.setBlocked(block);
+    expect(await owner.candidate({ userId: f.bob })).toMatchObject({ grant: null, blockedRoles: ['support'] });
+    await expect(manager.grant({ ...input, role: 'support' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    for (const scope of ['global', 'school'] as const) {
+      await expect(owner.grant({ ...input, accountId: f.owner, role: 'support', scope })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(() => grantStaffRole(f.service, f.bob, 'support', undefined, scope)).toThrow(/blocked/);
+    }
+    expect(() => f.db.prepare('INSERT INTO staff_roles(user_id,role,granted_at) VALUES(?,?,?)').run(f.bob, 'support', 'now')).toThrow(/blocked/);
+    await manager.grant({ ...input, role: 'chat-moderation' });
+    await owner.setBlocked(block);
+    expect((await manager.candidate({ userId: f.bob })).grant?.role).toBe('chat-moderation');
+    await owner.setBlocked({ ...block, blocked: false });
+    expect(await owner.candidate({ userId: f.bob })).toMatchObject({ grant: { role: 'chat-moderation' }, blockedRoles: [] });
+    grantStaffRole(f.service, f.bob, 'support');
+    await owner.setBlocked(block);
+    expect(await owner.candidate({ userId: f.bob })).toMatchObject({ grant: null, blockedRoles: ['support'] });
+    expect((await owner.candidate({ userId: f.helper })).grant?.role).toBe('support');
+  });
+
+  it('rejects assignment changes if the target changed schools or another grant replaced the one on screen', async () => {
+    const f = fixture();
+    const roles = f.caller(f.owner).admin.roles;
+    const stale = { accountId: f.owner, userId: f.helper, expectedSchoolId: f.school.id, expectedGrant: { role: 'support' as const, schoolId: null } };
+    grantStaffRole(f.service, f.helper, 'school-manager');
+    await expect(roles.revoke(stale)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(roles.grant({ ...stale, role: 'administrator' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const manager = { ...stale, expectedGrant: { role: 'school-manager' as const, schoolId: f.school.id } };
+    await expect(roles.revoke({ ...manager, expectedGrant: { ...manager.expectedGrant, schoolId: null } })).rejects.toMatchObject({ code: 'CONFLICT' });
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.helper);
+    await expect(roles.revoke(manager)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(roles.grant({ ...manager, role: 'support' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(listStaff(f.service).find(member => member.userId === f.helper)).toMatchObject({ role: 'school-manager', currentSchoolId: null, schoolId: f.school.id });
   });
 
   it('keeps the owner-only tools from every role, administrator included', async () => {
@@ -137,6 +260,65 @@ describe('staff roles', () => {
     await expect(f.caller(f.moderator).admin.resolveReport({ id: aboutStaff.id, outcome: 'dismissed' })).rejects.toMatchObject({ message: STAFF_TARGET });
   });
 
+  it('limits the manager’s roster, verification and support queue to their school', async () => {
+    const f = fixture();
+    const accountId = f.editor;
+    grantStaffRole(f.service, accountId, 'school-manager');
+    const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Boston, MA', schedule: exampleSchedule });
+    f.service.join(f.bob, { schoolId: other.id, choice: 'community' });
+    const as = f.caller(accountId).admin;
+    expect((await as.users.search({ query: '' })).map(row => row.id)).toEqual([f.alice]);
+    await expect(as.users.search({ query: '', schoolId: other.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.users.view({ accountId, userId: f.alice, reason: 'Account history' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    for (const id of [f.alice, f.bob]) {
+      f.community.requestVerification(id, { proof: 'Proof of enrollment attached' });
+      f.service.requestCorrection(id, 'Please change the Friday bell times.');
+    }
+    f.service.feedback(f.alice, 'App feedback for the site owner.');
+    const requests = await as.requests();
+    expect(requests.map(row => row.userId)).toEqual([f.alice]);
+    const hidden = (await f.caller(f.owner).admin.requests()).filter(row => row.id !== requests[0].id);
+    for (const row of hidden) await expect(as.resolveRequest({ accountId, id: row.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await as.resolveRequest({ accountId, id: requests[0].id });
+    const verifications = await as.verificationRequests();
+    expect(verifications.map(row => row.userId)).toEqual([f.alice]);
+    const foreignProof = f.community.verificationRequests(f.owner).find(row => row.userId === f.bob)!;
+    await expect(as.decideVerification({ id: foreignProof.id, approve: true })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await as.decideVerification({ id: verifications[0].id, approve: true });
+    expect(f.community.isVerified(f.alice, f.school.id)).toBe(true);
+    await expect(as.users.setVerified({ accountId, userId: f.bob, verified: true })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await as.users.setVerified({ accountId, userId: f.alice, verified: false });
+    expect(f.community.isVerified(f.alice, f.school.id)).toBe(false);
+  });
+
+  it('removes a member locally and answers the school appeal without closing their other relationships or reports', async () => {
+    const f = fixture();
+    const accountId = f.editor;
+    grantStaffRole(f.service, accountId, 'school-manager');
+    f.community.request(f.alice, f.bob);
+    f.community.respond(f.bob, f.alice, true);
+    const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Boston, MA', schedule: exampleSchedule });
+    f.service.join(f.bob, { schoolId: other.id, choice: 'community' });
+    f.community.report(f.bob, { userId: f.alice, reason: 'Cross-school dispute with Alice' });
+    const as = f.caller(accountId).admin;
+    const remove = (userId: string, schoolId: string) => as.removeMember({ userId, schoolId, reason: 'False enrollment' });
+    await expect(remove(f.bob, f.school.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(remove(f.bob, other.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await remove(f.alice, f.school.id);
+    expect(f.service.user(f.alice).schoolId).toBeNull();
+    expect(f.community.friends(f.alice).friends.map(user => user.id)).toContain(f.bob);
+    expect(f.community.reports(f.owner)).toHaveLength(1);
+    f.community.removeFromSchool(f.owner, f.bob, other.id, 'False enrollment');
+    expect((await as.bans()).map(row => row.userId)).toEqual([f.alice]);
+    await expect(as.liftBan({ accountId, userId: f.bob, schoolId: other.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.users.unban({ accountId, userId: f.bob, schoolId: other.id, reason: 'Reviewing appeal' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    f.service.appeal(f.alice, { kind: 'ban', schoolId: f.school.id, message: 'I have current proof of enrollment.' });
+    expect((await as.requests()).map(row => row.kind)).toEqual(['appeal:ban']);
+    await as.liftBan({ accountId, userId: f.alice, schoolId: f.school.id });
+    expect(await as.requests()).toEqual([]);
+    expect(f.community.isBanned(f.alice, f.school.id)).toBe(false);
+  });
+
   it('routes each request kind to the roles that handle it', async () => {
     const f = fixture();
     f.service.requestCorrection(f.alice, 'Period 3 starts at 10:05 on Wednesdays.');
@@ -145,10 +327,10 @@ describe('staff roles', () => {
     await f.caller(f.owner).admin.pauseChat({ accountId: f.owner, userId: f.alice, days: 1, reason: 'Spamming the room' });
     f.service.appeal(f.alice, { kind: 'pause', message: 'I was not spamming, it was a group joke.' });
     const kinds = async (id: string) => (await f.caller(id).admin.requests()).map(request => request.kind).sort();
-    expect(await kinds(f.owner)).toEqual(['', 'appeal:pause', 'beta:month-days']);
-    expect(await kinds(f.admin)).toEqual(['', 'appeal:pause', 'beta:month-days']);
-    expect(await kinds(f.helper)).toEqual(['', 'beta:month-days']);
-    expect(await kinds(f.editor)).toEqual(['']);
+    expect(await kinds(f.owner)).toEqual(['appeal:pause', 'beta:month-days', 'school:correction']);
+    expect(await kinds(f.admin)).toEqual(['appeal:pause', 'beta:month-days', 'school:correction']);
+    expect(await kinds(f.helper)).toEqual(['beta:month-days', 'school:correction']);
+    expect(await kinds(f.editor)).toEqual(['school:correction']);
     expect(await kinds(f.moderator)).toEqual(['appeal:pause']);
     const appeal = (await f.caller(f.owner).admin.requests()).find(request => request.kind === 'appeal:pause')!;
     await expect(f.caller(f.helper).admin.resolveRequest({ accountId: f.helper, id: appeal.id })).rejects.toMatchObject({ message: 'Your staff role doesn’t handle this request.' });
@@ -200,6 +382,85 @@ describe('staff roles', () => {
     expect(directory.list(f.owner, f.school.id).canEdit).toBe(true);
   });
 
+  it('limits school reviews, guide editing and workspace tools to the manager’s assigned school', async () => {
+    const f = fixture();
+    const manager = f.editor;
+    grantStaffRole(f.service, manager, 'school-manager');
+    const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
+    f.db.prepare('UPDATE schools SET support_locked=1').run();
+    f.service.request = { authAt: Date.now(), ip: null, userAgent: null };
+    const as = f.caller(manager);
+    const accountId = manager;
+    const schoolId = f.school.id;
+    const update = { schoolId, expectedVersion: 1, schedule: exampleSchedule, approved: true, supportLocked: true };
+    await expect(as.admin.update(update)).resolves.toMatchObject({ id: schoolId, approved: true });
+    await expect(as.admin.update({ ...update, schoolId: other.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.admin.renameSchool({ accountId, schoolId: other.id, name: 'New school name', location: 'Reno, NV' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const saveGuide = (scope: string | null) => as.admin.saveGuide({ accountId, schoolId: scope, kind: 'calendar', platform: 'canvas', guide: null });
+    await expect(saveGuide(schoolId)).resolves.toBeUndefined();
+    for (const scope of [null, other.id]) {
+      await expect(as.admin.guides({ schoolId: scope })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(saveGuide(scope)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(as.admin.uploadGuideImage({ accountId, schoolId: scope, data: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await expect(as.admin.setGuidePlatforms({ accountId, schoolId: other.id, kind: 'calendar', platforms: ['canvas'] })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await as.directory.list({ schoolId })).toMatchObject({ canEdit: true });
+    await expect(as.directory.list({ schoolId: other.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.school.setMenu({ accountId, schoolId, source: null })).resolves.toBeNull();
+    await expect(as.school.setMenu({ accountId, schoolId: other.id, source: null })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('shows school content and membership events without exposing audit details or other schools', async () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.editor, 'school-manager');
+    const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
+    const as = f.caller(f.editor);
+    const before = await as.admin.schoolActivity();
+    const at = '2026-09-08T12:00:00.000Z';
+    f.service.audit(f.owner, 'support.renameSchool', other.id, {}, at);
+    f.service.audit(f.owner, 'support.signOut', f.school.id, { userId: f.bob }, at);
+    f.service.audit(f.owner, 'support.editTask', f.school.id, { userId: f.bob }, at);
+    f.service.audit(f.owner, 'setupGuide.save', null, { platform: 'canvas' }, at);
+    f.service.audit(f.owner, 'member.remove', f.school.id, { userId: f.alice, reason: 'Private reason' }, at);
+    const rows = await as.admin.schoolActivity();
+    expect(rows.slice(1)).toEqual(before);
+    expect(rows[0]).toEqual({ id: expect.any(Number), action: 'Member removed from school', schoolName: f.school.name, createdAt: at });
+    await expect(f.caller(f.helper).admin.schoolActivity()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller(f.editor, ADMIN_SIGN_IN_MAX_AGE_MS + 1000).admin.schoolActivity()).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(as.admin.auditLog({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    revokeStaffRole(f.service, f.editor);
+    await expect(as.admin.schoolActivity()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('scopes proposal and logo queues before listing, loading an image or deciding a proposal by ID', async () => {
+    const f = fixture();
+    const manager = f.editor;
+    grantStaffRole(f.service, manager, 'school-manager');
+    const other = f.service.createSchool(f.bob, { name: 'Other High', location: 'Reno, NV', schedule: exampleSchedule });
+    const as = f.caller(manager);
+    const schedule = f.db.prepare(`INSERT INTO schedule_proposals(id,school_id,proposer_id,base_version,schedule,summary,status,created_at)
+      VALUES(?,?,?,1,?,'New lunch time','awaiting-support',datetime('now'))`);
+    const logo = f.db.prepare(`INSERT INTO school_logo_proposals(id,school_id,proposer_id,image,mime,status,request,created_at)
+      VALUES(?,?,?,X'01','image/png','requested',1,datetime('now'))`);
+    const mine = randomUUID(), theirs = randomUUID();
+    for (const [id, schoolId] of [[mine, f.school.id], [theirs, other.id]]) {
+      schedule.run(id, schoolId, f.alice, JSON.stringify(exampleSchedule));
+      logo.run(id, schoolId, f.alice);
+    }
+    expect((await as.admin.proposals()).map(row => row.id)).toEqual([mine]);
+    expect((await as.admin.logoVotes()).map(row => row.id)).toEqual([mine]);
+    const logos = new SchoolLogoService(f.service);
+    expect(logos.proposalImage(manager, theirs)).toBeNull();
+    expect(logos.proposalImage(manager, mine)?.mime).toBe('image/png');
+    await expect(as.admin.schoolLogos({ schoolId: other.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.admin.decideProposal({ id: theirs, publish: false })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.admin.forceLogo({ id: theirs, win: false })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(as.admin.decideProposal({ id: mine, publish: false })).resolves.toBeUndefined();
+    await expect(as.admin.forceLogo({ id: mine, win: false })).resolves.toBeUndefined();
+    expect((await f.caller(f.owner).admin.proposals()).map(row => row.id)).toEqual([theirs]);
+    expect((await f.caller(f.owner).admin.logoVotes()).map(row => row.id)).toEqual([theirs]);
+  });
+
   it('keeps email domains, which verify students, from roles without verification', async () => {
     const f = fixture();
     const update = (id: string, emailDomains: string[]) => f.caller(id).admin.update({ schoolId: f.school.id, expectedVersion: f.service.school(f.school.id).version, schedule: exampleSchedule, exceptionGradesExplicit: true, approved: false, supportLocked: false, emailDomains });
@@ -247,7 +508,47 @@ describe('staff roles', () => {
   });
 });
 
+describe('scoped staff sessions', () => {
+
+  it('requires a grant and the assigned school on every request', async () => {
+    const f = fixture();
+    const manager = f.caller(f.alice);
+    const other = f.service.createSchool(f.bob, { name: 'North High', location: 'Boston, MA', schedule: exampleSchedule });
+    expect((await manager.session())?.staff).toBeNull();
+    grantStaffRole(f.service, f.alice, 'school-manager');
+    expect(f.service.canTarget(f.admin, f.alice)).toBe(false);
+    expect((await f.caller(f.bob).session())?.staff).toBeNull();
+    expect((await manager.session())?.staff).toMatchObject({ role: 'school-manager', schoolId: f.school.id, schoolName: f.school.name });
+    expect((await manager.admin.schools()).map(school => school.id)).toEqual([f.school.id]);
+    await expect(manager.admin.users.suspend({ accountId: f.alice, userId: f.bob, suspended: true, reason: 'School issue' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    f.service.join(f.alice, { schoolId: other.id, choice: 'community' });
+    await expect(manager.admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    grantStaffRole(f.service, f.alice, 'school-manager');
+    expect((await manager.admin.schools()).map(school => school.id)).toEqual([other.id]);
+    revokeStaffRole(f.service, f.alice);
+    await expect(manager.admin.schools()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
 describe('npm run staff', () => {
+  it('pins a manager grant to one school until the operator grants a new scope', () => {
+    const f = fixture();
+    const separate = f.service.createSchool(f.alice, { name: 'West High', location: 'Boston, MA', schedule: exampleSchedule });
+    const member = grantStaffRole(f.service, f.helper, 'school-manager').member;
+    expect(member).toMatchObject({ schoolId: f.school.id, schoolName: f.school.name });
+    expect(() => grantStaffRole(f.service, f.helper, 'school-manager')).toThrow('already school manager');
+
+    f.service.join(f.helper, { schoolId: separate.id, choice: 'community' });
+    expect(listStaff(f.service).find(row => row.userId === f.helper)).toMatchObject({ schoolId: f.school.id });
+    expect(grantStaffRole(f.service, f.helper, 'school-manager').member).toMatchObject({ schoolId: separate.id, schoolName: separate.name });
+    expect(JSON.parse(f.audit('staff.grant').at(-1)!.detail)).toMatchObject({ previousSchoolId: f.school.id });
+    expect(grantStaffRole(f.service, f.helper, 'chat-moderation').member).toMatchObject({ role: 'chat-moderation', schoolId: null });
+
+    f.db.prepare('UPDATE users SET school_id=NULL WHERE id=?').run(f.helper);
+    expect(() => grantStaffRole(f.service, f.helper, 'school-manager')).toThrow('must join a school');
+    expect(listStaff(f.service).find(row => row.userId === f.helper)?.role).toBe('chat-moderation');
+  });
+
   it('grants, changes, lists and revokes roles, logged under the owner', () => {
     const f = fixture();
     expect(listStaff(f.service).map(member => [member.email, member.role])).toEqual([

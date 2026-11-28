@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { AnnouncementBoard } from '../announcements';
 import { AttentionGap } from '../attention-videos';
 import { api, errorMessage } from '@/client/api';
 import { upcomingDaysOff } from '@/domain/days-off';
@@ -123,6 +124,7 @@ export function SchoolView({ state }: { state: AppState }) {
       {shared}
       {!voting && signals}
     </>,
+    announcements: <AnnouncementBoard key={JSON.stringify([school.id, context.isAdmin, context.staff?.role, context.staff?.schoolId])} state={state} />,
     lunch: <LunchMenuSection state={state} />,
     changes: <>{signals}<ProposalsSection state={state} /></>,
     setup: source,
@@ -132,7 +134,7 @@ export function SchoolView({ state }: { state: AppState }) {
   }}>{dialogs}</SchoolHub>;
 }
 
-type HubSection = 'rotation' | 'lunch' | 'changes' | 'setup' | 'correction' | 'logo' | 'about';
+type HubSection = 'announcements' | 'rotation' | 'lunch' | 'changes' | 'setup' | 'correction' | 'logo' | 'about';
 
 function HubRow({ icon, title, detail, value, active, away, onClick }: { icon: IconName; title: string; detail?: string; value?: string; active?: boolean; away?: boolean; onClick: () => void }) {
   // The chosen row is tinted on wide screens only: a phone shows the list by itself, with no section open beside it.
@@ -157,7 +159,7 @@ function SchoolHub({ state, voting, panels, children }: { state: AppState; votin
   const school = context.school;
   const schedule = effectiveSchedule(state.schedule, personal);
   const rotation = schedule.cycleDays.length > 1;
-  const sections: HubSection[] = ['rotation', 'lunch', ...(voting ? ['changes' as const] : []), 'setup', 'correction', 'logo', 'about'];
+  const sections: HubSection[] = ['rotation', 'announcements', 'lunch', ...(voting ? ['changes' as const] : []), 'setup', 'correction', 'logo', 'about'];
   const open = sections.find((id) => id === state.params.get('section')) ?? null;
   const shown = open ?? 'rotation';
   const { menu } = useLunchMenu(state, today);
@@ -195,6 +197,7 @@ function SchoolHub({ state, voting, panels, children }: { state: AppState; votin
       <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <nav data-attention-after="school-sections" aria-label="School sections" className="grid gap-0.5 rounded-2xl bg-card p-2 shadow-card ring-1 ring-foreground/[0.06] dark:ring-foreground/[0.09]">
         <HubRow icon="calendar" title={rotation ? 'Rotation' : 'Bell schedule'} detail={todayDay && !todayDay.closed ? (rotation ? `${todayDay.cycleDayLabel} today` : 'Same every day') : 'No school today'} active={shown === 'rotation'} onClick={() => go('rotation')} />
+        <HubRow icon="bell" title="Announcements" detail="School and platform updates" active={shown === 'announcements'} onClick={() => go('announcements')} />
         <HubRow icon="utensils" title="Lunch menu" detail={lunchToday ?? (menu && !menu.source ? 'Not set up' : 'This week')} active={shown === 'lunch'} onClick={() => go('lunch')} />
         {voting && <HubRow icon="users" title="Proposed changes" detail="Vote on schedule changes" active={shown === 'changes'} onClick={() => go('changes')} />}
         <HubRow icon="school" title="Your setup" detail={personal.customSchedule ? 'Private schedule' : 'School schedule'} value={personal.grade ? gradeLabel(personal.grade) : undefined} active={shown === 'setup'} onClick={() => go('setup')} />

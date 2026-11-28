@@ -1,10 +1,11 @@
 /**
  * Staff roles (src/server/staff.ts). The owner is the account in OWNER_EMAIL and holds every permission plus the
  * owner-only tools (betas, mod overrides, the whole audit log, editing a member's classes, tasks, feeds, friendships
- * and profile, moving a member between schools). Every other role is a fixed bundle of permissions, granted only with
- * `npm run staff` on the server. No role can grant roles in the app, administrator included.
+ * and profile, moving a member between schools). Every other role is a fixed bundle of permissions, assigned by the owner in
+ * the staff console or by the operator with `npm run staff`. School Managers can delegate school Support and Chat Moderation.
  */
-export const STAFF_ROLES = ['administrator', 'moderator', 'support', 'schedule-editor'] as const;
+export const STAFF_ROLES = ['administrator', 'moderator', 'support', 'schedule-editor', 'school-manager', 'chat-moderation'] as const;
+export const SCHOOL_DELEGABLE_ROLES = ['support', 'chat-moderation'] as const;
 export type StaffRole = typeof STAFF_ROLES[number];
 /** A staff account's rank: a granted role, or the owner. */
 export type StaffRank = 'owner' | StaffRole;
@@ -40,27 +41,35 @@ export type StaffPermission = typeof STAFF_PERMISSIONS[number];
 export const ROLE_PERMISSIONS: Record<StaffRank, readonly StaffPermission[]> = {
   owner: STAFF_PERMISSIONS,
   administrator: STAFF_PERMISSIONS,
+  'school-manager': ['requests', 'verification', 'proposals', 'schools.edit', 'members.remove', 'members.search', 'reports'],
+  'chat-moderation': ['reports', 'chat.pause', 'global.moderate'],
   moderator: ['reports', 'chat.pause', 'global.moderate', 'members.remove'],
   support: ['requests', 'verification', 'members.search', 'members.view', 'members.sessions'],
   'schedule-editor': ['proposals', 'schools.edit'],
 };
 
 export const STAFF_LABELS: Record<StaffRank, string> = {
+  'school-manager': 'School Manager', 'chat-moderation': 'Chat Moderation',
   owner: 'Owner', administrator: 'Administrator', moderator: 'Moderator', support: 'Support', 'schedule-editor': 'Schedule editor',
 };
 /** How a moderation note names who acted: "Removed by the owner", "Removed by a moderator". */
 export const STAFF_NOUNS: Record<StaffRank, string> = {
+  'school-manager': 'a school manager', 'chat-moderation': 'a chat moderator',
   owner: 'the owner', administrator: 'an administrator', moderator: 'a moderator', support: 'support', 'schedule-editor': 'a schedule editor',
 };
 
 /** What the signed-in account may do in the support tools. */
-export type StaffAccess = { role: StaffRank; permissions: StaffPermission[] };
+export type StaffAccess = { role: StaffRank; permissions: StaffPermission[]; schoolId?: string; schoolName?: string };
 
 export function isStaffRole(value: unknown): value is StaffRole {
   return typeof value === 'string' && (STAFF_ROLES as readonly string[]).includes(value);
 }
-export function staffAccess(role: StaffRank | null): StaffAccess | null {
-  return role ? { role, permissions: [...ROLE_PERMISSIONS[role]] } : null;
+export function staffAccess(role: StaffRank | null, scope?: { schoolId: string; schoolName: string }): StaffAccess | null {
+  if (!role) return null;
+  let permissions = ROLE_PERMISSIONS[role];
+  if (scope && role === 'support') permissions = ['requests', 'verification', 'members.search'];
+  if (scope && role === 'chat-moderation') permissions = [];
+  return { role, permissions: [...permissions], ...scope };
 }
 export function hasPermission(access: StaffAccess | null | undefined, permission: StaffPermission): boolean {
   return !!access && access.permissions.includes(permission);
@@ -71,13 +80,16 @@ export function hasPermission(access: StaffAccess | null | undefined, permission
  * owner. Support and schedule editors are outside the chain and count as members.
  */
 export function moderationTier(rank: StaffRank | null | undefined): number {
-  return rank === 'owner' ? 3 : rank === 'administrator' ? 2 : rank === 'moderator' ? 1 : 0;
+  if (rank === 'owner') return 3;
+  if (rank === 'administrator') return 2;
+  return isModerationRank(rank) ? 1 : 0;
 }
-export function isModerationRank(value: unknown): value is 'owner' | 'administrator' | 'moderator' {
-  return value === 'owner' || value === 'administrator' || value === 'moderator';
+export type ModerationRank = 'owner' | 'administrator' | 'moderator' | 'chat-moderation' | 'school-manager';
+export function isModerationRank(value: unknown): value is ModerationRank {
+  return value === 'owner' || value === 'administrator' || value === 'moderator' || value === 'chat-moderation' || value === 'school-manager';
 }
 /** The rank stored with a removal or an edit: the actor's place in the chain, null for a member (or support). */
-export function moderationRank(rank: StaffRank | null): 'owner' | 'administrator' | 'moderator' | null {
+export function moderationRank(rank: StaffRank | null): ModerationRank | null {
   return isModerationRank(rank) ? rank : null;
 }
 /** A removed message's text: moderators and up, when whoever removed it is at their tier or below. Members never. */

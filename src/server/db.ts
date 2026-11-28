@@ -705,7 +705,7 @@ function migrate(db: Db): void {
     INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(28, datetime('now'));
   `);
 
-  // Migration 29: staff roles (src/server/staff.ts), granted only with `npm run staff`. The owner is never a row here;
+  // Migration 29: staff grants (src/server/staff.ts). The owner is never a row here;
   // it stays OWNER_EMAIL. Every message table also keeps what moderation needs to show text to the tiers that may read
   // it (src/domain/staff.ts): `original` is the text as sent when the slur filter changed it (the owner reads it),
   // `deleted_rank` the moderation rank of whoever removed the message (null for a member), and in Global chat
@@ -717,6 +717,38 @@ function migrate(db: Db): void {
       granted_at TEXT NOT NULL
     );
   `);
+  // Rebuild the CHECK once, retaining pinned schools from the first role beta and global grants from older builds.
+  const staffDefinition = db.prepare("SELECT sql FROM sqlite_schema WHERE name='staff_roles'").pluck().get() as string;
+  if (!staffDefinition.includes("'school-support'")) {
+    const hasScope = (db.pragma('table_info(staff_roles)') as { name: string }[]).some(column => column.name === 'school_id');
+    db.exec(`
+      CREATE TABLE staff_roles_next (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('administrator','moderator','support','schedule-editor','school-manager','chat-moderation','school-support','school-chat-moderation')),
+        granted_at TEXT NOT NULL,
+        school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+        CHECK ((role IN ('school-manager','school-support','school-chat-moderation')) = (school_id IS NOT NULL))
+      );
+      INSERT INTO staff_roles_next(user_id,role,granted_at,school_id) SELECT user_id,role,granted_at,${hasScope ? 'school_id' : 'NULL'} FROM staff_roles;
+      DROP TABLE staff_roles;
+      ALTER TABLE staff_roles_next RENAME TO staff_roles;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS staff_role_blacklist (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('administrator','moderator','support','schedule-editor','school-manager','chat-moderation')),
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id,role)
+    );
+  `);
+  // Older server and CLI builds share this database. Enforce owner blocks for their writes too.
+  for (const operation of ['INSERT', 'UPDATE']) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS staff_role_block_${operation.toLowerCase()} BEFORE ${operation} ON staff_roles
+      WHEN EXISTS (SELECT 1 FROM staff_role_blacklist WHERE user_id=NEW.user_id AND role=
+        CASE NEW.role WHEN 'school-support' THEN 'support' WHEN 'school-chat-moderation' THEN 'chat-moderation' ELSE NEW.role END)
+      BEGIN SELECT RAISE(ABORT, 'The owner blocked this role for this account.'); END;`);
+  }
   const addColumn = (table: string, column: string) => {
     if (!(db.pragma(`table_info(${table})`) as { name: string }[]).some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
   };
@@ -877,6 +909,29 @@ function migrate(db: Db): void {
       UPDATE users SET now_card=CASE now_split WHEN 1 THEN 1 ELSE 2 END;
     `);
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+      author_id TEXT NOT NULL REFERENCES users(id),
+      request_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(author_id, request_id)
+    );
+    CREATE INDEX IF NOT EXISTS announcements_school ON announcements(school_id, id);
+    CREATE TABLE IF NOT EXISTS announcement_dismissals (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+      dismissed_at TEXT NOT NULL,
+      PRIMARY KEY(user_id, announcement_id)
+    );
+  `);
+  const announcementColumns = db.pragma('table_info(announcements)') as { name: string }[];
+  if (!announcementColumns.some(column => column.name === 'publish_at')) db.exec('ALTER TABLE announcements ADD COLUMN publish_at TEXT');
+  if (!announcementColumns.some(column => column.name === 'cancelled_at')) db.exec('ALTER TABLE announcements ADD COLUMN cancelled_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS announcements_school_publication ON announcements(school_id, coalesce(publish_at, created_at), id)');
   chatPolishColumns(db);
 }
 
