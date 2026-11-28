@@ -15,6 +15,32 @@ const plan = (db: Database.Database, sql: string, ...params: unknown[]) =>
   (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[]).map(row => row.detail).join('\n');
 
 describe('openDatabase migrations', () => {
+  it('retains a manager’s original school when adding school-level Support and Chat Moderation', () => {
+    const path = tempPath();
+    const before = openDatabase(path);
+    before.exec(`
+      INSERT INTO schools(id,name,location,schedule,created_at) VALUES('north','North High','Boston','{}','today');
+      INSERT INTO users(id,google_sub,email,created_at) VALUES('manager','manager','manager@example.com','today');
+      DROP TABLE staff_roles;
+      CREATE TABLE staff_roles (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        granted_at TEXT NOT NULL,
+        school_id TEXT REFERENCES schools(id) ON DELETE CASCADE,
+        CHECK ((role='school-manager') = (school_id IS NOT NULL))
+      );
+      INSERT INTO staff_roles VALUES('manager','school-manager','yesterday','north');
+    `);
+    before.close();
+    const db = openDatabase(path);
+    try {
+      expect(db.prepare('SELECT * FROM staff_roles').get()).toEqual({ user_id: 'manager', role: 'school-manager', school_id: 'north', granted_at: 'yesterday' });
+      expect(() => db.exec("UPDATE staff_roles SET role='support'")).toThrow(/CHECK/);
+      db.exec("UPDATE staff_roles SET role='school-support'");
+      expect(() => db.exec('UPDATE staff_roles SET school_id=NULL')).toThrow(/CHECK/);
+    } finally { db.close(); }
+  });
+
   it('preserves legacy staff grants and requires school scope for manager grants', () => {
     const path = tempPath();
     const before = openDatabase(path);

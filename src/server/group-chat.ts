@@ -131,12 +131,6 @@ function leaveGroup(db: Db, groupId: string, userId: string, nowIso: string): vo
 
 export class GroupChatService {
   constructor(private readonly service: Service, private readonly now: () => Date = () => new Date()) {}
-  private readonly reveals = new Map<string, Reveal>();
-  private reveal(viewerId: string): Reveal {
-    let reveal = this.reveals.get(viewerId);
-    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
-    return reveal;
-  }
   private get db() { return this.service.db; }
   private get community() { return new CommunityService(this.service); }
   private iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
@@ -188,14 +182,14 @@ export class GroupChatService {
     const members = this.members(group.id);
     return { id: group.id, name: group.name, createdAt: group.created_at, role: members.find(member => member.id === viewerId)?.role ?? 'member', members: members.map(({ row: _row, ...member }) => member) };
   }
-  private message(viewerId: string, row: MessageRow, staff = this.service.staffRank(row.sender_id)): GroupMessage {
+  private message(viewerId: string, row: MessageRow, staff = this.service.staffRank(row.sender_id), reveal = new Reveal(this.service, viewerId)): GroupMessage {
     return {
       ...messageExtras(this.service, 'group', viewerId, row.seq),
       id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at,
       deletedBy: row.deleted_at ? row.deleted_by : null, editedAt: row.deleted_at ? null : row.edited_at, reason: null,
-      editedFrom: this.reveal(viewerId).editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at,
+      editedFrom: reveal.editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at,
       sender: { staff: staff ?? undefined, id: row.sender_id, displayName: row.display_name, verified: !!row.verified, avatar: avatarUrl({ id: row.sender_id, google_picture: row.google_picture, avatar_version: row.avatar_version, avatar_hidden: row.avatar_hidden }) },
-      original: this.reveal(viewerId).original(row), removed: this.reveal(viewerId).removed(row, 'group'),
+      original: reveal.original(row), removed: reveal.removed(row, 'group'),
     };
   }
   private latestPage(member: MemberRow, before?: number): { rows: MessageRow[]; hasEarlier: boolean } {
@@ -332,7 +326,8 @@ export class GroupChatService {
       const base = { peer: null, group: info, revision: group.revision, lastReadSeq: member.last_read_seq, muted: !!member.muted, pause: this.pause(viewerId), receipts };
       const toMessages = (rows: MessageRow[]) => {
         const roles = this.service.staffRanks(rows.map(row => row.sender_id));
-        return rows.map(row => this.message(viewerId, row, roles.get(row.sender_id) ?? null));
+        const reveal = new Reveal(this.service, viewerId);
+        return rows.map(row => this.message(viewerId, row, roles.get(row.sender_id) ?? null, reveal));
       };
       const newest = (rows: MessageRow[]) => {
         const seq = rows.reduce((max, row) => (row.sender_id !== viewerId && row.seq > max ? row.seq : max), 0);

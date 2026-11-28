@@ -260,8 +260,11 @@ class RoomChatService {
   private roomModerator(room: Room, actorId: string): StaffRank | null {
     const access = this.service.staffAccess(actorId);
     if (!access) return null;
-    if (access.permissions.includes('global.moderate')) return access.role;
-    return room.kind === 'school' && access.role === 'school-manager' && access.schoolId === room.scope ? access.role : null;
+    if (access.schoolId) {
+      const moderatesSchool = access.role === 'school-manager' || access.role === 'chat-moderation';
+      return moderatesSchool && room.kind === 'school' && access.schoolId === room.scope ? access.role : null;
+    }
+    return access.permissions.includes('global.moderate') ? access.role : null;
   }
   private roomInfo(room: Room, viewerId: string): GlobalRoom {
     const members = this.db.prepare(ROOMS[room.kind].population).get(this.params(room)) as { n: number };
@@ -299,7 +302,8 @@ class RoomChatService {
     return { unreadChats: countUnreadChats(this.db, viewerId), unreadAt: new Date().toISOString() };
   }
   private audit(room: Room, actorId: string, action: string, detail: Record<string, unknown>): void {
-    this.service.audit(actorId, `${room.kind === 'school' ? 'schoolChat' : 'global'}.${action}`, null, room.kind === 'school' ? { ...detail, schoolId: room.scope } : detail, this.iso());
+    const schoolId = room.kind === 'school' ? room.scope : null;
+    this.service.audit(actorId, `${schoolId ? 'schoolChat' : 'global'}.${action}`, schoolId, schoolId ? { ...detail, schoolId } : detail, this.iso());
   }
   /** Live events: the global room reaches everyone connected; a school room only its members. */
   private notify(room: Room): void {

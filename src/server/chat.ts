@@ -162,12 +162,6 @@ export function countUnreadChats(db: Db, userId: string): number {
 
 export class ChatService {
   constructor(private readonly service: Service, private readonly now: () => Date = () => new Date()) {}
-  private readonly reveals = new Map<string, Reveal>();
-  private reveal(viewerId: string): Reveal {
-    let reveal = this.reveals.get(viewerId);
-    if (!reveal) this.reveals.set(viewerId, reveal = new Reveal(this.service, viewerId));
-    return reveal;
-  }
   private get db() { return this.service.db; }
   private get community() { return new CommunityService(this.service); }
   private iso(offsetMs = 0): string { return new Date(this.now().getTime() + offsetMs).toISOString(); }
@@ -239,8 +233,7 @@ export class ChatService {
   private markDelivered(threadId: string, viewerId: string, seq: number): void {
     this.db.prepare('UPDATE chat_members SET delivered_seq=max(delivered_seq, ?) WHERE thread_id=? AND user_id=? AND delivered_seq<?').run(seq, threadId, viewerId, seq);
   }
-  private message(viewerId: string, row: MessageRow): ChatMessage {
-    const reveal = this.reveal(viewerId);
+  private message(viewerId: string, row: MessageRow, reveal = new Reveal(this.service, viewerId)): ChatMessage {
     return { ...messageExtras(this.service, 'peer', viewerId, row.seq), id: row.id, seq: row.seq, revision: row.revision, fromMe: row.sender_id === viewerId, body: row.deleted_at ? null : row.body, createdAt: row.created_at, deletedBy: row.deleted_at ? row.deleted_by : null,
       original: reveal.original(row), removed: reveal.removed(row, 'peer'),
       editedAt: row.deleted_at ? null : row.edited_at, editedFrom: reveal.editedFrom({ ...row, edited_rank: 'member' }), editedBySender: !row.deleted_at && !!row.edited_at };
@@ -336,7 +329,10 @@ export class ChatService {
       }
       const member = this.memberRow(thread.id, viewerId);
       const base = { peer, revision: thread.revision, lastReadSeq: member?.last_read_seq ?? 0, muted: !!member?.muted, pause, receipts: [this.receipt(peer, this.memberRow(thread.id, otherId))] };
-      const toMessages = (rows: MessageRow[]) => rows.map(row => this.message(viewerId, row));
+      const toMessages = (rows: MessageRow[]) => {
+        const reveal = new Reveal(this.service, viewerId);
+        return rows.map(row => this.message(viewerId, row, reveal));
+      };
       // The newest incoming message this response carries: the viewer's device holds it once the response lands (§13).
       const newest = (rows: MessageRow[]) => {
         const seq = rows.reduce((max, row) => (row.sender_id !== viewerId && row.seq > max ? row.seq : max), 0);

@@ -2,9 +2,10 @@
  * Staff roles (src/server/staff.ts). The owner is the account in OWNER_EMAIL and holds every permission plus the
  * owner-only tools (betas, mod overrides, the whole audit log, editing a member's classes, tasks, feeds, friendships
  * and profile, moving a member between schools). Every other role is a fixed bundle of permissions, assigned by the owner in
- * the staff console or by the operator with `npm run staff`.
+ * the staff console or by the operator with `npm run staff`. School Managers can delegate school Support and Chat Moderation.
  */
 export const STAFF_ROLES = ['administrator', 'moderator', 'support', 'schedule-editor', 'school-manager', 'chat-moderation'] as const;
+export const SCHOOL_DELEGABLE_ROLES = ['support', 'chat-moderation'] as const;
 export type StaffRole = typeof STAFF_ROLES[number];
 /** A staff account's rank: a granted role, or the owner. */
 export type StaffRank = 'owner' | StaffRole;
@@ -63,8 +64,12 @@ export type StaffAccess = { role: StaffRank; permissions: StaffPermission[]; sch
 export function isStaffRole(value: unknown): value is StaffRole {
   return typeof value === 'string' && (STAFF_ROLES as readonly string[]).includes(value);
 }
-export function staffAccess(role: StaffRank | null): StaffAccess | null {
-  return role ? { role, permissions: [...ROLE_PERMISSIONS[role]] } : null;
+export function staffAccess(role: StaffRank | null, scope?: { schoolId: string; schoolName: string }): StaffAccess | null {
+  if (!role) return null;
+  let permissions = ROLE_PERMISSIONS[role];
+  if (scope && role === 'support') permissions = ['requests', 'verification', 'members.search'];
+  if (scope && role === 'chat-moderation') permissions = [];
+  return { role, permissions: [...permissions], ...scope };
 }
 export function hasPermission(access: StaffAccess | null | undefined, permission: StaffPermission): boolean {
   return !!access && access.permissions.includes(permission);

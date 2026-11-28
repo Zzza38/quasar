@@ -18,7 +18,8 @@ import { currentBetaRegistry } from './beta-registry';
 import { seedSchoolMember } from './global-chat';
 import { MERGE_KIND, mergeRequestView } from './directory';
 import type { StoredBetaDiagnostics } from '@/domain/betas';
-import { ROLE_PERMISSIONS, isStaffRole, staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
+import { decodeStoredRole } from '@/domain/stored-staff';
+import { staffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
 import { adminSignInAllowed } from '@/lib/admin-session';
 import { NOW_CARD_STYLES, type NowCardStyle } from '@/lib/now-split';
 export { avatarUrl, usableGooglePicture, AVATAR_COLUMNS, type AvatarRow } from './avatars';
@@ -297,10 +298,11 @@ export class Service {
   admin(id: string): void { if (!this.isAdmin(id)) fail('FORBIDDEN', 'Owner access is required.'); }
   private activeGrants(ids: readonly string[]) {
     const rows = this.db.prepare(`SELECT u.id, u.email, u.google_sub googleSub, r.role, r.school_id schoolId, s.name schoolName,
+        EXISTS (SELECT 1 FROM staff_role_blacklist b WHERE b.user_id=u.id AND b.role=CASE r.role WHEN 'school-support' THEN 'support' WHEN 'school-chat-moderation' THEN 'chat-moderation' ELSE r.role END) blocked,
         EXISTS (SELECT 1 FROM beta_members b WHERE b.user_id=u.id AND b.beta_key='staff-roles') joined
-      FROM users u LEFT JOIN staff_roles r ON r.user_id=u.id AND (r.role <> 'school-manager' OR r.school_id=u.school_id)
+      FROM users u LEFT JOIN staff_roles r ON r.user_id=u.id AND (r.school_id IS NULL OR r.school_id=u.school_id)
       LEFT JOIN schools s ON s.id=r.school_id WHERE u.id IN (SELECT value FROM json_each(?))`)
-      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; joined: number }[];
+      .all(JSON.stringify(ids)) as { id: string; email: string; googleSub: string; role: string | null; schoolId: string | null; schoolName: string | null; joined: number; blocked: number }[];
     const grants = new Map<string, { role: StaffRank; schoolId: string | null; schoolName: string | null }>();
     let betaExists: boolean | undefined;
     for (const row of rows) {
@@ -308,13 +310,14 @@ export class Service {
         grants.set(row.id, { role: 'owner', schoolId: null, schoolName: null });
         continue;
       }
-      if (!isStaffRole(row.role)) continue;
-      if (row.role === 'school-manager' || row.role === 'chat-moderation') {
+      const role = decodeStoredRole(row.role);
+      if (!role || row.blocked) continue;
+      if (row.schoolId || role === 'chat-moderation') {
         if (!row.joined) continue;
         betaExists ??= currentBetaRegistry().betas.some(beta => beta.key === 'staff-roles');
         if (!betaExists) continue;
       }
-      grants.set(row.id, { role: row.role, schoolId: row.schoolId, schoolName: row.schoolName });
+      grants.set(row.id, { role, schoolId: row.schoolId, schoolName: row.schoolName });
     }
     return grants;
   }
@@ -330,11 +333,8 @@ export class Service {
   staffAccess(id: string) {
     const grant = this.activeGrant(id);
     if (!grant) return null;
-    const access = staffAccess(grant.role)!;
-    if (grant.role === 'school-manager' && grant.schoolId && grant.schoolName) {
-      return { ...access, schoolId: grant.schoolId, schoolName: grant.schoolName };
-    }
-    return access;
+    if (grant.schoolId) return staffAccess(grant.role, { schoolId: grant.schoolId, schoolName: grant.schoolName ?? '' });
+    return staffAccess(grant.role);
   }
   managedSchoolId(id: string): string | null {
     const grant = this.activeGrant(id);
@@ -355,8 +355,7 @@ export class Service {
   isStaff(id: string): boolean { return this.staffRank(id) !== null; }
   requireStaff(id: string): void { if (!this.isStaff(id)) fail('FORBIDDEN', 'Staff access is required.'); }
   can(id: string, permission: StaffPermission): boolean {
-    const rank = this.staffRank(id);
-    return !!rank && ROLE_PERMISSIONS[rank].includes(permission);
+    return this.staffAccess(id)?.permissions.includes(permission) ?? false;
   }
   permit(id: string, permission: StaffPermission): void {
     if (!this.can(id, permission)) fail('FORBIDDEN', this.isStaff(id) ? 'Your staff role doesn’t include this.' : 'Staff access is required.');
@@ -377,7 +376,7 @@ export class Service {
     const access = this.staffAccess(id);
     if (access?.role === 'owner') return true;
     return !!access && access.permissions.includes('schools.edit')
-      && (access.role !== 'school-manager' || access.schoolId === schoolId)
+      && (!access.schoolId || access.schoolId === schoolId)
       && adminSignInAllowed(this.request?.authAt ?? null);
   }
   guardTarget(actorId: string, targetId: string): void {

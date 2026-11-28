@@ -1,3 +1,4 @@
+import { AnnouncementService, announcementPageSchema, publishAnnouncementSchema } from './announcements';
 import { prepareChatImage } from './chat-images';
 import { initTRPC, StandardSchemaV1Error, TRPCError } from '@trpc/server';
 import { z, ZodError } from 'zod';
@@ -27,7 +28,7 @@ import { assertModTarget, modOverrideSchema, readModOverrides, setModOverride } 
 import { NOW_CARD_STYLES } from '@/lib/now-split';
 import { BetaService, betaEnrollSchema, betaFeedbackSchema, betaJoinSchema, betaLeaveSchema, betaMemberSchema } from './betas';
 import { STAFF_ROLES, type StaffPermission } from '@/domain/staff';
-import { grantStaffRole, listStaff, requireRoleConsole, revokeStaffRole, staffCandidate } from './staff';
+import { grantStaffRole, listStaff, revokeStaffRole, searchStaffCandidates, setStaffRoleBlocked, staffCandidate } from './staff';
 /**
  * `authAt` is when the session's Google sign-in happened (src/server/auth.ts); owner tools need a recent one.
  * The tRPC route always sets it; a caller that leaves it out (tests, server code) is treated as signed in long ago.
@@ -100,7 +101,6 @@ const accountScoped = authenticated.use(requiresField('accountId')).input(z.obje
 /** Support mutations bound to the signed-in account, so an account switch in another tab can't write the audit log under the wrong account. */
 const staffScoped = (access: StaffGate) => accountScoped.use(({ ctx, path, next }) => { staffGate(ctx, path, access); return next({ ctx }); });
 const adminScoped = staffScoped('owner');
-const roleConsole = admin.use(({ ctx, next }) => { requireRoleConsole(ctx.service, ctx.userId); return next({ ctx }); });
 const roleExpectation = z.object({ role: z.enum(STAFF_ROLES), schoolId: z.uuid().nullable() });
 const assignmentInput = z.object({ userId: z.uuid(), expectedSchoolId: z.uuid().nullable(), expectedGrant: roleExpectation });
 /**
@@ -118,6 +118,12 @@ const support = (service: Service) => new SupportService(service);
 const betas = (service: Service) => new BetaService(service);
 const guides = (service: Service) => new SetupGuideService(service);
 export const appRouter = t.router({
+  announcements: t.router({
+    unread: accountScoped.query(({ ctx }) => new AnnouncementService(ctx.service).unread(ctx.userId)),
+    list: accountScoped.input(announcementPageSchema).query(({ ctx, input }) => new AnnouncementService(ctx.service).list(ctx.userId, input.before)),
+    publish: staffScoped('staff').input(publishAnnouncementSchema).mutation(({ ctx, input }) => new AnnouncementService(ctx.service).publish(ctx.userId, input)),
+    dismiss: accountScoped.input(z.object({ id: z.number().int().positive() })).mutation(({ ctx, input }) => new AnnouncementService(ctx.service).dismiss(ctx.userId, input.id)),
+  }),
   scheduleSignals: t.router({ list: authenticated.query(({ ctx }) => new ScheduleSignalsService(ctx.service).list(ctx.userId)) }),
   mods: t.procedure.query(({ ctx }) => ({ accountId: ctx.userId ?? null, overrides: readModOverrides(ctx.service, ctx.userId) })),
   // `staff`: the account's staff role and permissions (src/domain/staff.ts). `adminReady`: it is staff and signed in
@@ -344,12 +350,15 @@ export const appRouter = t.router({
     bans: staff('members.remove').query(({ ctx }) => ctx.service.bans(ctx.userId)),
     liftBan: staffScoped('members.remove').input(z.object({ userId: z.uuid(), schoolId: z.uuid() })).mutation(({ ctx, input }) => { ctx.service.liftBan(ctx.userId, input.userId, input.schoolId); }),
     roles: t.router({
-      list: roleConsole.query(({ ctx }) => listStaff(ctx.service)),
-      candidate: roleConsole.input(z.object({ userId: z.uuid() })).query(({ ctx, input }) => staffCandidate(ctx.service, input.userId)),
-      grant: adminScoped.input(assignmentInput.extend({ expectedGrant: roleExpectation.nullable(), role: z.enum(STAFF_ROLES) }))
+      list: staff('staff').query(({ ctx }) => listStaff(ctx.service, ctx.userId)),
+      search: staff('staff').input(z.object({ query: z.string().trim().max(200) })).query(({ ctx, input }) => searchStaffCandidates(ctx.service, ctx.userId, input.query)),
+      candidate: staff('staff').input(z.object({ userId: z.uuid() })).query(({ ctx, input }) => staffCandidate(ctx.service, ctx.userId, input.userId)),
+      grant: staffScoped('staff').input(assignmentInput.extend({ expectedGrant: roleExpectation.nullable(), role: z.enum(STAFF_ROLES), scope: z.enum(['school','global']).optional() }))
         .mutation(({ ctx, input }) => grantStaffRole(ctx.service, input.userId, input.role, { ...input, actorId: ctx.userId })),
-      revoke: adminScoped.input(assignmentInput)
+      revoke: staffScoped('staff').input(assignmentInput)
         .mutation(({ ctx, input }) => revokeStaffRole(ctx.service, input.userId, { ...input, actorId: ctx.userId })),
+      setBlocked: adminScoped.input(z.object({ userId: z.uuid(), role: z.enum(STAFF_ROLES), blocked: z.boolean() }))
+        .mutation(({ ctx, input }) => setStaffRoleBlocked(ctx.service, ctx.userId, input.userId, input.role, input.blocked)),
     }),
     // Betas are created and changed with `npm run beta` (the beta list is not in git); the console reads them.
     betas: t.router({

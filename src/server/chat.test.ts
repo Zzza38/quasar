@@ -524,7 +524,7 @@ describe('10. what the owner can see', () => {
       'users.moveSchool', 'users.setVerified', 'users.unban', 'users.savePersonal', 'users.saveTask', 'users.deleteTask', 'users.feed',
       'users.removeFriendship', 'users.deleteGlobal', 'users.editGlobal',
       'betas.list', 'betas.removeMember', 'guides', 'saveGuide', 'setGuidePlatforms', 'uploadGuideImage',
-      'roles.list', 'roles.candidate', 'roles.grant', 'roles.revoke',
+      'roles.list', 'roles.candidate', 'roles.grant', 'roles.revoke', 'roles.search', 'roles.setBlocked',
       'logoVotes', 'schoolLogos', 'forceLogo', 'setSchoolLogo', 'removeSchoolLogo', 'revertSchoolLogo',
     ].map(name => `admin.${name}`).sort());
   });

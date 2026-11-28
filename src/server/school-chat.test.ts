@@ -5,6 +5,8 @@ import webpush from 'web-push';
 import { openDatabase, type Db } from './db';
 import { Service } from './service';
 import { GlobalChatService, SchoolChatService, countUnreadSchool, pruneGlobalChat, NOT_IN_SCHOOL } from './global-chat';
+import { readChatImage } from './chat-images';
+import { GroupChatService } from './group-chat';
 import { ChatService, countUnreadChats } from './chat';
 import { CommunityService } from './community';
 import { NotificationService } from './notifications';
@@ -90,7 +92,8 @@ describe('school chat', () => {
     expect(f.rooms.thread(f.owner, f.school.id).room.canModerate).toBe(true);
     expect(f.rooms.edit(f.owner, f.school.id, message.id, 'call me', 'phone number').message).toMatchObject({ body: 'call me', reason: 'phone number' });
     expect(f.rooms.delete(f.owner, f.school.id, message.id, 'still personal').message).toMatchObject({ body: null, deletedBy: 'owner', reason: 'still personal' });
-    const audits = f.db.prepare("SELECT action, detail FROM audit_log WHERE action LIKE 'schoolChat.%' ORDER BY id").all() as { action: string; detail: string }[];
+    const audits = f.db.prepare("SELECT action, school_id, detail FROM audit_log WHERE action LIKE 'schoolChat.%' ORDER BY id").all() as { action: string; school_id: string; detail: string }[];
+    expect(audits.map(row => row.school_id)).toEqual([f.school.id, f.school.id]);
     expect(audits.map(row => [row.action, JSON.parse(row.detail).schoolId])).toEqual([['schoolChat.edit', f.school.id], ['schoolChat.delete', f.school.id]]);
     // A sender deletes their own; a message from another school's room is not found from this one.
     const mine = f.send(f.bob, 'oops');
@@ -116,17 +119,17 @@ describe('school chat', () => {
   describe('delegated room moderation', () => {
     useStaffBetaFixture();
 
-    it('lets managers moderate and read removed messages only in their assigned school room', async () => {
+    it.each(['school-manager', 'chat-moderation'] as const)('lets a school-scoped %s moderate and read removed messages only in the assigned room', async role => {
       const f = fixture();
       const manager = f.nina;
-      grantStaffRole(f.service, manager, 'school-manager');
+      grantStaffRole(f.service, manager, role, undefined, 'school');
       const schoolMessage = f.send(f.alice, 'local post');
       fails(() => f.rooms.delete(manager, f.school.id, schoolMessage.id), 'FORBIDDEN');
       joinStaffBeta(f.service, manager);
-      expect(f.rooms.thread(manager, f.school.id).room).toMatchObject({ canModerate: true, moderator: 'school-manager' });
+      expect(f.rooms.thread(manager, f.school.id).room).toMatchObject({ canModerate: true, moderator: role });
       await f.caller(manager).schoolChat.edit({ accountId: manager, schoolId: f.school.id, messageId: schoolMessage.id, body: 'local', reason: 'Personal information' });
       const removed = f.rooms.delete(manager, f.school.id, schoolMessage.id, 'Spam').message;
-      expect(removed).toMatchObject({ moderatedBy: 'school-manager', removed: { body: 'local' } });
+      expect(removed).toMatchObject({ moderatedBy: role, removed: { body: 'local' } });
 
       f.tick(4000);
       const globalPost = f.global.send(f.bob, randomUUID(), 'global post').message;
@@ -138,6 +141,48 @@ describe('school chat', () => {
       const elsewhere = f.send(f.outsider, 'other school', f.other.id);
       fails(() => f.rooms.delete(manager, f.other.id, elsewhere.id), 'FORBIDDEN');
       fails(() => f.rooms.thread(manager, f.school.id), 'NOT_FOUND');
+    });
+
+    it('ends platform powers as soon as a chat moderator is reassigned to a school', async () => {
+      const f = fixture();
+      const moderator = f.nina;
+      joinStaffBeta(f.service, moderator);
+      grantStaffRole(f.service, moderator, 'chat-moderation');
+      const community = new CommunityService(f.service);
+      community.request(f.alice, moderator);
+      community.respond(moderator, f.alice, true);
+      community.request(f.alice, f.bob);
+      community.respond(f.bob, f.alice, true);
+      const chat = new ChatService(f.service);
+      const direct = chat.send(f.alice, moderator, randomUUID(), 'withdrawn direct message').message;
+      chat.delete(f.alice, moderator, direct.id);
+      const groups = new GroupChatService(f.service);
+      const group = groups.create(f.alice, { name: 'Biology', memberIds: [moderator, f.bob] });
+      const post = groups.send(f.bob, group.id, randomUUID(), 'group post').message;
+      groups.report(f.alice, group.id, { seq: post.seq, category: 'bullying', block: false });
+      const [report] = community.reports(moderator);
+      groups.delete(f.bob, group.id, post.id);
+      expect(chat.thread(moderator, f.alice).messages[0]!.removed?.body).toBe('withdrawn direct message');
+      expect(groups.thread(moderator, group.id).messages[0]!.removed?.body).toBe('group post');
+      const global = f.global.send(f.bob, randomUUID(), 'photo', undefined, 'YQ==').message;
+      f.global.delete(f.bob, global.id);
+      expect(readChatImage(f.service, moderator, 'global', global.seq)).toEqual(Buffer.from('a'));
+
+      grantStaffRole(f.service, moderator, 'chat-moderation', undefined, 'school');
+      const caller = appRouter.createCaller({ service: f.service, userId: moderator, authAt: Date.now() });
+      const denied = { code: 'FORBIDDEN' };
+      expect(chat.thread(moderator, f.alice).messages[0]!.removed).toBeNull();
+      expect(groups.thread(moderator, group.id).messages[0]!.removed).toBeNull();
+      expect(readChatImage(f.service, moderator, 'global', global.seq)).toBeNull();
+      expect(f.global.thread(moderator).room.canModerate).toBe(false);
+      await expect(caller.global.edit({ accountId: moderator, messageId: global.id, body: 'new', reason: '' })).rejects.toMatchObject(denied);
+      await expect(caller.group.delete({ accountId: moderator, groupId: group.id, messageId: post.id })).rejects.toMatchObject(denied);
+      await expect(caller.admin.reports()).rejects.toMatchObject(denied);
+      await expect(caller.admin.showEvidence({ accountId: moderator, reportId: report!.id })).rejects.toMatchObject(denied);
+      await expect(caller.admin.redactMessage({ accountId: moderator, reportId: report!.id, seq: post.seq })).rejects.toMatchObject(denied);
+      await expect(caller.admin.pauseChat({ accountId: moderator, userId: f.bob, days: 1, reason: 'Pause' })).rejects.toMatchObject(denied);
+      await expect(caller.admin.liftChatPause({ accountId: moderator, userId: f.bob })).rejects.toMatchObject(denied);
+      await expect(caller.admin.chatPauses()).rejects.toMatchObject(denied);
     });
 
     it('separates chat cases and local profile reports, including actions taken by case ID', () => {

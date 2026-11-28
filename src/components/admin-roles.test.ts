@@ -37,6 +37,35 @@ describe('staff console presentation', () => {
     expect(html).not.toContain('>Audit log<');
   });
 
+  it('opens school Chat Moderation directly on its room tools', () => {
+    const initial: AdminBoot = { accountId: 'moderator', isAdmin: false, staff: staffAccess('chat-moderation', { schoolId: 'school-1', schoolName: 'Harbor High' }), betas: [beta], adminReady: true };
+    const html = renderToStaticMarkup(createElement(Admin, { initial }));
+    expect(html).toContain('Chat Moderation · Harbor High');
+    expect(html).toContain('href="/messages?room=school"');
+    expect(html).not.toContain('Messaging appeals');
+    expect(html).not.toContain('>People<');
+    expect(html).not.toContain('>Inbox<');
+  });
+
+  it('limits school Support to roster, verification and school corrections', () => {
+    const access = staffAccess('support', { schoolId: 'school-2', schoolName: 'East High' })!;
+    const html = renderToStaticMarkup(createElement(AdminRoles, { access }));
+    expect(html).toContain('East High');
+    expect(html).toContain('Answer corrections for your school');
+    expect(html).toContain('school roster');
+    expect(html).not.toContain('Sign members out');
+    expect(html).not.toContain('Open a member record');
+  });
+
+  it('reserves member role blocks for owners and shows delegated assignments to managers', () => {
+    const props = { accountId: 'user', schools: [], onAccessLost: async () => false };
+    const owner = renderToStaticMarkup(createElement(AdminRoleGrants, props));
+    expect(owner).toContain('Manage role blocks');
+    const manager = renderToStaticMarkup(createElement(AdminRoleGrants, { ...props, managerSchool: 'East High' }));
+    expect(manager).not.toContain('Manage role blocks');
+    expect(manager).toContain('Assign Support or Chat Moderation to members of East High');
+  });
+
   it('keeps the role catalog behind its beta', () => {
     const initial: AdminBoot = { accountId: 'owner', isAdmin: true, staff: staffAccess('owner'), betas: [], adminReady: true };
     expect(renderToStaticMarkup(createElement(Admin, { initial }))).not.toContain('>Staff roles<');

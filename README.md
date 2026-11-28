@@ -167,9 +167,9 @@ The owner is the account in `OWNER_EMAIL` (pinned by `OWNER_GOOGLE_SUB`). Other 
 
 | Role | Can do |
 | --- | --- |
-| School Manager (`school-manager`) | Manage the assigned school's timetable, directory, lunch menu, guides, logos, and proposals. Handle school requests, verification, member reports, removals, and removal appeals. Moderate the school's chat room. School activity shows the last 100 school content and membership changes with their timestamps. |
-| Chat Moderation (`chat-moderation`) | Review chat reports and their evidence, hide reported messages, edit or remove posts in Global chat and their own school room, and handle messaging pauses and pause appeals. |
-| Support (`support`) | Answer correction requests and beta feedback, handle verification, search members, open a member's record with a reason, sign a member out, or forget their reminder browsers. |
+| School Manager (`school-manager`) | Manage the assigned school's timetable, directory, lunch menu, guides, logos, and proposals. Handle school requests, verification, member reports, removals, and removal appeals. Moderate the school's chat room, assign school Support and Chat Moderation, and publish school announcements. School activity shows the last 100 school content and membership changes with their timestamps. |
+| Chat Moderation (`chat-moderation`) | School scope: edit or remove posts and view moderation history in the assigned school room. Platform scope: review chat reports and their evidence, hide reported messages, edit or remove posts in Global chat and their own school room, and handle messaging pauses and pause appeals. |
+| Support (`support`) | School scope: handle school corrections and verification, and search school members. Platform scope: answer correction requests and beta feedback, handle verification, search members, open a member's record with a reason, sign a member out, or forget their reminder browsers. |
 | `administrator` | All staff permissions across schools, including account suspension |
 | `moderator` | Reports and their chat messages, messaging pauses, removals from a school, Global chat moderation, and the appeals against pauses and removals |
 | `schedule-editor` | Correction requests, passed proposals, shared school timetables and names, and every school's class directory and lunch menu. Changing a school's email domains needs verification, because domains verify students |
@@ -178,7 +178,7 @@ These stay with the owner: the whole audit log, betas, mod overrides, editing a 
 
 Staff never act on the owner, on other staff or on themselves. Only the owner sees reports that involve staff, whether as reporter, reported member or a sender in a group report's messages, and only the owner sees requests, removals or record entries about staff. Staff need a Google sign-in from the last two hours, like the owner, for the console and for editing other schools' directories and menus. Their actions go to the audit log and journald with their address and browser. In Global and school chat, a role badge appears beside a staff sender’s name. Members of the Staff roles beta also see these badges in direct messages, group chats, and People. A moderation note names the role that acted ("Removed by a moderator").
 
-Chat text that moderation took out is shown by tier: member, then moderator, administrator and owner. Chat Moderation shares the moderator tier. School managers have that tier inside their assigned school's chat room only. Support and schedule editors count as members here. Only the server censors and removes. A member is never sent what was taken out. The server keeps the rest for those allowed to read it (`src/server/moderation.ts`):
+Chat text that moderation took out is shown by tier: member, then moderator, administrator and owner. Chat Moderation shares the moderator tier. School Managers and school-scoped Chat Moderation have that tier only inside their assigned school's chat room. Support and schedule editors count as members here. Only the server censors and removes. A member is never sent what was taken out. The server keeps the rest for those allowed to read it (`src/server/moderation.ts`):
 
 - **Slurs.** The message is stored censored, plus the text as sent. Only the owner gets that copy. In the bubble, the owner sees the censored word's asterisks, and hovering or focusing them shows the word.
 - **Removed messages.** Moderators and up see a removed message's text and photo inside its dashed outline when whoever removed it ranks at their tier or below. A member's own deletion counts as a member's. A moderator sees what members and moderators removed, an administrator also sees what administrators removed, and the owner sees everything. Members never see removed text. The text is cleared after 30 days like any deleted text.
@@ -186,7 +186,9 @@ Chat text that moderation took out is shown by tier: member, then moderator, adm
 
 The owner can assign, change, and revoke staff roles in **Admin → Staff roles** after joining the Staff roles beta. Search for a member who has signed in at least once, select their account, and choose a role. Each account can hold one role. Changes apply on the next request, and the audit log records who made each change. The server operator can also use the commands below in the production checkout.
 
-School Manager and Chat Moderation require membership in the `staff-roles` beta. Joining the beta alone gives an account no staff permissions. Before granting School Manager, check the member has joined the intended school. The grant records that school's ID. Switching schools never transfers the grant. To assign the new school, grant School Manager again for the new school. The command and `list` both print the assigned school's name and ID.
+The owner chooses platform or school scope for Support and Chat Moderation. School Managers can assign or revoke those two roles for members of their own school. A manager cannot replace a platform grant or another manager. The owner can block specific roles for an account. Blocking removes a matching grant immediately and prevents future assignments at either scope. Unblocking permits a fresh assignment.
+
+Every school-scoped grant and platform Chat Moderation require membership in the `staff-roles` beta. Joining the beta alone gives an account no staff permissions. Before assigning a school role, check the member has joined the intended school. The grant records that school's ID. Switching schools never transfers the grant. To assign the new school, grant the role again there. The command and `list` both print the assigned school's name and ID.
 
 ```sh
 npm run staff -- roles
@@ -194,8 +196,15 @@ npm run staff -- list
 npm run staff -- grant principal@example.com school-manager
 npm run staff -- grant moderator@example.com chat-moderation
 npm run staff -- grant helper@example.com support
+npm run staff -- grant helper@example.com support school
 npm run staff -- revoke principal@example.com
 ```
+
+## Announcements
+
+Members of the private `announcements` beta see a board in School and a popup for unread announcements. Dismissing a popup saves that choice for the signed-in account across devices. The post stays on the board. Platform posts reach every enrolled member. School posts appear only to enrolled members who currently belong to that school.
+
+The owner can publish to the whole platform or to one school. A School Manager enrolled in both Announcements and Staff roles can publish to their assigned school. Publishing requires a recent Google sign-in.
 
 ## Continuous integration
 

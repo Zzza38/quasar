@@ -279,16 +279,17 @@ export class CommunityService {
   verificationRequests(adminId: string) {
     const scope = this.service.requiredStaffScope(adminId, 'verification');
     return (this.db.prepare(`SELECT r.id, r.user_id userId, r.school_id schoolId, r.proof, r.created_at createdAt, u.display_name displayName, u.full_name fullName, u.email, s.name schoolName
-      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL AND (? IS NULL OR r.school_id=?) ORDER BY r.created_at`).all(scope, scope) as
+      FROM verification_requests r JOIN users u ON u.id=r.user_id JOIN schools s ON s.id=r.school_id WHERE r.resolved_at IS NULL AND (@scope IS NULL OR (r.school_id=@scope AND u.school_id=@scope)) ORDER BY r.created_at`).all({ scope }) as
       { id: string; userId: string; schoolId: string; proof: string; createdAt: string; displayName: string; fullName: string; email: string; schoolName: string }[])
       .filter(row => this.service.canTarget(adminId, row.userId));
   }
   decideVerification(adminId: string, requestId: string, approve: boolean): void {
     this.service.permit(adminId, 'verification');
     const banned = this.db.transaction(() => {
-      const request = this.db.prepare('SELECT user_id, school_id FROM verification_requests WHERE id=? AND resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string } | undefined;
+      const request = this.db.prepare('SELECT r.user_id, r.school_id, u.school_id currentSchool FROM verification_requests r JOIN users u ON u.id=r.user_id WHERE r.id=? AND r.resolved_at IS NULL').get(requestId) as { user_id: string; school_id: string; currentSchool: string | null } | undefined;
       if (!request) fail('NOT_FOUND', 'This request was already handled.');
       this.service.requireSchoolScope(adminId, request.school_id, 'verification');
+      this.service.requireSchoolScope(adminId, request.currentSchool, 'verification');
       this.service.guardTarget(adminId, request!.user_id);
       // A ban clears the student's verification, so a request left open from before the removal is declined, never approved.
       const banned = approve && this.isBanned(request.user_id, request.school_id);

@@ -43,6 +43,8 @@ const SCHOOL_ACTIVITY = {
   'proposal.decline': 'Timetable proposal declined',
   'support.renameSchool': 'School details updated',
   'school.menu': 'Lunch menu source changed',
+  'schoolChat.edit': 'School chat message edited',
+  'schoolChat.delete': 'School chat message removed',
   'school.logoSet': 'School logo set',
   'school.logoRemoved': 'School logo removed',
   'school.logoReverted': 'School logo reverted',
@@ -262,8 +264,9 @@ export class SupportService {
   }
 
   schoolActivity(managerId: string) {
-    const schoolId = this.service.requiredStaffScope(managerId);
-    if (!schoolId) return fail('FORBIDDEN', 'School activity requires a School Manager role.');
+    const access = this.service.staffAccess(managerId);
+    if (access?.role !== 'school-manager' || !access.schoolId) return fail('FORBIDDEN', 'School activity requires a School Manager role.');
+    const schoolId = access.schoolId;
     const actions = Object.keys(SCHOOL_ACTIVITY);
     const rows = this.db.prepare(`SELECT a.id, a.action, a.created_at AS createdAt, s.name AS schoolName
       FROM audit_log a JOIN schools s ON s.id=a.school_id

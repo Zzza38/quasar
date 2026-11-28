@@ -12,10 +12,11 @@ import type { Service } from './service';
 /** The rank stored with a removal or an edit. 'member' says a member (or support) did it, so it never falls back. */
 export type ActorRank = ModerationRank | 'member';
 
-/** A school manager has a moderation tier only inside the school room named in the grant. */
+/** A school grant reveals moderation history only in that school's room. */
 function chatRank(service: Service, actorId: string, schoolId?: string): StaffRank | null {
-  const rank = service.staffRank(actorId);
-  return rank === 'school-manager' && (!schoolId || service.managedSchoolId(actorId) !== schoolId) ? null : rank;
+  const access = service.staffAccess(actorId);
+  if (!access || (access.schoolId && access.schoolId !== schoolId)) return null;
+  return access.role;
 }
 export function actorRank(service: Service, actorId: string, schoolId?: string): ActorRank {
   return moderationRank(chatRank(service, actorId, schoolId)) ?? 'member';

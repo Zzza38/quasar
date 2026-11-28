@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { browserTimeZone, formatDate, formatTime, instantParts } from '@/lib/format';
-import { ROLE_PERMISSIONS, STAFF_LABELS, type StaffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
+import { ROLE_PERMISSIONS, STAFF_LABELS, staffAccess, type StaffAccess, type StaffPermission, type StaffRank } from '@/domain/staff';
+import { Beta } from './betas';
 import { Icon, type IconName } from './icon';
-import { Button, Callout, Hint, Panel, Section } from './primitives';
+import { Button, Callout, Hint, Panel, Section, Segmented } from './primitives';
 
 const featured = ['school-manager', 'chat-moderation', 'support'] as const;
 const icons: Record<StaffRank, IconName> = {
@@ -26,12 +27,19 @@ const actions: Record<StaffPermission, string> = {
   'members.suspend': 'Suspend or restore accounts',
 };
 
-function RoleCard({ role, permissions, schoolName }: { role: StaffRank; permissions: readonly StaffPermission[]; schoolName?: string | null }) {
-  const scope = role === 'school-manager' ? schoolName || 'One school' : 'Across Quasar';
+function RoleCard({ role, permissions, schoolName, preview = false }: { role: StaffRank; permissions: readonly StaffPermission[]; schoolName?: string | null; preview?: boolean }) {
+  const [previewScope, setPreviewScope] = useState<'school' | 'global'>('school');
+  const showSelector = preview && (role === 'support' || role === 'chat-moderation');
+  const scoped = !!schoolName || role === 'school-manager' || (showSelector && previewScope === 'school');
+  const scope = scoped ? schoolName || 'One school' : 'Across Quasar';
+  const displayed = showSelector && scoped ? staffAccess(role, { schoolId: 'preview', schoolName: 'One school' })!.permissions : permissions;
   const roleActions: Partial<Record<StaffPermission, string>> = role === 'school-manager' ? {
     reports: 'Review school member reports and moderate the school chat room',
     requests: 'Answer school correction requests',
     'members.remove': 'Remove members, lift removals and decide removal appeals',
+  } : role === 'support' && scoped ? {
+    requests: 'Answer corrections for your school',
+    'members.search': 'Find members on your school roster',
   } : role === 'chat-moderation' ? {
     reports: 'Review chat reports, open their evidence and hide reported messages',
     'global.moderate': 'Edit or remove posts in Global and your school chat',
@@ -41,10 +49,18 @@ function RoleCard({ role, permissions, schoolName }: { role: StaffRank; permissi
       <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary-soft-foreground"><Icon name={icons[role]} size={19} /></span>
       <div className="min-w-0"><h3 className="text-base font-bold">{STAFF_LABELS[role]}</h3><Hint className="break-words">{scope}</Hint></div>
     </div>
+    {showSelector && <Segmented<'school' | 'global'> size="sm" label={`${STAFF_LABELS[role]} permission scope`} value={previewScope} onChange={setPreviewScope}
+      options={[{ value: 'school', label: 'One school' }, { value: 'global', label: 'Across Quasar' }]} />}
     <ul className="grid gap-2 text-sm leading-snug">
-      {permissions.map(permission => <li key={permission} className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />{roleActions[permission] ?? actions[permission]}</li>)}
-      {role === 'school-manager' && <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Read the school activity log</li>}
+      {displayed.map(permission => <li key={permission} className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />{roleActions[permission] ?? actions[permission]}</li>)}
+      {role === 'chat-moderation' && scoped && <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Edit or remove school room messages and review their edit and removal history</li>}
+      {role === 'school-manager' && <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Assign school Support and Chat Moderation to members of the school</li>}
+      {role === 'school-manager' && <>
+        <li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Read the school activity log</li>
+        <Beta id="announcements"><li className="flex items-start gap-2"><Icon name="check" size={14} className="mt-0.5 text-muted-foreground" />Publish announcements to the school board</li></Beta>
+      </>}
     </ul>
+    {!preview && role === 'chat-moderation' && scoped && <a className="justify-self-start text-sm font-semibold text-primary underline underline-offset-4" href="/messages?room=school">Open school chat</a>}
   </Panel>;
 }
 
@@ -53,12 +69,12 @@ export function AdminRoles({ access }: { access: StaffAccess }) {
     <RoleCard role={access.role} schoolName={access.schoolName} permissions={access.permissions} />
   </Section>;
   return <Section id="staff-access-title" title="Staff roles" icon="users" description="Each account can hold one staff role.">
-    <div className="grid items-stretch gap-3 md:grid-cols-3">{featured.map(role => <RoleCard key={role} role={role} permissions={ROLE_PERMISSIONS[role]} />)}</div>
+    <div className="grid items-stretch gap-3 md:grid-cols-3">{featured.map(role => <RoleCard key={role} role={role} preview permissions={ROLE_PERMISSIONS[role]} />)}</div>
     <details className="rounded-xl border border-border p-3">
       <summary className="cursor-pointer text-sm font-semibold">Administrator, Moderator and Schedule editor</summary>
       <div className="mt-3 grid gap-3 md:grid-cols-3">{(['administrator', 'moderator', 'schedule-editor'] as const).map(role => <RoleCard key={role} role={role} permissions={ROLE_PERMISSIONS[role]} />)}</div>
     </details>
-    <Hint>A School Manager grant records the school their account belongs to at the time.</Hint>
+    <Hint>School roles are pinned to the member’s school at assignment. Leaving that school pauses their access.</Hint>
   </Section>;
 }
 
