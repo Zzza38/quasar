@@ -119,7 +119,9 @@ const betas = (service: Service) => new BetaService(service);
 const guides = (service: Service) => new SetupGuideService(service);
 export const appRouter = t.router({
   announcements: t.router({
-    cancel: staffScoped('staff').input(z.object({ id: z.number().int().positive() })).mutation(({ ctx, input }) => new AnnouncementService(ctx.service).cancel(ctx.userId, input.id)),
+    management: staffScoped('staff').input(announcementPageSchema).query(({ ctx, input }) => new AnnouncementService(ctx.service).list(ctx.userId, input.before, true)),
+    remove: staffScoped('staff').input(z.object({ id: z.number().int().positive() })).mutation(({ ctx, input }) => new AnnouncementService(ctx.service).withdraw(ctx.userId, input.id, 'remove')),
+    cancel: staffScoped('staff').input(z.object({ id: z.number().int().positive() })).mutation(({ ctx, input }) => new AnnouncementService(ctx.service).withdraw(ctx.userId, input.id, 'cancel')),
     upcoming: staffScoped('staff').query(({ ctx }) => new AnnouncementService(ctx.service).upcoming(ctx.userId)),
     unread: accountScoped.query(({ ctx }) => new AnnouncementService(ctx.service).unread(ctx.userId)),
     list: accountScoped.input(announcementPageSchema).query(({ ctx, input }) => new AnnouncementService(ctx.service).list(ctx.userId, input.before)),

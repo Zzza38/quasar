@@ -141,7 +141,7 @@ describe('announcements', () => {
     const f = fixture();
     const when = '2030-01-02T12:00:00.000Z';
     const global = await f.post(f.owner, null, 'Platform', when);
-    const local = await f.post(f.owner, f.east, 'East', when);
+    const local = await f.post(f.manager, f.east, 'East', when);
     const away = await f.post(f.owner, f.west, 'West', '2030-01-02T11:00:00.000Z');
     const queue = (userId: string) => f.api(userId).upcoming({ accountId: userId });
     expect((await queue(f.owner)).map(row => row.id)).toEqual([away.id, global.id, local.id]);
@@ -163,6 +163,61 @@ describe('announcements', () => {
     expect((await f.list(f.student)).items.map(row => row.id)).toEqual([global.id]);
     expect((await f.unread(f.student))?.id).toBe(global.id);
     await expect(f.api(f.student).dismiss({ accountId: f.student, id: local.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('lets the owner manage all published posts and managers only their own at their assigned school', async () => {
+    const f = fixture();
+    grantStaffRole(f.service, f.student, 'school-manager');
+    joinStaffBeta(f.service, f.student);
+    const input = { accountId: f.manager, requestId: randomUUID(), schoolId: f.east, title: 'Assembly', body: 'Meet in the gym.' };
+    const mine = await f.api(f.manager).publish(input);
+    const theirs = await f.post(f.student, f.east, 'After school pickup');
+    const global = await f.post(f.owner, null, 'Welcome');
+    const away = await f.post(f.owner, f.west, 'Field trip');
+    const pending = await f.post(f.student, f.east, 'Tomorrow', new Date(Date.now() + 60_000).toISOString());
+    const manage = (id: string) => f.api(id).management({ accountId: id });
+    const remove = (id: string, post: number) => f.api(id).remove({ accountId: id, id: post });
+    expect((await manage(f.owner)).items.map(row => row.id)).toEqual([away.id, global.id, theirs.id, mine.id]);
+    expect((await f.list(f.owner)).items.map(row => row.id)).toEqual([global.id]);
+    expect((await manage(f.manager)).items.map(row => row.id)).toEqual([mine.id]);
+    expect((await f.list(f.manager)).items.map(row => [row.id, row.canDelete])).toEqual([[global.id, false], [theirs.id, false], [mine.id, true]]);
+    expect((await f.list(f.other)).items.every(row => !row.canDelete)).toBe(true);
+    expect((await f.api(f.manager).upcoming({ accountId: f.manager })).map(row => [row.id, row.canDelete])).toEqual([[pending.id, false]]);
+    await expect(f.api(f.manager).cancel({ accountId: f.manager, id: pending.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(remove(f.student, pending.id)).rejects.toMatchObject({ code: 'CONFLICT' });
+    for (const target of [theirs.id, away.id, global.id]) await expect(remove(f.manager, target)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    const stale = f.api(f.manager, ADMIN_SIGN_IN_MAX_AGE_MS + 1000);
+    await expect(stale.management({ accountId: f.manager })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(stale.remove({ accountId: f.manager, id: mine.id })).rejects.toMatchObject({ message: ADMIN_REAUTH_MESSAGE });
+    await expect(f.api(f.manager).remove({ accountId: f.student, id: theirs.id })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    for (const role of ['support', 'chat-moderation', 'administrator']) {
+      grantStaffRole(f.service, f.other, role);
+      joinStaffBeta(f.service, f.other);
+      await expect(manage(f.other)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(remove(f.other, away.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await remove(f.manager, mine.id);
+    await remove(f.manager, mine.id);
+    await expect(f.api(f.manager).publish(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await remove(f.owner, theirs.id);
+    await remove(f.owner, away.id);
+    await f.api(f.owner).cancel({ accountId: f.owner, id: pending.id });
+    expect((await f.list(f.student)).items.map(row => row.id)).toEqual([global.id]);
+    expect((await f.unread(f.other))?.id).toBe(global.id);
+    expect((await manage(f.owner)).items.map(row => row.id)).toEqual([global.id]);
+    await expect(f.api(f.manager).dismiss({ accountId: f.manager, id: mine.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(f.db.prepare("SELECT count(*) AS n FROM audit_log WHERE action='announcement.remove' AND actor_id=? AND school_id=?").get(f.manager, f.east)).toEqual({ n: 1 });
+  });
+
+  it('retains published pagination after the last item on a page is deleted', async () => {
+    const f = fixture();
+    for (let i = 0; i < 32; i++) await f.post(f.manager, f.east, 'Notice ' + i);
+    const first = await f.api(f.owner).management({ accountId: f.owner });
+    expect(first.items).toHaveLength(30);
+    await f.api(f.owner).remove({ accountId: f.owner, id: first.nextBefore! });
+    const older = await f.api(f.owner).management({ accountId: f.owner, before: first.nextBefore! });
+    expect(older.items.map(row => row.title)).toEqual(['Notice 1', 'Notice 0']);
+    expect((await f.list(f.student, first.nextBefore!)).items.map(row => row.title)).toEqual(['Notice 1', 'Notice 0']);
   });
 
   it('uses publication time and the ID tie breaker across page boundaries', async () => {

@@ -15,18 +15,20 @@ export const publishAnnouncementSchema = z.object({
 
 type Row = {
   id: number; schoolId: string | null; schoolName: string | null;
-  authorName: string; title: string; body: string; createdAt: string; publishAt: string; dismissed: number;
+  authorName: string; title: string; body: string; createdAt: string; publishAt: string; dismissed: number; canDelete: number;
 };
 
 const publication = 'coalesce(a.publish_at, a.created_at)';
 const audience = '(a.school_id IS NULL OR a.school_id=@schoolId)';
-const published = `${audience} AND a.cancelled_at IS NULL AND ${publication}<=@now`;
+// cancelled_at is the withdrawal timestamp for both cancelled and deleted posts.
+const published = `a.cancelled_at IS NULL AND ${publication}<=@now`;
+const manageable = '(@isOwner=1 OR (a.school_id=@managerSchool AND a.author_id=@userId))';
 const announcementRows = `SELECT a.id, a.school_id AS schoolId, s.name AS schoolName, coalesce(nullif(u.display_name, ''), 'Quasar staff') AS authorName, a.title, a.body, a.created_at AS createdAt, ${publication} AS publishAt,
-    d.announcement_id IS NOT NULL AS dismissed
+    d.announcement_id IS NOT NULL AS dismissed, coalesce(${manageable}, 0) AS canDelete
   FROM announcements a JOIN users u ON u.id=a.author_id LEFT JOIN schools s ON s.id=a.school_id
   LEFT JOIN announcement_dismissals d ON d.announcement_id=a.id AND d.user_id=@userId`;
 
-function item(row: Row) { return { ...row, dismissed: !!row.dismissed }; }
+function item(row: Row) { return { ...row, dismissed: !!row.dismissed, canDelete: !!row.canDelete }; }
 
 export class AnnouncementService {
   constructor(private readonly service: Service) {}
@@ -41,20 +43,22 @@ export class AnnouncementService {
     return joined.schoolId;
   }
 
-  /** A null scope here belongs only to the owner. */
-  private publisherScope(userId: string) {
+  private authority(userId: string, publisherOnly = false) {
     const access = this.service.staffAccess(userId);
-    if (access?.role === 'owner') return null;
-    if (access?.role === 'school-manager' && access.schoolId) return access.schoolId;
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner or the assigned School Manager can post to this audience.' });
+    const isOwner = access?.role === 'owner';
+    const managerSchool = access?.role === 'school-manager' ? access.schoolId ?? null : null;
+    if (publisherOnly && !isOwner && !managerSchool) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner or an assigned School Manager can manage announcements.' });
+    }
+    return { userId, isOwner: Number(isOwner), managerSchool };
   }
 
   upcoming(userId: string) {
     return this.db.transaction(() => {
       this.requireEnrollment(userId);
-      const scope = this.publisherScope(userId);
-      const rows = this.db.prepare(`${announcementRows} WHERE a.cancelled_at IS NULL AND a.publish_at>@now AND (@scope IS NULL OR a.school_id=@scope)
-        ORDER BY a.publish_at, a.id LIMIT 100`).all({ userId, scope, now: new Date().toISOString() }) as Row[];
+      const authority = this.authority(userId, true);
+      const rows = this.db.prepare(`${announcementRows} WHERE a.cancelled_at IS NULL AND a.publish_at>@now AND (@isOwner=1 OR a.school_id=@managerSchool)
+        ORDER BY a.publish_at, a.id LIMIT 100`).all({ ...authority, now: new Date().toISOString() }) as Row[];
       return rows.map(item);
     })();
   }
@@ -62,20 +66,23 @@ export class AnnouncementService {
   unread(userId: string) {
     return this.db.transaction(() => {
       const schoolId = this.requireEnrollment(userId);
-      const row = this.db.prepare(`${announcementRows} WHERE ${published} AND d.announcement_id IS NULL ORDER BY ${publication} DESC, a.id DESC LIMIT 1`)
-        .get({ userId, schoolId, now: new Date().toISOString() }) as Row | undefined;
+      const row = this.db.prepare(`${announcementRows} WHERE ${audience} AND ${published} AND d.announcement_id IS NULL ORDER BY ${publication} DESC, a.id DESC LIMIT 1`)
+        .get({ ...this.authority(userId), schoolId, now: new Date().toISOString() }) as Row | undefined;
       return row ? item(row) : null;
     })();
   }
 
-  list(userId: string, before?: number) {
+  list(userId: string, before?: number, management = false) {
     return this.db.transaction(() => {
       const schoolId = this.requireEnrollment(userId);
-      // Keep the ID cursor older clients send. Resolve its (release time, ID) within this reader's audience.
-      const rows = this.db.prepare(`${announcementRows} WHERE ${published} AND (@before IS NULL OR
-        (${publication}, a.id)<(SELECT ${publication}, a.id FROM announcements a WHERE a.id=@before AND ${published}))
+      const authority = this.authority(userId, management);
+      const scope = management ? manageable : audience;
+      // A deleted page boundary keeps its place. A cancelled post that never went live cannot act as a cursor.
+      const visibleCursor = `${scope} AND ${publication}<=@now AND (a.cancelled_at IS NULL OR a.cancelled_at>=${publication})`;
+      const rows = this.db.prepare(`${announcementRows} WHERE ${scope} AND ${published} AND (@before IS NULL OR
+        (${publication}, a.id)<(SELECT ${publication}, a.id FROM announcements a WHERE a.id=@before AND ${visibleCursor}))
         ORDER BY ${publication} DESC, a.id DESC LIMIT @limit`)
-        .all({ userId, schoolId, now: new Date().toISOString(), before: before ?? null, limit: pageSize + 1 }) as Row[];
+        .all({ ...authority, schoolId, now: new Date().toISOString(), before: before ?? null, limit: pageSize + 1 }) as Row[];
       const items = rows.slice(0, pageSize).map(item);
       return { items, nextBefore: rows.length > pageSize ? items.at(-1)!.id : null };
     })();
@@ -85,15 +92,15 @@ export class AnnouncementService {
     const input = publishAnnouncementSchema.parse(raw);
     return this.db.transaction(() => {
       this.requireEnrollment(userId);
-      const scope = this.publisherScope(userId);
-      if (scope !== null && scope !== input.schoolId) {
+      const authority = this.authority(userId, true);
+      if (!authority.isOwner && authority.managerSchool !== input.schoolId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner or the assigned School Manager can post to this audience.' });
       }
       if (input.schoolId) this.service.school(input.schoolId);
       const existing = this.db.prepare('SELECT id, school_id, title, body, publish_at, cancelled_at FROM announcements WHERE author_id=? AND request_id=?')
         .get(userId, input.requestId) as { id: number; school_id: string | null; title: string; body: string; publish_at: string | null; cancelled_at: string | null } | undefined;
       if (existing) {
-        if (existing.cancelled_at) throw new TRPCError({ code: 'CONFLICT', message: 'This scheduled announcement was cancelled.' });
+        if (existing.cancelled_at) throw new TRPCError({ code: 'CONFLICT', message: 'This announcement was withdrawn.' });
         if (existing.school_id !== input.schoolId || existing.title !== input.title || existing.body !== input.body || existing.publish_at !== (input.publishAt ?? null)) {
           throw new TRPCError({ code: 'CONFLICT', message: 'This post request already published a different announcement.' });
         }
@@ -112,19 +119,21 @@ export class AnnouncementService {
     }).immediate();
   }
 
-  cancel(userId: string, id: number) {
+  withdraw(userId: string, id: number, action: 'cancel' | 'remove') {
     this.db.transaction(() => {
       this.requireEnrollment(userId);
-      const scope = this.publisherScope(userId);
-      const row = this.db.prepare(`SELECT school_id, publish_at, cancelled_at FROM announcements
-        WHERE id=@id AND (@scope IS NULL OR school_id=@scope)`).get({ id, scope }) as
-        { school_id: string | null; publish_at: string | null; cancelled_at: string | null } | undefined;
-      if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Scheduled announcement not found.' });
-      if (row.cancelled_at) return;
+      const authority = this.authority(userId, true);
+      const row = this.db.prepare(`SELECT a.school_id, ${publication} AS publishAt, a.cancelled_at FROM announcements a
+        WHERE a.id=@id AND ${manageable}`).get({ id, ...authority }) as
+        { school_id: string | null; publishAt: string; cancelled_at: string | null } | undefined;
+      if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Announcement not found.' });
       const now = new Date().toISOString();
-      if (!row.publish_at || row.publish_at <= now) throw new TRPCError({ code: 'CONFLICT', message: 'This announcement has already been published.' });
+      const wasScheduled = row.publishAt > (row.cancelled_at ?? now);
+      if (action === 'cancel' && !wasScheduled) throw new TRPCError({ code: 'CONFLICT', message: 'This announcement has already been published.' });
+      if (action === 'remove' && wasScheduled) throw new TRPCError({ code: 'CONFLICT', message: 'Only published announcements can be deleted.' });
+      if (row.cancelled_at) return;
       this.db.prepare('UPDATE announcements SET cancelled_at=? WHERE id=?').run(now, id);
-      this.service.audit(userId, 'announcement.cancel', row.school_id, { announcementId: id, publishAt: row.publish_at }, now);
+      this.service.audit(userId, 'announcement.' + action, row.school_id, { announcementId: id, publishAt: row.publishAt }, now);
     }).immediate();
   }
 
@@ -132,7 +141,7 @@ export class AnnouncementService {
     this.db.transaction(() => {
       const schoolId = this.requireEnrollment(userId);
       const now = new Date().toISOString();
-      const visible = this.db.prepare(`SELECT 1 FROM announcements a WHERE a.id=@id AND ${published}`)
+      const visible = this.db.prepare(`SELECT 1 FROM announcements a WHERE a.id=@id AND ${audience} AND ${published}`)
         .get({ id, schoolId, now });
       if (!visible) throw new TRPCError({ code: 'NOT_FOUND', message: 'Announcement not found.' });
       this.db.prepare('INSERT OR IGNORE INTO announcement_dismissals(user_id,announcement_id,dismissed_at) VALUES(?,?,?)')

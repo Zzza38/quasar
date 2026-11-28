@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { TRPCClientError } from '@trpc/client';
 import { signIn } from 'next-auth/react';
 import { api, errorMessage, type RouterOutput } from '@/client/api';
 import { announcementTime } from '@/domain/announcement-time';
@@ -90,21 +91,73 @@ function ComposeAnnouncement({ state, owner, onClose, onPublished }: { state: Ap
   </Modal>;
 }
 
-function CancelAnnouncement({ accountId, item, onClose, onCanceled }: { accountId: string; item: Announcement; onClose: () => void; onCanceled: () => void }) {
+function RemoveAnnouncement({ accountId, item, scheduled, onClose, onRemoved }: { accountId: string; item: Announcement; scheduled: boolean; onClose: () => void; onRemoved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const cancel = async () => {
+  const remove = async () => {
     if (busy) return;
     setBusy(true); setError('');
     try {
-      await api.announcements.cancel.mutate({ accountId, id: item.id });
-      onCanceled();
+      const input = { accountId, id: item.id };
+      if (scheduled) await api.announcements.cancel.mutate(input);
+      else await api.announcements.remove.mutate(input);
+      onRemoved();
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   };
-  return <Modal open title="Cancel scheduled announcement?" onClose={onClose} busy={busy}
-    footer={<><Button onClick={onClose} disabled={busy}>Keep scheduled</Button><Button variant="danger" busy={busy} onClick={() => void cancel()}>Cancel announcement</Button></>}>
-    <p className="wrap-anywhere text-sm">Cancel “{item.title}” for {item.schoolName ?? 'All Quasar'} before it goes live?</p>
+  return <Modal open title={scheduled ? 'Cancel scheduled announcement?' : 'Delete announcement?'} onClose={onClose} busy={busy}
+    footer={<><Button onClick={onClose} disabled={busy}>{scheduled ? 'Keep scheduled' : 'Keep announcement'}</Button>
+      <Button variant="danger" busy={busy} onClick={() => void remove()}>{scheduled ? 'Cancel announcement' : 'Delete announcement'}</Button></>}>
+    <p className="wrap-anywhere text-sm">{scheduled ? `Cancel "${item.title}" for ${item.schoolName ?? 'All Quasar'} before it goes live?` :
+      `Remove "${item.title}" from the board and popups for ${item.schoolName ?? 'All Quasar'}?`}</p>
     {error && <AnnouncementError message={error} />}
+  </Modal>;
+}
+
+function PublishedAnnouncement({ item, accountId, online, onRemoved }: { item: Announcement; accountId: string; online: boolean; onRemoved: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  return <article className="grid gap-3 rounded-xl border bg-card p-4">
+    <AnnouncementDetails item={item} heading />
+    {item.canDelete && <Button size="sm" variant="ghost" icon="trash" className="w-fit text-destructive" disabled={!online} onClick={() => setConfirm(true)}>Delete announcement</Button>}
+    {confirm && item.canDelete && <RemoveAnnouncement accountId={accountId} item={item} scheduled={false} onClose={() => setConfirm(false)} onRemoved={() => { setConfirm(false); onRemoved(); }} />}
+  </article>;
+}
+
+function PublishedManagement({ accountId, online, onClose, onRemoved }: { accountId: string; online: boolean; onClose: () => void; onRemoved: () => void }) {
+  const [before, setBefore] = useState<number>();
+  const [page, setPage] = useState<BoardPage | null>(null);
+  const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    if (!online) { setPage(null); return; }
+    let active = true;
+    let busy = false;
+    const refresh = async () => {
+      if (busy || document.visibilityState === 'hidden') return;
+      busy = true;
+      try {
+        const result = await api.announcements.management.query({ accountId, before });
+        if (active) { setPage(result); setError(''); }
+      } catch (err) {
+        if (active) { setPage(null); setError(errorMessage(err)); }
+      } finally { busy = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 60000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { active = false; clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [accountId, before, online, revision]);
+  const turnPage = (cursor?: number) => { setPage(null); setError(''); setBefore(cursor); };
+  return <Modal open wide title="Published announcements" description="Posts from all schools and across Quasar." onClose={onClose}>
+    {!online ? <Callout>Connect to manage published announcements.</Callout> : error ? <><AnnouncementError message={error} /><Button size="sm" onClick={() => setRevision(value => value + 1)}>Retry</Button></>
+      : !page ? <p role="status">Loading announcements…</p> : page.items.length === 0 ? <EmptyState title="No published announcements" icon="bell" /> :
+      page.items.map(item => <PublishedAnnouncement key={item.id} item={item} accountId={accountId} online={online} onRemoved={() => {
+        setPage(null); setBefore(undefined); setRevision(value => value + 1); onRemoved();
+      }} />)}
+    {online && <div className="flex flex-wrap gap-2">
+      {before !== undefined && <Button size="sm" onClick={() => turnPage()}>Newest announcements</Button>}
+      {page?.nextBefore != null && <Button size="sm" onClick={() => turnPage(page.nextBefore!)}>Older announcements</Button>}
+    </div>}
   </Modal>;
 }
 
@@ -118,6 +171,7 @@ export function AnnouncementBoard({ state }: { state: AppState }) {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [compose, setCompose] = useState(false);
+  const [manage, setManage] = useState(false);
   const [published, setPublished] = useState('');
   const generation = useRef(0);
   const lastCursor = useRef<number | undefined>(undefined);
@@ -134,16 +188,19 @@ export function AnnouncementBoard({ state }: { state: AppState }) {
           .then(rows => ({ rows, error: '' }), err => ({ rows: [], error: errorMessage(err) })) : null,
       ]);
       if (generation.current !== request) return;
-      if (scheduledItems) { setUpcoming(scheduledItems.rows); setUpcomingError(scheduledItems.error); }
-      setPage(current => {
-        if (before !== undefined) return { ...page, items: [...current.items, ...page.items] };
-        // Preserve older pages if the refreshed page still overlaps the loaded history.
-        const tail = page.items.at(-1);
-        const overlap = tail ? current.items.findIndex(item => item.id === tail.id) : -1;
-        if (overlap < 0) return page;
-        return { items: [...page.items, ...current.items.slice(overlap + 1)], nextBefore: current.nextBefore };
-      });
-    } catch (err) { if (generation.current === request) setError(errorMessage(err)); }
+      if (scheduledItems) {
+        setUpcoming(scheduledItems.rows); setUpcomingError(scheduledItems.error);
+        setCancel(current => current && scheduledItems.rows.some(item => item.id === current.id && item.canDelete) ? current : null);
+      }
+      setPage(current => before === undefined ? page : { ...page, items: [...current.items, ...page.items] });
+    } catch (err) {
+      if (generation.current === request) {
+        setError(errorMessage(err));
+        if (err instanceof TRPCClientError && (err.data?.code === 'FORBIDDEN' || err.data?.code === 'UNAUTHORIZED')) {
+          setPage({ items: [], nextBefore: null }); setUpcoming([]); setCancel(null); setManage(false);
+        }
+      }
+    }
     finally { if (generation.current === request) { pending.current = false; setBusy(false); } }
   }, [user.id, canPublish]);
   useEffect(() => {
@@ -164,21 +221,25 @@ export function AnnouncementBoard({ state }: { state: AppState }) {
   }, [load, state.online]);
   return <Section id="announcement-board" title="Announcements" icon="bell" description={`Updates for ${school.name} and everyone on Quasar.`}
     action={canPublish && <Button size="sm" variant="primary" disabled={!state.online} onClick={() => setCompose(true)}>New announcement</Button>}>
+    {isAdmin && <Button size="sm" className="w-fit" variant="secondary" onClick={() => setManage(true)} disabled={!state.online}>Manage published announcements</Button>}
+    {manage && isAdmin && <PublishedManagement accountId={user.id} online={state.online} onClose={() => setManage(false)} onRemoved={() => { setPublished('Announcement deleted.'); void load(); }} />}
     {published && <Callout tone="success" role="status">{published}</Callout>}
     {canPublish && upcomingError && <AnnouncementError message={upcomingError} />}
     {canPublish && upcoming.length > 0 && <section aria-labelledby="upcoming-announcements" className="grid gap-3">
       <h3 id="upcoming-announcements" className="font-bold">Upcoming announcements</h3>
       {upcoming.map(item => <article key={item.id} className="grid gap-3 rounded-xl border border-dashed bg-muted/40 p-4">
         <AnnouncementDetails item={item} heading />
-        <Button size="sm" variant="ghost" className="w-fit" disabled={!state.online} onClick={() => setCancel(item)}>Cancel announcement</Button>
+        {item.canDelete && <Button size="sm" variant="ghost" className="w-fit" disabled={!state.online} onClick={() => setCancel(item)}>Cancel announcement</Button>}
       </article>)}
     </section>}
     {!state.online ? <Callout>Connect to see the latest announcements.</Callout> : error ? <Callout tone="danger" role="alert" actions={<Button size="sm" onClick={() => void load(lastCursor.current)}>Retry</Button>}>{error}</Callout>
       : busy && items.length === 0 ? <p role="status" className="text-sm text-muted-foreground">Loading announcements…</p>
       : items.length === 0 && <EmptyState icon="bell" title={upcoming.length && canPublish ? "No published announcements yet" : "No announcements yet"}>New posts will appear here.</EmptyState>}
-    {items.map(item => <article key={item.id} className="rounded-xl border bg-card p-4"><AnnouncementDetails item={item} heading /></article>)}
+    {items.map(item => <PublishedAnnouncement key={item.id} item={item} accountId={user.id} online={state.online} onRemoved={() => {
+      setPage(current => ({ ...current, items: current.items.filter(entry => entry.id !== item.id) })); setPublished('Announcement deleted.'); void load();
+    }} />)}
     {next !== null && <div><Button size="sm" busy={busy} disabled={!state.online} onClick={() => void load(next)}>Older announcements</Button></div>}
-    {cancel && canPublish && <CancelAnnouncement accountId={user.id} item={cancel} onClose={() => setCancel(null)} onCanceled={() => {
+    {cancel?.canDelete && canPublish && <RemoveAnnouncement scheduled accountId={user.id} item={cancel} onClose={() => setCancel(null)} onRemoved={() => {
       setUpcoming(current => current.filter(item => item.id !== cancel.id)); setCancel(null); setPublished('Announcement canceled.'); void load();
     }} />}
     {compose && canPublish && <ComposeAnnouncement state={state} owner={isAdmin} onClose={() => setCompose(false)} onPublished={message => { setCompose(false); setPublished(message); void load(); }} />}
@@ -195,7 +256,7 @@ export function AnnouncementPopup({ accountId, openBoard }: { accountId: string;
     return () => { mounted.current = false; };
   }, []);
   useEffect(() => {
-    if (item || busy) return;
+    if (busy) return;
     let active = true;
     let pending = false;
     const check = async () => {
@@ -203,7 +264,7 @@ export function AnnouncementPopup({ accountId, openBoard }: { accountId: string;
       pending = true;
       try {
         const unread = await api.announcements.unread.query({ accountId });
-        if (active) setItem(unread);
+        if (active) { setItem(unread); setError(''); }
       } catch { /* A connection or focus change retries delivery. */ }
       finally { pending = false; }
     };
@@ -212,13 +273,14 @@ export function AnnouncementPopup({ accountId, openBoard }: { accountId: string;
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
     return () => { active = false; clearInterval(timer); window.removeEventListener('focus', check); document.removeEventListener('visibilitychange', check); };
-  }, [accountId, item, busy]);
+  }, [accountId, busy]);
   if (!item) return null;
   const dismiss = async (board = false) => {
     if (busy) return;
     setBusy(true); setError('');
     try {
-      await api.announcements.dismiss.mutate({ accountId, id: item.id });
+      try { await api.announcements.dismiss.mutate({ accountId, id: item.id }); }
+      catch (err) { if (!(err instanceof TRPCClientError && err.data?.code === 'NOT_FOUND')) throw err; }
       if (!mounted.current) return;
       setItem(null);
       if (board) openBoard();
